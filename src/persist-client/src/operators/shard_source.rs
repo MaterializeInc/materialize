@@ -11,6 +11,8 @@
 
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -30,7 +32,8 @@ use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use timely::dataflow::channels::pact::Exchange;
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
@@ -42,10 +45,9 @@ use tracing::{debug, trace};
 
 use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::RetryParameters;
-use crate::fetch::{FetchedBlob, SerdeLeasedBatchPart};
+use crate::fetch::{FetchedBlob, Lease, SerdeLeasedBatchPart};
 use crate::internal::state::BatchPart;
 use crate::project::ProjectionPushdown;
-use crate::read::SubscriptionLeaseReturner;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
 
@@ -171,6 +173,38 @@ pub enum SnapshotMode {
     Exclude,
 }
 
+#[derive(Debug)]
+struct LeaseManager<T> {
+    leases: BTreeMap<T, Vec<Lease>>,
+}
+
+impl<T: Timestamp + Codec64> LeaseManager<T> {
+    fn new() -> Self {
+        Self {
+            leases: BTreeMap::new(),
+        }
+    }
+
+    /// Track a lease associated with a particular time.
+    fn push_at(&mut self, time: T, lease: Lease) {
+        self.leases.entry(time).or_default().push(lease);
+    }
+
+    /// Discard any leases for data that aren't past the given frontier.
+    fn advance_to(&mut self, frontier: AntichainRef<T>)
+    where
+        // If we allowed partial orders, we'd need to reconsider every key on each advance.
+        T: TotalOrder,
+    {
+        while let Some(first) = self.leases.first_entry() {
+            if frontier.less_equal(first.key()) {
+                break; // This timestamp is still live!
+            }
+            drop(first.remove());
+        }
+    }
+}
+
 pub(crate) fn shard_source_descs<K, V, D, F, G>(
     scope: &G,
     name: &str,
@@ -179,7 +213,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     as_of: Option<Antichain<G::Timestamp>>,
     snapshot_mode: SnapshotMode,
     until: Antichain<G::Timestamp>,
-    completed_fetches_stream: Stream<G, SerdeLeasedBatchPart>,
+    completed_fetches_stream: Stream<G, Infallible>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
@@ -210,34 +244,25 @@ where
     let return_listen_handle = Rc::clone(&listen_handle);
 
     // Create a oneshot channel to give the part returner a SubscriptionLeaseReturner
-    let (tx, rx) = tokio::sync::oneshot::channel::<SubscriptionLeaseReturner>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Rc<RefCell<LeaseManager<G::Timestamp>>>>();
     let mut builder = AsyncOperatorBuilder::new(
         format!("shard_source_descs_return({})", name),
         scope.clone(),
     );
-    let mut completed_fetches = builder.new_disconnected_input(
-        &completed_fetches_stream,
-        // We must ensure all completed fetches are fed into
-        // the worker responsible for managing part leases
-        Exchange::new(move |_| u64::cast_from(chosen_worker)),
-    );
+    let mut completed_fetches = builder.new_disconnected_input(&completed_fetches_stream, Pipeline);
     // This operator doesn't need to use a token because it naturally exits when its input
     // frontier reaches the empty antichain.
     builder.build(move |_caps| async move {
-        let Ok(mut lease_returner) = rx.await else {
+        let Ok(leases) = rx.await else {
             // Either we're not the chosen worker or the dataflow was shutdown before the
             // subscriber was even created.
             return;
         };
         while let Some(event) = completed_fetches.next().await {
-            let Event::Data(_cap, data) = event else {
+            let Event::Progress(frontier) = event else {
                 continue;
             };
-            for part in data {
-                lease_returner.return_leased_part(
-                    lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part),
-                );
-            }
+            leases.borrow_mut().advance_to(frontier.borrow());
         }
         // Make it explicit that the subscriber is kept alive until we have finished returning parts
         drop(return_listen_handle);
@@ -329,9 +354,9 @@ where
         // We're about to start producing parts to be fetched whose leases will be returned by the
         // `shard_source_descs_return` operator above. In order for that operator to successfully
         // return the leases we send it the lease returner associated with our shared subscriber.
-        tx.send(read.lease_returner().clone())
+        let leases = Rc::new(RefCell::new(LeaseManager::new()));
+        tx.send(Rc::clone(&leases))
             .expect("lease returner exited before desc producer");
-        let mut lease_returner = read.lease_returner().clone();
 
         // Store the listen handle in the shared slot so that it stays alive until both operators
         // exit
@@ -428,7 +453,6 @@ where
                                 "skipping part because of stats filter {:?}",
                                 part_desc.part.stats()
                             );
-                            lease_returner.return_leased_part(part_desc);
                             continue;
                         }
                     }
@@ -441,12 +465,11 @@ where
                 // There's certainly some other things we could be doing instead here, but this has
                 // seemed to work okay so far. Continue to revisit as necessary.
                 let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
-                descs_output
-                    .give(
-                        &session_cap,
-                        (worker_idx, part_desc.into_exchangeable_part()),
-                    )
-                    .await;
+                let (part, lease) = part_desc.into_exchangeable_part();
+                if let Some(lease) = lease {
+                    leases.borrow_mut().push_at(current_ts.clone(), lease);
+                }
+                descs_output.give(&session_cap, (worker_idx, part)).await;
             }
 
             current_frontier.join_assign(&progress);
@@ -466,7 +489,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     val_schema: Arc<V::Schema>,
 ) -> (
     Stream<G, FetchedBlob<K, V, T, D>>,
-    Stream<G, SerdeLeasedBatchPart>,
+    Stream<G, Infallible>,
     PressOnDropButton,
 )
 where
@@ -480,7 +503,8 @@ where
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
     let (mut fetched_output, fetched_stream) = builder.new_output();
-    let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
+    let (completed_fetches_output, completed_fetches_stream) =
+        builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
     let mut descs_input = builder.new_input_for_many(
         descs,
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
@@ -505,7 +529,7 @@ where
         };
 
         while let Some(event) = descs_input.next().await {
-            if let Event::Data([fetched_cap, completed_fetches_cap], data) = event {
+            if let Event::Data([fetched_cap, _completed_fetches_cap], data) = event {
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
                 for (_idx, part) in data {
@@ -521,9 +545,6 @@ where
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
                         fetched_output.give(&fetched_cap, fetched).await;
-                        completed_fetches_output
-                            .give(&completed_fetches_cap, leased_part.into_exchangeable_part())
-                            .await;
                     }
                 }
             }
@@ -549,6 +570,24 @@ mod tests {
 
     use crate::operators::shard_source::shard_source;
     use crate::{Diagnostics, ShardId};
+
+    #[mz_ore::test]
+    fn test_lease_manager() {
+        let lease = Lease::default();
+        let mut manager = LeaseManager::new();
+        for t in 0u64..10 {
+            manager.push_at(t, lease.clone());
+        }
+        assert_eq!(lease.count(), 11);
+        manager.advance_to(AntichainRef::new(&[5]));
+        assert_eq!(lease.count(), 6);
+        manager.advance_to(AntichainRef::new(&[3]));
+        assert_eq!(lease.count(), 6);
+        manager.advance_to(AntichainRef::new(&[9]));
+        assert_eq!(lease.count(), 2);
+        manager.advance_to(AntichainRef::new(&[10]));
+        assert_eq!(lease.count(), 1);
+    }
 
     /// Verifies that a `shard_source` will downgrade it's output frontier to
     /// the `since` of the shard when no explicit `as_of` is given. Even if

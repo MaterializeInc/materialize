@@ -356,6 +356,22 @@ where
     Ok(part)
 }
 
+/// This represents the lease of a seqno. It's generally paired with some external state,
+/// like a hollow part: holding this lease indicates that we may still want to fetch that part,
+/// and should hold back GC to keep it around.
+///
+/// Generally the state and lease are bundled together, as in [LeasedBatchPart]... but sometimes
+/// it's necessary to handle them separately, so this struct is exposed as well. Handle with care.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Lease(Arc<()>);
+
+impl Lease {
+    /// Returns the number of live copies of this lease, including this one.
+    pub fn count(&self) -> usize {
+        Arc::strong_count(&self.0)
+    }
+}
+
 /// A token representing one fetch-able batch part.
 ///
 /// It is tradeable via `crate::fetch::fetch_batch` for the resulting data
@@ -366,7 +382,7 @@ where
 /// You can exchange `LeasedBatchPart`:
 /// - If `leased_seqno.is_none()`
 /// - By converting it to [`SerdeLeasedBatchPart`] through
-///   [`Self::into_exchangeable_part`]. [`SerdeLeasedBatchPart`] is exchangeable,
+///   `Self::into_exchangeable_part`. [`SerdeLeasedBatchPart`] is exchangeable,
 ///   including over the network.
 ///
 /// n.b. `Self::into_exchangeable_part` is known to be equivalent to
@@ -390,9 +406,12 @@ pub struct LeasedBatchPart<T> {
     pub(crate) desc: Description<T>,
     pub(crate) part: BatchPart<T>,
     /// The `SeqNo` from which this part originated; we track this value as
-    /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
+    /// to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
-    pub(crate) leased_seqno: Option<SeqNo>,
+    pub(crate) leased_seqno: SeqNo,
+    /// The lease that prevents this part from being GCed. Code should ensure that this lease
+    /// lives as long as the part is needed.
+    pub(crate) lease: Option<Lease>,
     pub(crate) filter_pushdown_audit: bool,
 }
 
@@ -405,36 +424,19 @@ where
     ///
     /// !!!WARNING!!!
     ///
-    /// This semantically transfers the lease to the returned
-    /// SerdeLeasedBatchPart. If `self` has a `leased_seqno`, failing to take
-    /// the returned `SerdeLeasedBatchPart` back into a `LeasedBatchPart` will
-    /// leak `SeqNo`s and prevent persist GC.
-    pub fn into_exchangeable_part(mut self) -> SerdeLeasedBatchPart {
+    /// This method also returns the [Lease] associated with the given part, since
+    /// that can't travel across process boundaries. The caller is responsible for
+    /// ensuring that the lease is held for as long as the batch part may be in use:
+    /// dropping it too early may cause a fetch to fail.
+    pub(crate) fn into_exchangeable_part(mut self) -> (SerdeLeasedBatchPart, Option<Lease>) {
         let (proto, _metrics) = self.into_proto();
         // If `x` has a lease, we've effectively transferred it to `r`.
-        let _ = self.leased_seqno.take();
-        SerdeLeasedBatchPart {
+        let lease = self.lease.take();
+        let part = SerdeLeasedBatchPart {
             encoded_size_bytes: self.part.encoded_size_bytes(),
             proto: LazyProto::from(&proto),
-        }
-    }
-
-    /// Because sources get dropped without notice, we need to permit another
-    /// operator to safely expire leases.
-    ///
-    /// The part's `reader_id` is intentionally inaccessible, and should
-    /// be obtained from the issuing [`crate::ReadHandle`], or one of its derived
-    /// structures, e.g. [`crate::read::Subscribe`].
-    ///
-    /// # Panics
-    /// - If `reader_id` is different than the [`LeasedReaderId`] from
-    ///   the part issuer.
-    pub(crate) fn return_lease(&mut self, reader_id: &LeasedReaderId) -> Option<SeqNo> {
-        assert!(
-            &self.reader_id == reader_id,
-            "only issuing reader can authorize lease expiration"
-        );
-        self.leased_seqno.take()
+        };
+        (part, lease)
     }
 
     /// The encoded size of this part in bytes
@@ -1016,7 +1018,7 @@ impl<T: Timestamp + Codec64> RustType<(ProtoLeasedBatchPart, Arc<Metrics>)> for 
             part: Some(self.part.into_proto()),
             lease: Some(ProtoLease {
                 reader_id: self.reader_id.into_proto(),
-                seqno: self.leased_seqno.map(|x| x.into_proto()),
+                seqno: Some(self.leased_seqno.into_proto()),
             }),
             filter_pushdown_audit: self.filter_pushdown_audit,
         };
@@ -1037,7 +1039,8 @@ impl<T: Timestamp + Codec64> RustType<(ProtoLeasedBatchPart, Arc<Metrics>)> for 
             desc: proto.desc.into_rust_if_some("ProtoLeasedBatchPart::desc")?,
             part: proto.part.into_rust_if_some("ProtoLeasedBatchPart::part")?,
             reader_id: lease.reader_id.into_rust()?,
-            leased_seqno: lease.seqno.map(|x| x.into_rust()).transpose()?,
+            leased_seqno: lease.seqno.into_rust_if_some("ProtoLease::seqno")?,
+            lease: None,
             filter_pushdown_audit: proto.filter_pushdown_audit,
         })
     }
