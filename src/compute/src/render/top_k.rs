@@ -440,9 +440,9 @@ where
             (input, stage, None)
         };
         // Turn input into collection.
-        let intput = input.as_collection(|k, v| (k.into_owned(), v.into_owned()));
+        let input = input.as_collection(|k, v| (k.into_owned(), v.into_owned()));
         // Negate oks and concatenate them with the input.
-        (oks.negate().concat(&intput), errs)
+        (oks.negate().concat(&input), errs)
     }
 
     fn render_top1_monotonic<S>(
