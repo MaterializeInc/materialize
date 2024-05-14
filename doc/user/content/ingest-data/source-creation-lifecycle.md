@@ -1,6 +1,6 @@
 ---
 title: "Source Creation Lifecycle"
-description: "Understanding the Differenct Statges of Source Creation"
+description: "Understanding the Different Stages of Source Creation"
 menu:
   main:
     name: "Source Creation Lifecycle"
@@ -46,7 +46,7 @@ FROM mz_sources AS s
 INNER JOIN mz_internal.mz_hydration_statuses AS h ON (s.id = h.object_id);
 ```
 
-Because the initial data load is more resource intensive than rehydration and consuming data from the external system, you might have needed to size up the source cluster during the intial snapshot. Now is a good time to restart the cluster to see if you can scale back down to understand the resource requirements during rehydration and steady state operations. Because the initial snapshot happens only once, knowing the resource requirements during steady state is much more important to correctly size the source cluster for normal operation. Restarting is achieved by removing all compute resources from the underlying cluster and subsequently adding it back.
+Because the initial data load is more resource intensive than rehydration and consuming data from the external system, you might have needed to size up the source cluster during the initial snapshot. Now is a good time to restart the cluster to see if you can scale back down to understand the resource requirements during rehydration and steady state operations. Because the initial snapshot happens only once, knowing the resource requirements during steady state is much more important to correctly size the source cluster for normal operation. Restarting is achieved by removing all compute resources from the underlying cluster and subsequently adding it back.
 
 ```sql
 ALTER CLUSTER sources SET (REPLICATION FACTOR 0);
