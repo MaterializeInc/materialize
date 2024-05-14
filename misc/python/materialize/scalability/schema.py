@@ -55,9 +55,16 @@ class Schema:
                     ]
                 )
 
+                # Create indexes and wait until they are queryable. Compute can
+                # delay execution of dataflows when inputs are not yet
+                # available. This would lead to a large outlier on the first
+                # query of the actual workload, when it has to wait for the
+                # index to be ready.
                 if self.create_index:
                     init_sqls.append(f"CREATE INDEX i{t} ON t{t} (f1);")
                     init_sqls.append(f"CREATE INDEX mv_i{t} ON mv{t} (count);")
+                    init_sqls.append(f"SELECT f1 from t{t};")
+                    init_sqls.append(f"SELECT count from mv{t};")
 
         return init_sqls
 
