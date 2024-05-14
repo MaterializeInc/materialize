@@ -23,14 +23,14 @@ from materialize.output_consistency.expression.expression import (
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
-from materialize.output_consistency.input_data.return_specs.input_arg_type_hints import (
-    InputArgTypeHints,
-)
 from materialize.output_consistency.operation.operation import (
     EXPRESSION_PLACEHOLDER,
     DbOperationOrFunction,
 )
-from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
+from materialize.output_consistency.operation.return_type_spec import (
+    InputArgTypeHints,
+    ReturnTypeSpec,
+)
 from materialize.output_consistency.selection.selection import DataRowSelection
 
 
@@ -98,6 +98,11 @@ class ExpressionWithArgs(Expression):
                 input_type_hints.type_category_of_requested_args[arg_index] = self.args[
                     arg_index
                 ].resolve_return_type_category()
+
+                if self.return_type_spec.requires_return_type_spec_hints:
+                    input_type_hints.return_type_spec_of_requested_args[
+                        arg_index
+                    ] = self.args[arg_index].resolve_return_type_spec()
 
         return self.return_type_spec.resolve_type_category(input_type_hints)
 

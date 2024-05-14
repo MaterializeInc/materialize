@@ -9,10 +9,10 @@
 
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.input_data.return_specs.input_arg_type_hints import (
+from materialize.output_consistency.operation.return_type_spec import (
     InputArgTypeHints,
+    ReturnTypeSpec,
 )
-from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
 class DynamicReturnTypeSpec(ReturnTypeSpec):
