@@ -48,4 +48,4 @@ jemalloc = ["mz-alloc/jemalloc"]
 tokio-console = ["mz-ore/tokio-console"]
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+normal = ["mz-alloc-default", "workspace-hack"]
