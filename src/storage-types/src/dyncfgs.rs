@@ -56,6 +56,24 @@ pub const KAFKA_CLIENT_ID_ENRICHMENT_RULES: Config<fn() -> serde_json::Value> = 
     "Rules for enriching the `client.id` property of Kafka clients with additional data.",
 );
 
+/// The maximum time we will wait before re-polling rdkafka to see if new partitions/data are
+/// available.
+pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
+    "kafka_poll_max_wait",
+    Duration::from_secs(1),
+    "The maximum time we will wait before re-polling rdkafka to see if new partitions/data are \
+    available.",
+);
+
+/// The timeout when seeking through a consumer when fast-forwarding it. We expect this
+/// to happen quickly.
+pub const KAFKA_FAST_FORWARD_SEEK_TIMEOUT: Config<Duration> = Config::new(
+    "kafka_fast_forward_seek_timeout",
+    Duration::from_secs(1),
+    "The timeout when seeking through a consumer when fast-forwarding it. We expect this \
+    to happen quickly.",
+);
+
 // MySQL
 
 /// Replication heartbeat interval requested from the MySQL server.
@@ -146,6 +164,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
+        .add(&KAFKA_POLL_MAX_WAIT)
+        .add(&KAFKA_FAST_FORWARD_SEEK_TIMEOUT)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)

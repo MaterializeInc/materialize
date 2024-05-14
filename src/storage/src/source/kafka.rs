@@ -102,6 +102,8 @@ pub struct KafkaSourceReader {
     health_status: Arc<Mutex<HealthStatus>>,
     /// Per partition capabilities used to produce messages
     partition_capabilities: BTreeMap<PartitionId, PartitionCapability>,
+    /// Timeout when fast-forwarding the consumer.
+    consumer_seek_timeout: Duration,
 }
 
 /// A partially-filled version of `ProgressStatisticsUpdate`. This allows us to
@@ -463,6 +465,8 @@ impl SourceRender for KafkaSourceConnection {
                 ),
                 health_status,
                 partition_capabilities,
+                consumer_seek_timeout: mz_storage_types::dyncfgs::KAFKA_FAST_FORWARD_SEEK_TIMEOUT
+                    .get(config.config.config_set()),
             };
 
             let offset_committer = KafkaResumeUpperProcessor {
@@ -514,6 +518,8 @@ impl SourceRender for KafkaSourceConnection {
             let mut prev_pid_info: Option<BTreeMap<PartitionId, WatermarkOffsets>> = None;
             let mut snapshot_total = None;
 
+            let max_wait_time =
+                mz_storage_types::dyncfgs::KAFKA_POLL_MAX_WAIT.get(config.config.config_set());
             loop {
                 let partition_info = reader.partition_info.lock().unwrap().take();
                 if let Some(partitions) = partition_info {
@@ -821,7 +827,7 @@ impl SourceRender for KafkaSourceConnection {
                 tokio::select! {
                     // TODO(petrosagg): remove the timeout and rely purely on librdkafka waking us
                     // up
-                    _  = tokio::time::timeout(Duration::from_secs(1), notificator.notified()) => {},
+                    _  = tokio::time::timeout(max_wait_time, notificator.notified()) => {},
                     // This future is not cancel safe but we are only passing a reference to it in
                     // the select! loop so the future stays on the stack and never gets cancelled
                     // until the end of the function.
@@ -973,7 +979,7 @@ impl KafkaSourceReader {
             &self.topic_name,
             pid,
             Offset::Offset(next_offset),
-            Duration::from_secs(1),
+            self.consumer_seek_timeout,
         );
         match res {
             Ok(_) => {
