@@ -16,6 +16,7 @@ use crate::parser::BuiltinCommand;
 pub async fn run_skip_if(cmd: BuiltinCommand, state: &State) -> Result<ControlFlow, anyhow::Error> {
     let query = cmd.input.join("\n");
     let stmt = state
+        .materialize
         .pgclient
         .prepare(&query)
         .await
@@ -26,6 +27,7 @@ pub async fn run_skip_if(cmd: BuiltinCommand, state: &State) -> Result<ControlFl
     }
 
     let should_skip: bool = state
+        .materialize
         .pgclient
         .query_one(&stmt, &[])
         .await
