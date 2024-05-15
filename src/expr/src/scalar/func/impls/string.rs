@@ -688,6 +688,10 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
         .nullable(input.nullable)
     }
 
+    fn could_error(&self) -> bool {
+        !self.fail_on_len || self.length.is_none()
+    }
+
     fn preserves_uniqueness(&self) -> bool {
         self.fail_on_len || self.length.is_none()
     }
