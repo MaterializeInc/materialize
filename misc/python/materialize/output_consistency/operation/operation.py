@@ -130,6 +130,7 @@ class DbOperation(DbOperationOrFunction):
         is_enabled: bool = True,
         is_pg_compatible: bool = True,
         tags: set[str] | None = None,
+        since_mz_version: MzVersion | None = None,
     ):
         param_count = len(params)
         super().__init__(
@@ -143,6 +144,7 @@ class DbOperation(DbOperationOrFunction):
             is_enabled=is_enabled,
             is_pg_compatible=is_pg_compatible,
             tags=tags,
+            since_mz_version=since_mz_version,
         )
         self.pattern = pattern
 

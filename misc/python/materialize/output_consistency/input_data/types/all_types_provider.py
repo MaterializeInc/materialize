@@ -21,6 +21,9 @@ from materialize.output_consistency.input_data.types.date_time_types_provider im
 from materialize.output_consistency.input_data.types.jsonb_type_provider import (
     JSONB_DATA_TYPE,
 )
+from materialize.output_consistency.input_data.types.map_type_provider import (
+    MAP_DATA_TYPES,
+)
 from materialize.output_consistency.input_data.types.number_types_provider import (
     NUMERIC_DATA_TYPES,
 )
@@ -36,5 +39,6 @@ DATA_TYPES: list[DataType] = list(
         [TEXT_DATA_TYPE],
         [BYTEA_DATA_TYPE],
         [JSONB_DATA_TYPE],
+        MAP_DATA_TYPES,
     )
 )
