@@ -989,7 +989,7 @@ where
                             |v| v.into_owned(),
                             aggr_funcs.clone(),
                         )
-                        .as_collection(|k, v| (SharedRow::pack(k), v.clone()))
+                        .as_collection(|k, v| (k.into_owned(), v.clone()))
                         .map_fallible("Checked Invalid Accumulations", |(hash_key, result)| {
                             match result {
                                 Err(hash_key) => {
@@ -1013,13 +1013,7 @@ where
                         |v| v.into_owned(),
                         aggr_funcs.clone(),
                     )
-                    .as_collection(|k, v| {
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
-                        let key = row_builder.pack_using(k);
-                        let val = row_builder.pack_using(v);
-                        (key, val)
-                    })
+                    .as_collection(|k, v| (k.into_owned(), v.into_owned()) )
                 };
 
                 stage = negated_output
@@ -1184,9 +1178,6 @@ where
             "Reduced Fallibly MinsMaxesHierarchical",
             from,
             move |key, source, target| {
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-                let mut row_packer = row_builder.packer();
                 if let Some(err) = V::into_error() {
                     // Should negative accumulations reach us, we should loudly complain.
                     for (value, count) in source.iter() {
@@ -1199,11 +1190,15 @@ where
                         );
                         // After complaining, output an error here so that we can eventually
                         // report it in an error stream.
-                        row_packer.extend(key);
-                        target.push((err(row_builder.clone()), -1));
+                        target.push((err(key.into_owned()), -1));
                         return;
                     }
                 }
+
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
+                let mut row_packer = row_builder.packer();
+
                 let mut source_iters = source
                     .iter()
                     .map(|(values, _cnt)| *values)
@@ -1222,7 +1217,7 @@ where
                 target.push((V::ok(row_builder.clone()), -1));
                 for (values, cnt) in source.iter() {
                     row_packer = row_builder.packer();
-                    row_packer.extend(*values);
+                    values.copy_into(&mut row_packer);
                     target.push((V::ok(row_builder.clone()), *cnt));
                 }
             },

@@ -1812,6 +1812,18 @@ impl RowPacker<'_> {
         self.row.data.extend_from_slice(row.data.as_slice());
     }
 
+    /// Appends the slice of data representing an entire `Row`. The data is not validated.
+    ///
+    /// # Safety
+    ///
+    /// The requirements from [`Row::from_bytes_unchecked`] apply here, too:
+    /// This method relies on `data` being an appropriate row encoding, and can
+    /// result in unsafety if this is not the case.
+    #[inline]
+    pub unsafe fn extend_by_slice_unchecked(&mut self, data: &[u8]) {
+        self.row.data.extend_from_slice(data)
+    }
+
     /// Pushes a [`DatumList`] that is built from a closure.
     ///
     /// The supplied closure will be invoked once with a `Row` that can be used
