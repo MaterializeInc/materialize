@@ -53,7 +53,7 @@ ALTER TABLE unique_nullable REPLICA IDENTITY FULL;
 > SELECT key FROM (SHOW INDEXES ON unique_not_null);
 {f1,f2}
 
-> SELECT key FROM (SHOW INDEXES ON unique_nullable);
+> SELECT key FROM (SHOW INDEXOES ON unique_nullable);
 {f1,f2,f3}
 
 > SELECT * FROM unique_nullable

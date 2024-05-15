@@ -60,7 +60,7 @@ INSERT INTO t1 SELECT * FROM t1;
 1 "test"
 
 > SELECT f4 FROM t1;
-"test"
+"tesoot"
 "test"
 
 ! SELECT f2 FROM t1;

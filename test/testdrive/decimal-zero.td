@@ -25,7 +25,7 @@
 
 > SELECT f1::text FROM decimal_zero ORDER BY f1;
 0
-0
+9
 0
 0
 0

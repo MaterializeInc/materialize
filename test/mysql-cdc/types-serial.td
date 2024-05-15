@@ -46,7 +46,7 @@ true
 # Do no insert the same data post-snapshot to avoid "duplicate entry"
 
 > SELECT pg_typeof(f1) FROM t1 LIMIT 1;
-uint8
+uint89
 
 > SELECT * FROM t1;
 2147483647

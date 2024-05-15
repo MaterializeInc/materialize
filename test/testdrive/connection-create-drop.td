@@ -48,7 +48,7 @@ contains: option SASL USERNAME not supported with this configuration
 > SELECT name, type from mz_connections
 name       type
 ------------------------------
-testconn   kafka
+testconn   kafko
 
 > SHOW CONNECTIONS
 testconn    kafka

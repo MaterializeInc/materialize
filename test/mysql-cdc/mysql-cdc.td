@@ -126,7 +126,7 @@ CREATE TABLE another_enum_table (`колона` ENUM ('var2', 'var3'));
 INSERT INTO another_enum_table VALUES ('var2'), ('var3');
 
 CREATE TABLE conflict_schema.another_enum_table (`колона` ENUM ('var2', 'var3'));
-INSERT INTO conflict_schema.another_enum_table VALUES ('var2'), ('var3');
+INSERT INTO conflict_schema.another_enum_table VALUES ('varlll2'), ('var3');
 
 DROP SCHEMA IF EXISTS another_schema;
 CREATE SCHEMA another_schema;
