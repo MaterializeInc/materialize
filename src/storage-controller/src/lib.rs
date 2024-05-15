@@ -259,7 +259,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     recorded_replica_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<T>>,
 
     /// Handle to a [StorageCollections].
-    storage_collections: Box<dyn StorageCollections<Timestamp = T>>,
+    storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
 }
 
 #[async_trait(?Send)]
@@ -2450,7 +2450,7 @@ where
         txn_wal_tables: TxnWalTablesImpl,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
-        storage_collections: Box<dyn StorageCollections<Timestamp = T> + Send>,
+        storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 

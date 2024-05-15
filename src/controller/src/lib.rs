@@ -146,7 +146,7 @@ enum Readiness<T> {
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 pub struct Controller<T = mz_repr::Timestamp> {
     pub storage: Box<dyn StorageController<Timestamp = T>>,
-    pub storage_collections: Box<dyn StorageCollections<Timestamp = T>>,
+    pub storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     pub compute: ComputeController<T>,
     /// The clusterd image to use when starting new cluster processes.
     clusterd_image: String,
@@ -585,7 +585,8 @@ where
         )
         .await;
 
-        let collections_ctl = Box::new(collections_ctl);
+        let collections_ctl: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync> =
+            Arc::new(collections_ctl);
 
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
@@ -598,7 +599,7 @@ where
             txn_wal_tables,
             config.connection_context,
             storage_txn,
-            collections_ctl.clone(),
+            Arc::clone(&collections_ctl),
         )
         .await;
 
