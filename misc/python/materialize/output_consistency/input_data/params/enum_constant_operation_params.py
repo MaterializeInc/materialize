@@ -106,6 +106,12 @@ MAP_FIELD_NAME_PARAM = EnumConstantOperationParam(
     ["", "n", "a", "A", "b"], add_quotes=True, add_invalid_value=True
 )
 
+UUID_VALUE_PARAM = EnumConstantOperationParam(
+    ["0000bc999c0b4ef8bb6d6bb9bd380a11", "1111Bc99-9c0b-4ef8-bB6d-6bb9bd380A11"],
+    add_quotes=True,
+    add_invalid_value=True,
+)
+
 
 def all_data_types_enum_constant_operation_param(
     must_be_pg_compatible: bool,

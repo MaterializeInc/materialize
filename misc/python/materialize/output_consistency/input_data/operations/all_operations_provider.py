@@ -48,6 +48,9 @@ from materialize.output_consistency.input_data.operations.text_operations_provid
 from materialize.output_consistency.input_data.operations.trigonometric_operations_provider import (
     TRIGONOMETRIC_OPERATION_TYPES,
 )
+from materialize.output_consistency.input_data.operations.uuid_operations_provider import (
+    UUID_OPERATION_TYPES,
+)
 from materialize.output_consistency.operation.operation import DbOperationOrFunction
 
 ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
@@ -65,5 +68,6 @@ ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
         CRYPTO_OPERATION_TYPES,
         JSONB_OPERATION_TYPES,
         MAP_OPERATION_TYPES,
+        UUID_OPERATION_TYPES,
     )
 )
