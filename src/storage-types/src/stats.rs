@@ -266,12 +266,13 @@ mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::PartStats;
-    use mz_repr::arb_datum_for_column;
+    use mz_repr::{arb_datum_for_column, RelationType};
     use mz_repr::{
         ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena,
         ScalarType,
     };
     use proptest::prelude::*;
+    use proptest::strategy::ValueTree;
 
     use super::*;
     use crate::sources::SourceData;
@@ -352,5 +353,70 @@ mod tests {
             let datums: Vec<_> = datums.iter().map(Datum::from).collect();
             prop_assert_eq!(validate_stats(&ty, &datums[..]), Ok(()));
         })
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn statistics_stability() {
+        /// This is the seed [`proptest`] uses for their deterministic RNG. We
+        /// copy it here to prevent breaking this test if [`proptest`] changes.
+        const RNG_SEED: [u8; 32] = [
+            0xf4, 0x16, 0x16, 0x48, 0xc3, 0xac, 0x77, 0xac, 0x72, 0x20, 0x0b, 0xea, 0x99, 0x67,
+            0x2d, 0x6d, 0xca, 0x9f, 0x76, 0xaf, 0x1b, 0x09, 0x73, 0xa0, 0x59, 0x22, 0x6d, 0xc5,
+            0x46, 0x39, 0x1c, 0x4a,
+        ];
+
+        let rng = proptest::test_runner::TestRng::from_seed(
+            proptest::test_runner::RngAlgorithm::ChaCha,
+            &RNG_SEED,
+        );
+        // Generate a collection of Rows.
+        let config = proptest::test_runner::Config {
+            // We let the loop below drive how much data we generate.
+            cases: u32::MAX,
+            rng_algorithm: proptest::test_runner::RngAlgorithm::ChaCha,
+            ..Default::default()
+        };
+        let mut runner = proptest::test_runner::TestRunner::new_with_rng(config, rng);
+
+        let max_cols = 4;
+        let max_rows = 8;
+        let test_cases = 1000;
+
+        // Note: We don't use the `Arbitrary` impl for `RelationDesc` because
+        // it generates large column names which is not interesting to us.
+        let strat = proptest::collection::vec(any::<ColumnType>(), 1..max_cols)
+            .prop_map(|cols| {
+                let col_names = (0..cols.len()).map(|i| i.to_string());
+                RelationDesc::new(RelationType::new(cols), col_names)
+            })
+            .prop_flat_map(|desc| {
+                let rows = desc
+                    .typ()
+                    .columns()
+                    .iter()
+                    .map(|ct| arb_datum_for_column(ct))
+                    .collect::<Vec<_>>()
+                    .prop_map(|datums| Row::pack(datums.iter().map(Datum::from)));
+                proptest::collection::vec(rows, 1..max_rows)
+                    .prop_map(move |rows| (desc.clone(), rows))
+            });
+
+        let mut all_stats = Vec::new();
+        for _ in 0..test_cases {
+            let value_tree = strat.new_tree(&mut runner).unwrap();
+            let (desc, rows) = value_tree.current();
+
+            let mut builder = PartBuilder::new(&desc, &UnitSchema).expect("success");
+            for row in rows {
+                builder.push(&SourceData(Ok(row)), &(), 1u64, 1i64);
+            }
+            let part = builder.finish();
+            let stats = part.key_stats().unwrap();
+
+            all_stats.push(stats);
+        }
+
+        insta::assert_json_snapshot!(all_stats);
     }
 }
