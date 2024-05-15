@@ -551,13 +551,27 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if query_template.matches_any_expression(
             partial(matches_op_by_pattern, pattern="CAST ($ AS $)"),
             True,
+        ) and query_template.matches_any_expression(
+            partial(
+                involves_data_type_category, data_type_category=DataTypeCategory.NUMERIC
+            ),
+            True,
         ):
+            value1_str = str(error.details1.value)
+            value2_str = str(error.details2.value)
+
             # cut ".000" endings
-            value1_str = re.sub(r"\.0+$", "", str(error.details1.value))
-            value2_str = re.sub(r"\.0+$", "", str(error.details2.value))
+            value1_str = re.sub(r"\.0+$", "", value1_str)
+            value2_str = re.sub(r"\.0+$", "", value2_str)
+
+            # align exponent representation (e.g., '4.5e-07' => '4.5e-7')
+            value1_str = re.sub(r"e-0+(\d+$)$", r"e-\1", value1_str)
+            value2_str = re.sub(r"e-0+(\d+$)$", r"e-\1", value2_str)
 
             if value1_str == value2_str:
-                return YesIgnore("#24687: different representation of DECIMAL type")
+                return YesIgnore(
+                    "#24687: different representation of floating-point type"
+                )
 
         if query_template.matches_any_expression(
             lambda expression: expression.has_any_characteristic(
