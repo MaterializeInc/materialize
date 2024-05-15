@@ -18,6 +18,7 @@ FUNCTION_ID_SUFFIX_PATTERN = re.compile(r" \(function \[s\d+ AS pg_catalog\.\w+\
 
 class VersionConsistencyErrorMessageNormalizer(ErrorMessageNormalizer):
     def normalize(self, error_message: str) -> str:
+        error_message = super().normalize(error_message)
         error_message = re.sub(FUNCTION_ID_SUFFIX_PATTERN, "", error_message)
 
         return error_message
