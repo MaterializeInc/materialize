@@ -792,8 +792,8 @@ CREATE DEFAULT INDEX ON s
 statement ok
 BEGIN
 
-statement error db error: ERROR: ALTER INDEX s_primary_idx SET \(RETAIN HISTORY = FOR 0\) cannot be run inside a transaction block
-ALTER INDEX s_primary_idx SET (RETAIN HISTORY = FOR 0)
+statement error db error: ERROR: ALTER INDEX s_primary_idx SET \(RETAIN HISTORY = FOR '1000 hours'\) cannot be run inside a transaction block
+ALTER INDEX s_primary_idx SET (RETAIN HISTORY = FOR '1000 hours')
 
 query error db error: ERROR: current transaction is aborted, commands ignored until end of transaction block
 SELECT 1

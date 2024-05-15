@@ -495,7 +495,7 @@ fn test_subscribe_basic() {
 
     // Create a table with disabled compaction.
     client_writes
-        .batch_execute("CREATE TABLE t (data text) WITH (RETAIN HISTORY FOR 0)")
+        .batch_execute("CREATE TABLE t (data text) WITH (RETAIN HISTORY FOR '1000 hours')")
         .unwrap();
     client_writes.batch_execute("SELECT * FROM t").unwrap();
     client_reads
@@ -597,7 +597,7 @@ fn test_subscribe_basic() {
     // view derived from the index. This previously selected an invalid
     // `AS OF` timestamp (#5391).
     client_writes
-        .batch_execute("ALTER TABLE t SET (RETAIN HISTORY = FOR '1ms')")
+        .batch_execute("ALTER TABLE t SET (RETAIN HISTORY = FOR '1s')")
         .unwrap();
     client_writes
         .batch_execute("CREATE VIEW v AS SELECT * FROM t")
