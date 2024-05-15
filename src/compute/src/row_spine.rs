@@ -100,7 +100,7 @@ mod container {
     use differential_dataflow::trace::cursor::MyTrait;
     use differential_dataflow::trace::implementations::BatchContainer;
     use mz_ore::region::Region;
-    use mz_repr::{read_datum, Datum, Row};
+    use mz_repr::{read_datum, Datum, Row, RowPacker};
 
     /// A slice container with four bytes overhead per slice.
     pub struct DatumContainer {
@@ -229,6 +229,13 @@ mod container {
         bytes: &'a [u8],
     }
 
+    impl DatumSeq<'_> {
+        pub fn copy_into(&self, row: &mut RowPacker) {
+            // SAFETY: `self.bytes` is a correctly formatted row.
+            unsafe { row.extend_by_slice_unchecked(self.bytes) }
+        }
+    }
+
     impl<'a> Copy for DatumSeq<'a> {}
     impl<'a> Clone for DatumSeq<'a> {
         fn clone(&self) -> Self {
@@ -259,11 +266,12 @@ mod container {
     impl<'a> MyTrait<'a> for DatumSeq<'a> {
         type Owned = Row;
         fn into_owned(self) -> Self::Owned {
-            Row::pack(self)
+            // SAFETY: `bytes` contains a valid row.
+            unsafe { Row::from_bytes_unchecked(self.bytes) }
         }
         fn clone_onto(&self, other: &mut Self::Owned) {
             let mut packer = other.packer();
-            packer.extend(*self);
+            self.copy_into(&mut packer);
         }
         fn compare(&self, other: &Self::Owned) -> std::cmp::Ordering {
             self.cmp(&DatumSeq::borrow_as(other))

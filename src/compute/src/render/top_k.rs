@@ -405,7 +405,7 @@ where
                 build_topk_negated_stage::<S, _, _, RowValSpine<Result<Row, Row>, _, _>>(
                     &input, from, order_key, offset, limit, arity,
                 );
-            let stage = stage.as_collection(|k, v| (SharedRow::pack(k), v.clone()));
+            let stage = stage.as_collection(|k, v| (k.into_owned(), v.clone()));
 
             // Demux oks and errors.
             let error_logger = self.error_logger();
@@ -424,18 +424,12 @@ where
             (input, oks, Some(errs))
         } else {
             // Build non-validating topk stage.
-            let from = |v: DatumSeq| SharedRow::pack(v);
+            let from = |v: DatumSeq| v.into_owned();
             let (input, stage) = build_topk_negated_stage::<S, _, _, RowRowSpine<_, _>>(
                 &input, from, order_key, offset, limit, arity,
             );
             // Turn arrangement into collection.
-            let stage = stage.as_collection(|k, v| {
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-                let key = row_builder.pack_using(k);
-                let val = row_builder.pack_using(v);
-                (key, val)
-            });
+            let stage = stage.as_collection(|k, v| (k.into_owned(), v.into_owned()));
 
             (input, stage, None)
         };
@@ -579,7 +573,7 @@ where
                     if diff.is_positive() {
                         continue;
                     }
-                    target.push((err(SharedRow::pack(*datums)), -1));
+                    target.push((err((*datums).into_owned()), -1));
                     return;
                 }
             }
@@ -593,16 +587,12 @@ where
                 return;
             }
 
-            // The `row_builder` below will be used to construct output values in the following.
-            let binding = SharedRow::get();
-            let mut row_builder = binding.borrow_mut();
-
             // First go ahead and emit all records. Note that we ensure target
             // has the capacity to hold at least these records, and avoid any
             // dependencies on the user-provided (potentially unbounded) limit.
             target.reserve(source.len());
             for (datums, diff) in source.iter() {
-                target.push((V::ok(row_builder.pack_using(*datums)), diff.clone()));
+                target.push((V::ok((*datums).into_owned()), diff.clone()));
             }
             // local copies that may count down to zero.
             let mut offset = offset;
@@ -612,7 +602,7 @@ where
             let mut indexes = (0..source.len()).collect::<Vec<_>>();
             // We decode the datums once, into a common buffer for efficiency.
             // Each row should contain `arity` columns; we should check that.
-            let mut buffer = Vec::with_capacity(arity * source.len());
+            let mut buffer = datum_vec.borrow();
             for (index, (datums, _)) in source.iter().enumerate() {
                 buffer.extend(*datums);
                 assert_eq!(buffer.len(), arity * (index + 1));
@@ -650,8 +640,7 @@ where
                 if diff > 0 {
                     // Emit retractions for the elements actually part of
                     // the set of TopK elements.
-                    let row = row_builder.pack_using(datums);
-                    target.push((V::ok(row), -diff));
+                    target.push((V::ok(datums.into_owned()), -diff));
                 }
             }
         }
