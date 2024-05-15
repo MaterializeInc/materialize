@@ -271,10 +271,23 @@ def annotate_logged_errors(log_files: list[str]) -> int:
                     f"Unknown error in {location}:\n{formatted_error_message}"
                 )
 
-    def handle_junit_error(error_message: bytes, location: str):
+    def handle_junit_error(
+        error_message: str | None, details: str | None, location: str
+    ):
         # Don't have too huge output, so truncate
-        formatted_error_message = f"```\n{sanitize_text(truncate_str(error_message.decode('utf-8'), 10_000))}\n```"
-        unknown_errors.append(f"Failure in {location}:\n{formatted_error_message}")
+        formatted_error_message = (
+            f"`{sanitize_text(truncate_str(error_message, 1_000))}`"
+            if error_message is not None
+            else ""
+        )
+        formatted_error_details = (
+            f"```\n{sanitize_text(truncate_str(details, 9_000))}\n```"
+            if details is not None
+            else ""
+        )
+        unknown_errors.append(
+            f"Failure in {location}:{formatted_error_message}\n{formatted_error_details}"
+        )
 
     for error in errors:
         if isinstance(error, ErrorLog):
@@ -289,12 +302,12 @@ def annotate_logged_errors(log_files: list[str]) -> int:
 
             handle_log_error(error.match, linked_file)
         elif isinstance(error, JunitError):
-            msg = "\n".join(filter(None, [error.message, error.text]))
             if "in Code Coverage" in error.text or "covered" in error.message:
+                msg = "\n".join(filter(None, [error.message, error.text]))
                 # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
                 known_errors.append(f"{error.testcase}:\n```\n{msg}\n```")
             else:
-                handle_junit_error(msg.encode("utf-8"), error.testcase)
+                handle_junit_error(error.message, error.text, error.testcase)
         else:
             raise RuntimeError(f"Unexpected error type: {type(error)}")
 
