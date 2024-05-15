@@ -324,30 +324,39 @@ def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError]:
         # junit_testdrive_* is excluded by this, but currently
         # not more useful than junit_mzcompose anyway
         if "junit_" in log_file_name and "junit_testdrive_" not in log_file_name:
-            xml = JUnitXml.fromfile(log_file_name)
-            for suite in xml:
-                for case in suite:
-                    for result in case.result:
-                        if not isinstance(result, Error) and not isinstance(
-                            result, Failure
-                        ):
-                            continue
-                        error_logs.append(
-                            JunitError(
-                                case.name, result.message or "", result.text or ""
-                            )
-                        )
+            error_logs.extend(_get_errors_from_junit_file(log_file_name))
         else:
-            with open(log_file_name, "r+") as f:
-                try:
-                    data: Any = mmap.mmap(f.fileno(), 0)
-                except ValueError:
-                    # empty file, ignore
-                    continue
+            error_logs.extend(_get_errors_from_log_file(log_file_name))
 
-                error_logs.extend(_collect_errors_in_logs(data, log_file_name))
-                data.seek(0)
-                error_logs.extend(_collect_service_panics_in_logs(data, log_file_name))
+    return error_logs
+
+
+def _get_errors_from_junit_file(log_file_name: str) -> list[JunitError]:
+    error_logs = []
+    xml = JUnitXml.fromfile(log_file_name)
+    for suite in xml:
+        for case in suite:
+            for result in case.result:
+                if not isinstance(result, Error) and not isinstance(result, Failure):
+                    continue
+                error_logs.append(
+                    JunitError(case.name, result.message or "", result.text or "")
+                )
+    return error_logs
+
+
+def _get_errors_from_log_file(log_file_name: str) -> list[ErrorLog]:
+    error_logs = []
+    with open(log_file_name, "r+") as f:
+        try:
+            data: Any = mmap.mmap(f.fileno(), 0)
+        except ValueError:
+            # empty file, ignore
+            return error_logs
+
+        error_logs.extend(_collect_errors_in_logs(data, log_file_name))
+        data.seek(0)
+        error_logs.extend(_collect_service_panics_in_logs(data, log_file_name))
 
     return error_logs
 
