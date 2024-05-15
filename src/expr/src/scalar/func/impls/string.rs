@@ -666,9 +666,9 @@ pub struct CastStringToVarChar {
 
 impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
     type Input = &'a str;
-    type Output = Result<VarChar<String>, EvalError>;
+    type Output = Result<VarChar<&str>, EvalError>;
 
-    fn call(&self, a: &'a str) -> Result<VarChar<String>, EvalError> {
+    fn call(&self, a: &'a str) -> Result<VarChar<&str>, EvalError> {
         let s =
             mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
                 assert!(self.fail_on_len);
