@@ -115,7 +115,7 @@ class ConsistencyTestRunner:
 
             if expression is None:
                 test_summary.global_warnings.append(
-                    f"Failed to generate an expression for operation: {operation}"
+                    f"Failed to generate an expression for {operation.__class__.__name__}: '{operation.to_pattern(operation.max_param_count)}'"
                 )
                 continue
 
