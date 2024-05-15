@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -27,6 +28,7 @@ use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::columnation::Columnation;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::{Map, OkErr};
 use timely::dataflow::Scope;
@@ -266,7 +268,7 @@ where
                     // and projections that could not be applied (e.g. column repetition).
                     if let Some(final_closure) = final_closure {
                         let (updates, errors) =
-                            update_stream.flat_map_fallible("DeltaJoinFinalization", {
+                            update_stream.flat_map_fallible::<ConsolidatingContainerBuilder<_>, ConsolidatingContainerBuilder<_>, _, _, _, _>("DeltaJoinFinalization", {
                                 // Reuseable allocation for unpacking.
                                 let mut datums = DatumVec::new();
                                 move |row| {
@@ -399,7 +401,9 @@ where
     for<'a> Tr::Val<'a>: ToDatumIter,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
+    let name = "DeltaJoinKeyPreparation";
+    type CB<C> = CapacityContainerBuilder<C>;
+    let (updates, errs) = updates.map_fallible::<CB<_>, CB<_>, _, _, _>(name, {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
         let mut key_buf = Tr::KeyOwned::default();
@@ -421,7 +425,6 @@ where
             Ok((key, row_value, time))
         }
     });
-
     let mut datums = DatumVec::new();
 
     if closure.could_error() {

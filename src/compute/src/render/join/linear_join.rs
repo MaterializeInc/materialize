@@ -13,6 +13,7 @@
 
 use std::time::{Duration, Instant};
 
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
@@ -26,6 +27,7 @@ use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::{Refines, Timestamp};
@@ -244,7 +246,7 @@ where
                         // If there is no starting arrangement, then we can run filters
                         // directly on the starting collection.
                         // If there is only one input, we are done joining, so run filters
-                        let (j, errs) = joined.flat_map_fallible("LinearJoinInitialization", {
+                        let (j, errs) = joined.flat_map_fallible::<ConsolidatingContainerBuilder<_>, ConsolidatingContainerBuilder<_>, _, _, _, _>("LinearJoinInitialization", {
                             // Reuseable allocation for unpacking.
                             let mut datums = DatumVec::new();
                             move |row| {
@@ -286,7 +288,7 @@ where
             // and projections that could not be applied (e.g. column repetition).
             if let JoinedFlavor::Collection(mut joined) = joined {
                 if let Some(closure) = linear_plan.final_closure {
-                    let (updates, errs) = joined.flat_map_fallible("LinearJoinFinalization", {
+                    let (updates, errs) = joined.flat_map_fallible::<ConsolidatingContainerBuilder<_>, ConsolidatingContainerBuilder<_>, _, _, _, _>("LinearJoinFinalization", {
                         // Reuseable allocation for unpacking.
                         let mut datums = DatumVec::new();
                         move |row| {
@@ -338,27 +340,31 @@ where
     {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
-            let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
-                // Reuseable allocation for unpacking.
-                let mut datums = DatumVec::new();
-                move |row| {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
-                    let temp_storage = RowArena::new();
-                    let datums_local = datums.borrow_with(&row);
-                    row_builder.packer().try_extend(
-                        stream_key
-                            .iter()
-                            .map(|e| e.eval(&datums_local, &temp_storage)),
-                    )?;
-                    let key = row_builder.clone();
-                    row_builder
-                        .packer()
-                        .extend(stream_thinning.iter().map(|e| datums_local[*e]));
-                    let value = row_builder.clone();
-                    Ok((key, value))
-                }
-            });
+            let (keyed, errs) = stream
+                .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
+                    "LinearJoinKeyPreparation",
+                    {
+                        // Reuseable allocation for unpacking.
+                        let mut datums = DatumVec::new();
+                        move |row| {
+                            let binding = SharedRow::get();
+                            let mut row_builder = binding.borrow_mut();
+                            let temp_storage = RowArena::new();
+                            let datums_local = datums.borrow_with(&row);
+                            row_builder.packer().try_extend(
+                                stream_key
+                                    .iter()
+                                    .map(|e| e.eval(&datums_local, &temp_storage)),
+                            )?;
+                            let key = row_builder.clone();
+                            row_builder
+                                .packer()
+                                .extend(stream_thinning.iter().map(|e| datums_local[*e]));
+                            let value = row_builder.clone();
+                            Ok((key, value))
+                        }
+                    },
+                );
 
             errors.push(errs);
 

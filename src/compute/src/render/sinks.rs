@@ -23,6 +23,7 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
@@ -93,25 +94,28 @@ where
         let non_null_assertions = sink.non_null_assertions.clone();
         let from_desc = sink.from_desc.clone();
         if !non_null_assertions.is_empty() {
-            let (oks, null_errs) =
-                ok_collection.map_fallible("NullAssertions({sink_id:?})", move |row| {
-                    let mut idx = 0;
-                    let mut iter = row.iter();
-                    for &i in &non_null_assertions {
-                        let skip = i - idx;
-                        let datum = iter.nth(skip).unwrap();
-                        idx += skip + 1;
-                        if datum.is_null() {
-                            return Err(DataflowError::EvalError(Box::new(
-                                EvalError::MustNotBeNull(format!(
-                                    "column {}",
-                                    from_desc.get_name(i).as_str().quoted()
-                                )),
-                            )));
+            let (oks, null_errs) = ok_collection
+                .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
+                    "NullAssertions({sink_id:?})",
+                    move |row| {
+                        let mut idx = 0;
+                        let mut iter = row.iter();
+                        for &i in &non_null_assertions {
+                            let skip = i - idx;
+                            let datum = iter.nth(skip).unwrap();
+                            idx += skip + 1;
+                            if datum.is_null() {
+                                return Err(DataflowError::EvalError(Box::new(
+                                    EvalError::MustNotBeNull(format!(
+                                        "column {}",
+                                        from_desc.get_name(i).as_str().quoted()
+                                    )),
+                                )));
+                            }
                         }
-                    }
-                    Ok(row)
-                });
+                        Ok(row)
+                    },
+                );
             ok_collection = oks;
             err_collection = err_collection.concat(&null_errs);
         }

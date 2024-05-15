@@ -56,7 +56,6 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
-use mz_timely_util::operator::StreamExt as _;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
@@ -613,7 +612,8 @@ where
 
     let operator_name = format!("reclock({})", id);
     let mut reclock_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-    let (mut reclocked_output, reclocked_stream) = reclock_op.new_output();
+    let (mut reclocked_ok_output, ok_muxed_stream) = reclock_op.new_output();
+    let (mut reclocked_err_output, err_muxed_stream) = reclock_op.new_output();
     let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates.inner, Pipeline);
 
     reclock_op.build(move |capabilities| async move {
@@ -721,7 +721,8 @@ where
                     let mut total_processed = 0;
                     for (((idx, msg), from_ts, diff), into_ts) in timestamper.reclock(msgs) {
                         let into_ts = into_ts.expect("reclock for update not beyond upper failed");
-                        let output = match msg {
+                        let ts_cap = cap_set.delayed(&into_ts);
+                        match msg {
                             Ok(message) => {
                                 bytes_read += message.key.byte_len() + message.value.byte_len();
                                 let ok = SourceOutput {
@@ -730,19 +731,17 @@ where
                                     metadata: message.metadata,
                                     from_time: from_ts,
                                 };
-                                (idx, Ok(ok))
+                                reclocked_ok_output.give(&ts_cap, ((idx, ok), into_ts, diff)).await;
                             }
                             Err(SourceReaderError { inner }) => {
                                 let err = SourceError {
                                     source_id: id,
                                     error: inner,
                                 };
-                                (idx, Err(err))
+                                reclocked_err_output.give(&ts_cap, ((idx, err), into_ts, diff.into())).await;
                             }
-                        };
+                        }
 
-                        let ts_cap = cap_set.delayed(&into_ts);
-                        reclocked_output.give(&ts_cap, (output, into_ts, diff)).await;
                         total_processed += 1;
                     }
                     // The loop above might have completely emptied batches. We can now remove them
@@ -800,13 +799,6 @@ where
             }
         }
     });
-
-    // TODO(petrosagg): output the two streams directly
-    let (ok_muxed_stream, err_muxed_stream) =
-        reclocked_stream.map_fallible("reclock-demux-ok-err", |((output, r), ts, diff)| match r {
-            Ok(ok) => Ok(((output, ok), ts, diff)),
-            Err(err) => Err(((output, err), ts, diff.into())),
-        });
 
     // We use the output index from the source export to route values to its ok and err streams. We
     // do this obliquely by generating as many partitions as there are output indices and then

@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 use dec::OrderedDecimal;
 use differential_dataflow::collection::AsCollection;
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -37,6 +38,7 @@ use mz_timely_util::operator::CollectionExt;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use timely::container::columnation::{Columnation, CopyRegion};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
@@ -154,8 +156,7 @@ where
             // Demux out the potential errors from key and value selector evaluation.
             let (ok, mut err) = key_val_input
                 .as_collection()
-                .consolidate_stream()
-                .flat_map_fallible("OkErrDemux", Some);
+                .flat_map_fallible::<ConsolidatingContainerBuilder<_>, ConsolidatingContainerBuilder<_>, _, _, _, _>("OkErrDemux", Some);
 
             err = err.concat(&err_input);
 
@@ -749,7 +750,7 @@ where
                 let (oks, errs) = self
                     .build_reduce_inaccumulable_distinct::<_, _, _, RowValSpine<Result<(), String>, _, _>>(keyed, None, |v| v.into_owned())
                     .as_collection(|k, v| (k.into_owned(), v.into_owned()))
-                    .map_fallible("Demux Errors", move |(key_val, result)| match result {
+                    .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>("Demux Errors", move |(key_val, result)| match result {
                         Ok(()) => Ok(pairer.split(&key_val)),
                         Err(m) => Err(EvalError::Internal(m).into()),
                     });
@@ -990,7 +991,7 @@ where
                             aggr_funcs.clone(),
                         )
                         .as_collection(|k, v| (k.into_owned(), v.clone()))
-                        .map_fallible("Checked Invalid Accumulations", |(hash_key, result)| {
+                        .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>("Checked Invalid Accumulations", |(hash_key, result)| {
                             match result {
                                 Err(hash_key) => {
                                     let mut hash_key_iter = hash_key.iter();
