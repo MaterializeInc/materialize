@@ -36,7 +36,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_repr::{Datum, RelationDesc, RowArena, RowIterator};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Raw, Statement, StatementKind};
+use mz_sql::ast::{CopyDirection, CopyStatement, CopyTarget, Raw, Statement, StatementKind};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
@@ -978,23 +978,37 @@ async fn execute_request<S: ResultSender>(
             .flatten()
             .collect::<Vec<_>>();
 
-        if execute_responses.iter().any(|execute_response| {
-            // Returns true if a statement or execute response are unsupported.
-            match execute_response {
-                ExecuteResponseKind::Subscribing if sender.allow_subscribe() => false,
-                ExecuteResponseKind::Fetch
-                | ExecuteResponseKind::Subscribing
-                | ExecuteResponseKind::CopyFrom
-                | ExecuteResponseKind::DeclaredCursor
-                | ExecuteResponseKind::ClosedCursor => true,
-                // Various statements generate `PeekPlan` (`SELECT`, `COPY`,
-                // `EXPLAIN`, `SHOW`) which has both `SendRows` and `CopyTo` as its
-                // possible response types. but `COPY` needs be picked out because
-                // http don't support its response type
-                ExecuteResponseKind::CopyTo if matches!(kind, StatementKind::Copy) => true,
-                _ => false,
-            }
-        }) {
+        // Special-case `COPY TO` statements that are not `COPY ... TO STDOUT`, since
+        // StatementKind::Copy links to several `ExecuteResponseKind`s that are not supported,
+        // but this specific statement should be allowed.
+        let is_valid_copy_to = matches!(
+            stmt,
+            Statement::Copy(CopyStatement {
+                direction: CopyDirection::To,
+                target: CopyTarget::Expr(_),
+                ..
+            })
+        );
+
+        if !is_valid_copy_to
+            && execute_responses.iter().any(|execute_response| {
+                // Returns true if a statement or execute response are unsupported.
+                match execute_response {
+                    ExecuteResponseKind::Subscribing if sender.allow_subscribe() => false,
+                    ExecuteResponseKind::Fetch
+                    | ExecuteResponseKind::Subscribing
+                    | ExecuteResponseKind::CopyFrom
+                    | ExecuteResponseKind::DeclaredCursor
+                    | ExecuteResponseKind::ClosedCursor => true,
+                    // Various statements generate `PeekPlan` (`SELECT`, `COPY`,
+                    // `EXPLAIN`, `SHOW`) which has both `SendRows` and `CopyTo` as its
+                    // possible response types. but `COPY` needs be picked out because
+                    // http don't support its response type
+                    ExecuteResponseKind::CopyTo if matches!(kind, StatementKind::Copy) => true,
+                    _ => false,
+                }
+            })
+        {
             return Err(Error::Unsupported(stmt.to_ast_string()));
         }
         Ok(())
