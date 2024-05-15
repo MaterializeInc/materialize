@@ -10,7 +10,11 @@
 //! Dyncfgs used by the storage layer. Despite their name, these can be used
 //! "statically" during rendering, or dynamically within timely operators.
 
+use std::time::Duration;
+
 use mz_dyncfg::{Config, ConfigSet};
+
+// Flow control
 
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 /// Configuration for basic hydration backpressure.
@@ -22,6 +26,8 @@ pub const DELAY_SOURCES_PAST_REHYDRATION: Config<bool> = Config::new(
         (namely, upsert) till after rehydration is finished",
 );
 
+// Controller
+
 /// When enabled, force-downgrade the controller's since handle on the shard
 /// during shard finalization.
 pub const STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION: Config<bool> = Config::new(
@@ -31,6 +37,8 @@ pub const STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION: Config<bool> = Config::ne
     "When enabled, force-downgrade the controller's since handle on the shard\
     during shard finalization",
 );
+
+// Kafka
 
 /// Rules for enriching the `client.id` property of Kafka clients with
 /// additional data.
@@ -48,6 +56,58 @@ pub const KAFKA_CLIENT_ID_ENRICHMENT_RULES: Config<fn() -> serde_json::Value> = 
     "Rules for enriching the `client.id` property of Kafka clients with additional data.",
 );
 
+/// The maximum time we will wait before re-polling rdkafka to see if new partitions/data are
+/// available.
+pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
+    "kafka_poll_max_wait",
+    Duration::from_secs(1),
+    "The maximum time we will wait before re-polling rdkafka to see if new partitions/data are \
+    available.",
+);
+
+/// The timeout when seeking through a consumer when fast-forwarding it. We expect this
+/// to happen quickly.
+pub const KAFKA_FAST_FORWARD_SEEK_TIMEOUT: Config<Duration> = Config::new(
+    "kafka_fast_forward_seek_timeout",
+    Duration::from_secs(1),
+    "The timeout when seeking through a consumer when fast-forwarding it. We expect this \
+    to happen quickly.",
+);
+
+// MySQL
+
+/// Replication heartbeat interval requested from the MySQL server.
+pub const MYSQL_REPLICATION_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
+    "mysql_replication_heartbeat_interval",
+    Duration::from_secs(30),
+    "Replication heartbeat interval requested from the MySQL server.",
+);
+
+/// Interval to fetch `offset_known`, from `@gtid_executed`
+pub const MYSQL_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
+    "mysql_offset_known_interval",
+    Duration::from_secs(10),
+    "Interval to fetch `offset_known`, from `@gtid_executed`",
+);
+
+// Postgres
+
+/// Interval to poll `confirmed_flush_lsn` to get a resumption lsn.
+pub const PG_FETCH_SLOT_RESUME_LSN_INTERVAL: Config<Duration> = Config::new(
+    "postgres_fetch_slot_resume_lsn_interval",
+    Duration::from_millis(500),
+    "Interval to poll `confirmed_flush_lsn` to get a resumption lsn.",
+);
+
+/// Interval to fetch `offset_known`, from `pg_current_wal_lsn`
+pub const PG_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
+    "pg_offset_known_interval",
+    Duration::from_secs(10),
+    "Interval to fetch `offset_known`, from `pg_current_wal_lsn`",
+);
+
+// Networking
+
 /// Whether or not to enforce that external connection addresses are global
 /// (not private or local) when resolving them.
 pub const ENFORCE_EXTERNAL_ADDRESSES: Config<bool> = Config::new(
@@ -56,6 +116,8 @@ pub const ENFORCE_EXTERNAL_ADDRESSES: Config<bool> = Config::new(
     "Whether or not to enforce that external connection addresses are global \
           (not private or local) when resolving them",
 );
+
+// Upsert
 
 /// Whether or not to prevent buffering the entire _upstream_ snapshot in
 /// memory when processing it in memory. This is generally understood to reduce
@@ -87,6 +149,8 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     "Limit snapshot buffering in upsert.",
 );
 
+// RocksDB
+
 /// How many times to try to cleanup old RocksDB DB's on disk before giving up.
 pub const STORAGE_ROCKSDB_CLEANUP_TRIES: Config<usize> = Config::new(
     "storage_rocksdb_cleanup_tries",
@@ -100,6 +164,12 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
+        .add(&KAFKA_POLL_MAX_WAIT)
+        .add(&KAFKA_FAST_FORWARD_SEEK_TIMEOUT)
+        .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
+        .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
+        .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
+        .add(&PG_OFFSET_KNOWN_INTERVAL)
         .add(&ENFORCE_EXTERNAL_ADDRESSES)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)

@@ -347,7 +347,11 @@ async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), Tran
 }
 
 /// Fetches the minimum LSN at which this slot can safely resume.
-async fn fetch_slot_resume_lsn(client: &Client, slot: &str) -> Result<MzOffset, TransientError> {
+async fn fetch_slot_resume_lsn(
+    client: &Client,
+    slot: &str,
+    interval: Duration,
+) -> Result<MzOffset, TransientError> {
     loop {
         let query = format!(
             "SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{slot}'"
@@ -362,7 +366,9 @@ async fn fetch_slot_resume_lsn(client: &Client, slot: &str) -> Result<MzOffset, 
             // already has "upper" semantics.
             Some(flush_lsn) => return Ok(MzOffset::from(flush_lsn.parse::<PgLsn>().unwrap())),
             // It can happen that confirmed_flush_lsn is NULL as the slot initializes
-            None => tokio::time::sleep(Duration::from_millis(500)).await,
+            // This could probably be a `tokio::time::interval`, but its only is called twice,
+            // so its fine like this.
+            None => tokio::time::sleep(interval).await,
         };
     }
 }
