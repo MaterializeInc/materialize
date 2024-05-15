@@ -266,6 +266,7 @@ mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::PartStats;
+    use mz_repr::arb_datum_for_column;
     use mz_repr::{
         ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena,
         ScalarType,
@@ -275,8 +276,8 @@ mod tests {
     use super::*;
     use crate::sources::SourceData;
 
-    fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
-        struct ValidateStats<'a>(RelationPartStats<'a>, &'a RowArena, Datum<'a>);
+    fn validate_stats(column_type: &ColumnType, datums: &[Datum<'_>]) -> Result<(), String> {
+        struct ValidateStats<'a>(&'a RelationPartStats<'a>, &'a RowArena, Datum<'a>);
         impl<'a> DatumToPersistFn<()> for ValidateStats<'a> {
             fn call<T: DatumToPersist>(self) -> () {
                 let ValidateStats(stats, arena, datum) = self;
@@ -286,39 +287,47 @@ mod tests {
             }
         }
 
-        fn validate_stats(column_type: &ColumnType, datum: Datum<'_>) -> Result<(), String> {
-            let schema = RelationDesc::empty().with_column("col", column_type.clone());
-            let row = SourceData(Ok(Row::pack(std::iter::once(datum))));
+        let schema = RelationDesc::empty().with_column("col", column_type.clone());
 
-            let mut builder = PartBuilder::new(&schema, &UnitSchema).expect("success");
+        let mut builder = PartBuilder::new(&schema, &UnitSchema).expect("success");
+        let mut row = SourceData(Ok(Row::default()));
+        for datum in datums {
+            row.as_mut().unwrap().packer().push(datum);
             builder.push(&row, &(), 1u64, 1i64);
-            let part = builder.finish();
-            let stats = part.key_stats()?;
+        }
+        let part = builder.finish();
+        let stats = part.key_stats()?;
 
-            let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
-            let stats = RelationPartStats {
-                name: "test",
-                metrics: &metrics,
-                stats: &PartStats { key: stats },
-                desc: &schema,
-            };
-            let arena = RowArena::default();
-            column_type.to_persist(ValidateStats(stats, &arena, datum));
-            Ok(())
+        let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+        let stats = RelationPartStats {
+            name: "test",
+            metrics: &metrics,
+            stats: &PartStats { key: stats },
+            desc: &schema,
+        };
+        let arena = RowArena::default();
+
+        // Validate that the stats would include all of the provided datums.
+        for datum in datums {
+            column_type.to_persist(ValidateStats(&stats, &arena, *datum));
         }
 
+        Ok(())
+    }
+
+    fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
         // Non-nullable version of the column.
         let column_type = scalar_type.clone().nullable(false);
         for datum in scalar_type.interesting_datums() {
-            assert_eq!(validate_stats(&column_type, datum), Ok(()));
+            assert_eq!(validate_stats(&column_type, &[datum]), Ok(()));
         }
 
         // Nullable version of the column.
         let column_type = scalar_type.clone().nullable(true);
         for datum in scalar_type.interesting_datums() {
-            assert_eq!(validate_stats(&column_type, datum), Ok(()));
+            assert_eq!(validate_stats(&column_type, &[datum]), Ok(()));
         }
-        assert_eq!(validate_stats(&column_type, Datum::Null), Ok(()));
+        assert_eq!(validate_stats(&column_type, &[Datum::Null]), Ok(()));
     }
 
     #[mz_ore::test]
@@ -328,5 +337,20 @@ mod tests {
             // The proptest! macro interferes with rustfmt.
             scalar_type_stats_roundtrip(scalar_type)
         });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn all_datums_produce_valid_stats() {
+        // A strategy that will return a Vec of Datums for an arbitrary ColumnType.
+        let datums = any::<ColumnType>().prop_flat_map(|ty| {
+            prop::collection::vec(arb_datum_for_column(&ty), 0..128)
+                .prop_map(move |datums| (ty.clone(), datums))
+        });
+        proptest!(|((ty, datums) in datums)| {
+            // The proptest! macro interferes with rustfmt.
+            let datums: Vec<_> = datums.iter().map(Datum::from).collect();
+            prop_assert_eq!(validate_stats(&ty, &datums[..]), Ok(()));
+        })
     }
 }
