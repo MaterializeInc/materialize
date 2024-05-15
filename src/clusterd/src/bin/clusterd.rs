@@ -260,6 +260,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut persist_cfg =
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), mz_dyncfgs::all_dyncfgs());
     persist_cfg.is_cc_active = args.is_cluster_size_v2;
+    persist_cfg.announce_memory_limit = args.announce_memory_limit;
     let persist_clients = Arc::new(PersistClientCache::new(
         persist_cfg,
         &metrics_registry,

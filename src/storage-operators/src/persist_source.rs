@@ -26,8 +26,8 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
-use mz_persist_client::fetch::SerdeLeasedBatchPart;
 use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
+use mz_persist_client::fetch::{SerdeLeasedBatchPart, ShardSourcePart};
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_txn::operator::txns_progress;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -493,7 +493,7 @@ struct PendingWork {
 enum PendingPart {
     Unparsed(FetchedBlob<SourceData, (), Timestamp, Diff>),
     Parsed {
-        part: FetchedPart<SourceData, (), Timestamp, Diff>,
+        part: ShardSourcePart<SourceData, (), Timestamp, Diff>,
         error_free: bool,
     },
 }
@@ -516,7 +516,7 @@ impl PendingPart {
                 // Won't recurse any further.
                 self.part_mut()
             }
-            PendingPart::Parsed { part, error_free } => (part, *error_free),
+            PendingPart::Parsed { part, error_free } => (&mut part.part, *error_free),
         }
     }
 }
