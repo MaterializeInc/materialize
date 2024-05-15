@@ -267,8 +267,10 @@ where
                     // For example, we may have expressions not pushed down (e.g. literals)
                     // and projections that could not be applied (e.g. column repetition).
                     if let Some(final_closure) = final_closure {
-                        let (updates, errors) =
-                            update_stream.flat_map_fallible::<ConsolidatingContainerBuilder<_>, ConsolidatingContainerBuilder<_>, _, _, _, _>("DeltaJoinFinalization", {
+                        let name = "DeltaJoinFinalization";
+                        type CB<C> = ConsolidatingContainerBuilder<C>;
+                        let (updates, errors) = update_stream
+                            .flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
                                 // Reuseable allocation for unpacking.
                                 let mut datums = DatumVec::new();
                                 move |row| {
