@@ -136,13 +136,13 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
 
     // A simple merge operator that adds all merge values to the existing key
     // value, if any.
-    fn merge(_key: &[u8], operands: ValueIterator<bincode::DefaultOptions, u32>) -> Option<u32> {
+    fn merge(_key: &[u8], operands: ValueIterator<bincode::DefaultOptions, u32>) -> u32 {
         let mut val = 0;
 
         for op in operands {
             val += op;
         }
-        Some(val)
+        val
     }
 
     let static_options = InstanceOptions::new(

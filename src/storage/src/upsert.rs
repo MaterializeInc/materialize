@@ -538,7 +538,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // implementations, and reduces the number of reads and write we need to do.
     //
     // This "mini-upsert" technique is actually useful in `UpsertState`'s
-    // `consolidate_snapshot_chunk` implementation, minimizing gets and puts on
+    // `consolidate_snapshot_read_write_inner` implementation, minimizing gets and puts on
     // the `UpsertStateBackend` implementations. In some sense, its "upsert all the way down".
     while let Some((ts, key, from_time, value)) = commands.next() {
         let mut command_state = if let Entry::Occupied(command_state) = commands_state.entry(key) {

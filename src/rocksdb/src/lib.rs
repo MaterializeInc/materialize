@@ -93,7 +93,7 @@ where
 /// Helper type stub to satisfy generic bounds when initializing a `InstanceOptions` without a
 /// defined merge operator.
 pub type StubMergeOperator<V> =
-    fn(key: &[u8], operands: ValueIterator<bincode::DefaultOptions, V>) -> Option<V>;
+    fn(key: &[u8], operands: ValueIterator<bincode::DefaultOptions, V>) -> V;
 
 /// Fixed options to configure a [`RocksDBInstance`]. These are not tuning parameters,
 /// see the `config` modules for tuning. These are generally fixed within the binary.
@@ -128,7 +128,7 @@ impl<O, V, F> InstanceOptions<O, V, F>
 where
     O: bincode::Options + Copy + Send + Sync + 'static,
     V: DeserializeOwned + Serialize + Send + Sync + 'static,
-    F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> Option<V> + Copy + Send + Sync + 'static,
+    F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> V + Copy + Send + Sync + 'static,
 {
     /// A new `Options` object with reasonable defaults.
     pub fn new(
@@ -172,7 +172,10 @@ where
                     bincode: &bincode,
                     v: std::marker::PhantomData::<V>,
                 };
-                merge_fn(key, operands).map(|result| bincode.serialize(&result).unwrap())
+                let result = merge_fn(key, operands);
+                // NOTE: While the API specifies the return type as Option<Vec<u8>>, returning a None
+                // will cause rocksdb to throw a corruption error and SIGABRT the process.
+                Some(bincode.serialize(&result).unwrap())
             });
         }
 
@@ -337,11 +340,7 @@ where
         O: bincode::Options + Copy + Send + Sync + 'static,
         M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
         IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
-        F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> Option<V>
-            + Copy
-            + Send
-            + Sync
-            + 'static,
+        F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> V + Copy + Send + Sync + 'static,
     {
         let dynamic_config = tuning_config.dynamic.clone();
         let supports_merges = options.merge_operator.is_some();
@@ -608,7 +607,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
     O: bincode::Options + Copy + Send + Sync + 'static,
-    F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> Option<V> + Send + Sync + Copy + 'static,
+    F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> V + Send + Sync + Copy + 'static,
     IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
 {
     let retry_max_duration = tuning_config.retry_max_duration;

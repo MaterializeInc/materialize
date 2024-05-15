@@ -445,8 +445,6 @@ impl<O: Default> StateValue<O> {
                                 .collect::<Vec<_>>(),
                             snapshotting
                         );
-                        // TODO(guswynn): This is probably not necessary, as we should have deleted
-                        // the value from the state.
                         *self = Self::Value(Value::Tombstone(Default::default()));
                     }
                     other => panic!(
@@ -695,19 +693,18 @@ where
 /// backend implementation when it has accumulated a set of updates for a key, and needs to merge
 /// them into the existing value for the key.
 ///
-/// The function should return the new value for the key, or None if the key should be deleted.
 /// The function is called with the following arguments:
 /// - The key for which the merge is being performed.
 /// - An iterator over any current value and merge operands queued for the key.
+/// The function should return the new value for the key after merging all the updates.
 pub(crate) fn snapshot_merge_function<O>(
     _key: UpsertKey,
     updates: impl Iterator<Item = StateValue<O>>,
-) -> Option<StateValue<O>>
+) -> StateValue<O>
 where
     O: Default,
 {
     let mut current = Default::default();
-    let mut should_delete = false;
     assert!(
         matches!(current, StateValue::Snapshotting(_)),
         "merge_function called with non-snapshotting default"
@@ -717,14 +714,10 @@ where
             matches!(update, StateValue::Snapshotting(_)),
             "merge_function called with non-snapshot update"
         );
-        should_delete = current.merge_update_state(&update);
+        current.merge_update_state(&update);
     }
 
-    if should_delete {
-        None
-    } else {
-        Some(current)
-    }
+    current
 }
 
 /// An `UpsertStateBackend` wrapper that supports
