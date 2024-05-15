@@ -304,6 +304,78 @@ mod container {
             *self
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use crate::row_spine::DatumContainer;
+        use differential_dataflow::trace::implementations::BatchContainer;
+        use mz_repr::adt::date::Date;
+        use mz_repr::adt::interval::Interval;
+        use mz_repr::{Datum, Row, ScalarType};
+
+        #[mz_ore::test]
+        fn miri_test_round_trip() {
+            fn round_trip(datums: Vec<Datum>) {
+                let row = Row::pack(datums.clone());
+
+                let mut container = DatumContainer::with_capacity(row.byte_len());
+                container.copy_push(&row);
+
+                // When run under miri this catches undefined bytes written to data
+                // eg by calling push_copy! on a type which contains undefined padding values
+                println!("{:?}", container.index(0).bytes);
+
+                let datums2 = container.index(0).collect::<Vec<_>>();
+                assert_eq!(datums, datums2);
+            }
+
+            round_trip(vec![]);
+            round_trip(
+                ScalarType::enumerate()
+                    .iter()
+                    .flat_map(|r#type| r#type.interesting_datums())
+                    .collect(),
+            );
+            round_trip(vec![
+                Datum::Null,
+                Datum::Null,
+                Datum::False,
+                Datum::True,
+                Datum::Int16(-21),
+                Datum::Int32(-42),
+                Datum::Int64(-2_147_483_648 - 42),
+                Datum::UInt8(0),
+                Datum::UInt8(1),
+                Datum::UInt16(0),
+                Datum::UInt16(1),
+                Datum::UInt16(1 << 8),
+                Datum::UInt32(0),
+                Datum::UInt32(1),
+                Datum::UInt32(1 << 8),
+                Datum::UInt32(1 << 16),
+                Datum::UInt32(1 << 24),
+                Datum::UInt64(0),
+                Datum::UInt64(1),
+                Datum::UInt64(1 << 8),
+                Datum::UInt64(1 << 16),
+                Datum::UInt64(1 << 24),
+                Datum::UInt64(1 << 32),
+                Datum::UInt64(1 << 40),
+                Datum::UInt64(1 << 48),
+                Datum::UInt64(1 << 56),
+                Datum::Date(Date::from_pg_epoch(365 * 45 + 21).unwrap()),
+                Datum::Interval(Interval {
+                    months: 312,
+                    ..Default::default()
+                }),
+                Datum::Interval(Interval::new(0, 0, 1_012_312)),
+                Datum::Bytes(&[]),
+                Datum::Bytes(&[0, 2, 1, 255]),
+                Datum::String(""),
+                Datum::String("العَرَبِيَّة"),
+            ]);
+        }
+    }
 }
 
 mod offset_opt {
