@@ -94,28 +94,27 @@ where
         let non_null_assertions = sink.non_null_assertions.clone();
         let from_desc = sink.from_desc.clone();
         if !non_null_assertions.is_empty() {
-            let (oks, null_errs) = ok_collection
-                .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
-                    "NullAssertions({sink_id:?})",
-                    move |row| {
-                        let mut idx = 0;
-                        let mut iter = row.iter();
-                        for &i in &non_null_assertions {
-                            let skip = i - idx;
-                            let datum = iter.nth(skip).unwrap();
-                            idx += skip + 1;
-                            if datum.is_null() {
-                                return Err(DataflowError::EvalError(Box::new(
-                                    EvalError::MustNotBeNull(format!(
-                                        "column {}",
-                                        from_desc.get_name(i).as_str().quoted()
-                                    )),
-                                )));
-                            }
+            let name = format!("NullAssertions({sink_id:?})");
+            type CB<C> = CapacityContainerBuilder<C>;
+            let (oks, null_errs) =
+                ok_collection.map_fallible::<CB<_>, CB<_>, _, _, _>(&name, move |row| {
+                    let mut idx = 0;
+                    let mut iter = row.iter();
+                    for &i in &non_null_assertions {
+                        let skip = i - idx;
+                        let datum = iter.nth(skip).unwrap();
+                        idx += skip + 1;
+                        if datum.is_null() {
+                            return Err(DataflowError::EvalError(Box::new(
+                                EvalError::MustNotBeNull(format!(
+                                    "column {}",
+                                    from_desc.get_name(i).as_str().quoted()
+                                )),
+                            )));
                         }
-                        Ok(row)
-                    },
-                );
+                    }
+                    Ok(row)
+                });
             ok_collection = oks;
             err_collection = err_collection.concat(&null_errs);
         }

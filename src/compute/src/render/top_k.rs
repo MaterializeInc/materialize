@@ -410,21 +410,21 @@ where
 
             // Demux oks and errors.
             let error_logger = self.error_logger();
-            let (oks, errs) = stage
-                .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
-                    "Demuxing Errors",
-                    move |(hk, result)| match result {
-                        Err(v) => {
-                            let mut hk_iter = hk.iter();
-                            let h = hk_iter.next().unwrap().unwrap_uint64();
-                            let k = SharedRow::pack(hk_iter);
-                            let message = "Negative multiplicities in TopK";
-                            error_logger.log(message, &format!("k={k:?}, h={h}, v={v:?}"));
-                            Err(EvalError::Internal(message.to_string()).into())
-                        }
-                        Ok(t) => Ok((hk, t)),
-                    },
-                );
+            type CB<C> = CapacityContainerBuilder<C>;
+            let (oks, errs) = stage.map_fallible::<CB<_>, CB<_>, _, _, _>(
+                "Demuxing Errors",
+                move |(hk, result)| match result {
+                    Err(v) => {
+                        let mut hk_iter = hk.iter();
+                        let h = hk_iter.next().unwrap().unwrap_uint64();
+                        let k = SharedRow::pack(hk_iter);
+                        let message = "Negative multiplicities in TopK";
+                        error_logger.log(message, &format!("k={k:?}, h={h}, v={v:?}"));
+                        Err(EvalError::Internal(message.to_string()).into())
+                    }
+                    Ok(t) => Ok((hk, t)),
+                },
+            );
             (input, oks, Some(errs))
         } else {
             // Build non-validating topk stage.
