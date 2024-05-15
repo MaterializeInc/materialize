@@ -773,6 +773,20 @@ impl MirScalarExpr {
                                     }
                                     _ => {}
                                 }
+                            } else if let Some(inverse_func) = func.inverse() {
+                                if func.preserves_uniqueness()
+                                    && inverse_func.preserves_uniqueness()
+                                {
+                                    if let MirScalarExpr::CallUnary {
+                                        func: inner_func,
+                                        expr,
+                                    } = &mut **expr
+                                    {
+                                        if inner_func == &inverse_func {
+                                            *e = expr.take();
+                                        }
+                                    }
+                                }
                             }
                         }
                         _ => {}
