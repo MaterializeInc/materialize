@@ -48,4 +48,9 @@ setup(
         "dbt-core>=1.8.0",
         "dbt-postgres~=1.8.0",
     ],
+    extras_require={
+        "dev": [
+            "dbt-tests-adapter @ git+https://github.com/dbt-labs/dbt-adapters.git#egg=dbt-tests-adapter&subdirectory=dbt-tests-adapter"
+        ],
+    },
 )
