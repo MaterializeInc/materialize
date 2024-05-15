@@ -136,6 +136,7 @@ class ErrorLog:
 
 @dataclass
 class JunitError:
+    testclass: str
     testcase: str
     message: str
     text: str
@@ -335,12 +336,17 @@ def _get_errors_from_junit_file(log_file_name: str) -> list[JunitError]:
     error_logs = []
     xml = JUnitXml.fromfile(log_file_name)
     for suite in xml:
-        for case in suite:
-            for result in case.result:
+        for testcase in suite:
+            for result in testcase.result:
                 if not isinstance(result, Error) and not isinstance(result, Failure):
                     continue
                 error_logs.append(
-                    JunitError(case.name, result.message or "", result.text or "")
+                    JunitError(
+                        testcase.classname,
+                        testcase.name,
+                        result.message or "",
+                        result.text or "",
+                    )
                 )
     return error_logs
 
