@@ -231,7 +231,7 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     # Keep track of known errors so we log each only once
     already_reported_issue_numbers: set[int] = set()
 
-    def handle_error(error_message: bytes, location: str):
+    def handle_error(error_message: bytes, location: str, is_junit_error: bool):
         # Don't have too huge output, so truncate
         formatted_error_message = f"```\n{sanitize_text(truncate_str(error_message.decode('utf-8'), 10_000))}\n```"
 
@@ -267,8 +267,9 @@ def annotate_logged_errors(log_files: list[str]) -> int:
                         already_reported_issue_numbers.add(issue.info["number"])
                     break
             else:
+                error_type = "Failure" if is_junit_error else "Unknown error"
                 unknown_errors.append(
-                    f"Unknown error in {location}:\n{formatted_error_message}"
+                    f"{error_type} in {location}:\n{formatted_error_message}"
                 )
 
     for error in errors:
@@ -282,15 +283,16 @@ def annotate_logged_errors(log_files: list[str]) -> int:
             else:
                 linked_file: str = error.file
 
-            handle_error(error.match, linked_file)
-
-        else:
+            handle_error(error.match, linked_file, is_junit_error=False)
+        elif isinstance(error, JunitError):
             msg = "\n".join(filter(None, [error.message, error.text]))
             if "in Code Coverage" in error.text or "covered" in error.message:
                 # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
                 known_errors.append(f"{error.testcase}:\n```\n{msg}\n```")
             else:
-                handle_error(msg.encode("utf-8"), error.testcase)
+                handle_error(msg.encode("utf-8"), error.testcase, is_junit_error=True)
+        else:
+            raise RuntimeError(f"Unexpected error type: {type(error)}")
 
     failures_on_main = get_failures_on_main()
     annotate_errors(unknown_errors, known_errors, failures_on_main)
