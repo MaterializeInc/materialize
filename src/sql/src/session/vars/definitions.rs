@@ -1565,8 +1565,8 @@ pub mod cluster_scheduling {
         true,
     );
 
-    pub static CLUSTER_ENABLE_SECURITY_CONTEXT: VarDefinition = VarDefinition::new(
-        "enable_security_context",
+    pub static CLUSTER_SECURITY_CONTEXT_ENABLED: VarDefinition = VarDefinition::new(
+        "cluster_security_context_enabled",
         value!(bool; DEFAULT_SECURITY_CONTEXT_ENABLED),
         "Enables SecurityContext for clusterd instances, restricting capabilities to improve security.",
         true,
