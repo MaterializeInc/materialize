@@ -1731,32 +1731,40 @@ where
         &self,
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotPartsStats, StorageError<Self::Timestamp>> {
-        let metadata = &self.collection(id)?.collection_metadata;
+    ) -> BoxFuture<'static, Result<SnapshotPartsStats, StorageError<Self::Timestamp>>> {
         // See the comments in Self::snapshot for what's going on here.
-        let result = match metadata.txns_shard.as_ref() {
-            None => {
-                let mut read_handle = self.read_handle_for_snapshot(id).await?;
-                let result = read_handle.snapshot_parts_stats(as_of).await;
-                read_handle.expire().await;
-                result
-            }
-            Some(txns_id) => {
+        let read_handle = self.read_handle_for_snapshot(id).await;
+        let data_snapshot = match self.collection(id) {
+            Err(e) => Err(e),
+            Ok(CollectionState {
+                collection_metadata:
+                    CollectionMetadata {
+                        txns_shard: Some(txns_id),
+                        data_shard,
+                        ..
+                    },
+                ..
+            }) => {
                 let as_of = as_of
-                    .into_option()
+                    .as_option()
                     .expect("cannot read as_of the empty antichain");
                 let txns_read = self.txns.expect_enabled_lazy(txns_id);
                 txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = txns_read
-                    .data_snapshot(metadata.data_shard, as_of.clone())
-                    .await;
-                let mut handle = self.read_handle_for_snapshot(id).await?;
-                let result = data_snapshot.snapshot_parts_stats(&mut handle).await;
-                handle.expire().await;
-                result
+                let data_snapshot = txns_read.data_snapshot(*data_shard, as_of.clone()).await;
+                Ok(Some(data_snapshot))
             }
+            Ok(_) => Ok(None),
         };
-        result.map_err(|_| StorageError::ReadBeforeSince(id))
+
+        Box::pin(async move {
+            let mut read_handle = read_handle?;
+            let result = match data_snapshot? {
+                Some(data_snapshot) => data_snapshot.snapshot_parts_stats(&mut read_handle).await,
+                None => read_handle.snapshot_parts_stats(as_of).await,
+            };
+            read_handle.expire().await;
+            result.map_err(|_| StorageError::ReadBeforeSince(id))
+        })
     }
 
     #[instrument(level = "debug")]
