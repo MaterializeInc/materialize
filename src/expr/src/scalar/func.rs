@@ -4390,6 +4390,11 @@ trait EagerUnaryFunc<'a> {
         Self::Output::nullable()
     }
 
+    /// Whether this function could produce an error
+    fn could_error(&self) -> bool {
+        Self::Output::fallible()
+    }
+
     /// Whether this function preserves uniqueness
     fn preserves_uniqueness(&self) -> bool {
         false
@@ -4436,7 +4441,7 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
     }
 
     fn could_error(&self) -> bool {
-        T::Output::fallible()
+        self.could_error()
     }
 
     fn preserves_uniqueness(&self) -> bool {
