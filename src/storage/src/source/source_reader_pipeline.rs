@@ -56,6 +56,7 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
+use mz_timely_util::operator::StreamExt as _;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
@@ -612,15 +613,12 @@ where
 
     let operator_name = format!("reclock({})", id);
     let mut reclock_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-    let (mut reclocked_ok_output, ok_muxed_stream) = reclock_op.new_output();
-    let (mut reclocked_err_output, err_muxed_stream) = reclock_op.new_output();
+    let (mut reclocked_output, reclocked_stream) = reclock_op.new_output();
     let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates.inner, Pipeline);
 
     reclock_op.build(move |capabilities| async move {
         // The capability of the output after reclocking the source frontier
-        let [ok_cap, err_cap]: [_; 2] = capabilities.try_into().expect("one capability per output");
-        let mut ok_cap_set = CapabilitySet::from_elem(ok_cap);
-        let mut err_cap_set = CapabilitySet::from_elem(err_cap);
+        let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
 
         // Compute the overall resume upper to report for the ingestion
         let resume_upper = Antichain::from_iter(resume_uppers.values().flat_map(|f| f.iter().cloned()));
@@ -723,9 +721,7 @@ where
                     let mut total_processed = 0;
                     for (((idx, msg), from_ts, diff), into_ts) in timestamper.reclock(msgs) {
                         let into_ts = into_ts.expect("reclock for update not beyond upper failed");
-                        let ok_ts_cap = ok_cap_set.delayed(&into_ts);
-                        let err_ts_cap = err_cap_set.delayed(&into_ts);
-                        match msg {
+                        let output = match msg {
                             Ok(message) => {
                                 bytes_read += message.key.byte_len() + message.value.byte_len();
                                 let ok = SourceOutput {
@@ -734,17 +730,19 @@ where
                                     metadata: message.metadata,
                                     from_time: from_ts,
                                 };
-                                reclocked_ok_output.give(&ok_ts_cap, ((idx, ok), into_ts, diff)).await;
+                                (idx, Ok(ok))
                             }
                             Err(SourceReaderError { inner }) => {
                                 let err = SourceError {
                                     source_id: id,
                                     error: inner,
                                 };
-                                reclocked_err_output.give(&err_ts_cap, ((idx, err), into_ts, diff.into())).await;
+                                (idx, Err(err))
                             }
-                        }
+                        };
 
+                        let ts_cap = cap_set.delayed(&into_ts);
+                        reclocked_output.give(&ts_cap, (output, into_ts, diff)).await;
                         total_processed += 1;
                     }
                     // The loop above might have completely emptied batches. We can now remove them
@@ -763,9 +761,8 @@ where
                     // most one entry in the `CapabilitySet`. If this ever changes we
                     // need to rethink how we surface this in metrics. We will notice
                     // when that happens because the `expect()` will fail.
-                    // TODO: This only checks `ok_cap_set`, which should be in sync with `err_cap_set`.
                     source_metrics.capability.set(
-                        ok_cap_set
+                        cap_set
                             .iter()
                             .at_most_one()
                             .expect("there can be at most one element for totally ordered times")
@@ -794,8 +791,7 @@ where
                         into_ready_upper.pretty()
                     );
 
-                    ok_cap_set.downgrade(into_ready_upper.elements());
-                    err_cap_set.downgrade(into_ready_upper.elements());
+                    cap_set.downgrade(into_ready_upper.elements());
                     timestamper.compact(into_ready_upper.clone());
                     if into_ready_upper.is_empty() {
                         return;
@@ -804,6 +800,17 @@ where
             }
         }
     });
+
+    // TODO(petrosagg): output the two streams directly
+    type CB<C> = CapacityContainerBuilder<C>;
+    let (ok_muxed_stream, err_muxed_stream) = reclocked_stream
+        .map_fallible::<CB<_>, CB<_>, _, _, _>(
+            "reclock-demux-ok-err",
+            |((output, r), ts, diff)| match r {
+                Ok(ok) => Ok(((output, ok), ts, diff)),
+                Err(err) => Err(((output, err), ts, diff.into())),
+            },
+        );
 
     // We use the output index from the source export to route values to its ok and err streams. We
     // do this obliquely by generating as many partitions as there are output indices and then
