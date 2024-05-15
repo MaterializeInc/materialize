@@ -61,6 +61,10 @@ pub enum Error {
     /// A tokio thread used by the implementation panicked.
     #[error("failed to cleanup in time")]
     CleanupTimeout(#[from] tokio::time::error::Elapsed),
+
+    /// An error occured with a provided value.
+    #[error("error with value: {0}")]
+    ValueError(String),
 }
 
 /// An iterator over operand values to merge for a key in RocksDB.
@@ -242,11 +246,15 @@ pub struct GetResult<V> {
 /// The result type for `multi_update`.
 #[derive(Default, Debug)]
 pub struct MultiUpdateResult {
-    /// The number of keys we put, merged, or deleted.
+    /// The number of puts, merges, and deletes.
     pub processed_updates: u64,
     /// The total size of values we wrote to the database.
     /// Does not contain any information about deletes.
     pub size_written: u64,
+    /// The 'diff' size of the values we wrote to the database,
+    /// returned when the `MultiUpdate` command included a multiplier 'diff'
+    /// for at least one update value.
+    pub size_diff: Option<i64>,
 }
 
 /// The type of update to perform on a key.
@@ -280,10 +288,14 @@ enum Command<K, V> {
         >,
     },
     MultiUpdate {
-        batch: Vec<(K, KeyUpdate<V>)>,
+        // The batch of updates to perform. The 3rd item in each tuple is an optional diff
+        // multiplier that when present, will be multiplied by the size of the encoded
+        // value written to the database and summed into the `MultiUpdateResult::size_diff` field.
+        batch: Vec<(K, KeyUpdate<V>, Option<i64>)>,
         // Scratch vector to return results in.
-        response_sender:
-            oneshot::Sender<Result<(MultiUpdateResult, Vec<(K, KeyUpdate<V>)>), Error>>,
+        response_sender: oneshot::Sender<
+            Result<(MultiUpdateResult, Vec<(K, KeyUpdate<V>, Option<i64>)>), Error>,
+        >,
     },
     Shutdown {
         done_sender: oneshot::Sender<()>,
@@ -307,7 +319,7 @@ pub struct RocksDBInstance<K, V> {
 
     // Scratch vector to send updates to the RocksDB thread
     // during `MultiUpdate`.
-    multi_update_scratch: Vec<(K, KeyUpdate<V>)>,
+    multi_update_scratch: Vec<(K, KeyUpdate<V>, Option<i64>)>,
 
     // Configuration that can change dynamically.
     dynamic_config: config::RocksDBDynamicConfig,
@@ -509,9 +521,12 @@ where
     /// For each key in puts, store the given value, or delete it if
     /// the value is `None`. If the same `key` appears multiple times,
     /// the last value for the key wins.
+    /// The third item in each tuple is an optional diff multiplier that when present,
+    /// will be multiplied by the size of the encoded value written to the database and
+    /// summed into the `MultiUpdateResult::size_diff` field.
     pub async fn multi_update<P>(&mut self, puts: P) -> Result<MultiUpdateResult, Error>
     where
-        P: IntoIterator<Item = (K, KeyUpdate<V>)>,
+        P: IntoIterator<Item = (K, KeyUpdate<V>, Option<i64>)>,
     {
         let batch_size = self.dynamic_config.batch_size();
         let mut stats = MultiUpdateResult::default();
@@ -524,6 +539,9 @@ where
                 let ret = self.multi_update_inner(puts).await?;
                 stats.processed_updates += ret.processed_updates;
                 stats.size_written += ret.size_written;
+                if let Some(diff) = ret.size_diff {
+                    stats.size_diff = Some(stats.size_diff.unwrap_or(0) + diff);
+                }
             }
         }
 
@@ -532,7 +550,7 @@ where
 
     async fn multi_update_inner<P>(&mut self, updates: P) -> Result<MultiUpdateResult, Error>
     where
-        P: IntoIterator<Item = (K, KeyUpdate<V>)>,
+        P: IntoIterator<Item = (K, KeyUpdate<V>, Option<i64>)>,
     {
         let mut multi_put_vec = std::mem::take(&mut self.multi_update_scratch);
         multi_put_vec.clear();
@@ -543,6 +561,7 @@ where
             return Ok(MultiUpdateResult {
                 processed_updates: 0,
                 size_written: 0,
+                size_diff: None,
             });
         }
 
@@ -755,6 +774,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                 let mut ret = MultiUpdateResult {
                     processed_updates: 0,
                     size_written: 0,
+                    size_diff: None,
                 };
 
                 // initialize and push values into the buffer to match the batch size
@@ -778,7 +798,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                 assert!(encoded_batch_buffers.len() >= batch_size);
 
                 // TODO(guswynn): sort by key before writing.
-                for ((key, value), encode_buf) in
+                for ((key, value, diff), encode_buf) in
                     batch.drain(..).zip(encoded_batch_buffers.iter_mut())
                 {
                     ret.processed_updates += 1;
@@ -792,7 +812,25 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                                 .bincode
                                 .serialize_into::<&mut Vec<u8>, _>(&mut encode_buf, update)
                             {
-                                Ok(()) => ret.size_written += u64::cast_from(encode_buf.len()),
+                                Ok(()) => {
+                                    ret.size_written += u64::cast_from(encode_buf.len());
+                                    // calculate the diff size if the diff multiplier is present
+                                    if let Some(diff) = diff {
+                                        let encoded_len = match i64::try_from(encode_buf.len()) {
+                                            Ok(len) => len,
+                                            Err(_) => {
+                                                let _ =
+                                                    response_sender.send(Err(Error::ValueError(
+                                                        "encoded value length too large"
+                                                            .to_string(),
+                                                    )));
+                                                return;
+                                            }
+                                        };
+                                        ret.size_diff =
+                                            Some(ret.size_diff.unwrap_or(0) + (diff * encoded_len));
+                                    }
+                                }
                                 Err(e) => {
                                     let _ = response_sender.send(Err(Error::DecodeError(e)));
                                     return;

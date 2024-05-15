@@ -20,8 +20,8 @@ use std::collections::HashMap;
 use itertools::Itertools;
 
 use super::types::{
-    GetStats, MergeStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize,
-    ValueMetadata,
+    GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue, UpsertStateBackend,
+    UpsertValueAndSize, ValueMetadata,
 };
 use super::UpsertKey;
 
@@ -89,7 +89,7 @@ where
 
     async fn multi_merge<M>(&mut self, _merges: M) -> Result<MergeStats, anyhow::Error>
     where
-        M: IntoIterator<Item = (UpsertKey, StateValue<O>)>,
+        M: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<O>>)>,
     {
         anyhow::bail!("InMemoryHashMap does not support merging");
     }

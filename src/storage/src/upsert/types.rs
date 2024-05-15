@@ -143,6 +143,15 @@ pub struct PutValue<V> {
     pub previous_value_metadata: Option<ValueMetadata<i64>>,
 }
 
+/// A value to put in with a `multi_merge`.
+pub struct MergeValue<V> {
+    /// The value of the merge operand to write to the backend.
+    pub value: V,
+    /// The 'diff' of this merge operand value, used to estimate the the overall size diff
+    /// of the working set after this merge operand is merged by the backend.
+    pub diff: i64,
+}
+
 /// `UpsertState` has 2 modes:
 /// - Normal operation
 /// - Consolidation of snapshots (during rehydration).
@@ -499,9 +508,12 @@ pub struct MergeStats {
     /// Should be equal to number of inserts + deletes
     pub written_merge_operands: u64,
     /// The total size of values provided to `multi_merge`. The backend will write these
-    /// down and then later merge them in the `snapshot_merge_function`. Since we don't
-    /// know the size of the future merged value, we can't provide a `size_diff` here.
+    /// down and then later merge them in the `snapshot_merge_function`.
     pub size_written: u64,
+    /// The estimated diff of the total size of the working set after the merge operands
+    /// are merged by the backend. This is an estimate since it can't account for the
+    /// size overhead of `StateValue` for values that consolidate to 0 (tombstoned-values).
+    pub size_diff: i64,
 }
 
 /// Statistics for a single call to `multi_put`.
@@ -678,14 +690,20 @@ where
     /// This allows avoiding the read-modify-write method of updating many values to
     /// improve performance.
     ///
+    /// The `MergeValue` should include a `diff` field that represents the update diff for the
+    /// value. This is used to estimate the overall size diff of the working set
+    /// after the merge operands are merged by the backend `sum[merges: m](m.diff * m.size)`.
+    ///
     /// `MergeStats` **must** be populated correctly, according to these semantics:
     /// - `written_merge_operands` must record the number of merge operands written to the backend.
     /// - `size_written` must record the total size of values written to the backend.
-    /// Note that the size of the post-merge values are not known, so this is the size of the values
-    /// written to the backend as merge operands.
+    ///     Note that the size of the post-merge values are not known, so this is the size of the
+    ///     values written to the backend as merge operands.
+    /// - `size_diff` must record the estimated diff of the total size of the working set after the
+    ///    merge operands are merged by the backend.
     async fn multi_merge<P>(&mut self, merges: P) -> Result<MergeStats, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, StateValue<O>)>;
+        P: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<O>>)>;
 }
 
 /// A function that merges a set of updates for a key into the existing value for the key, expected
@@ -947,16 +965,11 @@ where
                     // and not the state after this `multi_merge` call.
                     stats.values_diff += diff;
 
-                    (k, val)
+                    (k, MergeValue { value: val, diff })
                 }))
                 .await?;
 
-            // This is the total size of the merge values written to the backend, so is an accurate
-            // view of the size stored by the backend after this `multi_merge` operation, but not
-            // representative of the ultimate size of the backend after these merge operands have
-            // been mergedd by the `snapshot_merge_function`.
-            let size: i64 = m_stats.size_written.try_into().expect("less than i64 size");
-            stats.size_diff = size;
+            stats.size_diff = m_stats.size_diff;
         }
 
         Ok(stats)

@@ -19,7 +19,8 @@ use serde::{de::DeserializeOwned, Serialize};
 use super::memory::InMemoryHashMap;
 use super::rocksdb::RocksDB;
 use super::types::{
-    GetStats, MergeStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize,
+    GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue, UpsertStateBackend,
+    UpsertValueAndSize,
 };
 use super::UpsertKey;
 
@@ -122,7 +123,7 @@ where
 
     async fn multi_merge<M>(&mut self, merges: M) -> Result<MergeStats, anyhow::Error>
     where
-        M: IntoIterator<Item = (UpsertKey, StateValue<O>)>,
+        M: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<O>>)>,
     {
         match &mut self.backend_type {
             BackendType::InMemory(_) => {
