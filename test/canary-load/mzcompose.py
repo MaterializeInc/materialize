@@ -120,6 +120,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     else:
                         raise
                 except FailedTestExecutionError as e:
+                    assert len(e.errors) == 1, "Unexpected error"
+                    print(
+                        f"Test failure occurred ('{e.errors[0].message}'), collecting it, and continuing."
+                    )
                     # collect, continue, and rethrow at the end
                     failures.append(e.errors[0])
 
