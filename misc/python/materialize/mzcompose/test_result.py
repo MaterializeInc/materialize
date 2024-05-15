@@ -121,7 +121,7 @@ def determine_error_from_docker_compose_failure(
     e: CommandFailureCausedUIError, output: str | None, test_context: str | None
 ) -> TestFailureDetails:
     command = to_sanitized_command_str(e.cmd)
-    context_prefix = f"{test_context}: " if test_context else None
+    context_prefix = f"{test_context}: " if test_context is not None else ""
     return TestFailureDetails(
         f"{context_prefix}Docker compose failed: {command}",
         details=output,
