@@ -48,7 +48,7 @@ the following query against Materialize:
 ```sql
 SELECT sum(s.credits_per_hour) AS credit_consumption_rate
   FROM mz_cluster_replicas r
-  JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size;
+  JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size;
 ```
 
 For example, if you start your free trial by following the [getting started guide](/get-started/quickstart),
