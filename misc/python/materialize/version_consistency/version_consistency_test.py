@@ -54,13 +54,20 @@ class VersionConsistencyTest(OutputConsistencyTest):
     def __init__(self) -> None:
         self.mz2_connection: Connection | None = None
         self.evaluation_strategy_name: str | None = None
+        self.allow_same_version_comparison = False
 
     def shall_run(self, sql_executors: SqlExecutors) -> bool:
         assert isinstance(sql_executors, MultiVersionSqlExecutors)
         different_versions_involved = sql_executors.uses_different_versions()
 
         if not different_versions_involved:
-            print("Involved versions are identical, aborting")
+            if self.allow_same_version_comparison:
+                print(
+                    "Involved versions are identical, but continuing due to allow_same_version_comparison"
+                )
+                return True
+            else:
+                print("Involved versions are identical, aborting")
 
         return different_versions_involved
 
@@ -166,6 +173,11 @@ def main() -> int:
         type=str,
         choices=EVALUATION_STRATEGY_NAMES,
     )
+    parser.add_argument(
+        "--allow-same-version-comparison",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
 
     args = test.parse_output_consistency_input_args(parser)
 
@@ -174,6 +186,7 @@ def main() -> int:
         mz_connection = connect(args.mz_host, args.mz_port, mz_db_user)
         test.mz2_connection = connect(args.mz_host_2, args.mz_port_2, mz_db_user)
         test.evaluation_strategy_name = args.evaluation_strategy
+        test.allow_same_version_comparison = args.allow_same_version_comparison
     except InterfaceError:
         return 1
 
