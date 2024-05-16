@@ -129,7 +129,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     assert len(e.errors) > 0, "Exception contains not errors"
                     for error in e.errors:
                         print(
-                            f"Test failure occurred ('{error.message}'), collecting it, and continuing."
+                            f"Test failure occurred ({error.message}), collecting it, and continuing."
                         )
                     # collect, continue, and rethrow at the end
                     failures.extend(e.errors)
