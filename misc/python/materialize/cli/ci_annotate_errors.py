@@ -277,12 +277,12 @@ def annotate_logged_errors(log_files: list[str]) -> int:
         # Don't have too huge output, so truncate
         formatted_error_message = (
             f" `{sanitize_text(truncate_str(error_message, 1_000))}`"
-            if error_message is not None
+            if error_message is not None and len(error_message) > 0
             else ""
         )
         formatted_error_details = (
             f"```\n{sanitize_text(truncate_str(details, 9_000))}\n```"
-            if details is not None
+            if details is not None and len(details) > 0
             else ""
         )
         unknown_errors.append(
