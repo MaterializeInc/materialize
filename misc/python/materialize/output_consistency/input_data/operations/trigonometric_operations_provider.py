@@ -39,7 +39,7 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
 # only for numbers [-1, +1]
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "ACOS",
+        "acos",
         [
             NumericOperationParam(
                 incompatibilities={
@@ -52,7 +52,7 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "COSH",
+        "cosh",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
         {SingleParamValueGrowsArgsValidator()},
@@ -61,7 +61,7 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
 # only for numbers [1,)
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "ACOSH",
+        "acosh",
         [
             NumericOperationParam(
                 incompatibilities={
@@ -81,14 +81,14 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "COT",
+        "cot",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "SIN",
+        "sin",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
     )
@@ -96,7 +96,7 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
 # only for numbers [-1, +1]
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "ASIN",
+        "asin",
         [
             NumericOperationParam(
                 incompatibilities={
@@ -109,7 +109,7 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "SINH",
+        "sinh",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
         {SingleParamValueGrowsArgsValidator()},
@@ -117,28 +117,28 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "ASINH",
+        "asinh",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "TAN",
+        "tan",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "ATAN",
+        "atan",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "TANH",
+        "tanh",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
     )
@@ -146,7 +146,7 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
 # only for numbers [-1, +1]
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "ATANH",
+        "atanh",
         [
             NumericOperationParam(
                 incompatibilities={
@@ -159,14 +159,14 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "RADIANS",
+        "radians",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
-        "DEGREES",
+        "degrees",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
     )
