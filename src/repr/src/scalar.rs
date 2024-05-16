@@ -18,6 +18,7 @@ use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
@@ -3593,12 +3594,34 @@ impl Arbitrary for ScalarType {
         ])
         .boxed();
 
+        // There are a limited set of types we support in ranges.
+        let range_leaf = Union::new(vec![
+            Just(ScalarType::Int32).boxed(),
+            Just(ScalarType::Int64).boxed(),
+            Just(ScalarType::Date).boxed(),
+            any::<Option<NumericMaxScale>>()
+                .prop_map(|max_scale| ScalarType::Numeric { max_scale })
+                .boxed(),
+            any::<Option<TimestampPrecision>>()
+                .prop_map(|precision| ScalarType::Timestamp { precision })
+                .boxed(),
+            any::<Option<TimestampPrecision>>()
+                .prop_map(|precision| ScalarType::TimestampTz { precision })
+                .boxed(),
+        ]);
+        let range = range_leaf
+            .prop_map(|inner_type| ScalarType::Range {
+                element_type: Box::new(inner_type),
+            })
+            .boxed();
+
         // The Array type is not recursive, so we define it separately.
         let array = leaf
             .clone()
             .prop_map(|inner_type| ScalarType::Array(Box::new(inner_type)))
             .boxed();
-        let leaf = Union::new_weighted(vec![(30, leaf), (1, array)]);
+
+        let leaf = Union::new_weighted(vec![(30, leaf), (1, array), (1, range)]);
 
         leaf.prop_recursive(
             2, // For now, just go one level deep
@@ -3618,13 +3641,6 @@ impl Arbitrary for ScalarType {
                         .prop_map(|(x, id)| ScalarType::Map {
                             value_type: Box::new(x),
                             custom_id: id,
-                        })
-                        .boxed(),
-                    // Range
-                    inner
-                        .clone()
-                        .prop_map(|x| ScalarType::Range {
-                            element_type: Box::new(x),
                         })
                         .boxed(),
                     // Record
@@ -3699,6 +3715,10 @@ pub enum PropDatum {
     Int16(i16),
     Int32(i32),
     Int64(i64),
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
     Float32(f32),
     Float64(f64),
 
@@ -3706,6 +3726,7 @@ pub enum PropDatum {
     Time(chrono::NaiveTime),
     Timestamp(CheckedTimestamp<chrono::NaiveDateTime>),
     TimestampTz(CheckedTimestamp<chrono::DateTime<chrono::Utc>>),
+    MzTimestamp(u64),
 
     Interval(Interval),
     Numeric(Numeric),
@@ -3716,7 +3737,11 @@ pub enum PropDatum {
     Array(PropArray),
     List(PropList),
     Map(PropDict),
+    Record(PropDict),
     Range(PropRange),
+
+    AclItem(AclItem),
+    MzAclItem(MzAclItem),
 
     JsonNull,
     Uuid(Uuid),
@@ -3724,9 +3749,6 @@ pub enum PropDatum {
 }
 
 /// Generate an arbitrary [`PropDatum`].
-///
-/// TODO: we also need a variant that can be parameterized by
-/// a [`ColumnType`] or a [`ColumnType`] [`Strategy`].
 pub fn arb_datum() -> BoxedStrategy<PropDatum> {
     let leaf = Union::new(vec![
         Just(PropDatum::Null).boxed(),
@@ -3734,6 +3756,9 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         any::<i16>().prop_map(PropDatum::Int16).boxed(),
         any::<i32>().prop_map(PropDatum::Int32).boxed(),
         any::<i64>().prop_map(PropDatum::Int64).boxed(),
+        any::<u16>().prop_map(PropDatum::UInt16).boxed(),
+        any::<u32>().prop_map(PropDatum::UInt32).boxed(),
+        any::<u64>().prop_map(PropDatum::UInt64).boxed(),
         any::<f32>().prop_map(PropDatum::Float32).boxed(),
         any::<f64>().prop_map(PropDatum::Float64).boxed(),
         arb_date().prop_map(PropDatum::Date).boxed(),
@@ -3753,8 +3778,12 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
             .boxed(),
         ".*".prop_map(PropDatum::String).boxed(),
         Just(PropDatum::JsonNull).boxed(),
-        Just(PropDatum::Uuid(Uuid::nil())).boxed(),
-        arb_range().prop_map(PropDatum::Range).boxed(),
+        any::<[u8; 16]>()
+            .prop_map(|x| PropDatum::Uuid(Uuid::from_bytes(x)))
+            .boxed(),
+        arb_range(arb_range_data())
+            .prop_map(PropDatum::Range)
+            .boxed(),
         Just(PropDatum::Dummy).boxed(),
     ]);
     leaf.prop_recursive(3, 8, 16, |inner| {
@@ -3765,6 +3794,145 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         ])
     })
     .boxed()
+}
+
+/// Generates an arbitrary [`PropDatum`] for the provided [`ColumnType`].
+pub fn arb_datum_for_column(column_type: &ColumnType) -> impl Strategy<Value = PropDatum> {
+    let strat = arb_datum_for_scalar(&column_type.scalar_type);
+
+    if column_type.nullable {
+        Union::new_weighted(vec![(1, Just(PropDatum::Null).boxed()), (5, strat.boxed())]).boxed()
+    } else {
+        strat.boxed()
+    }
+}
+
+/// Generates an arbitrary [`PropDatum`] for the provided [`ScalarType`].
+pub fn arb_datum_for_scalar(scalar_type: &ScalarType) -> impl Strategy<Value = PropDatum> {
+    match scalar_type {
+        ScalarType::Bool => any::<bool>().prop_map(PropDatum::Bool).boxed(),
+        ScalarType::Int16 => any::<i16>().prop_map(PropDatum::Int16).boxed(),
+        ScalarType::Int32 => any::<i32>().prop_map(PropDatum::Int32).boxed(),
+        ScalarType::Int64 => any::<i64>().prop_map(PropDatum::Int64).boxed(),
+        ScalarType::PgLegacyChar => any::<u8>().prop_map(PropDatum::UInt8).boxed(),
+        ScalarType::UInt16 => any::<u16>().prop_map(PropDatum::UInt16).boxed(),
+        ScalarType::UInt32
+        | ScalarType::Oid
+        | ScalarType::RegClass
+        | ScalarType::RegProc
+        | ScalarType::RegType => any::<u32>().prop_map(PropDatum::UInt32).boxed(),
+        ScalarType::UInt64 => any::<u64>().prop_map(PropDatum::UInt64).boxed(),
+        ScalarType::Float32 => any::<f32>().prop_map(PropDatum::Float32).boxed(),
+        ScalarType::Float64 => any::<f64>().prop_map(PropDatum::Float64).boxed(),
+        ScalarType::Numeric { .. } => arb_numeric().prop_map(PropDatum::Numeric).boxed(),
+        ScalarType::String
+        | ScalarType::PgLegacyName
+        | ScalarType::Char { length: None }
+        | ScalarType::VarChar { max_length: None } => ".*".prop_map(PropDatum::String).boxed(),
+        ScalarType::Char {
+            length: Some(length),
+        } => {
+            let max_len = usize::cast_from(length.into_u32()).max(1);
+            prop::collection::vec(any::<char>(), 0..max_len)
+                .prop_map(move |chars| {
+                    // `Char`s are fixed sized strings padded with blanks.
+                    let num_blanks = max_len - chars.len();
+                    let s = chars
+                        .into_iter()
+                        .chain(std::iter::repeat(' ').take(num_blanks))
+                        .collect();
+                    PropDatum::String(s)
+                })
+                .boxed()
+        }
+        ScalarType::VarChar {
+            max_length: Some(length),
+        } => {
+            let max_len = usize::cast_from(length.into_u32()).max(1);
+            prop::collection::vec(any::<char>(), 0..max_len)
+                .prop_map(|chars| PropDatum::String(chars.into_iter().collect()))
+                .boxed()
+        }
+        ScalarType::Bytes => prop::collection::vec(any::<u8>(), 300)
+            .prop_map(PropDatum::Bytes)
+            .boxed(),
+        ScalarType::Date => arb_date().prop_map(PropDatum::Date).boxed(),
+        ScalarType::Time => add_arb_duration(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap())
+            .prop_map(PropDatum::Time)
+            .boxed(),
+        ScalarType::Timestamp { .. } => arb_naive_date_time()
+            .prop_map(|t| PropDatum::Timestamp(CheckedTimestamp::from_timestamplike(t).unwrap()))
+            .boxed(),
+        ScalarType::TimestampTz { .. } => arb_utc_date_time()
+            .prop_map(|t| PropDatum::TimestampTz(CheckedTimestamp::from_timestamplike(t).unwrap()))
+            .boxed(),
+        ScalarType::MzTimestamp => any::<u64>().prop_map(PropDatum::MzTimestamp).boxed(),
+        ScalarType::Interval => arb_interval().prop_map(PropDatum::Interval).boxed(),
+        ScalarType::Uuid => any::<[u8; 16]>()
+            .prop_map(|x| PropDatum::Uuid(Uuid::from_bytes(x)))
+            .boxed(),
+        ScalarType::AclItem => any::<AclItem>().prop_map(PropDatum::AclItem).boxed(),
+        ScalarType::MzAclItem => any::<MzAclItem>().prop_map(PropDatum::MzAclItem).boxed(),
+        ScalarType::Range { element_type } => {
+            let data_strat = (
+                arb_datum_for_scalar(element_type),
+                arb_datum_for_scalar(element_type),
+            );
+            arb_range(data_strat).prop_map(PropDatum::Range).boxed()
+        }
+        ScalarType::List { element_type, .. } => arb_list(arb_datum_for_scalar(element_type))
+            .prop_map(PropDatum::List)
+            .boxed(),
+        ScalarType::Array(element_type) => arb_array(arb_datum_for_scalar(element_type))
+            .prop_map(PropDatum::Array)
+            .boxed(),
+        ScalarType::Int2Vector => arb_array(any::<i16>().prop_map(PropDatum::Int16).boxed())
+            .prop_map(PropDatum::Array)
+            .boxed(),
+        ScalarType::Map { value_type, .. } => arb_dict(arb_datum_for_scalar(value_type))
+            .prop_map(PropDatum::Map)
+            .boxed(),
+        ScalarType::Record { fields, .. } => {
+            let field_strats = fields
+                .iter()
+                .map(|(name, ty)| (name.to_string(), arb_datum_for_scalar(&ty.scalar_type)));
+            arb_record(field_strats).prop_map(PropDatum::Record).boxed()
+        }
+        ScalarType::Jsonb => {
+            let json_leaf = Union::new(vec![
+                any::<()>().prop_map(|_| PropDatum::JsonNull).boxed(),
+                any::<bool>().prop_map(PropDatum::Bool).boxed(),
+                arb_numeric().prop_map(PropDatum::Numeric).boxed(),
+                ".*".prop_map(PropDatum::String).boxed(),
+            ]);
+            json_leaf
+                .prop_recursive(4, 32, 8, |element| {
+                    Union::new(vec![
+                        prop::collection::vec(element.clone(), 0..16)
+                            .prop_map(|elements| {
+                                let datums: Vec<_> = elements.iter().map(|pd| pd.into()).collect();
+                                let mut row = Row::default();
+                                row.packer().push_list(datums.iter());
+                                PropDatum::List(PropList(row, elements))
+                            })
+                            .boxed(),
+                        prop::collection::hash_map(".*", element, 0..16)
+                            .prop_map(|elements| {
+                                let mut elements: Vec<_> = elements.into_iter().collect();
+                                elements.sort_by_key(|(k, _)| k.clone());
+                                elements.dedup_by_key(|(k, _)| k.clone());
+                                let mut row = Row::default();
+                                let entry_iter =
+                                    elements.iter().map(|(k, v)| (k.as_str(), Datum::from(v)));
+                                row.packer().push_dict(entry_iter);
+                                PropDatum::Map(PropDict(row, elements))
+                            })
+                            .boxed(),
+                    ])
+                })
+                .boxed()
+        }
+    }
 }
 
 /// Generates an arbitrary [`NaiveDateTime`].
@@ -3863,14 +4031,16 @@ fn arb_range_data() -> Union<BoxedStrategy<(PropDatum, PropDatum)>> {
     ])
 }
 
-fn arb_range() -> BoxedStrategy<PropRange> {
+fn arb_range(
+    data: impl Strategy<Value = (PropDatum, PropDatum)> + 'static,
+) -> BoxedStrategy<PropRange> {
     (
         any::<u16>(),
         any::<bool>(),
         any::<bool>(),
         any::<bool>(),
         any::<bool>(),
-        arb_range_data(),
+        data,
     )
         .prop_map(
             |(split, lower_inf, lower_inc, upper_inf, upper_inc, (a, b))| {
@@ -3975,6 +4145,21 @@ fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDic
         .boxed()
 }
 
+fn arb_record(
+    fields: impl Iterator<Item = (String, BoxedStrategy<PropDatum>)>,
+) -> BoxedStrategy<PropDict> {
+    let (names, strategies): (Vec<_>, Vec<_>) = fields.unzip();
+
+    strategies
+        .prop_map(move |x| {
+            let mut row = Row::default();
+            row.packer().push_list(x.iter().map(Datum::from));
+            let entries: Vec<_> = names.clone().into_iter().zip(x.into_iter()).collect();
+            PropDict(row, entries)
+        })
+        .boxed()
+}
+
 fn arb_date() -> BoxedStrategy<Date> {
     (Date::LOW_DAYS..Date::HIGH_DAYS)
         .prop_map(move |days| Date::from_pg_epoch(days).unwrap())
@@ -4023,12 +4208,17 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
             Int16(i) => Datum::from(*i),
             Int32(i) => Datum::from(*i),
             Int64(i) => Datum::from(*i),
+            UInt8(u) => Datum::from(*u),
+            UInt16(u) => Datum::from(*u),
+            UInt32(u) => Datum::from(*u),
+            UInt64(u) => Datum::from(*u),
             Float32(f) => Datum::from(*f),
             Float64(f) => Datum::from(*f),
             Date(d) => Datum::from(*d),
             Time(t) => Datum::from(*t),
             Timestamp(t) => Datum::from(*t),
             TimestampTz(t) => Datum::from(*t),
+            MzTimestamp(t) => Datum::MzTimestamp((*t).into()),
             Interval(i) => Datum::from(*i),
             Numeric(s) => Datum::from(*s),
             Bytes(b) => Datum::from(&b[..]),
@@ -4045,11 +4235,17 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
                 let map = row.unpack_first().unwrap_map();
                 Datum::Map(map)
             }
+            Record(PropDict(row, _)) => {
+                let list = row.unpack_first().unwrap_list();
+                Datum::List(list)
+            }
             Range(PropRange(row, _)) => {
                 let d = row.unpack_first();
                 assert!(matches!(d, Datum::Range(_)));
                 d
             }
+            AclItem(i) => Datum::AclItem(*i),
+            MzAclItem(i) => Datum::MzAclItem(*i),
             JsonNull => Datum::JsonNull,
             Uuid(u) => Datum::from(*u),
             Dummy => Datum::Dummy,
@@ -4142,7 +4338,7 @@ mod tests {
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
-        fn range_packing_unpacks_correctly(range in arb_range()) {
+        fn range_packing_unpacks_correctly(range in arb_range(arb_range_data())) {
             let PropRange(row, prop_range) = range;
             let row = row.unpack_first();
             let d = row.unwrap_range();
