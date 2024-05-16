@@ -261,6 +261,8 @@ ROLLBACK
 
 # Test that the number of rows returned in query history respects OFFSET and LIMIT.
 
+> RESET cluster
+
 > CREATE TABLE t_offset_limit (a int);
 
 > INSERT INTO t_offset_limit SELECT generate_series(1, 5);
