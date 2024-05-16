@@ -585,7 +585,7 @@ where
     fn work<L, I, YFn>(
         &mut self,
         output: &mut OutputHandle<T, (D, T, Diff), Tee<T, Vec<(D, T, Diff)>>>,
-        mut result: L,
+        mut logic: L,
         yield_fn: YFn,
         work: &mut usize,
     ) where
@@ -628,17 +628,20 @@ where
                     let key = cursor2.key(storage2);
                     while let Some(val1) = cursor1.get_val(storage1) {
                         while let Some(val2) = cursor2.get_val(storage2) {
-                            cursor1.map_times(storage1, |time1, diff1| {
-                                let time1 = time1.join(meet);
-                                cursor2.map_times(storage2, |time2, diff2| {
-                                    let time = time1.join(time2);
-                                    let diff = diff1.multiply(diff2);
-                                    buffer.push((time, diff));
+                            let mut result = logic(key, val1, val2).into_iter().peekable();
+
+                            if result.peek().is_some() {
+                                cursor1.map_times(storage1, |time1, diff1| {
+                                    let time1 = time1.join(meet);
+                                    cursor2.map_times(storage2, |time2, diff2| {
+                                        let time = time1.join(time2);
+                                        let diff = diff1.multiply(diff2);
+                                        buffer.push((time, diff));
+                                    });
                                 });
-                            });
+                            }
 
                             consolidate(&mut buffer);
-                            let mut result = result(key, val1, val2).into_iter().peekable();
                             match (result.next(), result.peek().is_some(), buffer.len()) {
                                 // Certainly no output
                                 (None, _, _) | (_, _, 0) => {}
