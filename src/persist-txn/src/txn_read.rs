@@ -273,12 +273,27 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
 ///
 /// Invariant: physical_upper <= logical_upper
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct DataRemapEntry<T> {
     /// The physical upper of a data shard.
     pub physical_upper: T,
     /// An upper bound on the times known to be empty of writes via txns since
     /// `physical_upper`.
     pub logical_upper: T,
+}
+
+/// The next action to take in a data shard `Listen`.
+///
+/// See [crate::txn_cache::TxnsCacheState::data_listen_next].
+#[derive(Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+pub enum DataListenNext<T> {
+    /// The data shard listen has caught up to what has been written to the txns
+    /// shard. Wait for it to progress with `update_gt` and call
+    /// `data_listen_next` again.
+    WaitForTxnsProgress,
+    /// TODO(jkosh44).
+    Remap(DataRemapEntry<T>),
 }
 
 /// A token exchangeable for a [`DataSubscribe`].

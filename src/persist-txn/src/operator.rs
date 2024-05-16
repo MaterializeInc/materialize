@@ -45,7 +45,7 @@ use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::debug;
 
 use crate::txn_cache::TxnsCache;
-use crate::txn_read::DataRemapEntry;
+use crate::txn_read::{DataListenNext, DataRemapEntry};
 use crate::TxnsCodecDefault;
 
 /// An operator for translating physical data shard frontiers into logical ones.
@@ -206,28 +206,34 @@ where
         remap_output.give(&cap, subscribe.remap.clone()).await;
 
         loop {
-            txns_cache.update_gt(&subscribe.remap.logical_upper).await;
+            txns_cache.update_ge(&subscribe.remap.logical_upper).await;
             cap.downgrade(&subscribe.remap.logical_upper);
-            let remap =
-                txns_cache.data_listen_next(&subscribe.data_id, &subscribe.remap.logical_upper);
-            subscribe.remap.physical_upper =
-                max(subscribe.remap.physical_upper, remap.physical_upper);
-            subscribe.remap.logical_upper = remap.logical_upper;
-            // debug!(
-            //     "{} data_listen_next at {:?}: {:?}",
-            //     name, subscribe.remap.logical_upper, data_listen_next,
-            // );
-            // TODO(jkosh44) Add asserts
-            if subscribe.remap.physical_upper != prev_physical_upper {
-                prev_physical_upper = subscribe.remap.physical_upper.clone();
-                debug!("{} emitting {:?}", name, subscribe.remap);
-                remap_output.give(&cap, subscribe.remap.clone()).await;
-            } else {
-                // As mentioned in the docs on `DataRemapEntry`, we only
-                // emit updates when the physical upper changes (which
-                // happens to makes the protocol a tiny bit more
-                // remap-like).
-                debug!("{} not emitting {:?}", name, subscribe.remap);
+
+            match txns_cache.data_listen_next(&subscribe.data_id, &subscribe.remap.logical_upper) {
+                DataListenNext::WaitForTxnsProgress => {
+                    txns_cache.update_gt(&subscribe.remap.logical_upper).await;
+                }
+                DataListenNext::Remap(remap) => {
+                    subscribe.remap.physical_upper =
+                        max(subscribe.remap.physical_upper, remap.physical_upper);
+                    subscribe.remap.logical_upper = remap.logical_upper;
+                    // debug!(
+                    //     "{} data_listen_next at {:?}: {:?}",
+                    //     name, subscribe.remap.logical_upper, data_listen_next,
+                    // );
+                    // TODO(jkosh44) Add asserts
+                    if subscribe.remap.physical_upper != prev_physical_upper {
+                        prev_physical_upper = subscribe.remap.physical_upper.clone();
+                        debug!("{} emitting {:?}", name, subscribe.remap);
+                        remap_output.give(&cap, subscribe.remap.clone()).await;
+                    } else {
+                        // As mentioned in the docs on `DataRemapEntry`, we only
+                        // emit updates when the physical upper changes (which
+                        // happens to makes the protocol a tiny bit more
+                        // remap-like).
+                        debug!("{} not emitting {:?}", name, subscribe.remap);
+                    }
+                }
             }
         }
     });

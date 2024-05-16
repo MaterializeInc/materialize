@@ -34,7 +34,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::metrics::Metrics;
-use crate::txn_read::{DataRemapEntry, DataSnapshot, DataSubscribeBlocked};
+use crate::txn_read::{DataListenNext, DataRemapEntry, DataSnapshot, DataSubscribeBlocked};
 use crate::TxnsCodecDefault;
 
 /// A cache of the txn shard contents, optimized for various in-memory
@@ -292,20 +292,15 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     /// Note that this is a state machine on `self.progress_exclusive` and the
     /// listen progress. DataListenNext indicates which state transitions to
     /// take.
-    pub fn data_listen_next(&self, data_id: &ShardId, ts: &T) -> DataRemapEntry<T> {
+    pub fn data_listen_next(&self, data_id: &ShardId, ts: &T) -> DataListenNext<T> {
         self.assert_only_data_id(data_id);
-        assert!(
-            &self.progress_exclusive >= ts,
-            "ts {:?} is past progress_exclusive {:?}",
-            ts,
-            self.progress_exclusive
-        );
         assert!(
             ts >= &self.init_ts,
             "ts {:?} is not past initial since {:?}",
             ts,
             self.init_ts
         );
+        use DataListenNext::*;
         let data_times = self.datas.get(data_id);
         debug!(
             "data_listen_next {:.9} {:?}: progress={:?} times={:?}",
@@ -314,13 +309,16 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             self.progress_exclusive,
             data_times,
         );
+        if ts >= &self.progress_exclusive {
+            return WaitForTxnsProgress;
+        }
         let Some(data_times) = data_times else {
             // Not registered, maybe it will be in the future? In the meantime,
             // treat it like a normal shard (i.e. pass through reads).
-            return DataRemapEntry {
+            return Remap(DataRemapEntry {
                 physical_upper: self.progress_exclusive.clone(),
                 logical_upper: self.progress_exclusive.clone(),
-            };
+            });
         };
         let physical_ts = data_times.latest_physical_ts();
         let last_reg = data_times.last_reg();
@@ -332,10 +330,10 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             None => physical_ts.clone(),
         };
         let logical_upper = self.progress_exclusive.clone();
-        DataRemapEntry {
+        Remap(DataRemapEntry {
             physical_upper,
             logical_upper,
-        }
+        })
     }
 
     /// Returns a token exchangeable for a subscribe of a data shard.
