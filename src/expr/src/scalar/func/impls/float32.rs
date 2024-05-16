@@ -37,13 +37,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "roundf32"]
     fn round_float32(a: f32) -> f32 {
-        // f32::round violates IEEE 754 by rounding ties away from zero rather than
-        // to nearest even. There appears to be no way to round ties to nearest even
-        // in Rust natively, so bail out to C.
-        extern "C" {
-            fn rintf(f: f32) -> f32;
-        }
-        unsafe { rintf(a) }
+        a.round_ties_even()
     }
 );
 
