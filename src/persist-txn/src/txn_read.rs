@@ -265,25 +265,6 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     }
 }
 
-/// The next action to take in a data shard `Listen`.
-///
-/// See [crate::txn_cache::TxnsCacheState::data_listen_next].
-#[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
-pub enum DataListenNext<T> {
-    /// Read the data shard normally, until this timestamp is less_equal what
-    /// has been read.
-    ReadDataTo(T),
-    /// It is known that there are no writes between the progress given to the
-    /// `data_listen_next` call and this timestamp. Advance the data shard
-    /// listen progress to this (exclusive) frontier.
-    EmitLogicalProgress(T),
-    /// The data shard listen has caught up to what has been written to the txns
-    /// shard. Wait for it to progress with `update_gt` and call
-    /// `data_listen_next` again.
-    WaitForTxnsProgress,
-}
-
 /// A mapping between the physical upper of a data shard and the largest upper
 /// which is known to logically have the same contents.
 ///

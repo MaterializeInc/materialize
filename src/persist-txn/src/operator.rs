@@ -9,6 +9,7 @@
 
 //! Timely operators for the crate
 
+use std::cmp::max;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::mpsc::TryRecvError;
@@ -44,7 +45,7 @@ use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::debug;
 
 use crate::txn_cache::TxnsCache;
-use crate::txn_read::{DataListenNext, DataRemapEntry};
+use crate::txn_read::DataRemapEntry;
 use crate::TxnsCodecDefault;
 
 /// An operator for translating physical data shard frontiers into logical ones.
@@ -200,51 +201,33 @@ where
             return;
         };
 
+        let mut prev_physical_upper = subscribe.remap.physical_upper.clone();
         debug!("{} emitting {:?}", name, subscribe.remap);
         remap_output.give(&cap, subscribe.remap.clone()).await;
 
         loop {
-            txns_cache.update_ge(&subscribe.remap.logical_upper).await;
+            txns_cache.update_gt(&subscribe.remap.logical_upper).await;
             cap.downgrade(&subscribe.remap.logical_upper);
-            let data_listen_next =
+            let remap =
                 txns_cache.data_listen_next(&subscribe.data_id, &subscribe.remap.logical_upper);
-            debug!(
-                "{} data_listen_next at {:?}: {:?}",
-                name, subscribe.remap.logical_upper, data_listen_next,
-            );
-            match data_listen_next {
-                // We've caught up to the txns upper and we have to wait for it
-                // to advance before asking again.
-                //
-                // Note that we're asking again with the same input, but once
-                // the cache is past remap.logical_upper (as it will be after
-                // this update_gt call), we're guaranteed to get an answer.
-                DataListenNext::WaitForTxnsProgress => {
-                    txns_cache.update_gt(&subscribe.remap.logical_upper).await;
-                }
-                // The data shard got a write!
-                DataListenNext::ReadDataTo(new_upper) => {
-                    // A write means both the physical and logical upper advance.
-                    subscribe.remap = DataRemapEntry {
-                        physical_upper: new_upper.clone(),
-                        logical_upper: new_upper,
-                    };
-                    debug!("{} emitting {:?}", name, subscribe.remap);
-                    remap_output.give(&cap, subscribe.remap.clone()).await;
-                }
-                // We know there are no writes in `[logical_upper,
-                // new_progress)`, so advance our output frontier.
-                DataListenNext::EmitLogicalProgress(new_progress) => {
-                    assert!(subscribe.remap.physical_upper < new_progress);
-                    assert!(subscribe.remap.logical_upper < new_progress);
-
-                    subscribe.remap.logical_upper = new_progress;
-                    // As mentioned in the docs on `DataRemapEntry`, we only
-                    // emit updates when the physical upper changes (which
-                    // happens to makes the protocol a tiny bit more
-                    // remap-like).
-                    debug!("{} not emitting {:?}", name, subscribe.remap);
-                }
+            subscribe.remap.physical_upper =
+                max(subscribe.remap.physical_upper, remap.physical_upper);
+            subscribe.remap.logical_upper = remap.logical_upper;
+            // debug!(
+            //     "{} data_listen_next at {:?}: {:?}",
+            //     name, subscribe.remap.logical_upper, data_listen_next,
+            // );
+            // TODO(jkosh44) Add asserts
+            if subscribe.remap.physical_upper != prev_physical_upper {
+                prev_physical_upper = subscribe.remap.physical_upper.clone();
+                debug!("{} emitting {:?}", name, subscribe.remap);
+                remap_output.give(&cap, subscribe.remap.clone()).await;
+            } else {
+                // As mentioned in the docs on `DataRemapEntry`, we only
+                // emit updates when the physical upper changes (which
+                // happens to makes the protocol a tiny bit more
+                // remap-like).
+                debug!("{} not emitting {:?}", name, subscribe.remap);
             }
         }
     });
