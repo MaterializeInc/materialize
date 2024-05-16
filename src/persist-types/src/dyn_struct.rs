@@ -329,8 +329,8 @@ impl ColumnPush<Option<DynStruct>> for DynStructMut {
         let len = self.len;
         let validity = self
             .validity
-            // Note(parkmycar): This capacity was picked arbitrarily.
-            .get_or_insert_with(|| BooleanBufferBuilder::new(128));
+            // `BooleanBuilder` uses 1024 for its default capacity.
+            .get_or_insert_with(|| BooleanBufferBuilder::new(1024));
         debug_assert_eq!(len, validity.len());
 
         if let Some(val) = val {

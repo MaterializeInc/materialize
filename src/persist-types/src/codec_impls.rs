@@ -655,8 +655,8 @@ impl ColumnPush<bool> for BooleanBufferBuilder {
 
 impl ColumnMut<()> for BooleanBufferBuilder {
     fn new(_cfg: &()) -> Self {
-        // Note(parkmycar): This capacity was picked arbitrarily.
-        BooleanBufferBuilder::new(128)
+        // `BooleanBuilder` uses 1024 for its default capacity.
+        BooleanBufferBuilder::new(1024)
     }
 
     fn cfg(&self) -> &() {
