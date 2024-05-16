@@ -240,15 +240,27 @@ impl ConnectionOptionExtracted {
                         .availability_zones
                         .ok_or_else(|| sql_err!("AVAILABILITY ZONES option is required"))?,
                 };
-
                 if let Some(supported_azs) = scx.catalog.aws_privatelink_availability_zones() {
+                    let mut unique_azs: BTreeSet<String> = BTreeSet::new();
+                    let mut duplicate_azs: BTreeSet<String> = BTreeSet::new();
+                    // Validate each AZ is supported
                     for connection_az in &connection.availability_zones {
+                        if unique_azs.contains(connection_az) {
+                            duplicate_azs.insert(connection_az.to_string());
+                        } else {
+                            unique_azs.insert(connection_az.to_string());
+                        }
                         if !supported_azs.contains(connection_az) {
                             return Err(PlanError::InvalidPrivatelinkAvailabilityZone {
                                 name: connection_az.to_string(),
                                 supported_azs,
                             });
                         }
+                    }
+                    if duplicate_azs.len() > 0 {
+                        return Err(PlanError::DuplicatePrivatelinkAvailabilityZone {
+                            duplicate_azs,
+                        });
                     }
                 }
                 Connection::AwsPrivatelink(connection)
