@@ -752,7 +752,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
 
             if let Some(ts) = data_times.writes.front() {
                 // Writes are compacted.
-                if min_unapplied_ts > ts {
+                if min_unapplied_ts >= ts && data_times.writes.len() > 1 {
                     return Err(format!(
                         "{:?} write ts {:?} not past min unapplied ts {:?}",
                         data_id, ts, min_unapplied_ts
