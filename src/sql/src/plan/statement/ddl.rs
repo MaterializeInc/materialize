@@ -4490,17 +4490,31 @@ fn plan_retain_history(
             )),
         }),
         Some(duration) => {
-            if duration < DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION {
-                Err(PlanError::RetainHistoryLow {
+            // Error if the duration is low and enable_unlimited_retain_history is not set (which
+            // should only be possible during testing).
+            if duration < DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION
+                && scx
+                    .require_feature_flag(&vars::ENABLE_UNLIMITED_RETAIN_HISTORY)
+                    .is_err()
+            {
+                return Err(PlanError::RetainHistoryLow {
                     limit: DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION,
-                })
-            } else {
-                Ok(duration.try_into()?)
+                });
             }
+            Ok(duration.try_into()?)
         }
         // In the past `RETAIN HISTORY FOR '0'` meant disable compaction. Disabling compaction seems
         // to be a bad choice, so prevent it.
-        None => Err(PlanError::RetainHistoryRequired),
+        None => {
+            if scx
+                .require_feature_flag(&vars::ENABLE_UNLIMITED_RETAIN_HISTORY)
+                .is_err()
+            {
+                Err(PlanError::RetainHistoryRequired)
+            } else {
+                Ok(CompactionWindow::DisableCompaction)
+            }
+        }
     }
 }
 
