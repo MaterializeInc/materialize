@@ -131,7 +131,7 @@ structurally equivalent built-in `list` (`int4 list`), the result is of the same
 type as the custom `list` (`custom_list`).
 
 ```sql
-CREATE TYPE custom_list AS LIST (element_type=int4);
+CREATE TYPE custom_list AS LIST (ELEMENT TYPE int4);
 
 SELECT pg_typeof(
   list_cat('{1}'::custom_list, '{2}'::int4 list)
