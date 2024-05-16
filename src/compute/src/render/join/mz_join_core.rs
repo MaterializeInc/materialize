@@ -628,9 +628,12 @@ where
                     let key = cursor2.key(storage2);
                     while let Some(val1) = cursor1.get_val(storage1) {
                         while let Some(val2) = cursor2.get_val(storage2) {
+                            // Evaluate logic on `key, val1, val2`. Note the absence of time and diff.
                             let mut result = logic(key, val1, val2).into_iter().peekable();
 
+                            // We can only produce output if the result return something.
                             if result.peek().is_some() {
+                                // Join times.
                                 cursor1.map_times(storage1, |time1, diff1| {
                                     let time1 = time1.join(meet);
                                     cursor2.map_times(storage2, |time2, diff2| {
@@ -639,28 +642,28 @@ where
                                         buffer.push((time, diff));
                                     });
                                 });
-                            }
+                                consolidate(&mut buffer);
 
-                            consolidate(&mut buffer);
-                            match (result.next(), result.peek().is_some(), buffer.len()) {
-                                // Certainly no output
-                                (None, _, _) | (_, _, 0) => {}
-                                // Single element, single time
-                                (Some(first), false, 1) => {
-                                    let (time, diff) = buffer.pop().unwrap();
-                                    temp.push((first, time, diff));
-                                }
-                                // Multiple elements or multiple times
-                                (Some(first), _, _) => {
-                                    for d in std::iter::once(first).chain(result) {
-                                        temp.extend(buffer.iter().map(|(time, diff)| {
-                                            (d.clone(), time.clone(), diff.clone())
-                                        }))
+                                // Special case no results, one result, and potentially many results
+                                match (result.next(), result.peek().is_some(), buffer.len()) {
+                                    // Certainly no output
+                                    (None, _, _) | (_, _, 0) => {}
+                                    // Single element, single time
+                                    (Some(first), false, 1) => {
+                                        let (time, diff) = buffer.pop().unwrap();
+                                        temp.push((first, time, diff));
+                                    }
+                                    // Multiple elements or multiple times
+                                    (Some(first), _, _) => {
+                                        for d in std::iter::once(first).chain(result) {
+                                            temp.extend(buffer.iter().map(|(time, diff)| {
+                                                (d.clone(), time.clone(), diff.clone())
+                                            }))
+                                        }
                                     }
                                 }
+                                buffer.clear();
                             }
-                            buffer.clear();
-
                             cursor2.step_val(storage2);
                         }
                         cursor1.step_val(storage1);
