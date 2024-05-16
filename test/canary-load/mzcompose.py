@@ -19,6 +19,7 @@ import pg8000
 import requests
 from pg8000 import Connection, Cursor
 from pg8000.exceptions import InterfaceError
+from requests.exceptions import ReadTimeout
 
 from materialize.cloudtest.util.jwt_key import fetch_jwt
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -111,12 +112,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )
                     close_connection_and_cursor(conn2, cursor_on_mv, "subscribe_mv")
 
-                except InterfaceError as e:
-                    if "network error" in str(e):
+                except (InterfaceError, ReadTimeout) as e:
+                    error_msg_str = str(e)
+                    if "network error" in error_msg_str:
                         print(
                             "Network error received, probably a cloud downtime, retrying in 1 min"
                         )
                         time.sleep(60)
+                    elif "Read timed out" in error_msg_str:
+                        print("Read timed out, retrying")
                     else:
                         raise
                 except FailedTestExecutionError as e:
