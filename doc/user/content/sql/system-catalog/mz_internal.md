@@ -910,6 +910,8 @@ The `mz_source_statistics` view contains statistics about each source.
 | `offset_known`            | [`uint8`]    | {{< warn-if-unreleased v0.87 >}} The offset of the most recent data in the source's upstream service that Materialize knows about. See above for its unit. |
 | `offset_committed`        | [`uint8`]    | {{< warn-if-unreleased v0.87 >}} The offset of the source's upstream service Materialize has fully committed. See above for its unit. |
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_with_history -->
+
 #### Counters
 `messages_received`, `messages_staged`, `updates_staged`, and `updates_committed` are all counters that monotonically increase. They are _only
 useful for calculating rates_, to understand the general performance of your source.
