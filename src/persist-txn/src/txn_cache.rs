@@ -108,10 +108,6 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     /// Invariant: Values are sorted by timestamp.
     pub(crate) unapplied_registers: VecDeque<(ShardId, T)>,
 
-    /// Invariant: Contains the minimum write time (if any) for each value in
-    /// `self.datas`.
-    datas_min_write_ts: BinaryHeap<Reverse<(T, ShardId)>>,
-
     /// If Some, this cache only tracks the indicated data shard as a
     /// performance optimization. When used, only some methods (in particular,
     /// the ones necessary for the txns_progress operator) are supported.
@@ -145,7 +141,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             batch_idx: HashMap::new(),
             datas: BTreeMap::new(),
             unapplied_registers: VecDeque::new(),
-            datas_min_write_ts: BinaryHeap::new(),
             only_data_id,
         }
     }
@@ -546,9 +541,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             let times = self.datas.get_mut(&data_id).expect("data is initialized");
             // Sanity check that shard is registered.
             assert_eq!(times.last_reg().forget_ts, None);
-            if times.writes.is_empty() {
-                self.datas_min_write_ts.push(Reverse((ts.clone(), data_id)));
-            }
             times.writes.push_back(ts);
         } else if diff == -1 {
             debug!(
@@ -572,7 +564,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         } else {
             unreachable!("only +1/-1 diffs are used");
         }
-        self.compact_data_times();
+        self.compact_data_times(&data_id);
         debug_assert_eq!(self.validate(), Ok(()));
     }
 
@@ -581,97 +573,76 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     pub(crate) fn mark_register_applied(&mut self, ts: &T) {
         self.unapplied_registers
             .retain(|(_, register_ts)| ts < register_ts);
-        self.compact_data_times();
         debug_assert_eq!(self.validate(), Ok(()));
     }
 
-    /// Compact the internal representations by removing all data that is not
-    /// needed to maintain the following invariants:
+    /// Compact the internal representation for `data_id` by removing all data
+    /// that is not needed to maintain the following invariants:
     ///
     ///   - The latest write and registration for each shard are kept in
     ///     `self.datas`.
     ///   - All unapplied writes and registrations are kept in `self.datas`.
     ///   - All writes in `self.datas` are contained by some registration in
     ///     `self.datas`.
-    fn compact_data_times(&mut self) {
-        let min_unapplied_ts = self.min_unapplied_ts_inner().clone();
-        debug!(
-            "cache compact min_unapplied_ts={:?} min_writes={:?}",
-            min_unapplied_ts, self.datas_min_write_ts
-        );
-        loop {
-            // Repeatedly grab the data shard with the minimum write_ts while it
-            // (the minimum write_ts) is less_than the since_ts. If that results
-            // in no registration and no writes, forget about the data shard
-            // entirely, so it doesn't sit around in the map forever. This will
-            // eventually finish because each data shard we compact will not
-            // meet the compaction criteria if we see it again.
-            //
-            // NB: This intentionally doesn't compact the registration
-            // timestamps if none of the writes need to be compacted, so that
-            // compaction isn't `O(compact calls * data shards)`.
-            let data_id = match self.datas_min_write_ts.peek() {
-                Some(Reverse((ts, _))) if ts < &min_unapplied_ts => {
-                    let Reverse((_, data_id)) = self.datas_min_write_ts.pop().expect("just peeked");
-                    data_id
-                }
-                Some(_) | None => break,
-            };
-            let times = self
-                .datas
-                .get_mut(&data_id)
-                .expect("datas_min_write_ts should be an index into datas");
+    fn compact_data_times(&mut self, data_id: &ShardId) {
+        let Some(times) = self.datas.get_mut(data_id) else {
+            return;
+        };
+
+        debug!("cache compact {:.9} times={:?}", data_id.to_string(), times);
+
+        if let Some(unapplied_write_ts) = self
+            .unapplied_batches
+            .first_key_value()
+            .map(|(_, (_, _, ts))| ts)
+        {
             debug!(
-                "cache compact {:.9} min_unapplied_ts={:?} times={:?}",
+                "cache compact {:.9} unapplied_write_ts={:?}",
                 data_id.to_string(),
-                min_unapplied_ts,
-                times
+                unapplied_write_ts,
             );
-
-            // Pop registrations that are forgotten before since_ts. We can
-            // stop as soon as something is >= or not forgotten.
-            while let Some(x) = times.registered.front() {
-                if let Some(forget_ts) = x.forget_ts.as_ref() {
-                    if forget_ts < &min_unapplied_ts {
-                        times.registered.pop_front();
-                        continue;
-                    }
-                }
-                break;
-            }
-
-            // Pop any write times before since_ts. We can stop as soon
-            // as something is >=.
             while let Some(write_ts) = times.writes.front() {
-                if write_ts < &min_unapplied_ts {
-                    times.writes.pop_front();
-                } else {
+                if times.writes.len() <= 1 || write_ts >= &unapplied_write_ts {
                     break;
                 }
+                times.writes.pop_front();
             }
-
-            // Now re-insert it into datas_min_write_ts if non-empty.
-            if let Some(ts) = times.writes.front() {
-                assert!(!times.registered.is_empty());
-                self.datas_min_write_ts.push(Reverse((ts.clone(), data_id)));
-            }
-
-            if times.registered.is_empty() {
-                assert!(times.writes.is_empty());
-                self.datas.remove(&data_id);
-            }
-            debug!(
-                "cache compact {:.9} DONE min_unapplied_ts={:?} times={:?}",
-                data_id.to_string(),
-                min_unapplied_ts,
-                self.datas.get(&data_id),
-            );
+        } else {
+            times.writes.drain(..times.writes.len() - 1);
         }
+        let unapplied_reg_ts = self.unapplied_registers.front().map(|(_, ts)| ts);
+        let min_write_ts = times.writes.front();
+        let min_reg_ts = [unapplied_reg_ts, min_write_ts].into_iter().flatten().min();
+        if let Some(min_reg_ts) = min_reg_ts {
+            debug!(
+                "cache compact {:.9} unapplied_reg_ts={:?} min_write_ts={:?} min_reg_ts={:?}",
+                data_id.to_string(),
+                unapplied_reg_ts,
+                min_write_ts,
+                min_reg_ts,
+            );
+            while let Some(reg) = times.registered.front() {
+                match &reg.forget_ts {
+                    Some(forget_ts) if forget_ts >= &min_reg_ts => break,
+                    _ if times.registered.len() <= 1 => break,
+                    _ => {
+                        assert!(
+                            reg.forget_ts.is_some(),
+                            "only the latest reg can have no forget ts"
+                        );
+                        times.registered.pop_front();
+                    }
+                }
+            }
+        } else {
+            times.registered.drain(..times.registered.len() - 1);
+        }
+
         debug!(
-            "cache compact DONE min_unapplied_ts={:?} min_writes={:?}",
-            min_unapplied_ts, self.datas_min_write_ts
+            "cache compact DONE {:.9} times={:?}",
+            data_id.to_string(),
+            times
         );
-        debug_assert_eq!(self.validate(), Ok(()));
     }
 
     pub(crate) fn update_gauges(&self, metrics: &Metrics) {
@@ -758,19 +729,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                         data_id, ts, min_unapplied_ts
                     ));
                 }
-
-                // datas_min_write_ts has an entry for this write.
-                // Oof, bummer to do this iteration.
-                if !self
-                    .datas_min_write_ts
-                    .iter()
-                    .any(|Reverse((t, d))| t == ts && d == data_id)
-                {
-                    return Err(format!(
-                        "{:?} {:?} missing from {:?}",
-                        data_id, ts, self.datas_min_write_ts
-                    ));
-                }
             }
 
             // datas contains all unapplied writes.
@@ -802,17 +760,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                         data_id, register_ts, unapplied_ts
                     ));
                 }
-            }
-        }
-
-        // datas_min_write_ts actually contains the min write time for each shard.
-        for Reverse((ts, data_id)) in self.datas_min_write_ts.iter() {
-            let min_ts = self.datas.get(data_id).unwrap().writes.front();
-            if min_ts != Some(ts) {
-                return Err(format!(
-                    "{:?} datas_min_write_ts {:?} does not match actual min write ts {:?}",
-                    data_id, ts, min_ts
-                ));
             }
         }
 
