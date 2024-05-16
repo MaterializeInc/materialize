@@ -994,6 +994,7 @@ impl Coordinator {
         ctx: ExecuteContext,
         stage: PeekStageExplainPushdown,
     ) {
+        let explain_timeout = *ctx.session().vars().statement_timeout();
         let as_of = stage.determination.timestamp_context.antichain();
         let mz_now = stage
             .determination
@@ -1072,13 +1073,16 @@ impl Coordinator {
 
         task::spawn(|| "explain filter pushdown", async move {
             use futures::TryStreamExt;
-            let res = futures
-                .try_collect()
+            let res = match tokio::time::timeout(explain_timeout, futures.try_collect::<Vec<_>>())
                 .await
-                .map(|rows: Vec<Row>| ExecuteResponse::SendingRowsImmediate {
+            {
+                Ok(Ok(rows)) => Ok(ExecuteResponse::SendingRowsImmediate {
                     rows: Box::new(rows.into_row_iter()),
-                })
-                .map_err(|e| e.into());
+                }),
+                Ok(Err(err)) => Err(err.into()),
+                Err(_) => Err(AdapterError::StatementTimeout),
+            };
+
             ctx.retire(res);
         });
     }
