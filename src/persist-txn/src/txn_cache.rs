@@ -134,7 +134,7 @@ pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecD
 impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState<T> {
     /// Creates a new empty [`TxnsCacheState`].
     ///
-    /// `init_ts` must be >= the since of the txn shard.
+    /// `init_ts` must be == the critical handle's since of the txn shard.
     fn new(txns_id: ShardId, init_ts: T, only_data_id: Option<ShardId>) -> Self {
         TxnsCacheState {
             txns_id,
@@ -235,8 +235,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         // with a lower timestamp than the initial since, but they are
         // guaranteed to be applied.
         //
-        // Once the txn shard itself always tracks the most recent write for
-        // every shard, we can remove this and always use
+        // TODO: Once the txn shard itself always tracks the most recent write
+        // for every shard, we can remove this and always use
         // `as_of.step_forward()`.
         let empty_to = max(as_of.step_forward(), self.init_ts.step_forward());
         let Some(all) = self.datas.get(&data_id) else {
@@ -752,7 +752,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
 
             if let Some(ts) = data_times.writes.front() {
                 // Writes are compacted.
-                if min_unapplied_ts >= ts && data_times.writes.len() > 1 {
+                if min_unapplied_ts > ts && data_times.writes.len() > 1 {
                     return Err(format!(
                         "{:?} write ts {:?} not past min unapplied ts {:?}",
                         data_id, ts, min_unapplied_ts
@@ -1389,6 +1389,9 @@ mod tests {
         // This shouldn't deadlock.
         let contents = snap.snapshot_and_fetch(&mut data_read).await.unwrap();
         assert_eq!(contents.len(), 1);
+
+        // Sanity check that the scenario played out like we said above.
+        assert_eq!(snap.empty_to, 5);
     }
 
     #[mz_ore::test]
