@@ -169,14 +169,14 @@ NUMERIC_OPERATION_TYPES.append(
 
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "ABS",
+        "abs",
         [NumericOperationParam()],
         NumericReturnTypeSpec(),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "CBRT",
+        "cbrt",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
     )
@@ -184,14 +184,14 @@ NUMERIC_OPERATION_TYPES.append(
 # CEIL == CEILING
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "CEIL",
+        "ceil",
         [NumericOperationParam()],
         NumericReturnTypeSpec(only_integer=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "EXP",
+        "exp",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
         {SingleParamValueGrowsArgsValidator()},
@@ -199,14 +199,14 @@ NUMERIC_OPERATION_TYPES.append(
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "FLOOR",
+        "floor",
         [NumericOperationParam()],
         NumericReturnTypeSpec(only_integer=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "LN",
+        "ln",
         [
             NumericOperationParam(
                 incompatibilities={
@@ -220,7 +220,7 @@ NUMERIC_OPERATION_TYPES.append(
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "LOG10",
+        "log10",
         [
             NumericOperationParam(
                 incompatibilities={
@@ -234,7 +234,7 @@ NUMERIC_OPERATION_TYPES.append(
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "LOG",
+        "log",
         [
             # first param is the base
             NumericOperationParam(
@@ -262,7 +262,7 @@ NUMERIC_OPERATION_TYPES.append(
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "MOD",
+        "mod",
         [
             NumericOperationParam(),
             NumericOperationParam(incompatibilities={ExpressionCharacteristics.ZERO}),
@@ -273,7 +273,7 @@ NUMERIC_OPERATION_TYPES.append(
 # POW == POWER
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "POW",
+        "pow",
         [
             NumericOperationParam(),
             NumericOperationParam(
@@ -285,7 +285,7 @@ NUMERIC_OPERATION_TYPES.append(
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "ROUND",
+        "round",
         [
             NumericOperationParam(),
             # negative values are allowed
@@ -303,14 +303,14 @@ NUMERIC_OPERATION_TYPES.append(
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "SQRT",
+        "sqrt",
         [NumericOperationParam(incompatibilities={ExpressionCharacteristics.NEGATIVE})],
         NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "TRUNC",
+        "trunc",
         [NumericOperationParam()],
         # Unlike one might expect, this is not guaranteed to return an integer. Postgres allows specifying the precision.
         NumericReturnTypeSpec(),
