@@ -364,6 +364,13 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 "mz does not evaluate a failing, constant expression when the result contains zero rows"
             )
 
+        if query_template.matches_any_expression(
+            partial(matches_fun_by_name, function_name_in_lower_case="COALESCE"), True
+        ):
+            return YesIgnore(
+                "Postgres resolves all arguments, possibly resulting in an evaluation error"
+            )
+
         return NoIgnore()
 
     def _shall_ignore_mz_failure_where_pg_succeeds(
