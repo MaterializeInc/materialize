@@ -816,17 +816,8 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                                     ret.size_written += u64::cast_from(encode_buf.len());
                                     // calculate the diff size if the diff multiplier is present
                                     if let Some(diff) = diff {
-                                        let encoded_len = match i64::try_from(encode_buf.len()) {
-                                            Ok(len) => len,
-                                            Err(_) => {
-                                                let _ =
-                                                    response_sender.send(Err(Error::ValueError(
-                                                        "encoded value length too large"
-                                                            .to_string(),
-                                                    )));
-                                                return;
-                                            }
-                                        };
+                                        let encoded_len = i64::try_from(encode_buf.len())
+                                            .expect("less than i64 size");
                                         ret.size_diff =
                                             Some(ret.size_diff.unwrap_or(0) + (diff * encoded_len));
                                     }

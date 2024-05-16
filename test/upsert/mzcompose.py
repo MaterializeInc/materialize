@@ -442,7 +442,6 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
 
 def workflow_autospill(c: Composition) -> None:
     """Testing auto spill to disk"""
-    c.down(destroy_volumes=True)
     dependencies = [
         "zookeeper",
         "kafka",
@@ -451,54 +450,76 @@ def workflow_autospill(c: Composition) -> None:
         "clusterd1",
     ]
 
-    with c.override(
-        Materialized(
-            options=[
-                "--orchestrator-process-scratch-directory=/mzdata/source_data",
-            ],
-            additional_system_parameter_defaults={
-                "disk_cluster_replicas_default": "true",
-                "upsert_rocksdb_auto_spill_to_disk": "true",
-                "upsert_rocksdb_auto_spill_threshold_bytes": "250",
-                "enable_unorchestrated_cluster_replicas": "true",
-                "storage_dataflow_delay_sources_past_rehydration": "true",
-            },
+    # Helper function to get worker 0 autospill metrics for clusterd.
+    def fetch_auto_spill_metric() -> int | None:
+        metrics = c.exec(
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+
+        value = None
+        for metric in metrics.splitlines():
+            if metric.startswith("mz_storage_upsert_state_rocksdb_autospill_in_use"):
+                if value:
+                    value += int(metric.split()[1])
+                else:
+                    value = int(metric.split()[1])
+
+        return value
+
+    for style, mz in [
+        (
+            "with DISK",
+            Materialized(
+                options=[
+                    "--orchestrator-process-scratch-directory=/mzdata/source_data",
+                ],
+                additional_system_parameter_defaults={
+                    "disk_cluster_replicas_default": "true",
+                    "upsert_rocksdb_auto_spill_to_disk": "true",
+                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
+                    "enable_unorchestrated_cluster_replicas": "true",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
+                },
+            ),
         ),
-        Clusterd(
-            name="clusterd1",
-            options=[
-                "--scratch-directory=/scratch",
-            ],
+        (
+            "with DISK and RocksDB Merge Operator",
+            Materialized(
+                options=[
+                    "--orchestrator-process-scratch-directory=/mzdata/source_data",
+                ],
+                additional_system_parameter_defaults={
+                    "disk_cluster_replicas_default": "true",
+                    "upsert_rocksdb_auto_spill_to_disk": "true",
+                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
+                    "enable_unorchestrated_cluster_replicas": "true",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
+                    # Enable the RocksDB merge operator
+                    "storage_rocksdb_use_merge_operator": "true",
+                },
+            ),
         ),
-        Testdrive(no_reset=True, consistent_seed=True),
-    ):
+    ]:
+        with c.override(
+            mz,
+            Clusterd(
+                name="clusterd1",
+                options=[
+                    "--scratch-directory=/scratch",
+                ],
+            ),
+            Testdrive(no_reset=True, consistent_seed=True),
+        ):
+            c.down(destroy_volumes=True)
+            print(f"Running autospill workflow {style}")
+            c.up(*dependencies)
+            c.run_testdrive_files("autospill/01-setup.td")
 
-        # Helper function to get worker 0 autospill metrics for clusterd.
-        def fetch_auto_spill_metric() -> int | None:
-            metrics = c.exec(
-                "clusterd1", "curl", "localhost:6878/metrics", capture=True
-            ).stdout
+            c.run_testdrive_files("autospill/02-memory.td")
+            assert fetch_auto_spill_metric() == 0
 
-            value = None
-            for metric in metrics.splitlines():
-                if metric.startswith(
-                    "mz_storage_upsert_state_rocksdb_autospill_in_use"
-                ):
-                    if value:
-                        value += int(metric.split()[1])
-                    else:
-                        value = int(metric.split()[1])
-
-            return value
-
-        c.up(*dependencies)
-        c.run_testdrive_files("autospill/01-setup.td")
-
-        c.run_testdrive_files("autospill/02-memory.td")
-        assert fetch_auto_spill_metric() == 0
-
-        c.run_testdrive_files("autospill/03-rocksdb.td")
-        assert fetch_auto_spill_metric() == 1
+            c.run_testdrive_files("autospill/03-rocksdb.td")
+            assert fetch_auto_spill_metric() == 1
 
 
 # This should not be run on ci and is not added to workflow_default above!

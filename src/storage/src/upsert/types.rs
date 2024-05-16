@@ -963,6 +963,9 @@ where
                     // This is a bit misleading as this represents the eventual state after the
                     // `snapshot_merge_function` has been called to merge all the updates,
                     // and not the state after this `multi_merge` call.
+                    //
+                    // This does not accurately report values that have been consolidated to diff == 0, as tracking that
+                    // per-key is extremely difficult.
                     stats.values_diff += diff;
 
                     (k, MergeValue { value: val, diff })
