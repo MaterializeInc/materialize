@@ -42,7 +42,14 @@ def workflow_test_version_skips(c: Composition) -> None:
 
     # If the current version is `v0.X.0-dev`, two_minor_releases_before will be `v0.X-2.Y`.
     # where Y is the most recent patch version of the minor version.
-    two_minor_releases_before = get_minor_mz_versions_listed_in_docs()[-2]
+    last_two_minor_releases = get_minor_mz_versions_listed_in_docs()[-2:]
+    two_minor_releases_before = last_two_minor_releases[-2]
+    one_minor_release_before = last_two_minor_releases[-1]
+
+    if current_version.major == one_minor_release_before.major:
+        assert (
+            one_minor_release_before.minor < current_version.minor
+        ), "current minor version matches last released minor version from docs; was the release bump merged?"
 
     print(
         f"Testing that a migration from two minor releases before (={two_minor_releases_before})"
