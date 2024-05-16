@@ -3832,26 +3832,26 @@ pub fn arb_datum_for_scalar(scalar_type: &ScalarType) -> impl Strategy<Value = P
         ScalarType::Char {
             length: Some(length),
         } => {
-            // Constrain the length otherwise we try to generate massive strings.
-            let length = length.into_u32() % 300;
-            prop::collection::vec(any::<char>(), usize::cast_from(length))
-                .prop_map(|chars| PropDatum::String(chars.into_iter().collect()))
+            let max_len = usize::cast_from(length.into_u32()).max(1);
+            prop::collection::vec(any::<char>(), 0..max_len)
+                .prop_map(move |chars| {
+                    // `Char`s are fixed sized strings padded with blanks.
+                    let num_blanks = max_len - chars.len();
+                    let s = chars
+                        .into_iter()
+                        .chain(std::iter::repeat(' ').take(num_blanks))
+                        .collect();
+                    PropDatum::String(s)
+                })
                 .boxed()
         }
         ScalarType::VarChar {
             max_length: Some(length),
         } => {
-            // Constrain the length otherwise we try to generate massive strings.
-            let length = length.into_u32() % 300;
-
-            // proptest panics if we provide an empty range, i.e. 0..0.
-            if length == 0 {
-                Just(PropDatum::String(String::new())).boxed()
-            } else {
-                prop::collection::vec(any::<char>(), 0..usize::cast_from(length))
-                    .prop_map(|chars| PropDatum::String(chars.into_iter().collect()))
-                    .boxed()
-            }
+            let max_len = usize::cast_from(length.into_u32()).max(1);
+            prop::collection::vec(any::<char>(), 0..max_len)
+                .prop_map(|chars| PropDatum::String(chars.into_iter().collect()))
+                .boxed()
         }
         ScalarType::Bytes => prop::collection::vec(any::<u8>(), 300)
             .prop_map(PropDatum::Bytes)
