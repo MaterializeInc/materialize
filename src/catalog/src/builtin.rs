@@ -6538,10 +6538,14 @@ ON mz_internal.mz_sink_status_history (sink_id)",
 //
 // These aggregations are just to make `GROUP BY` happy. Each id has a single row in the
 // underlying relation.
-pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
-    name: "mz_source_statistics",
+//
+// We append WITH_HISTORY because we want to build a separate view + index that doesn't
+// retain history. This is because retaining its history causes MZ_SOURCE_STATISTICS_WITH_HISTORY_IND
+// to hold all records/updates, which causes CPU and latency of querying it to spike.
+pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_source_statistics_with_history",
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SOURCE_STATISTICS_OID,
+    oid: oid::VIEW_MZ_SOURCE_STATISTICS_WITH_HISTORY_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -6570,13 +6574,33 @@ GROUP BY id",
     access: vec![PUBLIC_SELECT],
 });
 
+pub const MZ_SOURCE_STATISTICS_WITH_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_source_statistics_with_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SOURCE_STATISTICS_WITH_HISTORY_IND_OID,
+    sql: "IN CLUSTER mz_introspection
+ON mz_internal.mz_source_statistics_with_history (id)",
+    is_retained_metrics_object: true,
+};
+
+// The non historical version of MZ_SOURCE_STATISTICS_WITH_HISTORY.
+// Used to query MZ_SOURCE_STATISTICS at the current time.
+pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_source_statistics",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SOURCE_STATISTICS_OID,
+    column_defs: None,
+    sql: "SELECT *, true FROM mz_internal.mz_source_statistics_with_history",
+    access: vec![PUBLIC_SELECT],
+});
+
 pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_SOURCE_STATISTICS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_source_statistics (id)",
-    is_retained_metrics_object: true,
+    is_retained_metrics_object: false,
 };
 
 pub static MZ_SINK_STATISTICS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
@@ -7171,6 +7195,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::Source(&MZ_SOURCE_STATISTICS_RAW),
         Builtin::Source(&MZ_SINK_STATISTICS_RAW),
+        Builtin::View(&MZ_SOURCE_STATISTICS_WITH_HISTORY),
+        Builtin::Index(&MZ_SOURCE_STATISTICS_WITH_HISTORY_IND),
         Builtin::View(&MZ_SOURCE_STATISTICS),
         Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
         Builtin::View(&MZ_SINK_STATISTICS),
