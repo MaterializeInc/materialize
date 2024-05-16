@@ -22,3 +22,13 @@
 
   {{ adapter.dispatch('get_test_sql', 'dbt')(main_sql, fail_calc, warn_if, error_if, limit) }}
 {%- endmacro %}
+
+{% macro get_unit_test_sql(main_sql, expected_fixture_sql, expected_column_names, cluster) -%}
+    {% if cluster %}
+        {% call statement(auto_begin=True) %}
+            set cluster = {{ cluster }}
+        {% endcall %}
+    {% endif %}
+
+  {{ adapter.dispatch('get_unit_test_sql', 'dbt')(main_sql, expected_fixture_sql, expected_column_names) }}
+{%- endmacro %}
