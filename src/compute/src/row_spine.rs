@@ -314,7 +314,8 @@ mod container {
         use mz_repr::{Datum, Row, ScalarType};
 
         #[mz_ore::test]
-        fn miri_test_round_trip() {
+        #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::with_exposed_provenance` are not supported
+        fn test_round_trip() {
             fn round_trip(datums: Vec<Datum>) {
                 let row = Row::pack(datums.clone());
 
