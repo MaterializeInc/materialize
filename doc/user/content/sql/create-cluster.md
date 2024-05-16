@@ -94,7 +94,7 @@ The resource allocations are proportional to the number in the size name. For
 example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
 cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
 size `400cc`. To determine the specific resource allocations for a size,
-query the [`mz_catalog.mz_cluster_replica_sizes`] table.
+query the [`mz_cluster_replica_sizes`] table.
 
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
@@ -103,7 +103,7 @@ changes in the resource requirements of your workload.
 
 
 {{< warning >}}
-The values in the `mz_catalog.mz_cluster_replica_sizes` table may change at any
+The values in the `mz_cluster_replica_sizes` table may change at any
 time. You should not rely on them for any kind of capacity planning.
 {{< /warning >}}
 
@@ -294,4 +294,4 @@ The privileges required to execute this statement are:
 [`DROP CLUSTER`]: /sql/drop-cluster/
 [`SELECT`]: /sql/select
 [`SUBSCRIBE`]: /sql/subscribe
-[`mz_catalog.mz_cluster_replica_sizes`]: /sql/system-catalog/mz_catalog#mz_cluster_replica_sizes
+[`mz_cluster_replica_sizes`]: /sql/system-catalog/mz_catalog#mz_cluster_replica_sizes
