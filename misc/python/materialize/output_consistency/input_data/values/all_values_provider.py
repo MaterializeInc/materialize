@@ -32,6 +32,9 @@ from materialize.output_consistency.input_data.values.number_values_provider imp
 from materialize.output_consistency.input_data.values.text_values_provider import (
     TEXT_DATA_TYPE_WITH_VALUES,
 )
+from materialize.output_consistency.input_data.values.uuid_values_provider import (
+    UUID_DATA_TYPE_WITH_VALUES,
+)
 
 ALL_DATA_TYPES_WITH_VALUES: list[DataTypeWithValues] = list(
     itertools.chain(
@@ -42,5 +45,6 @@ ALL_DATA_TYPES_WITH_VALUES: list[DataTypeWithValues] = list(
         [TEXT_DATA_TYPE_WITH_VALUES],
         [JSONB_DATA_TYPE_WITH_VALUES],
         list(VALUES_PER_MAP_DATA_TYPE.values()),
+        [UUID_DATA_TYPE_WITH_VALUES],
     )
 )
