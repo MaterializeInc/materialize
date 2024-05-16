@@ -632,7 +632,7 @@ where
                             let mut result = logic(key, val1, val2).into_iter().peekable();
 
                             // We can only produce output if the result return something.
-                            if result.peek().is_some() {
+                            if let Some(first) = result.next() {
                                 // Join times.
                                 cursor1.map_times(storage1, |time1, diff1| {
                                     let time1 = time1.join(meet);
@@ -645,16 +645,16 @@ where
                                 consolidate(&mut buffer);
 
                                 // Special case no results, one result, and potentially many results
-                                match (result.next(), result.peek().is_some(), buffer.len()) {
+                                match (result.peek().is_some(), buffer.len()) {
                                     // Certainly no output
-                                    (None, _, _) | (_, _, 0) => {}
+                                    (_, 0) => {}
                                     // Single element, single time
-                                    (Some(first), false, 1) => {
+                                    (false, 1) => {
                                         let (time, diff) = buffer.pop().unwrap();
                                         temp.push((first, time, diff));
                                     }
                                     // Multiple elements or multiple times
-                                    (Some(first), _, _) => {
+                                    (_, _) => {
                                         for d in std::iter::once(first).chain(result) {
                                             temp.extend(buffer.iter().map(|(time, diff)| {
                                                 (d.clone(), time.clone(), diff.clone())
