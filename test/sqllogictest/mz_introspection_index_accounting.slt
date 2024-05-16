@@ -92,6 +92,7 @@ mz_sink_status_history_ind  CREATE␠INDEX␠"mz_sink_status_history_ind"␠IN�
 mz_sink_statuses_ind  CREATE␠INDEX␠"mz_sink_statuses_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_sink_statuses"␠("id")
 mz_sinks_ind  CREATE␠INDEX␠"mz_sinks_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_sinks"␠("id")
 mz_source_statistics_ind  CREATE␠INDEX␠"mz_source_statistics_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_source_statistics"␠("id")
+mz_source_statistics_with_history_ind  CREATE␠INDEX␠"mz_source_statistics_with_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_source_statistics_with_history"␠("id")
 mz_source_status_history_ind  CREATE␠INDEX␠"mz_source_status_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_source_status_history"␠("source_id")
 mz_source_statuses_ind  CREATE␠INDEX␠"mz_source_statuses_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_source_statuses"␠("id")
 mz_sources_ind  CREATE␠INDEX␠"mz_sources_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_sources"␠("id")
@@ -489,6 +490,7 @@ mz_sinks  redacted_create_sql
 mz_sinks  schema_id
 mz_sinks  size
 mz_sinks  type
+mz_source_statistics  bool
 mz_source_statistics  bytes_indexed
 mz_source_statistics  bytes_received
 mz_source_statistics  id
@@ -515,6 +517,19 @@ mz_source_statistics_raw  snapshot_records_known
 mz_source_statistics_raw  snapshot_records_staged
 mz_source_statistics_raw  updates_committed
 mz_source_statistics_raw  updates_staged
+mz_source_statistics_with_history  bytes_indexed
+mz_source_statistics_with_history  bytes_received
+mz_source_statistics_with_history  id
+mz_source_statistics_with_history  messages_received
+mz_source_statistics_with_history  offset_committed
+mz_source_statistics_with_history  offset_known
+mz_source_statistics_with_history  records_indexed
+mz_source_statistics_with_history  rehydration_latency
+mz_source_statistics_with_history  snapshot_committed
+mz_source_statistics_with_history  snapshot_records_known
+mz_source_statistics_with_history  snapshot_records_staged
+mz_source_statistics_with_history  updates_committed
+mz_source_statistics_with_history  updates_staged
 mz_source_status_history  details
 mz_source_status_history  error
 mz_source_status_history  occurred_at
