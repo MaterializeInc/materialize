@@ -66,7 +66,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperation,
     DbOperationOrFunction,
 )
-from materialize.output_consistency.query.query_result import QueryFailure
+from materialize.output_consistency.query.query_result import QueryFailure, QueryResult
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.validation.validation_message import ValidationError
 
@@ -283,11 +283,13 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         pg_outcome = outcome_by_strategy_id[EvaluationStrategyKey.POSTGRES]
 
         if isinstance(pg_outcome, QueryFailure):
+            assert isinstance(mz_outcome, QueryResult)
             return self._shall_ignore_pg_failure_where_mz_succeeds(
-                pg_outcome, query_template
+                pg_outcome, mz_outcome, query_template
             )
 
         if isinstance(mz_outcome, QueryFailure):
+            assert isinstance(pg_outcome, QueryResult)
             return self._shall_ignore_mz_failure_where_pg_succeeds(
                 query_template, mz_outcome
             )
@@ -297,7 +299,10 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         )
 
     def _shall_ignore_pg_failure_where_mz_succeeds(
-        self, pg_outcome: QueryFailure, query_template: QueryTemplate
+        self,
+        pg_outcome: QueryFailure,
+        mz_outcome: QueryResult,
+        query_template: QueryTemplate,
     ) -> IgnoreVerdict:
         pg_error_msg = pg_outcome.error_message
 
@@ -349,6 +354,14 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore(
                 "#27078: different error handling when extracting from timestamp"
+            )
+
+        if (
+            "invalid input syntax for type uuid" in pg_error_msg
+            and mz_outcome.row_count() == 0
+        ):
+            return YesIgnore(
+                "mz does not evaluate a failing, constant expression when the result contains zero rows"
             )
 
         return NoIgnore()
