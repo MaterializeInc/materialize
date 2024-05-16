@@ -67,7 +67,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             failures = []
 
+            count_chunk = 0
             while time.time() - start_time < args.runtime:
+                count_chunk = count_chunk + 1
                 try:
                     c.testdrive(
                         dedent(
@@ -92,9 +94,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
                     i = 0
                     while time.time() - start_time < args.runtime:
-                        print(f"Running iteration {i}")
+                        print(f"Running iteration {i} of chunk {count_chunk}")
                         c.override_current_testcase_name(
-                            f"iteration {i} of workflow_default"
+                            f"iteration {i} of chunk {count_chunk} in workflow_default"
                         )
                         perform_test(
                             c,
@@ -133,6 +135,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     failures.extend(e.errors)
 
             if len(failures) > 0:
+                # reset test case name to remove current iteration and chunk, which does not apply to collected errors
+                c.override_current_testcase_name("workflow_default")
                 raise FailedTestExecutionError(
                     error_summary="SQL failures occurred",
                     errors=failures,
