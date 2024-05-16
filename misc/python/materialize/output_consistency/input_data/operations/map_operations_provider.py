@@ -70,21 +70,21 @@ MAP_OPERATION_TYPES.append(
     )
 )
 
-# with specified keys
 MAP_OPERATION_TYPES.append(
     DbOperation(
         "MAP[$ => $]",
         [MAP_FIELD_NAME_PARAM, AnyOperationParam()],
         MapReturnTypeSpec(),
+        comment="using a set of specified keys",
         since_mz_version=MzVersion.parse_mz("v0.100.0"),
     )
 )
-# with arbitrary text values
 MAP_OPERATION_TYPES.append(
     DbOperation(
         "MAP[$ => $]",
         [TextOperationParam(), AnyOperationParam()],
         MapReturnTypeSpec(),
+        comment="using arbitrary text values as keys",
         since_mz_version=MzVersion.parse_mz("v0.100.0"),
     )
 )

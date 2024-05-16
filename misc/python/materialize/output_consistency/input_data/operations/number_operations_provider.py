@@ -80,7 +80,6 @@ NUMERIC_OPERATION_TYPES.append(
         relevance=OperationRelevance.HIGH,
     )
 )
-# Bitwise AND
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ & $",
@@ -91,10 +90,10 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         relevance=OperationRelevance.LOW,
+        comment="bitwise AND",
         tags={TAG_BITWISE_OP},
     )
 )
-# Bitwise OR
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ | $",
@@ -105,10 +104,10 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         relevance=OperationRelevance.LOW,
+        comment="bitwise OR",
         tags={TAG_BITWISE_OP},
     )
 )
-# Bitwise XOR
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ # $",
@@ -119,10 +118,10 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         relevance=OperationRelevance.LOW,
+        comment="bitwise XOR",
         tags={TAG_BITWISE_OP},
     )
 )
-# Bitwise NOT
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "~$",
@@ -131,10 +130,10 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         NumericReturnTypeSpec(),
         relevance=OperationRelevance.LOW,
+        comment="bitwise NOT",
         tags={TAG_BITWISE_OP},
     )
 )
-# Bitwise left shift
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ << $",
@@ -145,10 +144,10 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         relevance=OperationRelevance.LOW,
+        comment="bitwise left shift",
         tags={TAG_BITWISE_OP},
     )
 )
-# Bitwise right shift
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ >> $",
@@ -159,6 +158,7 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         relevance=OperationRelevance.LOW,
+        comment="bitwise right shift",
         tags={TAG_BITWISE_OP},
     )
 )
@@ -181,12 +181,12 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(always_floating_type=True),
     )
 )
-# CEIL == CEILING
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "CEIL",
         [NumericOperationParam()],
         NumericReturnTypeSpec(only_integer=True),
+        comment="equivalent to ceiling",
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -270,7 +270,6 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
     )
 )
-# POW == POWER
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "POW",
@@ -281,6 +280,7 @@ NUMERIC_OPERATION_TYPES.append(
             ),
         ],
         NumericReturnTypeSpec(),
+        comment="equivalent to power",
     )
 )
 NUMERIC_OPERATION_TYPES.append(
