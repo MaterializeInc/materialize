@@ -6590,6 +6590,7 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SOURCE_STATISTICS_OID,
     column_defs: None,
+    // We need to add a redundant 'true' column for a new dataflow to be created.
     sql: "SELECT *, true FROM mz_internal.mz_source_statistics_with_history",
     access: vec![PUBLIC_SELECT],
 });
