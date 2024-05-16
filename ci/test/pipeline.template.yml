@@ -659,6 +659,7 @@ steps:
     label: "Skip Version Upgrade"
     depends_on: build-aarch64
     timeout_in_minutes: 30
+    inputs: [doc/user/content/releases]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: skip-version-upgrade
