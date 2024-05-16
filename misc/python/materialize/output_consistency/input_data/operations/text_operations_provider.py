@@ -61,77 +61,77 @@ TEXT_OPERATION_TYPES.append(
     )
 )
 
-# Matches regular expression, case sensitive
 TEXT_OPERATION_TYPES.append(
     DbOperation(
         "$ ~ $",
         [TextOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
+        comment="matches regular expression, case sensitive",
         tags={TAG_REGEX},
     )
 )
 
-# Matches regular expression, case insensitive
 TEXT_OPERATION_TYPES.append(
     DbOperation(
         "$ ~* $",
         [TextOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
+        comment="matches regular expression, case insensitive",
         tags={TAG_REGEX},
     )
 )
 
-# Does not match regular expression, case sensitive
 TEXT_OPERATION_TYPES.append(
     DbOperation(
         "$ !~ $",
         [TextOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
+        comment="does not match regular expression, case sensitive",
         tags={TAG_REGEX},
     )
 )
 
-# Does not match regular expression, case insensitive
 TEXT_OPERATION_TYPES.append(
     DbOperation(
         "$ !~* $",
         [TextOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
+        comment="does not match regular expression, case insensitive",
         tags={TAG_REGEX},
     )
 )
 
-# case-sensitive SQL LIKE matching (equal to: $ ~~ $)
 TEXT_LIKE_OPERATION = DbOperation(
     "$ LIKE $",
     [TextOperationParam(), LIKE_PARAM],
     BooleanReturnTypeSpec(),
+    comment="case-sensitive SQL LIKE matching (equal to: $ ~~ $)",
 )
 TEXT_OPERATION_TYPES.append(TEXT_LIKE_OPERATION)
 
-# case-insensitive SQL LIKE matching (equal to: $ ~~* $)
 TEXT_OPERATION_TYPES.append(
     DbOperation(
         "$ ILIKE $",
         [TextOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
+        comment="case-insensitive SQL LIKE matching (equal to: $ ~~* $)",
     )
 )
 
-# negative case-sensitive SQL LIKE matching (equal to: $ !~~ $)
 TEXT_NOT_LIKE_OPERATION = DbOperation(
     "$ NOT LIKE $",
     [TextOperationParam(), LIKE_PARAM],
     BooleanReturnTypeSpec(),
+    comment="negative case-sensitive SQL LIKE matching (equal to: $ !~~ $)",
 )
 TEXT_OPERATION_TYPES.append(TEXT_NOT_LIKE_OPERATION)
 
-# negative case-insensitive SQL LIKE matching (equal to: $ !~~* $)
 TEXT_OPERATION_TYPES.append(
     DbOperation(
         "$ NOT ILIKE $",
         [TextOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
+        comment="negative case-insensitive SQL LIKE matching (equal to: $ !~~* $)",
     )
 )
 

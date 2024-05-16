@@ -114,8 +114,13 @@ class ConsistencyTestRunner:
             expression = self.expression_generator.generate_expression(operation)
 
             if expression is None:
+                comment = (
+                    f" (comment: {operation.comment})"
+                    if operation.comment is not None
+                    else ""
+                )
                 test_summary.global_warnings.append(
-                    f"Failed to generate an expression for {operation.__class__.__name__}: '{operation.to_pattern(operation.max_param_count)}'"
+                    f"Failed to generate an expression for {operation.__class__.__name__}: '{operation.to_pattern(operation.max_param_count)}'{comment}"
                 )
                 continue
 

@@ -44,16 +44,15 @@ from materialize.output_consistency.operation.operation import (
 
 AGGREGATE_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
-# array_agg without ordering (currently ignored)
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "array_agg",
         [AnyOperationParam()],
         ArrayReturnTypeSpec(DataTypeCategory.DYNAMIC),
         is_aggregation=True,
+        comment="without ordering",
     ),
 )
-# array_agg with ordering
 AGGREGATE_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "array_agg",
@@ -61,6 +60,7 @@ AGGREGATE_OPERATION_TYPES.append(
         [AnyOperationParam()],
         DynamicReturnTypeSpec(),
         is_aggregation=True,
+        comment="with ordering",
     ),
 )
 AGGREGATE_OPERATION_TYPES.append(
@@ -126,7 +126,6 @@ AGGREGATE_OPERATION_TYPES.append(
         relevance=OperationRelevance.LOW,
     ),
 )
-# equal to stddev
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "stddev_samp",
@@ -134,6 +133,7 @@ AGGREGATE_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
+        comment="equal to stddev",
     ),
 )
 AGGREGATE_OPERATION_TYPES.append(
@@ -154,7 +154,6 @@ AGGREGATE_OPERATION_TYPES.append(
         relevance=OperationRelevance.LOW,
     ),
 )
-# equal to variance
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "var_samp",
@@ -162,10 +161,10 @@ AGGREGATE_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
+        comment="equal to variance",
     ),
 )
 
-# string_agg without ordering (currently ignored)
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "string_agg",
@@ -173,10 +172,10 @@ AGGREGATE_OPERATION_TYPES.append(
         TextReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
+        comment="without ordering",
     ),
 )
 
-# string_agg with ordering
 AGGREGATE_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "string_agg",
@@ -185,6 +184,7 @@ AGGREGATE_OPERATION_TYPES.append(
         TextReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
+        comment="with ordering",
     ),
 )
 
