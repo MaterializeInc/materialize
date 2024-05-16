@@ -9,8 +9,8 @@
 
 //! A cache of the txn shard contents.
 
-use std::cmp::{max, min, Reverse};
-use std::collections::{BTreeMap, BinaryHeap, VecDeque};
+use std::cmp::{max, min};
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -602,7 +602,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 unapplied_write_ts,
             );
             while let Some(write_ts) = times.writes.front() {
-                if times.writes.len() <= 1 || write_ts >= &unapplied_write_ts {
+                if times.writes.len() <= 1 || write_ts >= unapplied_write_ts {
                     break;
                 }
                 times.writes.pop_front();
@@ -623,7 +623,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             );
             while let Some(reg) = times.registered.front() {
                 match &reg.forget_ts {
-                    Some(forget_ts) if forget_ts >= &min_reg_ts => break,
+                    Some(forget_ts) if forget_ts >= min_reg_ts => break,
                     _ if times.registered.len() <= 1 => break,
                     _ => {
                         assert!(
