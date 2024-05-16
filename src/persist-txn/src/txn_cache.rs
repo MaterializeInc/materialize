@@ -603,7 +603,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 unapplied_write_ts,
             );
             while let Some(write_ts) = times.writes.front() {
-                if times.writes.len() <= 1 || write_ts >= unapplied_write_ts {
+                if times.writes.len() == 1 || write_ts >= unapplied_write_ts {
                     break;
                 }
                 times.writes.pop_front();
@@ -625,7 +625,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             while let Some(reg) = times.registered.front() {
                 match &reg.forget_ts {
                     Some(forget_ts) if forget_ts >= min_reg_ts => break,
-                    _ if times.registered.len() <= 1 => break,
+                    _ if times.registered.len() == 1 => break,
                     _ => {
                         assert!(
                             reg.forget_ts.is_some(),
