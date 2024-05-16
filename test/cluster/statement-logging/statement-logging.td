@@ -258,3 +258,32 @@ ROLLBACK
 
 > SELECT sql FROM mz_internal.mz_recent_activity_log WHERE statement_type = 'alter_secret';
 "ALTER SECRET my_super_secret AS '<REDACTED>'"
+
+# Test that the number of rows returned in query history respects OFFSET and LIMIT.
+
+> CREATE TABLE t_offset_limit (a int);
+
+> INSERT INTO t_offset_limit SELECT generate_series(1, 5);
+
+> SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 4;
+1
+
+> SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 2;
+5
+4
+
+> SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 100;
+
+> SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0;
+
+> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 4';
+1
+
+> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 2';
+2
+
+> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 100';
+0
+
+> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0';
+0
