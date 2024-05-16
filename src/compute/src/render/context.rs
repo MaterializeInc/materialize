@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::rc::Weak;
 use std::sync::mpsc;
 
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -28,7 +29,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, ScopeParent};
@@ -291,7 +292,7 @@ where
     }
 
     /// Applies logic to elements of the underlying arrangement and returns the results.
-    pub fn flat_map<I, L, T>(
+    pub fn flat_map<D, I, L, T>(
         &self,
         key: Option<Row>,
         mut logic: L,
@@ -300,15 +301,15 @@ where
     where
         T: Timestamp + Lattice + Columnation,
         <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
-        I: IntoIterator,
-        I::Item: Data,
+        I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
+        D: Data,
         L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
     {
         use differential_dataflow::operators::arrange::TraceAgent;
         let mut datums = DatumVec::new();
         match self {
             MzArrangement::RowRow(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowRowSpine<_, _>>, _, _>(
+                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowRowSpine<_, _>>, _, _, _>(
                     inner,
                     key,
                     move |k, v, t, d| {
@@ -402,21 +403,21 @@ where
     }
 
     /// Applies logic to elements of the underlying arrangement and returns the results.
-    pub fn flat_map<I, L>(
+    pub fn flat_map<D, I, L>(
         &self,
         key: Option<Row>,
         mut logic: L,
         refuel: usize,
     ) -> timely::dataflow::Stream<S, I::Item>
     where
-        I: IntoIterator,
-        I::Item: Data,
+        I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
+        D: Data,
         L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
     {
         let mut datums = DatumVec::new();
         match self {
             MzArrangementImport::RowRow(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<RowRowEnter<T, Diff, S::Timestamp>, _, _>(
+                CollectionBundle::<S, T>::flat_map_core::<RowRowEnter<T, Diff, S::Timestamp>, _, _, _>(
                     inner,
                     key,
                     move |k, v, t, d| {
@@ -500,7 +501,7 @@ where
     /// If `key` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used to
     /// leap directly to exactly those records.
-    pub fn flat_map<I, C, L>(
+    pub fn flat_map<D, I, C, L>(
         &self,
         key: Option<Row>,
         constructor: C,
@@ -509,8 +510,8 @@ where
         Collection<S, DataflowError, Diff>,
     )
     where
-        I: IntoIterator,
-        I::Item: Data,
+        I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
+        D: Data,
         C: FnOnce() -> L,
         L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
     {
@@ -736,7 +737,7 @@ where
     /// It is important that `logic` still guard against data that does not satisfy
     /// this constraint, as this method does not statically know that it will have
     /// that arrangement.
-    pub fn flat_map<I, C, L>(
+    pub fn flat_map<D, I, C, L>(
         &self,
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         constructor: C,
@@ -745,8 +746,8 @@ where
         Collection<S, DataflowError, Diff>,
     )
     where
-        I: IntoIterator,
-        I::Item: Data,
+        I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
+        D: Data,
         C: FnOnce() -> L,
         L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
     {
@@ -781,7 +782,7 @@ where
     ///
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
     /// where key and value are potentially specialized, but convertible into rows.
-    fn flat_map_core<Tr, I, L>(
+    fn flat_map_core<Tr, D, I, L>(
         trace: &Arranged<S, Tr>,
         key: Option<Tr::KeyOwned>,
         mut logic: L,
@@ -791,51 +792,55 @@ where
         for<'a> Tr::Key<'a>: ToDatumIter,
         for<'a> Tr::Val<'a>: ToDatumIter,
         Tr: TraceReader<Time = S::Timestamp, Diff = mz_repr::Diff> + Clone + 'static,
-        I: IntoIterator,
-        I::Item: Data,
+        I: IntoIterator<Item = (D, Tr::Time, Tr::Diff)>,
+        D: Data,
         L: for<'a, 'b> FnMut(Tr::Key<'_>, Tr::Val<'_>, &'a S::Timestamp, &'a mz_repr::Diff) -> I
             + 'static,
     {
+        use differential_dataflow::consolidation::ConsolidatingContainerBuilder as CB;
+
         let mode = if key.is_some() { "index" } else { "scan" };
         let name = format!("ArrangementFlatMap({})", mode);
         use timely::dataflow::operators::Operator;
-        trace.stream.unary(Pipeline, &name, move |_, info| {
-            // Acquire an activator to reschedule the operator when it has unfinished work.
-            use timely::scheduling::Activator;
-            let activations = trace.stream.scope().activations();
-            let activator = Activator::new(&info.address[..], activations);
-            // Maintain a list of work to do, cursor to navigate and process.
-            let mut todo = std::collections::VecDeque::new();
-            move |input, output| {
-                // First, dequeue all batches.
-                input.for_each(|time, data| {
-                    let capability = time.retain();
-                    for batch in data.iter() {
-                        // enqueue a capability, cursor, and batch.
-                        todo.push_back(PendingWork::new(
-                            capability.clone(),
-                            batch.cursor(),
-                            batch.clone(),
-                        ));
-                    }
-                });
+        trace
+            .stream
+            .unary::<CB<_>, _, _, _>(Pipeline, &name, move |_, info| {
+                // Acquire an activator to reschedule the operator when it has unfinished work.
+                use timely::scheduling::Activator;
+                let activations = trace.stream.scope().activations();
+                let activator = Activator::new(&info.address[..], activations);
+                // Maintain a list of work to do, cursor to navigate and process.
+                let mut todo = std::collections::VecDeque::new();
+                move |input, output| {
+                    // First, dequeue all batches.
+                    input.for_each(|time, data| {
+                        let capability = time.retain();
+                        for batch in data.iter() {
+                            // enqueue a capability, cursor, and batch.
+                            todo.push_back(PendingWork::new(
+                                capability.clone(),
+                                batch.cursor(),
+                                batch.clone(),
+                            ));
+                        }
+                    });
 
-                // Second, make progress on `todo`.
-                let mut fuel = refuel;
-                while !todo.is_empty() && fuel > 0 {
-                    todo.front_mut()
-                        .unwrap()
-                        .do_work(&key, &mut logic, &mut fuel, output);
-                    if fuel > 0 {
-                        todo.pop_front();
+                    // Second, make progress on `todo`.
+                    let mut fuel = refuel;
+                    while !todo.is_empty() && fuel > 0 {
+                        todo.front_mut()
+                            .unwrap()
+                            .do_work(&key, &mut logic, &mut fuel, output);
+                        if fuel > 0 {
+                            todo.pop_front();
+                        }
+                    }
+                    // If we have not finished all work, re-activate the operator.
+                    if !todo.is_empty() {
+                        activator.activate();
                     }
                 }
-                // If we have not finished all work, re-activate the operator.
-                if !todo.is_empty() {
-                    activator.activate();
-                }
-            }
-        })
+            })
     }
 
     /// Look up an arrangement by the expressions that form the key.
@@ -917,24 +922,21 @@ where
                             // Copy the whole time, and re-populate event time.
                             let mut time: S::Timestamp = time.clone();
                             *time.event_time_mut() = event_time;
-                            Ok((row, time, diff))
+                            (Ok(row), time, diff)
                         }
                         Err((e, event_time, diff)) => {
                             // Copy the whole time, and re-populate event time.
                             let mut time: S::Timestamp = time.clone();
                             *time.event_time_mut() = event_time;
-                            Err((e, time, diff))
+                            (Err(e), time, diff)
                         }
                     })
             }
         });
 
-        use timely::dataflow::operators::ok_err::OkErr;
-        let (oks, errs) = stream.ok_err(|x| x);
-
         use differential_dataflow::AsCollection;
-        let oks = oks.as_collection();
-        let errs = errs.as_collection();
+        let (oks, errs) = stream.as_collection().map_fallible("OkErr", |x| x);
+
         (oks, errors.concat(&errs))
     }
     pub fn ensure_collections(
@@ -1054,27 +1056,27 @@ where
         }
     }
     /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to `output`.
-    fn do_work<I, L>(
+    fn do_work<I, D, L>(
         &mut self,
         key: &Option<C::KeyOwned>,
         logic: &mut L,
         fuel: &mut usize,
-        output: &mut OutputHandle<
+        output: &mut OutputHandleCore<
             '_,
             C::Time,
-            I::Item,
+            ConsolidatingContainerBuilder<Vec<I::Item>>,
             timely::dataflow::channels::pushers::Tee<C::Time, Vec<I::Item>>,
         >,
     ) where
-        I: IntoIterator,
-        I::Item: Data,
+        I: IntoIterator<Item = (D, C::Time, C::Diff)>,
+        D: Data,
         L: for<'a, 'b> FnMut(C::Key<'_>, C::Val<'b>, &'a C::Time, &'a C::Diff) -> I + 'static,
     {
         use differential_dataflow::consolidation::consolidate;
 
         // Attempt to make progress on this batch.
         let mut work: usize = 0;
-        let mut session = output.session(&self.capability);
+        let mut session = output.session_with_builder(&self.capability);
         let mut buffer = Vec::new();
         if let Some(key) = key {
             use differential_dataflow::trace::cursor::MyTrait;
