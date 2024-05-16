@@ -40,7 +40,7 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use differential_dataflow::consolidation::consolidate_updates;
+use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::difference::Multiply;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -585,7 +585,7 @@ where
     fn work<L, I, YFn>(
         &mut self,
         output: &mut OutputHandle<T, (D, T, Diff), Tee<T, Vec<(D, T, Diff)>>>,
-        mut result: L,
+        mut logic: L,
         yield_fn: YFn,
         work: &mut usize,
     ) where
@@ -617,6 +617,8 @@ where
 
         assert_eq!(temp.len(), 0);
 
+        let mut buffer = Vec::default();
+
         while cursor1.key_valid(storage1) && cursor2.key_valid(storage2) {
             match cursor1.key(storage1).cmp(&cursor2.key(storage2)) {
                 Ordering::Less => cursor1.seek_key(storage1, cursor2.key(storage2)),
@@ -626,17 +628,42 @@ where
                     let key = cursor2.key(storage2);
                     while let Some(val1) = cursor1.get_val(storage1) {
                         while let Some(val2) = cursor2.get_val(storage2) {
-                            cursor1.map_times(storage1, |time1, diff1| {
-                                let time1 = time1.join(meet);
-                                cursor2.map_times(storage2, |time2, diff2| {
-                                    let time = time1.join(time2);
-                                    let diff = diff1.multiply(diff2);
-                                    let results = result(key, val1, val2)
-                                        .into_iter()
-                                        .map(|d| (d, time.clone(), diff.clone()));
-                                    temp.extend(results);
+                            // Evaluate logic on `key, val1, val2`. Note the absence of time and diff.
+                            let mut result = logic(key, val1, val2).into_iter().peekable();
+
+                            // We can only produce output if the result return something.
+                            if let Some(first) = result.next() {
+                                // Join times.
+                                cursor1.map_times(storage1, |time1, diff1| {
+                                    let time1 = time1.join(meet);
+                                    cursor2.map_times(storage2, |time2, diff2| {
+                                        let time = time1.join(time2);
+                                        let diff = diff1.multiply(diff2);
+                                        buffer.push((time, diff));
+                                    });
                                 });
-                            });
+                                consolidate(&mut buffer);
+
+                                // Special case no results, one result, and potentially many results
+                                match (result.peek().is_some(), buffer.len()) {
+                                    // Certainly no output
+                                    (_, 0) => {}
+                                    // Single element, single time
+                                    (false, 1) => {
+                                        let (time, diff) = buffer.pop().unwrap();
+                                        temp.push((first, time, diff));
+                                    }
+                                    // Multiple elements or multiple times
+                                    (_, _) => {
+                                        for d in std::iter::once(first).chain(result) {
+                                            temp.extend(buffer.iter().map(|(time, diff)| {
+                                                (d.clone(), time.clone(), diff.clone())
+                                            }))
+                                        }
+                                    }
+                                }
+                                buffer.clear();
+                            }
                             cursor2.step_val(storage2);
                         }
                         cursor1.step_val(storage1);
