@@ -30,7 +30,7 @@ for map_data_type in MAP_DATA_TYPES:
             sql_value_by_key=dict(),
         ),
         "EMPTY",
-        {ExpressionCharacteristics.MAP_EMPTY},
+        {ExpressionCharacteristics.COLLECTION_EMPTY},
     )
 
     # key values should be specified in MAP_FIELD_NAME_PARAM in misc/python/materialize/output_consistency/input_data/params/enum_constant_operation_params.py
