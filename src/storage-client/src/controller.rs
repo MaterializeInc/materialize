@@ -20,6 +20,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::future::Future;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -264,6 +266,8 @@ pub trait StorageTxn<T> {
     /// The implementor should error if the shard is already specified.
     fn write_persist_txn_shard(&mut self, shard: String) -> Result<(), StorageError<T>>;
 }
+
+pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
@@ -545,11 +549,17 @@ pub trait StorageController: Debug {
 
     /// Returns aggregate statistics about the contents of the local input named
     /// `id` at `as_of`.
+    ///
+    /// Note that this async function itself returns a future. We may
+    /// need to block on the stats being available, but don't want to hold a reference
+    /// to the controller for too long... so the outer future holds a reference to the
+    /// controller but returns quickly, and the inner future is slow but does not
+    /// reference the controller.
     async fn snapshot_parts_stats(
         &self,
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotPartsStats, StorageError<Self::Timestamp>>;
+    ) -> BoxFuture<Result<SnapshotPartsStats, StorageError<Self::Timestamp>>>;
 
     /// Assigns a read policy to specific identifiers.
     ///
