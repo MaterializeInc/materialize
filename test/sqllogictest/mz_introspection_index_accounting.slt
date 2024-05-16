@@ -490,7 +490,6 @@ mz_sinks  redacted_create_sql
 mz_sinks  schema_id
 mz_sinks  size
 mz_sinks  type
-mz_source_statistics  bool
 mz_source_statistics  bytes_indexed
 mz_source_statistics  bytes_received
 mz_source_statistics  id
