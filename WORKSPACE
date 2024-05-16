@@ -158,6 +158,16 @@ maybe(
     url = "https://github.com/bazel-contrib/toolchains_llvm/releases/download/{0}/toolchains_llvm-{0}.tar.gz".format(TOOLCHAINS_LLVM_VERSION),
 )
 
+SYSROOT_LINUX_AARCH64_2_28_INTEGRITY = "sha256-2vep6bKVfCmaFdLzCU5vaEwXhuti2mXnCLRJxUraok4="
+
+maybe(
+    http_archive,
+    name = "sysroot_linux_aarch64_2_28",
+    build_file = "//misc/bazel/c_deps:BUILD.sysroot.bazel",
+    integrity = SYSROOT_LINUX_AARCH64_2_28_INTEGRITY,
+    url = "https://parkertimmerman-test-bucket-2.s3.amazonaws.com/sysroot-base-aarch64.tar.xz",
+)
+
 load("@toolchains_llvm//toolchain:deps.bzl", "bazel_toolchain_dependencies")
 bazel_toolchain_dependencies()
 
@@ -165,6 +175,12 @@ load("@toolchains_llvm//toolchain:rules.bzl", "llvm_toolchain")
 llvm_toolchain(
     name = "llvm_toolchain",
     llvm_version = LLVM_VERSION,
+    stdlib = {
+        "linux-aarch64": "stdc++",
+    },
+    sysroot = {
+        "linux-aarch64": "@sysroot_linux_aarch64_2_28//:sysroot",
+    }
 )
 
 load("@llvm_toolchain//:toolchains.bzl", "llvm_register_toolchains")

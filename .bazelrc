@@ -11,3 +11,5 @@ common:macos --linkopt=-mmacosx-version-min=13.0
 
 # Config for building protobuf.
 build --copt=-Wno-error=deprecated-declarations
+# Config to bootstrap make on Linux with clang 16.
+build --copt=-Wno-error=implicit-function-declaration
