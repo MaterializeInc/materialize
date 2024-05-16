@@ -316,10 +316,11 @@ fn builder_for_datatype(
                 item_capacity,
             ))
         }
-        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
-            ColBuilder::TimestampMicrosecondBuilder(TimestampMicrosecondBuilder::with_capacity(
-                item_capacity,
-            ))
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, timezone) => {
+            ColBuilder::TimestampMicrosecondBuilder(
+                TimestampMicrosecondBuilder::with_capacity(item_capacity)
+                    .with_timezone_opt(timezone.clone()),
+            )
         }
         DataType::LargeBinary => ColBuilder::LargeBinaryBuilder(LargeBinaryBuilder::with_capacity(
             item_capacity,

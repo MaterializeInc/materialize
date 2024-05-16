@@ -117,7 +117,7 @@ contains:MAX FILE SIZE cannot be less than 16MB
     FORMAT = 'csv'
   );
 
-> COPY (SELECT array[1,2]::int[], false::bool, 'Inf'::double, '{"s": "abc"}'::jsonb, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, 12345678901234567890123.4567890123456789::numeric(39,16), '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, '0 day'::interval, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/test/3'
+> COPY (SELECT array[1,2]::int[], false::bool, 'Inf'::double, '{"s": "abc"}'::jsonb, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, 12345678901234567890123.4567890123456789::numeric(39,16), '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, '2010-10-10 10:10:10+02'::timestamptz, '0 day'::interval, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/test/3'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
@@ -154,7 +154,7 @@ $ s3-verify-data bucket=copytos3 key=test/2_5
 1
 
 $ s3-verify-data bucket=copytos3 key=test/3
-"{1,2}",f,Infinity,"{""s"":""abc""}",1,32767,2147483647,9223372036854775807,12345678901234567890123.4567890123456789,2010-10-10,10:10:10,2010-10-10 10:10:10,00:00:00,aaaa,\x5c7841414141,това е,\xd182d0b5d0bad181d182
+"{1,2}",f,Infinity,"{""s"":""abc""}",1,32767,2147483647,9223372036854775807,12345678901234567890123.4567890123456789,2010-10-10,10:10:10,2010-10-10 10:10:10,2010-10-10 08:10:10+00,00:00:00,aaaa,\x5c7841414141,това е,\xd182d0b5d0bad181d182
 
 
 # Copy a large amount of data in the background and check to see that the INCOMPLETE
@@ -183,7 +183,7 @@ $ s3-verify-data bucket=copytos3 key=test/3
     FORMAT = 'parquet'
   );
 
-> COPY (SELECT array[1,2]::int[], array[array[1, 2], array[NULL, 4]], false::bool, 'Inf'::double, '{"s": "abc"}'::jsonb, '85907cb9-ac9b-4e35-84b8-60dc69368aca'::uuid, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, 1234567890123456789012.4567890123456789::numeric(38,16), '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/parquet_test/3'
+> COPY (SELECT array[1,2]::int[], array[array[1, 2], array[NULL, 4]], false::bool, 'Inf'::double, '{"s": "abc"}'::jsonb, '85907cb9-ac9b-4e35-84b8-60dc69368aca'::uuid, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, 1234567890123456789012.4567890123456789::numeric(38,16), '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, '2010-10-10 10:10:10+02'::timestamptz, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/parquet_test/3'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
@@ -199,7 +199,7 @@ $ s3-verify-data bucket=copytos3 key=parquet_test/2
 2
 
 $ s3-verify-data bucket=copytos3 key=parquet_test/3
-{items: [1, 2], dimensions: 1} {items: [1, 2, , 4], dimensions: 2} false inf {"s":"abc"} 85907cb9ac9b4e3584b860dc69368aca 1 32767 2147483647 9223372036854775807 1234567890123456789012.4567890123456789 2010-10-10 10:10:10 2010-10-10T10:10:10 aaaa 5c7841414141 това е d182d0b5d0bad181d182
+{items: [1, 2], dimensions: 1} {items: [1, 2, , 4], dimensions: 2} false inf {"s":"abc"} 85907cb9ac9b4e3584b860dc69368aca 1 32767 2147483647 9223372036854775807 1234567890123456789012.4567890123456789 2010-10-10 10:10:10 2010-10-10T10:10:10 2010-10-10T08:10:10Z aaaa 5c7841414141 това е d182d0b5d0bad181d182
 
 # Confirm that unimplemented types will early exit before writing to s3
 ! COPY (SELECT '0 day'::interval)  TO 's3://copytos3/parquet_test/5'
