@@ -185,11 +185,12 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     ///
     /// Specifically, a data shard is registered at a timestamp `ts` if it has a
     /// `register_ts <= ts` but no `register_ts < forget_ts < ts`.
-    // TODO(jkosh44) This method allows timestamps in the future and past which
+    // TODO(jkosh44) This method allows timestamps in the future which
     // allows the answer to change over time. See
     // https://github.com/MaterializeInc/materialize/issues/26903.
     pub fn registered_at(&self, data_id: &ShardId, ts: &T) -> bool {
         self.assert_only_data_id(data_id);
+        assert!(self.progress_exclusive <= *ts);
         let Some(data_times) = self.datas.get(data_id) else {
             return false;
         };

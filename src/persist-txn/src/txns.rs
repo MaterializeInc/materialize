@@ -1201,6 +1201,8 @@ mod tests {
 
         async fn registered_at_ts(&mut self, data_id: ShardId) -> bool {
             self.txns.txns_cache.update_ge(&self.ts).await;
+            // Bump our timestamp up to match the progress of the cache.
+            self.ts = self.txns.txns_cache.progress_exclusive;
             self.txns.txns_cache.registered_at(&data_id, &self.ts)
         }
 
