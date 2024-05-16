@@ -44,6 +44,7 @@ class DbOperationOrFunction:
         args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
+        comment: str | None = None,
         is_enabled: bool = True,
         is_pg_compatible: bool = True,
         tags: set[str] | None = None,
@@ -63,6 +64,7 @@ class DbOperationOrFunction:
         self.args_validators: set[OperationArgsValidator] = args_validators
         self.is_aggregation = is_aggregation
         self.relevance = relevance
+        self.comment = comment
         self.is_enabled = is_enabled
         self.is_pg_compatible = is_pg_compatible
         self.tags = tags
@@ -127,6 +129,7 @@ class DbOperation(DbOperationOrFunction):
         return_type_spec: ReturnTypeSpec,
         args_validators: set[OperationArgsValidator] | None = None,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
+        comment: str | None = None,
         is_enabled: bool = True,
         is_pg_compatible: bool = True,
         tags: set[str] | None = None,
@@ -141,6 +144,7 @@ class DbOperation(DbOperationOrFunction):
             args_validators=args_validators,
             is_aggregation=False,
             relevance=relevance,
+            comment=comment,
             is_enabled=is_enabled,
             is_pg_compatible=is_pg_compatible,
             tags=tags,
@@ -159,7 +163,8 @@ class DbOperation(DbOperationOrFunction):
         return f"({self.pattern})"
 
     def __str__(self) -> str:
-        return f"DbOperation: {self.pattern}"
+        comment = f" (comment: {self.comment})" if self.comment is not None else ""
+        return f"DbOperation: {self.pattern}{comment}"
 
 
 class DbFunction(DbOperationOrFunction):
@@ -173,6 +178,7 @@ class DbFunction(DbOperationOrFunction):
         args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
+        comment: str | None = None,
         is_enabled: bool = True,
         is_pg_compatible: bool = True,
         tags: set[str] | None = None,
@@ -188,6 +194,7 @@ class DbFunction(DbOperationOrFunction):
             args_validators=args_validators,
             is_aggregation=is_aggregation,
             relevance=relevance,
+            comment=comment,
             is_enabled=is_enabled,
             is_pg_compatible=is_pg_compatible,
             tags=tags,
@@ -218,7 +225,8 @@ class DbFunction(DbOperationOrFunction):
         return f"{self.function_name_in_lower_case}({args_pattern})"
 
     def __str__(self) -> str:
-        return f"DbFunction: {self.function_name_in_lower_case}"
+        comment = f" (comment: {self.comment})" if self.comment is not None else ""
+        return f"DbFunction: {self.function_name_in_lower_case}{comment}"
 
 
 class DbFunctionWithCustomPattern(DbFunction):
@@ -231,16 +239,18 @@ class DbFunctionWithCustomPattern(DbFunction):
         args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
+        comment: str | None = None,
         is_enabled: bool = True,
     ):
         super().__init__(
             function_name,
             params,
             return_type_spec,
-            args_validators,
-            is_aggregation,
-            relevance,
-            is_enabled,
+            args_validators=args_validators,
+            is_aggregation=is_aggregation,
+            relevance=relevance,
+            comment=comment,
+            is_enabled=is_enabled,
         )
         self.pattern_per_param_count = pattern_per_param_count
 
