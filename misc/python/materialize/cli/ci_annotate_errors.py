@@ -57,6 +57,8 @@ ERROR_RE = re.compile(
     | environmentd .* unrecognized\ configuration\ parameter
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     | SUMMARY:\ .*Sanitizer
+    # for miri test summary
+    | FAIL\ \[\s*\d+\.\d+s\]
     )
     .* $
     """,
