@@ -1554,6 +1554,13 @@ pub mod cluster_scheduling {
             for REFRESH EVERY materialized views.",
         true,
     );
+
+    pub static CLUSTER_SECURITY_CONTEXT_ENABLED: VarDefinition = VarDefinition::new(
+        "cluster_security_context_enabled",
+        value!(bool; DEFAULT_SECURITY_CONTEXT_ENABLED),
+        "Enables SecurityContext for clusterd instances, restricting capabilities to improve security.",
+        true,
+    );
 }
 
 /// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
