@@ -38,6 +38,7 @@ use crate::statement_logging::{
     SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
     StatementEndedExecutionRecord, StatementLifecycleEvent, StatementPreparedRecord,
 };
+use crate::AdapterNotice;
 
 use super::Message;
 
@@ -417,6 +418,7 @@ impl Coordinator {
             &StatementLifecycleEvent::ExecutionFinished,
             now,
         );
+        self.statement_ids.remove(&id);
     }
 
     fn pack_statement_execution_inner(
@@ -695,6 +697,8 @@ impl Coordinator {
 
         let ev_id = Uuid::new_v4();
         let now = self.now();
+        self.statement_ids
+            .insert(StatementLoggingId(ev_id), session.conn_id().clone());
         self.record_statement_lifecycle_event(
             &StatementLoggingId(ev_id),
             &StatementLifecycleEvent::ExecutionBegan,
@@ -782,6 +786,16 @@ impl Coordinator {
         if mz_adapter_types::dyncfgs::ENABLE_STATEMENT_LIFECYCLE_LOGGING
             .get(self.catalog().system_config().dyncfgs())
         {
+            if let Some(conn_id) = self.statement_ids.get(id) {
+                if let Some(conn) = self.active_conns.get(conn_id) {
+                    let _ = conn.notice_tx.send(AdapterNotice::StatementLifecycleEvent {
+                        event: event.clone(),
+                        when,
+                    });
+                }
+            } else {
+                tracing::warn!("statement event id {id:?} had no corresponding connection id");
+            }
             let row = Self::pack_statement_lifecycle_event(id, event, when);
             self.statement_logging
                 .pending_statement_lifecycle_events

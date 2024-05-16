@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_controller::clusters::ClusterStatus;
 use mz_orchestrator::{NotReadyReason, ServiceStatus};
+use mz_ore::now::EpochMillis;
 use mz_ore::str::{separated, StrExt};
 use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::mz_acl_item::AclMode;
@@ -23,6 +24,7 @@ use mz_sql::plan::PlanNotice;
 use mz_sql::session::vars::IsolationLevel;
 use tokio_postgres::error::SqlState;
 
+use crate::statement_logging::StatementLifecycleEvent;
 use crate::TimestampExplanation;
 
 /// Notices that can occur in the adapter layer.
@@ -134,6 +136,10 @@ pub enum AdapterNotice {
     },
     Welcome(String),
     PlanInsights(String),
+    StatementLifecycleEvent {
+        event: StatementLifecycleEvent,
+        when: EpochMillis,
+    },
 }
 
 impl AdapterNotice {
@@ -197,6 +203,7 @@ impl AdapterNotice {
             AdapterNotice::VarDefaultUpdated { .. } => Severity::Notice,
             AdapterNotice::Welcome(_) => Severity::Notice,
             AdapterNotice::PlanInsights(_) => Severity::Notice,
+            AdapterNotice::StatementLifecycleEvent { .. } => Severity::Notice,
         }
     }
 
@@ -210,6 +217,13 @@ impl AdapterNotice {
                     .iter()
                     .map(|obj_info| format!("drop cascades to {}", obj_info))
                     .join("\n"),
+            ),
+            AdapterNotice::StatementLifecycleEvent { event, when } => Some(
+                serde_json::json!({
+                    "event": event.as_str(),
+                    "when": when,
+                })
+                .to_string(),
             ),
             _ => None,
         }
@@ -290,6 +304,7 @@ impl AdapterNotice {
             AdapterNotice::VarDefaultUpdated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::Welcome(_) => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
+            AdapterNotice::StatementLifecycleEvent { .. } => SqlState::from_code("MZ009"),
         }
     }
 }
@@ -460,6 +475,9 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::Welcome(message) => message.fmt(f),
             AdapterNotice::PlanInsights(message) => message.fmt(f),
+            AdapterNotice::StatementLifecycleEvent { event, when } => {
+                write!(f, "{}: {}", mz_ore::now::to_datetime(*when), event.as_str())
+            }
         }
     }
 }

@@ -1406,6 +1406,8 @@ pub struct Coordinator {
 
     /// Data used by the statement logging feature.
     statement_logging: StatementLogging,
+    /// Maps in-progress statements to their connection id.
+    statement_ids: BTreeMap<StatementLoggingId, ConnectionId>,
 
     /// Limit for how many concurrent webhook requests we allow.
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
@@ -3097,6 +3099,7 @@ pub fn serve(
                     optimizer_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),
+                    statement_ids: BTreeMap::new(),
                     webhook_concurrency_limit,
                     pg_timestamp_oracle_config,
                     check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
