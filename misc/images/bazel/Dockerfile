@@ -19,7 +19,9 @@ RUN apt-get update \
         # dynamically linked by clang.
         libtinfo5 \
         # rules_perl doesn't include this, needed to build OpenSSL.
-        perl 
+        perl \
+        # Buildkite seems to need python 3.10+.
+        python3
 
 # Download the bazel binary from the official GitHub releases since the apt repositories do not
 # contain arm64 releases.
