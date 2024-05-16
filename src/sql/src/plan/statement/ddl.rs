@@ -3926,7 +3926,6 @@ pub fn plan_create_connection(
         if_not_exists,
         with_options,
     } = stmt;
-
     let connection_options_extracted = connection::ConnectionOptionExtracted::try_from(values)?;
     let connection = connection_options_extracted.try_into_connection(scx, connection_type)?;
     if let Connection::Aws(_) = &connection {

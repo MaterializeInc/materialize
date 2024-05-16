@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{Config, ConfigSet, ConfigType, ConfigUpdates};
+use mz_ore::instrument;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
@@ -97,6 +98,8 @@ pub struct PersistConfig {
     pub hostname: String,
     /// Whether this persist instance is running in a "cc" sized cluster.
     pub is_cc_active: bool,
+    /// Memory limit of the process, if known.
+    pub announce_memory_limit: Option<usize>,
     /// A clock to use for all leasing and other non-debugging use.
     pub now: NowFn,
     /// Persist [Config]s that can change value dynamically within the lifetime
@@ -178,6 +181,7 @@ impl PersistConfig {
         Self {
             build_version: build_info.semver_version(),
             is_cc_active: false,
+            announce_memory_limit: None,
             now,
             configs,
             configs_synced_once: Arc::new(configs_synced_once),
@@ -242,6 +246,7 @@ impl PersistConfig {
     ///
     /// Useful in conjunction with configuration parameters that cannot be
     /// dynamically updated once set (e.g., PubSub).
+    #[instrument(level = "info")]
     pub async fn configs_synced_once(&self) {
         self.configs_synced_once
             .subscribe()
@@ -325,7 +330,12 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
         .add(&crate::cfg::CRDB_TCP_USER_TIMEOUT)
-        .add(&crate::cfg::TXN_USE_CRITICAL_SINCE)
+        .add(&crate::cfg::USE_CRITICAL_SINCE_TXN)
+        .add(&crate::cfg::USE_CRITICAL_SINCE_CATALOG)
+        .add(&crate::cfg::USE_CRITICAL_SINCE_SOURCE)
+        .add(&crate::cfg::USE_CRITICAL_SINCE_SNAPSHOT)
+        .add(&crate::fetch::FETCH_SEMAPHORE_COST_ADJUSTMENT)
+        .add(&crate::fetch::FETCH_SEMAPHORE_PERMIT_ADJUSTMENT)
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)
         .add(&crate::internal::compact::COMPACTION_MINIMUM_TIMEOUT)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_CLAMP)
@@ -410,10 +420,31 @@ pub const CRDB_TCP_USER_TIMEOUT: Config<Duration> = Config::new(
 );
 
 /// Migrate the txns code to use the critical since when opening a new read handle.
-pub const TXN_USE_CRITICAL_SINCE: Config<bool> = Config::new(
-    "persist_txn_use_critical_since",
+pub const USE_CRITICAL_SINCE_TXN: Config<bool> = Config::new(
+    "persist_use_critical_since_txn",
     true,
     "Use the critical since (instead of the overall since) when initializing a subscribe.",
+);
+
+/// Migrate the catalog to use the critical since when opening a new read handle.
+pub const USE_CRITICAL_SINCE_CATALOG: Config<bool> = Config::new(
+    "persist_use_critical_since_catalog",
+    false,
+    "Use the critical since (instead of the overall since) for the Persist-backed catalog.",
+);
+
+/// Migrate the persist source to use the critical since when opening a new read handle.
+pub const USE_CRITICAL_SINCE_SOURCE: Config<bool> = Config::new(
+    "persist_use_critical_since_source",
+    false,
+    "Use the critical since (instead of the overall since) in the Persist source.",
+);
+
+/// Migrate snapshots to use the critical since when opening a new read handle.
+pub const USE_CRITICAL_SINCE_SNAPSHOT: Config<bool> = Config::new(
+    "persist_use_critical_since_snapshot",
+    false,
+    "Use the critical since (instead of the overall since) when taking snapshots in the controller or in fast-path peeks.",
 );
 
 impl PostgresClientKnobs for PersistConfig {

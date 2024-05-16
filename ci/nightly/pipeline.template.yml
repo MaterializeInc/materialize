@@ -1488,7 +1488,7 @@ steps:
   - id: cloudtest-slow
     label: "Slow Cloudtest"
     depends_on: build-aarch64
-    timeout_in_minutes: 35
+    timeout_in_minutes: 45
     env:
       CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
     agents:
@@ -1588,3 +1588,22 @@ steps:
               composition: ruby
         agents:
           queue: linux-aarch64-small
+
+  - group: ":bazel: Bazel"
+    key: bazel
+    steps:
+      - id: bazel-test-x86_64
+        label: ":bazel: Test (x86_64)"
+        command: bin/ci-builder run stable bazel test //... --remote_cache=https://bazel-remote.dev.materialize.com
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-x86_64
+
+      - id: bazel-test-aarch64
+        label: ":bazel: Test (aarch64)"
+        command: bin/ci-builder run stable bazel test //... --remote_cache=https://bazel-remote.dev.materialize.com
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-aarch64

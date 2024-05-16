@@ -40,7 +40,7 @@ pub async fn run_destination_command(
 
     // Interpret the remaining arguments are part of the connection config.
 
-    let sql_host = url::Url::parse(&state.materialize_sql_addr)
+    let sql_host = url::Url::parse(&state.materialize.sql_addr)
         .expect("failed to parse Materialize SQL addr")
         .scheme()
         .to_string();

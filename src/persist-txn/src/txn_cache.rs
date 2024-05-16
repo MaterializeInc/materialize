@@ -21,7 +21,7 @@ use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_ore::instrument;
-use mz_persist_client::cfg::TXN_USE_CRITICAL_SINCE;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
 use mz_persist_client::fetch::LeasedBatchPart;
 use mz_persist_client::metrics::encode_ts_metric;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
@@ -854,7 +854,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
                     shard_name: "txns".to_owned(),
                     handle_purpose: "read txns".to_owned(),
                 },
-                TXN_USE_CRITICAL_SINCE.get(client.dyncfgs()),
+                USE_CRITICAL_SINCE_TXN.get(client.dyncfgs()),
             )
             .await
             .expect("txns schema shouldn't change");
@@ -960,7 +960,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
                 part.stats()
             );
             if !should_fetch_part {
-                txns_subscribe.return_leased_part(part);
+                drop(part);
                 continue;
             }
             let part_updates = txns_subscribe.fetch_batch_part(part).await;

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import distutils.core
+import distutils.core  # pyright: ignore
 import os
 import sys
 from pathlib import Path

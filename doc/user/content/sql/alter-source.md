@@ -16,6 +16,14 @@ menu:
 
 {{< diagram "alter-source-add-clause.svg" >}}
 
+#### alter_source_set_retain_history_clause
+
+{{< diagram "alter-source-set-retain-history-clause.svg" >}}
+
+#### alter_source_reset_retain_history_clause
+
+{{< diagram "alter-source-reset-retain-history-clause.svg" >}}
+
 #### with_options
 
 {{< diagram "with-options.svg" >}}
@@ -24,6 +32,7 @@ Field   | Use
 --------|-----
 _name_  | The identifier of the source you want to alter.
 **ADD SUBSOURCE** ... | PostgreSQL sources only: Add the identified tables from the upstream database (`table_name`) to the named source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options).
+_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 ### **ADD SUBSOURCE** `with_options`
 

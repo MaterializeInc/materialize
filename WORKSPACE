@@ -111,9 +111,15 @@ maybe(
 #    See: <https://github.com/bazelbuild/rules_foreign_cc/pull/1023>
 #    See: <https://github.com/MaterializeInc/rules_foreign_cc/commit/2199b1c304140fa959c3703b0b7e9cbf7d39c4c2>
 #
+# 3. Specify the AR tool to use when bootstrapping `make`. On macOS explicitly set the path to
+#    be llvm-ar which we know exists in our toolchain.
+#    See: <https://github.com/MaterializeInc/rules_foreign_cc/commit/e94986f05edf95fff025b6aeb995e09be8889b89>
+#
+# 4. `make` 4.2 fails to compile on Linux because of unrecognized symbols so we patch the source.
+#    See: <https://github.com/MaterializeInc/rules_foreign_cc/commit/de4a79280f54d8796e86b7ab0b631939b7b44d05>
 
-RULES_FOREIGN_CC_VERSION = "2199b1c304140fa959c3703b0b7e9cbf7d39c4c2"
-RULES_FOREIGN_CC_INTEGRITY = "sha256-Prb2q/bhVCocjT427OPVpzHuEnJmqcf1WPK4Ev7KlEI="
+RULES_FOREIGN_CC_VERSION = "de4a79280f54d8796e86b7ab0b631939b7b44d05"
+RULES_FOREIGN_CC_INTEGRITY = "sha256-WwRg/GJuUjT3SMJEagTni2ZH+g3szIkHaqGgbYCN1u0="
 maybe(
     http_archive,
     name = "rules_foreign_cc",

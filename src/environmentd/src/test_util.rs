@@ -1173,7 +1173,7 @@ pub async fn create_postgres_source_with_table<'a>(
     )
 }
 
-pub async fn wait_for_view_population(mz_client: &Client, view_name: &str, source_rows: i64) {
+pub async fn wait_for_pg_table_population(mz_client: &Client, view_name: &str, source_rows: i64) {
     let current_isolation = mz_client
         .query_one("SHOW transaction_isolation", &[])
         .await

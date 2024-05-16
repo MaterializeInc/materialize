@@ -37,10 +37,13 @@ Sink source type      | Description
 
 {{< diagram "kafka-sink-connection.svg" >}}
 
-
 #### `csr_connection`
 
 {{< diagram "csr-connection.svg" >}}
+
+### `with_options`
+
+{{< diagram "with-options-retain-history.svg" >}}
 
 Field | Use
 ------|-----

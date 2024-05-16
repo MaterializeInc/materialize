@@ -2004,7 +2004,7 @@ pub mod datadriven {
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
                 Diagnostics::for_tests(),
-                false,
+                true,
             )
             .await
             .expect("invalid shard types");

@@ -13,4 +13,5 @@ pre-image:
     bin: testdrive
     extract:
       protobuf-src:
-        install: protobuf-install
+        bin: protobuf-bin
+        include: protobuf-include

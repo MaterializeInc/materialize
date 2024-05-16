@@ -43,7 +43,6 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::num::NonZeroU64;
 use std::pin::pin;
-use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
@@ -512,10 +511,11 @@ async fn raw_stream<'a>(
     // Request that the stream provide us with a heartbeat message when no other messages have
     // been sent. This isn't strictly necessary, but is a lightweight additional general
     // health-check for the replication stream
-    let heartbeat = Duration::from_secs(30);
     conn.query_drop(format!(
         "SET @master_heartbeat_period = {};",
-        heartbeat.as_nanos()
+        mz_storage_types::dyncfgs::MYSQL_REPLICATION_HEARTBEAT_INTERVAL
+            .get(config.config.config_set())
+            .as_nanos()
     ))
     .await?;
 

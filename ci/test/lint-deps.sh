@@ -24,20 +24,34 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-# Explicitly name targets to check dependencies. We support Apple on ARM64 and x86_64 and Linux on x86_64.
+# The crates whose dependency graphs we want to lint.
+entrypoints=(
+    mz-clusterd
+    mz-environmentd
+)
+
+# Explicitly name targets to check dependencies. We support Apple and Linux on ARM64 and x86_64.
 targets=(
     aarch64-apple-darwin
     x86_64-apple-darwin
+    aarch64-unknown-linux-gnu
     x86_64-unknown-linux-gnu
 )
 
 # List of crates to include in the dependency lint, including an explanation why they're listed.
 crates=(
     # Checks that the default allocator is jemalloc on supported platforms, but can
-    # be disabled using --no-default-features
+    # be disabled using --no-default-features or explicitly enabled with --features=jemalloc
     tikv_jemalloc_ctl
     tikv_jemallocator
+    tikv_jemalloc_sys
 )
+
+if [[ "$(uname -s)" = Darwin ]]; then
+    tac() {
+        tail -r
+    }
+fi
 
 rewrite=false
 resources="$(dirname "$0")/lint-deps"
@@ -53,7 +67,10 @@ function deps() {
     # output if there is no dependency to any of the specified packages.
     for crate in "${crates[@]}"; do
         # Gather data for the current target, reverse lines, find the dependency hierarchy to the root, reverse lines.
-        output=$(cargo tree --workspace --format ':{lib}:{f}' \
+        # shellcheck disable=SC2046
+        output=$(cargo tree \
+            $(printf -- "-p %s " "${entrypoints[@]}") \
+            --format ':{lib}:{f}' \
             --prefix depth \
             --edges normal,build \
             --locked \
@@ -76,9 +93,11 @@ for target in "${targets[@]}"; do
     if $rewrite; then
         deps > "$resources/$target-default"
         deps --no-default-features > "$resources/$target-no-default-features"
+        deps --features jemalloc > "$resources/$target-jemalloc"
     else
         try diff "$resources/$target-default" <(deps)
         try diff "$resources/$target-no-default-features" <(deps --no-default-features)
+        try diff "$resources/$target-jemalloc" <(deps --features jemalloc)
     fi
 done
 

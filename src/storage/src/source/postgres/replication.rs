@@ -211,7 +211,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             tracing::info!(%id, "ensuring replication slot {slot} exists");
             super::ensure_replication_slot(&replication_client, slot).await?;
-            let slot_lsn = super::fetch_slot_resume_lsn(&replication_client, slot).await?;
+            let slot_lsn = super::fetch_slot_resume_lsn(
+                &replication_client,
+                slot,
+                mz_storage_types::dyncfgs::PG_FETCH_SLOT_RESUME_LSN_INTERVAL
+                    .get(config.config.config_set()),
+            )
+            .await?;
 
             let resume_upper = Antichain::from_iter(
                 subsource_resume_uppers
@@ -511,14 +517,21 @@ async fn raw_stream<'a>(
     // to avoid a TOCTOU issue we must do this check after starting the replication stream. We
     // cannot use the replication client to do that because it's already in CopyBoth mode.
     // [1] https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION-SLOT-LOGICAL
-    let min_resume_lsn = super::fetch_slot_resume_lsn(&metadata_client, slot).await?;
+    let min_resume_lsn = super::fetch_slot_resume_lsn(
+        &metadata_client,
+        slot,
+        mz_storage_types::dyncfgs::PG_FETCH_SLOT_RESUME_LSN_INTERVAL
+            .get(config.config.config_set()),
+    )
+    .await?;
 
     let progress_stat_shared_value = Arc::new(Mutex::new(None));
     let progress_stat_task_value = Arc::clone(&progress_stat_shared_value);
+    let offset_known_interval =
+        mz_storage_types::dyncfgs::PG_OFFSET_KNOWN_INTERVAL.get(config.config.config_set());
     let max_lsn_task_handle =
         mz_ore::task::spawn(|| format!("pg_current_wal_lsn:{}", config.id), async move {
-            // TODO(guswynn): make configurable.
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            let mut interval = tokio::time::interval(offset_known_interval);
 
             loop {
                 interval.tick().await;

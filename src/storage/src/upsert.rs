@@ -236,6 +236,8 @@ where
             .shrink_upsert_unused_buffers_by_ratio,
     };
 
+    let thin_input = upsert_thinning(input);
+
     if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
         let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
 
@@ -266,8 +268,6 @@ where
         let env = instance_context.rocksdb_env.clone();
 
         let rocksdb_in_use_metric = Arc::clone(&upsert_metrics.rocksdb_autospill_in_use);
-
-        let thin_input = upsert_thinning(input);
 
         if allow_auto_spill {
             upsert_inner(
@@ -309,16 +309,17 @@ where
                     rocksdb::RocksDB::new(
                         mz_rocksdb::RocksDBInstance::new(
                             &rocksdb_dir,
-                            mz_rocksdb::InstanceOptions::defaults_with_env(
+                            mz_rocksdb::InstanceOptions::<_, _, mz_rocksdb::StubMergeOperator<_>>::new(
                                 env,
                                 rocksdb_cleanup_tries,
+                                None,
+                                // For now, just use the same config as the one used for
+                                // merging snapshots.
+                                upsert_bincode_opts(),
                             ),
                             tuning,
                             rocksdb_shared_metrics,
                             rocksdb_instance_metrics,
-                            // For now, just use the same config as the one used for
-                            // merging snapshots.
-                            upsert_bincode_opts(),
                         )
                         .await
                         .unwrap(),
@@ -336,7 +337,7 @@ where
             source_config.id
         );
         upsert_inner(
-            input,
+            &thin_input,
             upsert_envelope.key_indices,
             resume_upper,
             previous,

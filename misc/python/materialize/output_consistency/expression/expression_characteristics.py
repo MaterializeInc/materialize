@@ -41,3 +41,6 @@ class ExpressionCharacteristics(Enum):
 
     JSON_EMPTY = 150
     JSON_ARRAY = 151
+
+    MAP_EMPTY = 160
+    MAP_WITH_DUP_KEYS = 161

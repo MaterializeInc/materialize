@@ -108,7 +108,7 @@ async fn check_coordinator(state: &State) -> Result<(), anyhow::Error> {
     // Make sure we can dump the Coordinator state.
     let response = reqwest::get(&format!(
         "http://{}/api/coordinator/dump",
-        state.materialize_internal_http_addr
+        state.materialize.internal_http_addr
     ))
     .await?;
     // We allow NOT_FOUND to support upgrade tests where this endpoint doesn't yet exist.
@@ -123,7 +123,7 @@ async fn check_coordinator(state: &State) -> Result<(), anyhow::Error> {
         .retry_async(|_| async {
             reqwest::get(&format!(
                 "http://{}/api/coordinator/check",
-                state.materialize_internal_http_addr,
+                state.materialize.internal_http_addr,
             ))
             .await
         })
@@ -153,7 +153,7 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
     // connected to.
     let memory_catalog = reqwest::get(&format!(
         "http://{}/api/catalog/dump",
-        state.materialize_internal_http_addr,
+        state.materialize.internal_http_addr,
     ))
     .await
     .context("GET catalog")?

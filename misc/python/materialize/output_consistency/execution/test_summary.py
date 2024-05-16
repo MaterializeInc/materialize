@@ -76,7 +76,17 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         if len(self.global_warnings) == 0:
             return []
 
-        unique_global_warnings = set(self.global_warnings)
+        unique_warnings_with_count = dict()
+        for warning in self.global_warnings:
+            unique_warnings_with_count[warning] = 1 + (
+                unique_warnings_with_count.get(warning) or 0
+            )
+
+        unique_global_warnings = [
+            f"{warning} ({count} occurrences)"
+            for warning, count in unique_warnings_with_count.items()
+        ]
+        unique_global_warnings.sort()
 
         warning_rows = [
             f"{len(unique_global_warnings)} unique, non-query specific warnings occurred:"

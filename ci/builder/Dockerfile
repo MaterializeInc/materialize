@@ -37,6 +37,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     libncurses-dev \
     libstdc++6 \
     libstdc++-13-dev \
+    libtinfo5 \
     libtool-bin \
     llvm \
     make \
@@ -102,6 +103,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     libclang-common-15-dev \
     libclang-dev \
     libclang-rt-15-dev \
+    libtinfo5 \
     libpq-dev \
     lld \
     llvm \
@@ -271,6 +273,20 @@ RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /u
 
 RUN if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi
 RUN if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
+
+# Install Bazel.
+#
+# TODO(parkmycar): Run Bazel in Docker image that does not have access to clang/gcc or any other tools.
+
+ARG BAZEL_VERSION="7.1.1"
+
+# Download the bazel binary from the official GitHub releases since the apt repositories do not
+# contain arm64 releases.
+RUN arch_bazel=$(echo "$ARCH_GCC" | sed "s/aarch64/arm64/") bazel_version=$(echo "$BAZEL_VERSION") \
+    && curl -fsSL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazel/releases/download/$bazel_version/bazel-$bazel_version-linux-$arch_bazel \
+    && if [ "$arch_bazel" = arm64 ]; then echo '37c2d1c8ff917eba88fc68a9fc7ac0b96014f1bed653f1621de0eabc79ed0d2b /usr/local/bin/bazel' | sha256sum --check; fi \
+    && if [ "$arch_bazel" = amd64 ]; then echo 'd93508529d41136065c7b1e5ff555fbfb9d18fd00e768886f2fc7dfb53b05b43 /usr/local/bin/bazel' | sha256sum --check; fi \
+    && chmod +x /usr/local/bin/bazel
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.

@@ -630,8 +630,9 @@ mod tests {
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::critical::CriticalReaderId;
     use mz_persist_client::rpc::PubSubClientConnection;
-    use mz_persist_client::{Diagnostics, PersistLocation, ShardId};
+    use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
     use mz_storage_client::util::remap_handle::RemapHandle;
@@ -846,12 +847,10 @@ mod tests {
             .expect("error creating persist client");
 
         let mut remap_read_handle = persist_client
-            .open_leased_reader::<SourceData, (), Timestamp, Diff>(
+            .open_critical_since::<SourceData, (), Timestamp, Diff, u64>(
                 remap_shard,
-                Arc::new(PROGRESS_DESC.clone()),
-                Arc::new(UnitSchema),
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
                 Diagnostics::from_purpose("test_since_hold"),
-                false,
             )
             .await
             .expect("error opening persist shard");
@@ -1001,8 +1000,9 @@ mod tests {
 
         // Compact but not enough to change the bindings
         remap_read_handle
-            .downgrade_since(&Antichain::from_elem(900.into()))
-            .await;
+            .compare_and_downgrade_since(&0, (&0, &Antichain::from_elem(900.into())))
+            .await
+            .unwrap();
         follower.compact(Antichain::from_elem(900.into()));
         let query = partitioned_frontier([(1, MzOffset::from(9))]);
         assert_eq!(
@@ -1012,8 +1012,9 @@ mod tests {
 
         // Compact enough to compact bindings
         remap_read_handle
-            .downgrade_since(&Antichain::from_elem(1500.into()))
-            .await;
+            .compare_and_downgrade_since(&0, (&0, &Antichain::from_elem(1500.into())))
+            .await
+            .unwrap();
         follower.compact(Antichain::from_elem(1500.into()));
         let query = partitioned_frontier([(1, MzOffset::from(9))]);
         // Now reclocking the same offset maps to the compacted binding, which is the same result
@@ -1208,12 +1209,10 @@ mod tests {
             .expect("error creating persist client");
 
         let mut remap_read_handle = persist_client
-            .open_leased_reader::<SourceData, (), Timestamp, Diff>(
+            .open_critical_since::<SourceData, (), Timestamp, Diff, u64>(
                 remap_shard,
-                Arc::new(PROGRESS_DESC.clone()),
-                Arc::new(UnitSchema),
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
                 Diagnostics::from_purpose("test_since_hold"),
-                false,
             )
             .await
             .expect("error opening persist shard");
@@ -1263,8 +1262,9 @@ mod tests {
 
         // Compact enough so that offsets >= 3 remain uncompacted
         remap_read_handle
-            .downgrade_since(&Antichain::from_elem(1000.into()))
-            .await;
+            .compare_and_downgrade_since(&0, (&0, &Antichain::from_elem(1000.into())))
+            .await
+            .unwrap();
         follower.compact(Antichain::from_elem(1000.into()));
 
         // Reclock offsets 3 and 4 again to see we get the uncompacted result
@@ -1486,12 +1486,10 @@ mod tests {
             .expect("error creating persist client");
 
         let mut remap_read_handle = persist_client
-            .open_leased_reader::<SourceData, (), Timestamp, Diff>(
+            .open_critical_since::<SourceData, (), Timestamp, Diff, u64>(
                 remap_shard,
-                Arc::new(PROGRESS_DESC.clone()),
-                Arc::new(UnitSchema),
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
                 Diagnostics::from_purpose("test_since_hold"),
-                false,
             )
             .await
             .expect("error opening persist shard");
@@ -1614,8 +1612,9 @@ mod tests {
 
         // After compaction it should still work
         remap_read_handle
-            .downgrade_since(&Antichain::from_elem(1000.into()))
-            .await;
+            .compare_and_downgrade_since(&0, (&0, &Antichain::from_elem(1000.into())))
+            .await
+            .unwrap();
         follower.compact(Antichain::from_elem(1000.into()));
         assert_eq!(
             follower
@@ -1625,8 +1624,9 @@ mod tests {
         );
         // compact as close as we can
         remap_read_handle
-            .downgrade_since(&Antichain::from_elem(2000.into()))
-            .await;
+            .compare_and_downgrade_since(&0, (&0, &Antichain::from_elem(2000.into())))
+            .await
+            .unwrap();
         follower.compact(Antichain::from_elem(2000.into()));
         assert_eq!(
             follower
@@ -1638,8 +1638,9 @@ mod tests {
         // If we compact too far, we get an error. Note we compact
         // to the previous UPPER we were checking.
         remap_read_handle
-            .downgrade_since(&Antichain::from_elem(2001.into()))
-            .await;
+            .compare_and_downgrade_since(&0, (&0, &Antichain::from_elem(3000.into())))
+            .await
+            .unwrap();
         follower.compact(Antichain::from_elem(2001.into()));
 
         assert_eq!(
@@ -1702,7 +1703,7 @@ mod tests {
                 Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
                 Diagnostics::from_purpose("test_since_hold"),
-                false,
+                true,
             )
             .await
             .expect("error opening persist shard");

@@ -96,6 +96,7 @@ where
                     shard_name: remap_collection_id.to_string(),
                     handle_purpose: format!("reclock for {}", id),
                 },
+                false,
             )
             .await
             .context("error opening persist shard")?;
