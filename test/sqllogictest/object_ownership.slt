@@ -274,7 +274,7 @@ SELECT mz_roles.name
 materialize
 
 statement ok
-ALTER INDEX mt_ind SET (RETAIN HISTORY = FOR 0)
+ALTER INDEX mt_ind SET (RETAIN HISTORY = FOR '1000 hours')
 
 statement ok
 ALTER INDEX mt_ind RENAME TO ICs
@@ -305,7 +305,7 @@ statement error must be owner of INDEX materialize.public.jt_ind
 ALTER INDEX jt_ind OWNER TO group_materialize
 
 statement error must be owner of INDEX materialize.public.jt_ind
-ALTER INDEX jt_ind SET (RETAIN HISTORY = FOR 0)
+ALTER INDEX jt_ind SET (RETAIN HISTORY = FOR '1000 hours')
 
 ## Sources
 

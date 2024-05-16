@@ -2083,6 +2083,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_unlimited_retain_history,
+        desc: "Disable limits on RETAIN HISTORY (below 1s default, and 0 disables compaction).",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

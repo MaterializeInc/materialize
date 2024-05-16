@@ -745,11 +745,11 @@ CREATE INDEX foo ON myschema.bar (a, b)
 CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
-CREATE INDEX foo ON myschema.bar (a, b) WITH (RETAIN HISTORY = FOR 0)
+CREATE INDEX foo ON myschema.bar (a, b) WITH (RETAIN HISTORY = FOR '1000 hours')
 ----
-CREATE INDEX foo ON myschema.bar (a, b) WITH (RETAIN HISTORY = FOR 0)
+CREATE INDEX foo ON myschema.bar (a, b) WITH (RETAIN HISTORY = FOR '1000 hours')
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [IndexOption { name: RetainHistory, value: Some(RetainHistoryFor(Number("0"))) }], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [IndexOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1000 hours"))) }], if_not_exists: false })
 
 parse-statement
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)

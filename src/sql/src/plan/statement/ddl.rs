@@ -421,7 +421,7 @@ generate_extracted_config!(
     (IgnoreKeys, bool),
     (Timeline, String),
     (TimestampInterval, Duration),
-    (RetainHistory, Duration)
+    (RetainHistory, OptionalDuration)
 );
 
 generate_extracted_config!(
@@ -1362,13 +1362,7 @@ pub fn plan_create_source(
         Some(timeline) => Timeline::User(timeline),
     };
 
-    let compaction_window = retain_history
-        .map(|cw| {
-            scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-            Ok::<_, PlanError>(cw.try_into()?)
-        })
-        .transpose()?;
-
+    let compaction_window = plan_retain_history_option(scx, retain_history)?;
     let source = Source {
         create_sql,
         data_source: DataSourceDesc::Ingestion(Ingestion {
@@ -2420,13 +2414,7 @@ pub fn plan_create_materialized_view(
     };
 
     let as_of = stmt.as_of.map(Timestamp::from);
-
-    let compaction_window = retain_history
-        .map(|cw| {
-            scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-            Ok::<_, PlanError>(cw.try_into()?)
-        })
-        .transpose()?;
+    let compaction_window = plan_retain_history_option(scx, retain_history)?;
     let mut non_null_assertions = assert_not_null
         .into_iter()
         .map(normalize::column_name)
@@ -2535,7 +2523,7 @@ pub fn plan_create_materialized_view(
 generate_extracted_config!(
     MaterializedViewOption,
     (AssertNotNull, Ident, AllowMultiple),
-    (RetainHistory, Duration),
+    (RetainHistory, OptionalDuration),
     (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
 
@@ -4501,8 +4489,32 @@ fn plan_retain_history(
                 "internal error: unexpectedly zero".to_string(),
             )),
         }),
-        Some(duration) => Ok(duration.try_into()?),
-        None => Ok(CompactionWindow::DisableCompaction),
+        Some(duration) => {
+            // Error if the duration is low and enable_unlimited_retain_history is not set (which
+            // should only be possible during testing).
+            if duration < DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION
+                && scx
+                    .require_feature_flag(&vars::ENABLE_UNLIMITED_RETAIN_HISTORY)
+                    .is_err()
+            {
+                return Err(PlanError::RetainHistoryLow {
+                    limit: DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION,
+                });
+            }
+            Ok(duration.try_into()?)
+        }
+        // In the past `RETAIN HISTORY FOR '0'` meant disable compaction. Disabling compaction seems
+        // to be a bad choice, so prevent it.
+        None => {
+            if scx
+                .require_feature_flag(&vars::ENABLE_UNLIMITED_RETAIN_HISTORY)
+                .is_err()
+            {
+                Err(PlanError::RetainHistoryRequired)
+            } else {
+                Ok(CompactionWindow::DisableCompaction)
+            }
+        }
     }
 }
 
