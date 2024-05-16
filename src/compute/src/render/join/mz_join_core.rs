@@ -40,7 +40,7 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use differential_dataflow::consolidation::consolidate_updates;
+use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::difference::Multiply;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -617,6 +617,8 @@ where
 
         assert_eq!(temp.len(), 0);
 
+        let mut buffer = Vec::default();
+
         while cursor1.key_valid(storage1) && cursor2.key_valid(storage2) {
             match cursor1.key(storage1).cmp(&cursor2.key(storage2)) {
                 Ordering::Less => cursor1.seek_key(storage1, cursor2.key(storage2)),
@@ -631,11 +633,28 @@ where
                                 cursor2.map_times(storage2, |time2, diff2| {
                                     let time = time1.join(time2);
                                     let diff = diff1.multiply(diff2);
-                                    let results = result(key, val1, val2)
-                                        .into_iter()
-                                        .map(|d| (d, time.clone(), diff.clone()));
-                                    temp.extend(results);
+                                    buffer.push((time, diff));
                                 });
+                                consolidate(&mut buffer);
+                                let mut result = result(key, val1, val2).into_iter().peekable();
+                                match (result.next(), result.peek().is_some(), buffer.len()) {
+                                    // Certainly no output
+                                    (None, _, _) | (_, _, 0) => {}
+                                    // Single element, single time
+                                    (Some(first), false, 1) => {
+                                        let (time, diff) = buffer.pop().unwrap();
+                                        temp.push((first, time, diff));
+                                    }
+                                    // Multiple elements or multiple times
+                                    (Some(first), _, _) => {
+                                        for d in std::iter::once(first).chain(result) {
+                                            temp.extend(buffer.iter().map(|(time, diff)| {
+                                                (d.clone(), time.clone(), diff.clone())
+                                            }))
+                                        }
+                                    }
+                                }
+                                buffer.clear();
                             });
                             cursor2.step_val(storage2);
                         }
