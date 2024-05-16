@@ -635,27 +635,29 @@ where
                                     let diff = diff1.multiply(diff2);
                                     buffer.push((time, diff));
                                 });
-                                consolidate(&mut buffer);
-                                let mut result = result(key, val1, val2).into_iter().peekable();
-                                match (result.next(), result.peek().is_some(), buffer.len()) {
-                                    // Certainly no output
-                                    (None, _, _) | (_, _, 0) => {}
-                                    // Single element, single time
-                                    (Some(first), false, 1) => {
-                                        let (time, diff) = buffer.pop().unwrap();
-                                        temp.push((first, time, diff));
-                                    }
-                                    // Multiple elements or multiple times
-                                    (Some(first), _, _) => {
-                                        for d in std::iter::once(first).chain(result) {
-                                            temp.extend(buffer.iter().map(|(time, diff)| {
-                                                (d.clone(), time.clone(), diff.clone())
-                                            }))
-                                        }
+                            });
+
+                            consolidate(&mut buffer);
+                            let mut result = result(key, val1, val2).into_iter().peekable();
+                            match (result.next(), result.peek().is_some(), buffer.len()) {
+                                // Certainly no output
+                                (None, _, _) | (_, _, 0) => {}
+                                // Single element, single time
+                                (Some(first), false, 1) => {
+                                    let (time, diff) = buffer.pop().unwrap();
+                                    temp.push((first, time, diff));
+                                }
+                                // Multiple elements or multiple times
+                                (Some(first), _, _) => {
+                                    for d in std::iter::once(first).chain(result) {
+                                        temp.extend(buffer.iter().map(|(time, diff)| {
+                                            (d.clone(), time.clone(), diff.clone())
+                                        }))
                                     }
                                 }
-                                buffer.clear();
-                            });
+                            }
+                            buffer.clear();
+
                             cursor2.step_val(storage2);
                         }
                         cursor1.step_val(storage1);
