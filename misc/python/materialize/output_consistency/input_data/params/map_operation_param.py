@@ -14,13 +14,15 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.input_data.params.collection_operation_param import (
+    CollectionOperationParam,
+)
 from materialize.output_consistency.input_data.types.map_type_provider import (
     MapDataType,
 )
-from materialize.output_consistency.operation.operation_param import OperationParam
 
 
-class MapOperationParam(OperationParam):
+class MapOperationParam(CollectionOperationParam):
     def __init__(
         self,
         optional: bool = False,
