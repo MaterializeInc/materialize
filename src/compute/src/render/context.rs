@@ -1070,9 +1070,12 @@ where
         I::Item: Data,
         L: for<'a, 'b> FnMut(C::Key<'_>, C::Val<'b>, &'a C::Time, &'a C::Diff) -> I + 'static,
     {
+        use differential_dataflow::consolidation::consolidate;
+
         // Attempt to make progress on this batch.
         let mut work: usize = 0;
         let mut session = output.session(&self.capability);
+        let mut buffer = Vec::new();
         if let Some(key) = key {
             use differential_dataflow::trace::cursor::MyTrait;
             if self.cursor.get_key(&self.batch).map(|k| k.equals(key)) != Some(true) {
@@ -1082,11 +1085,15 @@ where
                 let key = self.cursor.key(&self.batch);
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
-                        for datum in logic(key, val, time, diff) {
+                        buffer.push((time.clone(), diff.clone()));
+                    });
+                    consolidate(&mut buffer);
+                    for (time, diff) in buffer.drain(..) {
+                        for datum in logic(key, val, &time, &diff) {
                             session.give(datum);
                             work += 1;
                         }
-                    });
+                    }
                     self.cursor.step_val(&self.batch);
                     if work >= *fuel {
                         *fuel = 0;
@@ -1098,11 +1105,15 @@ where
             while let Some(key) = self.cursor.get_key(&self.batch) {
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
-                        for datum in logic(key, val, time, diff) {
+                        buffer.push((time.clone(), diff.clone()));
+                    });
+                    consolidate(&mut buffer);
+                    for (time, diff) in buffer.drain(..) {
+                        for datum in logic(key, val, &time, &diff) {
                             session.give(datum);
                             work += 1;
                         }
-                    });
+                    }
                     self.cursor.step_val(&self.batch);
                     if work >= *fuel {
                         *fuel = 0;
