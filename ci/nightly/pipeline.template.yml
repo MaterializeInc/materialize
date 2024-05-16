@@ -1594,7 +1594,7 @@ steps:
     steps:
       - id: bazel-test-x86_64
         label: ":bazel: Test (x86_64)"
-        command: bin/ci-builder run stable bazel test //... --remote_cache=https://bazel-remote.dev.materialize.com
+        command: bin/bazel test //... --remote_cache=https://bazel-remote.dev.materialize.com
         depends_on: []
         timeout_in_minutes: 60
         agents:
@@ -1602,7 +1602,7 @@ steps:
 
       - id: bazel-test-aarch64
         label: ":bazel: Test (aarch64)"
-        command: bin/ci-builder run stable bazel test //... --remote_cache=https://bazel-remote.dev.materialize.com
+        command: bin/bazel test //... --remote_cache=https://bazel-remote.dev.materialize.com
         depends_on: []
         timeout_in_minutes: 60
         agents:
