@@ -221,6 +221,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
         plan: GetPlan,
         /// A dataflow-local identifier.
         lir_id: LirId,
+        /// Whether to ignore errors.
+        ignore_errors: bool,
     },
     /// Binds `value` to `id`, and then results in `body` with that binding.
     ///
@@ -558,12 +560,16 @@ impl Arbitrary for Plan {
             any::<AvailableCollections>(),
             any::<GetPlan>(),
             any::<LirId>(),
+            any::<bool>(),
         )
-            .prop_map(|(id, keys, plan, lir_id)| Plan::<mz_repr::Timestamp>::Get {
-                id: Id::Global(id),
-                keys,
-                plan,
-                lir_id,
+            .prop_map(|(id, keys, plan, lir_id, ignore_errors)| {
+                Plan::<mz_repr::Timestamp>::Get {
+                    id: Id::Global(id),
+                    keys,
+                    plan,
+                    lir_id,
+                    ignore_errors,
+                }
             });
 
         let leaf = prop::strategy::Union::new(vec![constant.boxed(), get.boxed()]).boxed();
@@ -1033,6 +1039,7 @@ impl<T> CollectionPlan for Plan<T> {
                 keys: _,
                 plan: _,
                 lir_id: _,
+                ignore_errors: _,
             } => match id {
                 Id::Global(id) => {
                     out.insert(*id);

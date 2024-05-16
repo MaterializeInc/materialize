@@ -259,6 +259,7 @@ where
                     keys,
                     plan,
                     lir_id: _,
+                    ignore_errors: _,
                 } => {
                     // Interpret the current node.
                     Ok(self.interpret.get(&self.ctx, id, keys, plan))
@@ -543,6 +544,7 @@ where
                     keys,
                     plan,
                     lir_id: _,
+                    ignore_errors: _,
                 } => {
                     // Interpret the current node.
                     let result = self.interpret.get(&self.ctx, id, keys, plan);

@@ -86,6 +86,8 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 keys,
                 plan,
                 lir_id: _,
+                // TODO
+                ignore_errors: _,
             } => {
                 ctx.indent.set(); // mark the current indent level
 
