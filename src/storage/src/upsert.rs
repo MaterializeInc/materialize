@@ -23,6 +23,7 @@ use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
+use mz_rocksdb::ValueIterator;
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::dyncfgs;
@@ -45,9 +46,12 @@ use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::render::sources::OutputIndex;
 use crate::storage_state::StorageInstanceContext;
-use autospill::{AutoSpillBackend, RocksDBParams};
+use autospill::AutoSpillBackend;
 use memory::InMemoryHashMap;
-use types::{upsert_bincode_opts, StateValue, UpsertState, UpsertStateBackend, Value};
+use types::{
+    snapshot_merge_function, upsert_bincode_opts, BincodeOpts, StateValue, UpsertState,
+    UpsertStateBackend, Value,
+};
 
 mod autospill;
 mod memory;
@@ -66,6 +70,12 @@ impl AsRef<[u8]> for UpsertKey {
     // Easy!!
     fn as_ref(&self) -> &[u8] {
         &self.0
+    }
+}
+
+impl From<&[u8]> for UpsertKey {
+    fn from(bytes: &[u8]) -> Self {
+        UpsertKey(bytes.try_into().expect("invalid key length"))
     }
 }
 
@@ -229,6 +239,11 @@ where
     let snapshot_buffering_max = dyncfgs::STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING
         .get(storage_configuration.config_set());
 
+    // Whether we should provide the upsert state merge operator to the RocksDB instance
+    // (for faster performance during snapshot hydration).
+    let rocksdb_use_native_merge_operator =
+        dyncfgs::STORAGE_ROCKSDB_USE_MERGE_OPERATOR.get(storage_configuration.config_set());
+
     let upsert_config = UpsertConfig {
         wait_for_input_resumption,
         shrink_upsert_unused_buffers_by_ratio: storage_configuration
@@ -253,6 +268,7 @@ where
         tracing::info!(
             ?tuning,
             ?storage_configuration.parameters.upsert_auto_spill_config,
+            ?rocksdb_use_native_merge_operator,
             "timely-{} rendering {} with rocksdb-backed upsert state",
             source_config.worker_id,
             source_config.id
@@ -269,6 +285,38 @@ where
 
         let rocksdb_in_use_metric = Arc::clone(&upsert_metrics.rocksdb_autospill_in_use);
 
+        // A closure that will initialize and return a configured RocksDB instance
+        let rocksdb_init_fn = move || async move {
+            let merge_operator = if rocksdb_use_native_merge_operator {
+                Some((
+                    "upsert_state_snapshot_merge_v1".to_string(),
+                    |a: &[u8], b: ValueIterator<BincodeOpts, StateValue<Option<FromTime>>>| {
+                        snapshot_merge_function::<Option<FromTime>>(a.into(), b)
+                    },
+                ))
+            } else {
+                None
+            };
+            rocksdb::RocksDB::new(
+                mz_rocksdb::RocksDBInstance::new(
+                    &rocksdb_dir,
+                    mz_rocksdb::InstanceOptions::new(
+                        env,
+                        rocksdb_cleanup_tries,
+                        merge_operator,
+                        // For now, just use the same config as the one used for
+                        // merging snapshots.
+                        upsert_bincode_opts(),
+                    ),
+                    tuning,
+                    rocksdb_shared_metrics,
+                    rocksdb_instance_metrics,
+                )
+                .await
+                .unwrap(),
+            )
+        };
+
         if allow_auto_spill {
             upsert_inner(
                 &thin_input,
@@ -279,18 +327,7 @@ where
                 upsert_metrics,
                 source_config,
                 move || async move {
-                    AutoSpillBackend::new(
-                        RocksDBParams {
-                            instance_path: rocksdb_dir,
-                            env,
-                            tuning_config: tuning,
-                            shared_metrics: rocksdb_shared_metrics,
-                            instance_metrics: rocksdb_instance_metrics,
-                            cleanup_tries: rocksdb_cleanup_tries,
-                        },
-                        spill_threshold,
-                        rocksdb_in_use_metric,
-                    )
+                    AutoSpillBackend::new(rocksdb_init_fn, spill_threshold, rocksdb_in_use_metric)
                 },
                 upsert_config,
                 prevent_snapshot_buffering,
@@ -305,26 +342,7 @@ where
                 previous_token,
                 upsert_metrics,
                 source_config,
-                move || async move {
-                    rocksdb::RocksDB::new(
-                        mz_rocksdb::RocksDBInstance::new(
-                            &rocksdb_dir,
-                            mz_rocksdb::InstanceOptions::<_, _, mz_rocksdb::StubMergeOperator<_>>::new(
-                                env,
-                                rocksdb_cleanup_tries,
-                                None,
-                                // For now, just use the same config as the one used for
-                                // merging snapshots.
-                                upsert_bincode_opts(),
-                            ),
-                            tuning,
-                            rocksdb_shared_metrics,
-                            rocksdb_instance_metrics,
-                        )
-                        .await
-                        .unwrap(),
-                    )
-                },
+                rocksdb_init_fn,
                 upsert_config,
                 prevent_snapshot_buffering,
                 snapshot_buffering_max,
@@ -520,7 +538,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // implementations, and reduces the number of reads and write we need to do.
     //
     // This "mini-upsert" technique is actually useful in `UpsertState`'s
-    // `merge_snapshot_chunk` implementation, minimizing gets and puts on
+    // `consolidate_snapshot_read_write_inner` implementation, minimizing gets and puts on
     // the `UpsertStateBackend` implementations. In some sense, its "upsert all the way down".
     while let Some((ts, key, from_time, value)) = commands.next() {
         let mut command_state = if let Entry::Occupied(command_state) = commands_state.entry(key) {
@@ -664,7 +682,7 @@ where
         let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
 
         // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
-        // (as required for `merge_snapshot_chunk`), with slightly more efficient serialization
+        // (as required for `consolidate_snapshot_chunk`), with slightly more efficient serialization
         // than a default `Partitioned`.
         let mut state = UpsertState::<_, Option<FromTime>>::new(
             state().await,
@@ -764,7 +782,7 @@ where
             }
 
             match state
-                .merge_snapshot_chunk(
+                .consolidate_snapshot_chunk(
                     events.drain(..),
                     PartialOrder::less_equal(&resume_upper, &snapshot_upper),
                 )
