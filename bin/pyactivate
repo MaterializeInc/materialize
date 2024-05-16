@@ -28,7 +28,7 @@ def main(args: list[str]) -> int:
     logger.debug("args=%s", args)
 
     # Validate Python version.
-    if sys.hexversion < 0x030a0000:
+    if sys.hexversion < 0x030a0000 and not os.environ.get("MZ_DEV_BAZEL"):
         print("fatal: python v3.10.0+ required", file=sys.stderr)
         print(
             " hint: you have v{}.{}.{}".format(
@@ -44,7 +44,7 @@ def main(args: list[str]) -> int:
 
     # If we're not in the CI builder container, activate a virtualenv with the
     # necessary dependencies.
-    if os.environ.get("MZ_DEV_CI_BUILDER"):
+    if os.environ.get("MZ_DEV_CI_BUILDER") or os.environ.get("MZ_DEV_BAZEL"):
         python = "python3"
     else:
         python = str(activate_venv(py_dir))

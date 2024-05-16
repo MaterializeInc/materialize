@@ -13,6 +13,8 @@
 
 set -euo pipefail
 
+export MZ_DEV_BAZEL=1
+
 tag=$(bin/mzimage fingerprint bazel)
 
 docker run -it \
