@@ -20,6 +20,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.test_result import FailedTestExecutionError
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.benchmark_executor import BenchmarkExecutor
 from materialize.scalability.benchmark_result import BenchmarkResult
@@ -253,7 +254,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     report_assessment(regression_assessment)
 
     if regression_assessment.has_unjustified_regressions():
-        sys.exit(1)
+        raise FailedTestExecutionError(
+            error_summary="At least one regression occurred",
+            errors=regression_assessment.to_failure_details(),
+        )
 
 
 def validate_and_adjust_targets(

@@ -1412,7 +1412,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn id_exists(&self, id: GlobalId) -> bool {
-        self.state.entry_by_id.get(&id).is_some()
+        self.state.entry_by_id.contains_key(&id)
     }
 }
 

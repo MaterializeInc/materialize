@@ -317,6 +317,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                         as_of: dataflow.as_of.clone(),
                         until: dataflow.until.clone(),
                         debug_name: dataflow.debug_name.clone(),
+                        initial_storage_as_of: dataflow.initial_storage_as_of.clone(),
+                        refresh_schedule: dataflow.refresh_schedule.clone(),
                     })
                     .map(ComputeCommand::CreateDataflow)
                     .collect()
@@ -344,6 +346,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             let cmd_queue = Rc::clone(&cmd_queue);
 
             move |scope| {
+                let mut container = Default::default();
                 source(scope, "CmdSource", |capability, info| {
                     // Send activator for this operator back
                     let activator = scope.sync_activator_for(&info.address[..]);
@@ -398,21 +401,18 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                         }
                     }
                 })
-                .unary_frontier::<Vec<()>, _, _, _>(
+                .sink(
                     Exchange::new(|(idx, _)| u64::cast_from(*idx)),
                     "CmdReceiver",
-                    |_, _| {
-                        let mut container = Default::default();
-                        move |input, _| {
-                            let mut queue = cmd_queue.borrow_mut();
-                            if input.frontier().is_empty() {
-                                queue.push_back(Err(TryRecvError::Disconnected))
-                            }
-                            while let Some((_, data)) = input.next() {
-                                data.swap(&mut container);
-                                for (_, cmd) in container.drain(..) {
-                                    queue.push_back(Ok(cmd));
-                                }
+                    move |input| {
+                        let mut queue = cmd_queue.borrow_mut();
+                        if input.frontier().is_empty() {
+                            queue.push_back(Err(TryRecvError::Disconnected))
+                        }
+                        while let Some((_, data)) = input.next() {
+                            data.swap(&mut container);
+                            for (_, cmd) in container.drain(..) {
+                                queue.push_back(Ok(cmd));
                             }
                         }
                     },
@@ -767,7 +767,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // If it were broken out by `GlobalId` then we could drop only those of dataflows we drop.
             compute_state.subscribe_response_buffer = Rc::new(RefCell::new(Vec::new()));
         } else {
-            todo_commands = new_commands.clone();
+            todo_commands.clone_from(&new_commands);
         }
 
         // Execute the commands to bring us to `new_commands`.

@@ -346,7 +346,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
-              args: ["--mysql-version=8.3.0"]
+              args: ["--mysql-version=8.4.0"]
         agents:
           queue: linux-aarch64-small
 
@@ -375,6 +375,7 @@ steps:
               composition: pg-cdc
         agents:
           queue: linux-aarch64-small
+        # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-cdc-resumption
         label: Postgres CDC resumption tests %N
@@ -658,6 +659,7 @@ steps:
     label: "Skip Version Upgrade"
     depends_on: build-aarch64
     timeout_in_minutes: 30
+    inputs: [doc/user/content/releases]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: skip-version-upgrade

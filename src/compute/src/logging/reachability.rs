@@ -13,13 +13,13 @@ use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::rc::Rc;
 
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::AsCollection;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, RowArena, SharedRow, Timestamp};
-use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::dataflow::operators::Filter;
@@ -76,15 +76,15 @@ pub(super) fn construct<A: Allocate>(
         use timely::dataflow::channels::pact::Pipeline;
         let mut input = flatten.new_input(&logs, Pipeline);
 
-        let (mut updates_out, updates) = flatten.new_output();
+        let (mut updates_out, updates) = flatten.new_output::<ConsolidatingContainerBuilder<_>>();
 
         let mut buffer = Vec::new();
         flatten.build(move |_capability| {
             move |_frontiers| {
                 let mut updates = updates_out.activate();
-                let mut updates_session = ConsolidateBuffer::new(&mut updates, 0);
 
                 input.for_each(|cap, data| {
+                    let mut updates_session = updates.session_with_builder(&cap);
                     data.swap(&mut buffer);
 
                     for (time, _worker, (addr, massaged)) in buffer.drain(..) {
@@ -93,7 +93,7 @@ pub(super) fn construct<A: Allocate>(
                             .expect("must fit");
                         for (source, port, update_type, ts, diff) in massaged {
                             let datum = (update_type, addr.clone(), source, port, ts);
-                            updates_session.give(&cap, ((datum, ()), time_ms, diff));
+                            updates_session.give(((datum, ()), time_ms, diff));
                         }
                     }
                 });

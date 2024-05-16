@@ -806,6 +806,97 @@ impl CoercibleScalarExpr {
     }
 }
 
+/// The column type for a [`CoercibleScalarExpr`].
+#[derive(Clone, Debug)]
+pub enum CoercibleColumnType {
+    Coerced(ColumnType),
+    Record(Vec<CoercibleColumnType>),
+    Uncoerced,
+}
+
+impl CoercibleColumnType {
+    /// Reports the nullability of the type.
+    pub fn nullable(&self) -> bool {
+        match self {
+            // A coerced value's nullability is known.
+            CoercibleColumnType::Coerced(ct) => ct.nullable,
+
+            // A literal record can never be null.
+            CoercibleColumnType::Record(_) => false,
+
+            // An uncoerced literal may be the literal `NULL`, so we have
+            // to conservatively assume it is nullable.
+            CoercibleColumnType::Uncoerced => true,
+        }
+    }
+}
+
+/// The scalar type for a [`CoercibleScalarExpr`].
+#[derive(Clone, Debug)]
+pub enum CoercibleScalarType {
+    Coerced(ScalarType),
+    Record(Vec<CoercibleColumnType>),
+    Uncoerced,
+}
+
+impl CoercibleScalarType {
+    /// Reports whether the scalar type has been coerced.
+    pub fn is_coerced(&self) -> bool {
+        matches!(self, CoercibleScalarType::Coerced(_))
+    }
+
+    /// Returns the coerced scalar type, if the type is coerced.
+    pub fn as_coerced(&self) -> Option<&ScalarType> {
+        match self {
+            CoercibleScalarType::Coerced(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// If the type is coerced, apply the mapping function to the contained
+    /// scalar type.
+    pub fn map_coerced<F>(self, f: F) -> CoercibleScalarType
+    where
+        F: FnOnce(ScalarType) -> ScalarType,
+    {
+        match self {
+            CoercibleScalarType::Coerced(t) => CoercibleScalarType::Coerced(f(t)),
+            _ => self,
+        }
+    }
+
+    /// If the type is an coercible record, forcibly converts to a coerced
+    /// record type. Any uncoerced field types are assumed to be of type text.
+    ///
+    /// Generally you should prefer to use [`typeconv::plan_coerce`], which
+    /// accepts a type hint that can indicate the types of uncoerced field
+    /// types.
+    pub fn force_coerced_if_record(&mut self) {
+        fn convert(uncoerced_fields: impl Iterator<Item = CoercibleColumnType>) -> ScalarType {
+            let mut fields = vec![];
+            for (i, uf) in uncoerced_fields.enumerate() {
+                let name = ColumnName::from(format!("f{}", i + 1));
+                let ty = match uf {
+                    CoercibleColumnType::Coerced(ty) => ty,
+                    CoercibleColumnType::Record(mut fields) => {
+                        convert(fields.drain(..)).nullable(false)
+                    }
+                    CoercibleColumnType::Uncoerced => ScalarType::String.nullable(true),
+                };
+                fields.push((name, ty))
+            }
+            ScalarType::Record {
+                fields,
+                custom_id: None,
+            }
+        }
+
+        if let CoercibleScalarType::Record(fields) = self {
+            *self = CoercibleScalarType::Coerced(convert(fields.drain(..)));
+        }
+    }
+}
+
 /// An expression whose type can be ascertained.
 ///
 /// Abstracts over `ScalarExpr` and `CoercibleScalarExpr`.
@@ -822,7 +913,7 @@ pub trait AbstractExpr {
 }
 
 impl AbstractExpr for CoercibleScalarExpr {
-    type Type = Option<ColumnType>;
+    type Type = CoercibleColumnType;
 
     fn typ(
         &self,
@@ -831,24 +922,17 @@ impl AbstractExpr for CoercibleScalarExpr {
         params: &BTreeMap<usize, ScalarType>,
     ) -> Self::Type {
         match self {
-            CoercibleScalarExpr::Coerced(expr) => Some(expr.typ(outers, inner, params)),
-            CoercibleScalarExpr::LiteralRecord(scalars) => {
-                let mut fields = vec![];
-                for (i, scalar) in scalars.iter().enumerate() {
-                    fields.push((
-                        format!("f{}", i + 1).into(),
-                        scalar.typ(outers, inner, params)?,
-                    ));
-                }
-                Some(ColumnType {
-                    scalar_type: ScalarType::Record {
-                        fields,
-                        custom_id: None,
-                    },
-                    nullable: false,
-                })
+            CoercibleScalarExpr::Coerced(expr) => {
+                CoercibleColumnType::Coerced(expr.typ(outers, inner, params))
             }
-            _ => None,
+            CoercibleScalarExpr::LiteralRecord(scalars) => {
+                let fields = scalars
+                    .iter()
+                    .map(|s| s.typ(outers, inner, params))
+                    .collect();
+                CoercibleColumnType::Record(fields)
+            }
+            _ => CoercibleColumnType::Uncoerced,
         }
     }
 }
@@ -856,7 +940,7 @@ impl AbstractExpr for CoercibleScalarExpr {
 /// A column type-like object whose underlying scalar type-like object can be
 /// ascertained.
 ///
-/// Abstracts over `ColumnType` and `Option<ColumnType>`.
+/// Abstracts over `ColumnType` and `CoercibleColumnType`.
 pub trait AbstractColumnType {
     type AbstractScalarType;
 
@@ -873,11 +957,15 @@ impl AbstractColumnType for ColumnType {
     }
 }
 
-impl AbstractColumnType for Option<ColumnType> {
-    type AbstractScalarType = Option<ScalarType>;
+impl AbstractColumnType for CoercibleColumnType {
+    type AbstractScalarType = CoercibleScalarType;
 
     fn scalar_type(self) -> Self::AbstractScalarType {
-        self.map(|t| t.scalar_type)
+        match self {
+            CoercibleColumnType::Coerced(t) => CoercibleScalarType::Coerced(t.scalar_type),
+            CoercibleColumnType::Record(t) => CoercibleScalarType::Record(t),
+            CoercibleColumnType::Uncoerced => CoercibleScalarType::Uncoerced,
+        }
     }
 }
 

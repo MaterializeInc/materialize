@@ -11,11 +11,10 @@ from dataclasses import dataclass
 from textwrap import dedent
 
 import pytest
-from pytest import fail
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
-TD_TIMEOUT_SHORT = 60
+TD_TIMEOUT_SHORT = 80
 TD_TIMEOUT_FULL_RECOVERY = 660
 
 
@@ -178,9 +177,10 @@ def validate_state(
 
     if not validation_succeeded:
         # do not raise an FailedTestExecutionError because we are not in mzcompose
-        fail(
-            f"Failed to achieve '{expected_state}' using '{isolation_level}' within {timeout_in_sec}s!",
-        )
+        # do not use fail because it comes with a verbose stacktrace
+        assert (
+            False
+        ), f"Failed to achieve '{expected_state}' using '{isolation_level}' within {timeout_in_sec}s!"
 
     duration = round(end_time - start_time, 1)
     print(

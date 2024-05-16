@@ -11,6 +11,7 @@ import argparse
 from pg8000 import Connection
 from pg8000.exceptions import InterfaceError
 
+from materialize.mz_version import MzVersion
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -53,13 +54,20 @@ class VersionConsistencyTest(OutputConsistencyTest):
     def __init__(self) -> None:
         self.mz2_connection: Connection | None = None
         self.evaluation_strategy_name: str | None = None
+        self.allow_same_version_comparison = False
 
     def shall_run(self, sql_executors: SqlExecutors) -> bool:
         assert isinstance(sql_executors, MultiVersionSqlExecutors)
         different_versions_involved = sql_executors.uses_different_versions()
 
         if not different_versions_involved:
-            print("Involved versions are identical, aborting")
+            if self.allow_same_version_comparison:
+                print(
+                    "Involved versions are identical, but continuing due to allow_same_version_comparison"
+                )
+                return True
+            else:
+                print("Involved versions are identical, aborting")
 
         return different_versions_involved
 
@@ -95,7 +103,9 @@ class VersionConsistencyTest(OutputConsistencyTest):
             sql_executors.executor2.query_version(),
         )
 
-    def create_evaluation_strategies(self) -> list[EvaluationStrategy]:
+    def create_evaluation_strategies(
+        self, sql_executors: SqlExecutors
+    ) -> list[EvaluationStrategy]:
         assert (
             self.evaluation_strategy_name is not None
         ), "Evaluation strategy name is not initialized"
@@ -117,13 +127,32 @@ class VersionConsistencyTest(OutputConsistencyTest):
 
         for i, strategy in enumerate(strategies):
             number = i + 1
-            strategy.name = f"{strategy.name} {number}"
-            strategy.object_name_base = f"{strategy.object_name_base}_{number}"
+            sql_executor = sql_executors.get_executor(strategy)
+
+            version = sql_executor.query_version()
+            sanitized_version_string = sanitize_and_shorten_version_string(version)
+
+            strategy.name = f"{strategy.name} {version}"
+
+            # include the number as well since the short version string may not be unique
+            strategy.object_name_base = (
+                f"{strategy.object_name_base}_{number}_{sanitized_version_string}"
+            )
             strategy.simple_db_object_name = (
-                f"{strategy.simple_db_object_name}_{number}"
+                f"{strategy.simple_db_object_name}_{number}_{sanitized_version_string}"
             )
 
         return strategies
+
+
+def sanitize_and_shorten_version_string(version: str) -> str:
+    """
+    Drop the commit hash and replace dots and dashes with an underscore
+    :param version: looks like "v0.98.5 (4cfc26688)", version may contain a "-dev" suffix
+    """
+
+    mz_version = MzVersion.parse(version)
+    return str(mz_version).replace(".", "_").replace("-", "_")
 
 
 def main() -> int:
@@ -144,6 +173,11 @@ def main() -> int:
         type=str,
         choices=EVALUATION_STRATEGY_NAMES,
     )
+    parser.add_argument(
+        "--allow-same-version-comparison",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
 
     args = test.parse_output_consistency_input_args(parser)
 
@@ -152,6 +186,7 @@ def main() -> int:
         mz_connection = connect(args.mz_host, args.mz_port, mz_db_user)
         test.mz2_connection = connect(args.mz_host_2, args.mz_port_2, mz_db_user)
         test.evaluation_strategy_name = args.evaluation_strategy
+        test.allow_same_version_comparison = args.allow_same_version_comparison
     except InterfaceError:
         return 1
 

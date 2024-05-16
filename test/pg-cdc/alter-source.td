@@ -296,6 +296,7 @@ INSERT INTO table_a VALUES (4, 'four');
 1
 2
 3
+4
 
 > DROP SOURCE table_a;
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a;

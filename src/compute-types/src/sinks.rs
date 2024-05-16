@@ -9,8 +9,8 @@
 
 //! Types for describing dataflow sinks.
 
-use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::controller::CollectionMetadata;

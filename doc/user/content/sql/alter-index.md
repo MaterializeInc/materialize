@@ -10,11 +10,13 @@ menu:
 
 ## Syntax
 
-{{< diagram "alter-index.svg" >}}
+{{< diagram "alter-index-set.svg" >}}
+{{< diagram "alter-index-reset.svg" >}}
 
 Field | Use
 ------|-----
 _name_ | The identifier of the index you want to alter.
+_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 ## Details
 
@@ -31,7 +33,7 @@ The privileges required to execute this statement are:
 
 - Ownership of the index.
 
-## See also
+## Related pages
 
 - [`SHOW INDEXES`](/sql/show-indexes)
 - [`SHOW CREATE VIEW`](/sql/show-create-view)

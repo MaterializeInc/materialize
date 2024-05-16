@@ -37,7 +37,6 @@ use crate::internal::metrics::{BatchPartReadMetrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::WriterKey;
 use crate::internal::state::{BatchPart, HollowBatchPart};
 use crate::metrics::Metrics;
-use crate::read::SubscriptionLeaseReturner;
 use crate::ShardId;
 
 /// Versions prior to this had bugs in consolidation, or used a different sort. However,
@@ -73,7 +72,6 @@ pub(crate) enum FetchData<T> {
         blob: Arc<dyn Blob + Send + Sync>,
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: Arc<ShardMetrics>,
-        lease_returner: SubscriptionLeaseReturner,
         part: LeasedBatchPart<T>,
     },
     AlreadyFetched,
@@ -132,7 +130,6 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                 blob,
                 read_metrics,
                 shard_metrics,
-                mut lease_returner,
                 part,
             } => {
                 // We do not use fetch_leased_part, since that requires more type info
@@ -148,7 +145,6 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                 )
                 .await
                 .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"));
-                lease_returner.return_leased_part(part);
                 fetched
             }
             FetchData::AlreadyFetched => Err(anyhow!("attempt to fetch an already-fetched part")),
@@ -350,7 +346,6 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         blob: &Arc<dyn Blob + Send + Sync>,
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: &Arc<ShardMetrics>,
-        lease_returner: &SubscriptionLeaseReturner,
         parts: impl IntoIterator<Item = LeasedBatchPart<T>>,
     ) {
         let run = parts
@@ -362,7 +357,6 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         blob: Arc::clone(blob),
                         read_metrics,
                         shard_metrics: Arc::clone(shard_metrics),
-                        lease_returner: lease_returner.clone(),
                         part,
                     },
                 };
@@ -1040,6 +1034,7 @@ mod tests {
                             key_lower: vec![],
                             stats: None,
                             ts_rewrite: None,
+                            diffs_sum: None,
                         })
                     })
                     .collect();

@@ -137,6 +137,7 @@ impl Transactor {
                 Arc::new(MaelstromKeySchema),
                 Arc::new(MaelstromValSchema),
                 Diagnostics::from_purpose("maelstrom long-lived"),
+                true,
             )
             .await?;
         // Use the CONTROLLER_CRITICAL_SINCE id for all nodes so we get coverage
@@ -267,7 +268,7 @@ impl Transactor {
                     Arc::new(MaelstromKeySchema),
                     Arc::new(MaelstromValSchema),
                     Diagnostics::from_purpose("maelstrom short-lived"),
-                    false,
+                    true,
                 )
                 .await
                 .expect("codecs should match");

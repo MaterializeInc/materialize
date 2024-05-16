@@ -21,9 +21,9 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 
 /// An out-of-crate [`Arbitrary`] implementation for [`Antichain`].
-pub fn any_antichain<T: PartialOrder>() -> impl Strategy<Value = Antichain<T>>
+pub fn any_antichain<T>() -> impl Strategy<Value = Antichain<T>>
 where
-    T: Arbitrary + Ord,
+    T: Arbitrary + Ord + PartialOrder,
 {
     proptest::collection::vec(any::<T>(), 0..11).prop_map(Into::into)
 }

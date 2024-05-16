@@ -482,8 +482,8 @@ where
     }
 
     /// Record updates to frontiers, and propagate any necessary responses.
-    // As of this writing (2/29/2024), the only response that can be generated
-    // from a frontier update is `WatchSetCompleted`.
+    /// As of this writing (2/29/2024), the only response that can be generated
+    /// from a frontier update is `WatchSetCompleted`.
     fn handle_frontier_updates(
         &mut self,
         updates: &[(GlobalId, Antichain<T>)],
@@ -540,7 +540,7 @@ where
         + From<EpochMillis>
         + TimestampManipulation
         + std::fmt::Display
-        + for<'a> Into<Datum<'a>>,
+        + Into<Datum<'static>>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
     // Bounds needed by `ComputeController`:

@@ -20,7 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::instrument;
 use mz_ore::task::AbortOnDropHandle;
-use mz_persist_client::cfg::TXN_USE_CRITICAL_SINCE;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::{Cursor, LazyPartStats, ListenEvent, ReadHandle, Since, Subscribe};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -681,20 +681,11 @@ where
                     shard_name: "txns".to_owned(),
                     handle_purpose: "read txns".to_owned(),
                 },
-                TXN_USE_CRITICAL_SINCE.get(client.dyncfgs()),
+                USE_CRITICAL_SINCE_TXN.get(client.dyncfgs()),
             )
             .await
             .expect("txns schema shouldn't change");
-        let as_of = txns_read.since().clone();
-        let txns_id = txns_read.shard_id();
-        let since_ts = as_of.as_option().expect("txns shard is not closed").clone();
-        let txns_subscribe = txns_read
-            .subscribe(as_of)
-            .await
-            .expect("handle holds a capability");
-
-        let state = TxnsCacheState::new(txns_id, since_ts, only_data_id);
-
+        let (state, txns_subscribe) = TxnsCacheState::init::<C>(only_data_id, txns_read).await;
         let subscribe_task = TxnsSubscribeTask {
             txns_subscribe,
             buf: Vec::new(),

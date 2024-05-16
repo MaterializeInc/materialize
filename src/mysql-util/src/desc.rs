@@ -165,6 +165,10 @@ pub enum MySqlColumnMeta {
     Json,
     /// The described column is a year value.
     Year,
+    /// The described column is a date value.
+    Date,
+    /// The described column is a timestamp value with a set precision.
+    Timestamp(u32),
 }
 
 impl IsCompatible for Option<MySqlColumnMeta> {
@@ -185,6 +189,12 @@ impl IsCompatible for Option<MySqlColumnMeta> {
             }
             (Some(MySqlColumnMeta::Json), Some(MySqlColumnMeta::Json)) => true,
             (Some(MySqlColumnMeta::Year), Some(MySqlColumnMeta::Year)) => true,
+            (Some(MySqlColumnMeta::Date), Some(MySqlColumnMeta::Date)) => true,
+            // Timestamps are compatible as long as we don't lose precision
+            (
+                Some(MySqlColumnMeta::Timestamp(precision)),
+                Some(MySqlColumnMeta::Timestamp(other_precision)),
+            ) => precision <= other_precision,
             _ => false,
         }
     }
@@ -210,6 +220,12 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                 MySqlColumnMeta::Enum(e) => Some(Meta::Enum(e.into_proto())),
                 MySqlColumnMeta::Json => Some(Meta::Json(ProtoMySqlColumnMetaJson {})),
                 MySqlColumnMeta::Year => Some(Meta::Year(ProtoMySqlColumnMetaYear {})),
+                MySqlColumnMeta::Date => Some(Meta::Date(ProtoMySqlColumnMetaDate {})),
+                MySqlColumnMeta::Timestamp(precision) => {
+                    Some(Meta::Timestamp(ProtoMySqlColumnMetaTimestamp {
+                        precision: *precision,
+                    }))
+                }
             }),
         }
     }
@@ -227,6 +243,8 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                     ),
                     Meta::Json(_) => Some(Ok(MySqlColumnMeta::Json)),
                     Meta::Year(_) => Some(Ok(MySqlColumnMeta::Year)),
+                    Meta::Date(_) => Some(Ok(MySqlColumnMeta::Date)),
+                    Meta::Timestamp(e) => Some(Ok(MySqlColumnMeta::Timestamp(e.precision))),
                 })
                 .transpose()?,
         })

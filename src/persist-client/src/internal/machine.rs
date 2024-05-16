@@ -1405,7 +1405,7 @@ pub mod datadriven {
                 .collections
                 .trace
                 .batches()
-                .filter(|b| !b.parts.is_empty())
+                .filter(|b| !b.is_empty())
                 .filter_map(|b| {
                     datadriven
                         .batches
@@ -1671,7 +1671,7 @@ pub mod datadriven {
         } else {
             datadriven.batches.insert(output.to_owned(), batch.clone());
         }
-        Ok(format!("parts={} len={}\n", batch.parts.len(), batch.len))
+        Ok(format!("parts={} len={}\n", batch.part_count(), batch.len))
     }
 
     pub async fn fetch_batch(
@@ -1767,7 +1767,7 @@ pub mod datadriven {
         let () = validate_truncate_batch(&batch, &truncated_desc, false)?;
         batch.desc = truncated_desc;
         datadriven.batches.insert(output.to_owned(), batch.clone());
-        Ok(format!("parts={} len={}\n", batch.parts.len(), batch.len))
+        Ok(format!("parts={} len={}\n", batch.part_count(), batch.len))
     }
 
     #[allow(clippy::unused_async)]
@@ -1845,7 +1845,7 @@ pub mod datadriven {
             .insert(output.to_owned(), res.output.clone());
         Ok(format!(
             "parts={} len={}\n",
-            res.output.parts.len(),
+            res.output.part_count(),
             res.output.len
         ))
     }
@@ -2004,7 +2004,7 @@ pub mod datadriven {
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
                 Diagnostics::for_tests(),
-                false,
+                true,
             )
             .await
             .expect("invalid shard types");

@@ -54,7 +54,7 @@ detail: subsources referencing table: x, y
 > SHOW sources
  mz_source          mysql     ${arg.default-replica-size} quickstart
  mz_source_progress progress  <null> <null>
- t                  subsource <null> <null>
+ t                  subsource ${arg.default-replica-size} quickstart
 
 $ mysql-execute name=mysql
 DROP DATABASE other;

@@ -49,7 +49,7 @@ impl fmt::Display for CodecError {
     }
 }
 
-trait Pgbuf: BufMut {
+pub trait Pgbuf: BufMut {
     fn put_string(&mut self, s: &str);
     fn put_length_i16(&mut self, len: usize) -> Result<(), io::Error>;
     fn put_format_i8(&mut self, format: Format);

@@ -77,8 +77,7 @@
 // environment in real time:
 // https://app.segment.com/materializeinc/sources/cloud_dev/debugger.
 
-use mz_adapter::telemetry::SegmentClientExt;
-use mz_ore::collections::CollectionExt;
+use mz_adapter::telemetry::{EventDetails, SegmentClientExt};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::adt::jsonb::Jsonb;
@@ -136,13 +135,13 @@ async fn report_loop(
                     .active_subscribes
                     .with_label_values(&["user"])
                     .get();
-                let rows = adapter_client.introspection_execute_one(&format!("
+                let mut rows = adapter_client.introspection_execute_one(&format!("
                     SELECT jsonb_build_object(
                         'active_aws_privatelink_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'aws-privatelink')::int4,
                         'active_clusters', (SELECT count(*) FROM mz_clusters WHERE id LIKE 'u%')::int4,
                         'active_cluster_replicas', (
                             SELECT jsonb_object_agg(base.size, coalesce(count, 0))
-                            FROM mz_internal.mz_cluster_replica_sizes base
+                            FROM mz_catalog.mz_cluster_replica_sizes base
                             LEFT JOIN (
                                 SELECT r.size, count(*)::int4
                                 FROM mz_cluster_replicas r
@@ -167,7 +166,10 @@ async fn report_loop(
                         'active_subscribes', {active_subscribes}
                     )",
                 )).await?;
-                let row = rows.into_element();
+
+                let row = rows.next().expect("expected at least one row").to_owned();
+                assert!(rows.next().is_none(), "introspection query had more than one row?");
+
                 let jsonb = Jsonb::from_row(row);
                 Ok::<_, anyhow::Error>(jsonb.as_ref().to_serde_json())
             })
@@ -202,25 +204,22 @@ async fn report_loop(
             subscribes: query_total.with_label_values(&["user", "subscribe"]).get(),
         };
         if let Some(last_stats) = &last_stats {
-            let mut event = json!({
+            let mut properties = json!({
                 "deletes": current_stats.deletes - last_stats.deletes,
                 "inserts": current_stats.inserts - last_stats.inserts,
                 "updates": current_stats.updates - last_stats.updates,
                 "selects": current_stats.selects - last_stats.selects,
                 "subscribes": current_stats.subscribes - last_stats.subscribes,
             });
-            event
+            properties
                 .as_object_mut()
                 .unwrap()
                 .extend(traits.as_object().unwrap().clone());
             segment_client.environment_track(
                 &environment_id,
-                "environmentd",
-                // We use the organization ID as the user ID for events
-                // that are not associated with a particular user.
-                environment_id.organization_id(),
                 "Environment Rolled Up",
-                event,
+                properties,
+                EventDetails::default(),
             );
         }
         last_stats = Some(current_stats);

@@ -142,6 +142,148 @@ SELECT ('{hello=>{\{\}=>\"\"}}'::map[text=>map[text=>text]])::text
 ----
 {hello=>{"{}"=>"\"\""}}
 
+# Test MAP literals.
+
+query T
+SELECT MAP['a' => 1]::text
+----
+{a=>1}
+
+query T
+SELECT MAP['a' => 1 + 1]::text
+----
+{a=>2}
+
+query T
+SELECT MAP['a' => 2 * 1 + 1]::text
+----
+{a=>3}
+
+query T
+SELECT MAP['a' => 2 * 1 + 2 / 2]::text
+----
+{a=>3}
+
+query T
+SELECT MAP['a' => 2 * (1 + 1) / 2]::text
+----
+{a=>2}
+
+query T
+SELECT MAP['a' || 'b' => 1]::text
+----
+{ab=>1}
+
+query T
+SELECT MAP['a' || 'b' => 1 + 1]::text
+----
+{ab=>2}
+
+query T
+SELECT MAP['a' => 1, 'a' => 2]::text
+----
+{a=>2}
+
+query T
+SELECT MAP['a' => 1, 'b' => 2, 'a' => 3]::text
+----
+{a=>3,b=>2}
+
+query T
+SELECT MAP['a' => MAP['b' => 'c']]::text
+----
+{a=>{b=>c}}
+
+query T
+SELECT MAP['a' => ['b' => 'c']]::text
+----
+{a=>{b=>c}}
+
+query T
+SELECT MAP['a' => list[[1], [2]]]::text
+----
+{a=>{{1},{2}}}
+
+query T
+SELECT MAP['a' => ['b' => list[[1], [2]]]]::text
+----
+{a=>{b=>{{1},{2}}}}
+
+query T
+SELECT MAP[column1 => column2]::text FROM (VALUES ('a', 1), ('b', 2), ('c', 3))
+----
+{a=>1}
+{b=>2}
+{c=>3}
+
+query error cannot determine type of empty map
+SELECT MAP[]::text
+
+query T
+SELECT MAP[]::map[text => text]::text
+----
+{}
+
+statement ok
+CREATE TABLE mlt(t text, y int)
+
+statement ok
+INSERT INTO mlt VALUES ('a', 6), ('b', 8), ('c', 10), ('c', 11)
+
+query T
+SELECT MAP(SELECT * FROM mlt WHERE t > 'a' ORDER BY y DESC)::text;
+----
+{b=>8,c=>10}
+
+query T
+SELECT MAP(SELECT * FROM mlt WHERE mlt.t > mlt_outer.t)::text
+FROM mlt AS mlt_outer;
+----
+{}
+{}
+{c=>11}
+{b=>8,c=>11}
+
+query TII
+SELECT list_agg(t)::text, min(y), max(y)
+FROM mlt AS mlt_outer
+GROUP BY MAP(SELECT * FROM mlt WHERE mlt.t < mlt_outer.t);
+----
+{a}  6  6
+{b}  8  8
+{c,c}  10  11
+
+query T
+SELECT MAP(SELECT * FROM mlt WHERE t < 'a')::text
+----
+{}
+
+# Test MAP subqueries.
+
+query T
+SELECT MAP(VALUES ('a', 1), ('b', 2), ('c', 3))::text
+----
+{a=>1,b=>2,c=>3}
+
+query T
+SELECT MAP(VALUES ('a', 1), ('a', 2) ORDER BY 2)::text
+----
+{a=>2}
+
+query T
+SELECT MAP(VALUES ('a', 1), ('a', 2) ORDER BY 2 DESC)::text
+----
+{a=>1}
+
+query error cannot build map from subquery because first column is not of type text
+SELECT MAP(VALUES (1, 1))
+
+query error expected map subquery to return 2 columns, got 1 columns
+SELECT MAP(VALUES (1))
+
+query error expected map subquery to return 2 columns, got 3 columns
+SELECT MAP(VALUES (1, 2, 3))
+
 # Test map operators.
 
 ## ?
@@ -614,8 +756,24 @@ NULL
 
 # map_build
 
+query T
+SELECT map_build(LIST[ROW('a', 1), ROW('b', 2)])::TEXT;
+----
+{a=>1,b=>2}
+
+query error LIST could not convert type record\(f1: text,f2: integer\) to text
+SELECT map_build(LIST[ROW('a', 1), ROW('b')])::TEXT;
+
+query error function map_build\(record\(f1: integer,f2: integer\) list\) does not exist
+SELECT map_build(LIST[ROW(1, 1), ROW(2, 2)])::TEXT;
+
 statement ok
 CREATE TYPE r AS (f1 TEXT, f2 INT);
+
+query T
+SELECT map_build(LIST[ROW('a', 1), ROW('b', 2)::r])::TEXT;
+----
+{a=>1,b=>2}
 
 query T
 SELECT map_build(LIST[ROW('a', 1), ROW('b', 2)]::r list)::TEXT;

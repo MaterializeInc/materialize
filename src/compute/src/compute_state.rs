@@ -37,12 +37,13 @@ use mz_ore::metrics::UIntGauge;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::Diagnostics;
 use mz_persist_txn::txn_cache::TxnsCache;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, RowCollection, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
@@ -866,7 +867,7 @@ impl PendingPeek {
                 Ok(vec![])
             };
             let result = match result {
-                Ok(rows) => PeekResponse::Rows(rows),
+                Ok(rows) => PeekResponse::Rows(RowCollection::new(&rows)),
                 Err(e) => PeekResponse::Error(e.to_string()),
             };
             match result_tx.send((result, start.elapsed())) {
@@ -940,7 +941,7 @@ impl PersistPeek {
                 Arc::new(metadata.relation_desc.clone()),
                 Arc::new(UnitSchema),
                 Diagnostics::from_purpose("persist::peek"),
-                false,
+                USE_CRITICAL_SINCE_SNAPSHOT.get(client.dyncfgs()),
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -1068,7 +1069,7 @@ impl IndexPeek {
         }
 
         let response = match self.collect_finished_data(max_result_size) {
-            Ok(rows) => PeekResponse::Rows(rows),
+            Ok(rows) => PeekResponse::Rows(RowCollection::new(&rows)),
             Err(text) => PeekResponse::Error(text),
         };
         Some(response)
@@ -1137,7 +1138,6 @@ impl IndexPeek {
         for<'a> Tr::Key<'a>: ToDatumIter,
         for<'a> Tr::Val<'a>: ToDatumIter,
         Tr::KeyOwned: Columnation + Data + FromDatumIter + ToDatumIter,
-        Tr::ValOwned: Columnation + Data + ToDatumIter,
     {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = std::mem::size_of::<NonZeroUsize>();

@@ -40,15 +40,15 @@ use mz_controller::clusters::{
     ReplicaAllocation, ReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::refresh_schedule::RefreshEvery;
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
+use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};
@@ -377,7 +377,7 @@ impl CatalogState {
         let not_ready_reason = match event.status {
             ClusterStatus::Ready => None,
             ClusterStatus::NotReady(None) => None,
-            ClusterStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("oom-killed"),
+            ClusterStatus::NotReady(Some(reason)) => Some(reason.to_string()),
         };
 
         BuiltinTableUpdate {
@@ -386,7 +386,7 @@ impl CatalogState {
                 Datum::String(&replica_id.to_string()),
                 Datum::UInt64(process_id),
                 Datum::String(status),
-                not_ready_reason.into(),
+                Datum::from(not_ready_reason.as_deref()),
                 Datum::TimestampTz(event.time.try_into().expect("must fit")),
             ]),
             diff,
@@ -424,7 +424,16 @@ impl CatalogState {
                     let source_type = source.source_type();
                     let connection_id = source.connection_id();
                     let envelope = source.envelope();
-                    let cluster_id = entry.item().cluster_id().map(|id| id.to_string());
+                    let cluster_entry = match source.data_source {
+                        // Ingestion exports don't have their own cluster, but
+                        // run on their ingestion's cluster.
+                        DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                            self.get_entry(&ingestion_id)
+                        }
+                        _ => entry,
+                    };
+
+                    let cluster_id = cluster_entry.item().cluster_id().map(|id| id.to_string());
 
                     let (key_format, value_format) = source.formats();
 

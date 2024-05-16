@@ -42,6 +42,7 @@ Type | Aliases | Use | Size (bytes) | Catalog name | Syntax
 [`timestamp`](timestamp) | | Date and time | 8 | Named | `TIMESTAMP '2007-02-01 15:04:05'`
 [`timestamp with time zone`](timestamp) | `timestamp with time zone` | Date and time with timezone | 8 | Named | `TIMESTAMPTZ '2007-02-01 15:04:05+06'`
 [Arrays](array) (`[]`) | | Multidimensional array | Variable | Named | `ARRAY[...]`
+[`uuid`](uuid) | | UUID | 16 | Named | `UUID 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'`
 
 #### Catalog name
 
@@ -130,7 +131,7 @@ structurally equivalent built-in `list` (`int4 list`), the result is of the same
 type as the custom `list` (`custom_list`).
 
 ```sql
-CREATE TYPE custom_list AS LIST (element_type=int4);
+CREATE TYPE custom_list AS LIST (ELEMENT TYPE int4);
 
 SELECT pg_typeof(
   list_cat('{1}'::custom_list, '{2}'::int4 list)

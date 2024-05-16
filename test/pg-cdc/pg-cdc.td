@@ -155,11 +155,10 @@ CREATE PUBLICATION another_publication FOR TABLE another_schema.another_table;
 # TODO: enable once we land #24586
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
-# Sneak in a test for pg_source_snapshot_statement_timeout, pg_source_wal_sender_timeout
+# Sneak in a test for pg_source_snapshot_statement_timeout
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 1000;
-ALTER SYSTEM SET pg_source_wal_sender_timeout = 0;
+ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 1000
 
 > CREATE SOURCE "test_slot_source"
   IN CLUSTER cdc_cluster
@@ -316,25 +315,25 @@ detail:referenced items: no_replica_identity
   );
 
 > SHOW SOURCES
-array_types_table     subsource <null>  <null>
-conflict_table        subsource <null>  <null>
-create                subsource <null>  <null>
-escaped_text_table    subsource <null>  <null>
-large_text            subsource <null>  <null>
-multipart_pk          subsource <null>  <null>
-mz_source             postgres  ${arg.default-replica-size}  cdc_cluster
-mz_source_progress    progress  <null>  <null>
-nonpk_table           subsource <null>  <null>
-nulls_table           subsource <null>  <null>
-pk_table              subsource <null>  <null>
-"space table"         subsource <null>  <null>
-trailing_space_nopk   subsource <null>  <null>
-trailing_space_pk     subsource <null>  <null>
-"\"literal_quotes\""  subsource <null>  <null>
-tstzrange_table       subsource <null>  <null>
-types_table           subsource <null>  <null>
-utf8_table            subsource <null>  <null>
-таблица               subsource <null>  <null>
+array_types_table     subsource  ${arg.default-replica-size}  cdc_cluster
+conflict_table        subsource  ${arg.default-replica-size}  cdc_cluster
+create                subsource  ${arg.default-replica-size}  cdc_cluster
+escaped_text_table    subsource  ${arg.default-replica-size}  cdc_cluster
+large_text            subsource  ${arg.default-replica-size}  cdc_cluster
+multipart_pk          subsource  ${arg.default-replica-size}  cdc_cluster
+mz_source             postgres   ${arg.default-replica-size}  cdc_cluster
+mz_source_progress    progress   <null> <null>
+nonpk_table           subsource  ${arg.default-replica-size}  cdc_cluster
+nulls_table           subsource  ${arg.default-replica-size}  cdc_cluster
+pk_table              subsource  ${arg.default-replica-size}  cdc_cluster
+"space table"         subsource  ${arg.default-replica-size}  cdc_cluster
+trailing_space_nopk   subsource  ${arg.default-replica-size}  cdc_cluster
+trailing_space_pk     subsource  ${arg.default-replica-size}  cdc_cluster
+"\"literal_quotes\""  subsource  ${arg.default-replica-size}  cdc_cluster
+tstzrange_table       subsource  ${arg.default-replica-size}  cdc_cluster
+types_table           subsource  ${arg.default-replica-size}  cdc_cluster
+utf8_table            subsource  ${arg.default-replica-size}  cdc_cluster
+таблица               subsource  ${arg.default-replica-size}  cdc_cluster
 
 > SELECT schema_name, table_name FROM mz_internal.mz_postgres_source_tables
 public          create
@@ -791,10 +790,10 @@ contains:TEXT COLUMNS refers to table not currently being added
   );
 
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
-another_enum_table      subsource <null> <null>
+another_enum_table      subsource ${arg.default-replica-size} cdc_cluster
 enum_source             postgres  ${arg.default-replica-size} cdc_cluster
 enum_source_progress    progress  <null> <null>
-enum_table              subsource <null> <null>
+enum_table              subsource ${arg.default-replica-size} cdc_cluster
 
 > SELECT * FROM enum_table
 var0
@@ -854,7 +853,7 @@ true
 > SHOW SOURCES
 another_source          postgres  ${arg.default-replica-size} cdc_cluster
 another_source_progress progress  <null> <null>
-another_table           subsource <null> <null>
+another_table           subsource ${arg.default-replica-size} cdc_cluster
 
 > DROP SOURCE another_source CASCADE
 

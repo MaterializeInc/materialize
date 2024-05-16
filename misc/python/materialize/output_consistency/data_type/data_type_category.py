@@ -24,9 +24,11 @@ class DataTypeCategory(Enum):
     DATE_TIME = 104
     BYTEA = 105
     JSONB = 106
+    UUID = 107
 
     ENUM = 200
 
     ARRAY = 300
+    MAP = 301
 
     OTHER_UNSUPPORTED = 400

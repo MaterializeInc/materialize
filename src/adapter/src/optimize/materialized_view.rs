@@ -30,9 +30,9 @@ use std::time::{Duration, Instant};
 
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
-use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -222,6 +222,8 @@ impl Optimize<LocalMirPlan> for Optimizer {
             DataflowBuilder::new(catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
+
+        df_desc.refresh_schedule.clone_from(&self.refresh_schedule);
 
         df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;

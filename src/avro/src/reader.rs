@@ -1010,7 +1010,7 @@ mod tests {
         record2.put("a", 42i64);
         record2.put("b", "bar");
 
-        let expected = vec![record1.avro(), record2.avro()];
+        let expected = [record1.avro(), record2.avro()];
 
         for (i, value) in reader.enumerate() {
             assert_eq!(value.unwrap(), expected[i]);

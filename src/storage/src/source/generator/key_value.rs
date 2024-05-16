@@ -18,6 +18,7 @@ use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::{Concat, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -44,9 +45,9 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (mut data_output, stream) = builder.new_output();
-    let (_progress_output, progress_stream) = builder.new_output();
-    let (mut stats_output, stats_stream) = builder.new_output();
+    let (mut data_output, stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let button = builder.build(move |caps| async move {
         let [mut cap, mut progress_cap, stats_cap]: [_; 3] = caps.try_into().unwrap();
@@ -98,7 +99,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
         // Re-usable buffers.
         let mut value_buffer: Vec<u8> = vec![0; usize::cast_from(key_value.value_size)];
-        let mut updates_buffer = Vec::new();
 
         // snapshotting
         let mut upper_offset = if snapshotting {
@@ -131,9 +131,10 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                 .await;
             while local_partitions.iter().any(|si| !si.finished()) {
                 for sp in local_partitions.iter_mut() {
-                    updates_buffer.clear();
-                    emitted += sp.produce_batch(&mut updates_buffer, &mut value_buffer);
-                    data_output.give_container(&cap, &mut updates_buffer).await;
+                    for u in sp.produce_batch(&mut value_buffer) {
+                        data_output.give(&cap, u).await;
+                        emitted += 1;
+                    }
 
                     stats_output
                         .give(
@@ -179,9 +180,11 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                 }
 
                 for up in local_partitions.iter_mut() {
-                    updates_buffer.clear();
-                    upper_offset = up.produce_batch(&mut updates_buffer, &mut value_buffer);
-                    data_output.give_container(&cap, &mut updates_buffer).await;
+                    let (new_upper, iter) = up.produce_batch(&mut value_buffer);
+                    upper_offset = new_upper;
+                    for u in iter {
+                        data_output.give(&cap, u).await;
+                    }
                 }
                 cap.downgrade(&MzOffset::from(upper_offset));
                 progress_cap.downgrade(&MzOffset::from(upper_offset));
@@ -313,48 +316,64 @@ impl TransactionalSnapshotProducer {
 
     /// Produce a batch of message into `buffer`, of size `batch_size`. Advances the current
     /// batch and round counter.
-    fn produce_batch(
-        &mut self,
-        buffer: &mut Vec<(
+    ///
+    /// The output iterator must be consumed fully for this method to be used correctly.
+    fn produce_batch<'a>(
+        &'a mut self,
+        value_buffer: &'a mut Vec<u8>,
+    ) -> impl Iterator<
+        Item = (
             (usize, Result<SourceMessage, SourceReaderError>),
             MzOffset,
             Diff,
-        )>,
-        value_buffer: &mut Vec<u8>,
-    ) -> u64 {
-        if self.finished() {
-            return 0;
-        }
+        ),
+    > + 'a {
+        let finished = self.finished();
 
         let rng = self
             .rng
             .get_or_insert_with(|| create_consistent_rng(self.seed, self.round, self.pi.partition));
 
-        let partition = self.pi.partition;
-        buffer.extend(self.pi.take(usize::cast_from(self.batch_size)).map(|key| {
-            rng.fill_bytes(value_buffer.as_mut_slice());
-            let msg = (
-                0,
-                Ok(SourceMessage {
-                    key: Row::pack_slice(&[Datum::UInt64(key)]),
-                    value: Row::pack_slice(&[Datum::UInt64(partition), Datum::Bytes(value_buffer)]),
-                    metadata: if self.include_offset {
-                        Row::pack(&[Datum::UInt64(self.round)])
-                    } else {
-                        Row::default()
-                    },
-                }),
-            );
-            (msg, MzOffset::from(self.round), 1)
-        }));
+        let partition: u64 = self.pi.partition;
+        let iter_round: u64 = self.round;
+        let include_offset: bool = self.include_offset;
+        let iter = self
+            .pi
+            .take(if finished {
+                0
+            } else {
+                usize::cast_from(self.batch_size)
+            })
+            .map(move |key| {
+                rng.fill_bytes(value_buffer.as_mut_slice());
+                let msg = (
+                    0,
+                    Ok(SourceMessage {
+                        key: Row::pack_slice(&[Datum::UInt64(key)]),
+                        value: Row::pack_slice(&[
+                            Datum::UInt64(partition),
+                            Datum::Bytes(value_buffer),
+                        ]),
+                        metadata: if include_offset {
+                            Row::pack(&[Datum::UInt64(iter_round)])
+                        } else {
+                            Row::default()
+                        },
+                    }),
+                );
+                (msg, MzOffset::from(iter_round), 1)
+            });
 
-        self.produced_batches += 1;
+        if !finished {
+            self.produced_batches += 1;
 
-        if self.produced_batches == self.expected_batches {
-            self.round += 1;
-            self.produced_batches = 0;
+            if self.produced_batches == self.expected_batches {
+                self.round += 1;
+                self.produced_batches = 0;
+            }
         }
-        self.batch_size
+
+        iter
     }
 }
 
@@ -418,39 +437,53 @@ impl UpdateProducer {
     }
 
     /// Produce a batch of message into `buffer`, of size `batch_size`. Advances the current
-    /// batch and round counter. Returns the frontier after the batch.
-    fn produce_batch(
-        &mut self,
-        buffer: &mut Vec<(
-            (usize, Result<SourceMessage, SourceReaderError>),
-            MzOffset,
-            Diff,
-        )>,
-        value_buffer: &mut Vec<u8>,
-    ) -> u64 {
+    /// batch and round counter. Also returns the frontier after the batch.
+    ///
+    /// The output iterator must be consumed fully for this method to be used correctly.
+    fn produce_batch<'a>(
+        &'a mut self,
+        value_buffer: &'a mut Vec<u8>,
+    ) -> (
+        u64,
+        impl Iterator<
+                Item = (
+                    (usize, Result<SourceMessage, SourceReaderError>),
+                    MzOffset,
+                    Diff,
+                ),
+            > + 'a,
+    ) {
         let mut rng = create_consistent_rng(self.seed, self.next_offset, self.pi.partition);
 
-        let partition = self.pi.partition;
-        buffer.extend(self.pi.take(usize::cast_from(self.batch_size)).map(|key| {
-            rng.fill_bytes(value_buffer.as_mut_slice());
-            let msg = (
-                0,
-                Ok(SourceMessage {
-                    key: Row::pack_slice(&[Datum::UInt64(key)]),
-                    value: Row::pack_slice(&[Datum::UInt64(partition), Datum::Bytes(value_buffer)]),
-                    metadata: if self.include_offset {
-                        Row::pack(&[Datum::UInt64(self.next_offset)])
-                    } else {
-                        Row::default()
-                    },
-                }),
-            );
-            (msg, MzOffset::from(self.next_offset), 1)
-        }));
+        let partition: u64 = self.pi.partition;
+        let iter_offset: u64 = self.next_offset;
+        let include_offset: bool = self.include_offset;
+        let iter = self
+            .pi
+            .take(usize::cast_from(self.batch_size))
+            .map(move |key| {
+                rng.fill_bytes(value_buffer.as_mut_slice());
+                let msg = (
+                    0,
+                    Ok(SourceMessage {
+                        key: Row::pack_slice(&[Datum::UInt64(key)]),
+                        value: Row::pack_slice(&[
+                            Datum::UInt64(partition),
+                            Datum::Bytes(value_buffer),
+                        ]),
+                        metadata: if include_offset {
+                            Row::pack(&[Datum::UInt64(iter_offset)])
+                        } else {
+                            Row::default()
+                        },
+                    }),
+                );
+                (msg, MzOffset::from(iter_offset), 1)
+            });
 
         // Advance to the next offset.
         self.next_offset += 1;
-        self.next_offset
+        (self.next_offset, iter)
     }
 }
 

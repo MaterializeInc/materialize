@@ -40,16 +40,16 @@ SELECT size FROM (
 > SHOW SOURCES
 name           type            size             cluster
 -------------------------------------------------------
- customer      subsource       <null>           <null>
+ customer      subsource       ${source-size}   ${arg.single-replica-cluster}
  gen           load-generator  ${source-size}   ${arg.single-replica-cluster}
- gen_progress  progress        <null>           <null>
- lineitem      subsource       <null>           <null>
- nation        subsource       <null>           <null>
- orders        subsource       <null>           <null>
- part          subsource       <null>           <null>
- partsupp      subsource       <null>           <null>
- region        subsource       <null>           <null>
- supplier      subsource       <null>           <null>
+ gen_progress  progress        <null> <null>
+ lineitem      subsource       ${source-size}   ${arg.single-replica-cluster}
+ nation        subsource       ${source-size}   ${arg.single-replica-cluster}
+ orders        subsource       ${source-size}   ${arg.single-replica-cluster}
+ part          subsource       ${source-size}   ${arg.single-replica-cluster}
+ partsupp      subsource       ${source-size}   ${arg.single-replica-cluster}
+ region        subsource       ${source-size}   ${arg.single-replica-cluster}
+ supplier      subsource       ${source-size}   ${arg.single-replica-cluster}
 
 # SF * 150,000
 > SELECT count(*) FROM customer

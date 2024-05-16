@@ -60,10 +60,11 @@ use mz_sql_parser::ast::{
     visit, AsOf, Assignment, AstInfo, CreateWebhookSourceBody, CreateWebhookSourceCheck,
     CreateWebhookSourceHeader, CreateWebhookSourceSecret, CteBlock, DeleteStatement, Distinct,
     Expr, Function, FunctionArgs, HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join,
-    JoinConstraint, JoinOperator, Limit, MutRecBlock, MutRecBlockOption, MutRecBlockOptionName,
-    OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName, SetExpr, SetOperator,
-    ShowStatement, SubscriptPosition, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName,
-    UpdateStatement, Value, Values, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
+    JoinConstraint, JoinOperator, Limit, MapEntry, MutRecBlock, MutRecBlockOption,
+    MutRecBlockOptionName, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName,
+    SetExpr, SetOperator, ShowStatement, SubscriptPosition, TableAlias, TableFactor,
+    TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 use mz_sql_parser::ident;
 use uuid::Uuid;
@@ -77,9 +78,9 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, AggregateWindowExpr,
-    BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef, Hir, HirRelationExpr, HirScalarExpr,
-    JoinKind, ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr, ValueWindowFunc,
-    VariadicFunc, WindowExpr, WindowExprType,
+    BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder, ColumnRef, Hir,
+    HirRelationExpr, HirScalarExpr, JoinKind, ScalarWindowExpr, ScalarWindowFunc, UnaryFunc,
+    ValueWindowExpr, ValueWindowFunc, VariadicFunc, WindowExpr, WindowExprType,
 };
 use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeUngroupedColumn};
@@ -1658,8 +1659,8 @@ fn plan_set_expr(
                 .enumerate()
             {
                 let types = &[
-                    Some(left_type.scalar_type.clone()),
-                    Some(right_type.scalar_type.clone()),
+                    CoercibleScalarType::Coerced(left_type.scalar_type.clone()),
+                    CoercibleScalarType::Coerced(right_type.scalar_type.clone()),
                 ];
                 let target =
                     typeconv::guess_best_common_type(&left_ecx.with_name(&op.to_string()), types)?;
@@ -3216,6 +3217,7 @@ fn invent_column_name(
             Expr::NullIf { .. } => Some(("nullif".into(), NameQuality::High)),
             Expr::Array { .. } => Some(("array".into(), NameQuality::High)),
             Expr::List { .. } => Some(("list".into(), NameQuality::High)),
+            Expr::Map { .. } | Expr::MapSubquery(_) => Some(("map".into(), NameQuality::High)),
             Expr::Cast { expr, data_type } => match invent(ecx, expr, table_func_names) {
                 Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
                 _ => Some((data_type.unqualified_item_name().into(), NameQuality::Low)),
@@ -3679,6 +3681,7 @@ fn plan_expr_inner<'a>(
         Expr::Parameter(n) => plan_parameter(ecx, *n),
         Expr::Array(exprs) => plan_array(ecx, exprs, None),
         Expr::List(exprs) => plan_list(ecx, exprs, None),
+        Expr::Map(exprs) => plan_map(ecx, exprs, None),
         Expr::Row { exprs } => plan_row(ecx, exprs),
 
         // Generalized functions, operators, and casts.
@@ -3743,6 +3746,7 @@ fn plan_expr_inner<'a>(
         Expr::Exists(query) => plan_exists(ecx, query),
         Expr::Subquery(query) => plan_subquery(ecx, query),
         Expr::ListSubquery(query) => plan_list_subquery(ecx, query),
+        Expr::MapSubquery(query) => plan_map_subquery(ecx, query),
         Expr::ArraySubquery(query) => plan_array_subquery(ecx, query),
         Expr::Collate { expr, collation } => plan_collate(ecx, expr, collation),
         Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
@@ -3787,16 +3791,17 @@ fn plan_cast(
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let to_scalar_type = scalar_type_from_sql(ecx.qcx.scx, data_type)?;
     let expr = match expr {
-        // Special case a direct cast of an ARRAY or LIST expression so
+        // Special case a direct cast of an ARRAY, LIST, or MAP expression so
         // we can pass in the target type as a type hint. This is
         // a limited form of the coercion that we do for string literals
         // via CoercibleScalarExpr. We used to let CoercibleScalarExpr
-        // handle ARRAY/LIST coercion too, but doing so causes
+        // handle ARRAY/LIST/MAP coercion too, but doing so causes
         // PostgreSQL compatibility trouble.
         //
         // See: https://github.com/postgres/postgres/blob/31f403e95/src/backend/parser/parse_expr.c#L2762-L2768
         Expr::Array(exprs) => plan_array(ecx, exprs, Some(&to_scalar_type))?,
         Expr::List(exprs) => plan_list(ecx, exprs, Some(&to_scalar_type))?,
+        Expr::Map(exprs) => plan_map(ecx, exprs, Some(&to_scalar_type))?,
         _ => plan_expr(ecx, expr)?,
     };
     let ecx = &ecx.with_name("CAST");
@@ -4124,7 +4129,7 @@ fn plan_like(
     let ecx = ecx.with_name("LIKE argument");
     let expr = plan_expr(&ecx, expr)?;
     let haystack = match ecx.scalar_type(&expr) {
-        Some(ref ty @ ScalarType::Char { length }) => expr
+        CoercibleScalarType::Coerced(ref ty @ ScalarType::Char { length }) => expr
             .type_as(&ecx, ty)?
             .call_unary(UnaryFunc::PadChar(expr_func::PadChar { length })),
         _ => expr.cast_to(&ecx, Implicit, &ScalarType::String)?,
@@ -4373,6 +4378,106 @@ where
     .into())
 }
 
+fn plan_map_subquery(
+    ecx: &ExprContext,
+    query: &Query<Aug>,
+) -> Result<CoercibleScalarExpr, PlanError> {
+    if !ecx.allow_subqueries {
+        sql_bail!("{} does not allow subqueries", ecx.name)
+    }
+
+    let mut qcx = ecx.derived_query_context();
+    let mut query = plan_query(&mut qcx, query)?;
+    if query.limit.is_some() || query.offset > 0 {
+        query.expr = HirRelationExpr::top_k(
+            query.expr,
+            vec![],
+            query.order_by.clone(),
+            query.limit,
+            query.offset,
+            query.group_size_hints.limit_input_group_size,
+        );
+    }
+    if query.project.len() != 2 {
+        sql_bail!(
+            "expected map subquery to return 2 columns, got {} columns",
+            query.project.len()
+        );
+    }
+
+    let query_types = qcx.relation_type(&query.expr).column_types;
+    let key_column = query.project[0];
+    let key_type = query_types[key_column].clone().scalar_type();
+    let value_column = query.project[1];
+    let value_type = query_types[value_column].clone().scalar_type();
+
+    if key_type != ScalarType::String {
+        sql_bail!("cannot build map from subquery because first column is not of type text");
+    }
+
+    let aggregation_exprs: Vec<_> = iter::once(HirScalarExpr::CallVariadic {
+        func: VariadicFunc::RecordCreate {
+            field_names: vec![ColumnName::from("key"), ColumnName::from("value")],
+        },
+        exprs: vec![
+            HirScalarExpr::column(key_column),
+            HirScalarExpr::column(value_column),
+        ],
+    })
+    .chain(
+        query
+            .order_by
+            .iter()
+            .map(|co| HirScalarExpr::column(co.column)),
+    )
+    .collect();
+
+    let expr = query
+        .expr
+        .reduce(
+            vec![],
+            vec![AggregateExpr {
+                func: AggregateFunc::MapAgg {
+                    order_by: query
+                        .order_by
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, order)| ColumnOrder { column: i, ..order })
+                        .collect(),
+                    value_type: value_type.clone(),
+                },
+                expr: Box::new(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RecordCreate {
+                        field_names: iter::repeat(ColumnName::from(""))
+                            .take(aggregation_exprs.len())
+                            .collect(),
+                    },
+                    exprs: aggregation_exprs,
+                }),
+                distinct: false,
+            }],
+            None,
+        )
+        .project(vec![0]);
+
+    // If `expr` has no rows, return an empty map rather than NULL.
+    let expr = HirScalarExpr::CallVariadic {
+        func: VariadicFunc::Coalesce,
+        exprs: vec![
+            HirScalarExpr::Select(Box::new(expr)),
+            HirScalarExpr::literal(
+                Datum::empty_map(),
+                ScalarType::Map {
+                    value_type: Box::new(value_type),
+                    custom_id: None,
+                },
+            ),
+        ],
+    };
+
+    Ok(expr.into())
+}
+
 fn plan_collate(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
@@ -4429,9 +4534,12 @@ fn plan_array(
         // evidence that any of the array elements are themselves arrays, we
         // want to coerce to the array type, not the element type.
         Some(ScalarType::Array(elem_type)) => {
-            let multidimensional = out
-                .iter()
-                .any(|e| matches!(ecx.scalar_type(e), Some(ScalarType::Array(_))));
+            let multidimensional = out.iter().any(|e| {
+                matches!(
+                    ecx.scalar_type(e),
+                    CoercibleScalarType::Coerced(ScalarType::Array(_))
+                )
+            });
             if multidimensional {
                 type_hint
             } else {
@@ -4516,6 +4624,53 @@ fn plan_list(
         exprs,
     }
     .into())
+}
+
+fn plan_map(
+    ecx: &ExprContext,
+    entries: &[MapEntry<Aug>],
+    type_hint: Option<&ScalarType>,
+) -> Result<CoercibleScalarExpr, PlanError> {
+    let (value_type, exprs) = if entries.is_empty() {
+        if let Some(ScalarType::Map { value_type, .. }) = type_hint {
+            (value_type.without_modifiers(), vec![])
+        } else {
+            sql_bail!("cannot determine type of empty map");
+        }
+    } else {
+        let type_hint = match type_hint {
+            Some(ScalarType::Map { value_type, .. }) => Some(&**value_type),
+            _ => None,
+        };
+
+        let mut keys = vec![];
+        let mut values = vec![];
+        for MapEntry { key, value } in entries {
+            let key = plan_expr(ecx, key)?.type_as(ecx, &ScalarType::String)?;
+            let value = match value {
+                // Special case nested MAP expressions so we can plumb
+                // the type hint through.
+                Expr::Map(entries) => plan_map(ecx, entries, type_hint)?,
+                _ => plan_expr(ecx, value)?,
+            };
+            keys.push(key);
+            values.push(value);
+        }
+        let values = coerce_homogeneous_exprs(&ecx.with_name("MAP"), values, type_hint)?;
+        let value_type = ecx.scalar_type(&values[0]).without_modifiers();
+        let out = itertools::interleave(keys, values).collect();
+        (value_type, out)
+    };
+
+    if matches!(value_type, ScalarType::Char { .. }) {
+        bail_unsupported!("char map");
+    }
+
+    let expr = HirScalarExpr::CallVariadic {
+        func: VariadicFunc::MapBuild { value_type },
+        exprs,
+    };
+    Ok(expr.into())
 }
 
 /// Coerces a list of expressions such that all input expressions will be cast
@@ -5081,8 +5236,9 @@ pub fn resolve_func(
     let arg_types: Vec<_> = cexprs
         .into_iter()
         .map(|ty| match ecx.scalar_type(&ty) {
-            Some(ty) => ecx.humanize_scalar_type(&ty),
-            None => "unknown".to_string(),
+            CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty),
+            CoercibleScalarType::Record(_) => "record".to_string(),
+            CoercibleScalarType::Uncoerced => "unknown".to_string(),
         })
         .collect();
 

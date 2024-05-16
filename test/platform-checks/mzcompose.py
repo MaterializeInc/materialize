@@ -229,6 +229,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         elif args.execution_mode is ExecutionMode.ONEATATIME:
             for check in checks:
                 print(f"Running individual check {check}, scenario {scenario_class}")
+                c.override_current_testcase_name(
+                    f"Check '{check}' with scenario '{scenario_class}'"
+                )
                 setup(c)
                 scenario = scenario_class(
                     checks=[check], executor=executor, seed=args.seed

@@ -18,6 +18,7 @@ import "expr/src/scalar.proto";
 import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
+import "repr/src/refresh_schedule.proto";
 import "repr/src/relation_and_scalar.proto";
 
 package mz_compute_types.dataflows;
@@ -54,6 +55,9 @@ message ProtoDataflowDescription {
     repeated ProtoSinkExport sink_exports = 5;
     optional mz_repr.antichain.ProtoU64Antichain as_of = 6;
     mz_repr.antichain.ProtoU64Antichain until = 7;
+    optional mz_repr.antichain.ProtoU64Antichain initial_storage_as_of = 9;
+    optional mz_repr.refresh_schedule.ProtoRefreshSchedule refresh_schedule = 10;
+
     string debug_name = 8;
 }
 

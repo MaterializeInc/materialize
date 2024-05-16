@@ -18,6 +18,7 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
@@ -38,11 +39,33 @@ use crate::batch::{
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
+use crate::internal::metrics::{Metrics, MetricsPermits, ReadMetrics, ShardMetrics};
 use crate::internal::paths::BlobKey;
 use crate::internal::state::{BatchPart, HollowBatchPart};
+use crate::project::ProjectionPushdown;
 use crate::read::LeasedReaderId;
 use crate::ShardId;
+
+pub(crate) const FETCH_SEMAPHORE_COST_ADJUSTMENT: Config<f64> = Config::new(
+    "persist_fetch_semaphore_cost_adjustment",
+    // We use `encoded_size_bytes` as the number of permits, but the parsed size
+    // is larger than the encoded one, so adjust it. This default value is from
+    // eyeballing graphs in experiments that were run on tpch loadgen data.
+    1.2,
+    "\
+    An adjustment multiplied by encoded_size_bytes to approximate an upper \
+    bound on the size in lgalloc, which includes the decoded version.",
+);
+
+pub(crate) const FETCH_SEMAPHORE_PERMIT_ADJUSTMENT: Config<f64> = Config::new(
+    "persist_fetch_semaphore_permit_adjustment",
+    1.0,
+    "\
+    A limit on the number of outstanding persist bytes being fetched and \
+    parsed, expressed as a multiplier of the process's memory limit. This data \
+    all spills to lgalloc, so values > 1.0 are safe. Only applied to cc \
+    replicas.",
+);
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
 #[derive(Debug)]
@@ -93,8 +116,13 @@ where
             });
         }
 
-        let buf = match &part.part {
+        let (buf, fetch_permit) = match &part.part {
             BatchPart::Hollow(x) => {
+                let fetch_permit = self
+                    .metrics
+                    .semaphore
+                    .acquire_fetch_permits(x.encoded_size_bytes)
+                    .await;
                 let buf = fetch_batch_part_blob(
                     &part.shard_id,
                     self.blob.as_ref(),
@@ -115,19 +143,23 @@ where
                     // process.
                     panic!("batch fetcher could not fetch batch part: {}", blob_key)
                 });
-                FetchedBlobBuf::Hollow {
+                let buf = FetchedBlobBuf::Hollow {
                     buf,
                     part: x.clone(),
-                }
+                };
+                (buf, Some(Arc::new(fetch_permit)))
             }
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
-            } => FetchedBlobBuf::Inline {
-                desc: part.desc.clone(),
-                updates: updates.clone(),
-                ts_rewrite: ts_rewrite.clone(),
-            },
+            } => {
+                let buf = FetchedBlobBuf::Inline {
+                    desc: part.desc.clone(),
+                    updates: updates.clone(),
+                    ts_rewrite: ts_rewrite.clone(),
+                };
+                (buf, None)
+            }
         };
         let fetched_blob = FetchedBlob {
             metrics: Arc::clone(&self.metrics),
@@ -137,6 +169,7 @@ where
             schemas: self.schemas.clone(),
             filter: part.filter.clone(),
             filter_pushdown_audit: part.filter_pushdown_audit,
+            fetch_permit,
             _phantom: PhantomData,
         };
         Ok(fetched_blob)
@@ -354,6 +387,22 @@ where
     Ok(part)
 }
 
+/// This represents the lease of a seqno. It's generally paired with some external state,
+/// like a hollow part: holding this lease indicates that we may still want to fetch that part,
+/// and should hold back GC to keep it around.
+///
+/// Generally the state and lease are bundled together, as in [LeasedBatchPart]... but sometimes
+/// it's necessary to handle them separately, so this struct is exposed as well. Handle with care.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Lease(Arc<()>);
+
+impl Lease {
+    /// Returns the number of live copies of this lease, including this one.
+    pub fn count(&self) -> usize {
+        Arc::strong_count(&self.0)
+    }
+}
+
 /// A token representing one fetch-able batch part.
 ///
 /// It is tradeable via `crate::fetch::fetch_batch` for the resulting data
@@ -364,7 +413,7 @@ where
 /// You can exchange `LeasedBatchPart`:
 /// - If `leased_seqno.is_none()`
 /// - By converting it to [`SerdeLeasedBatchPart`] through
-///   [`Self::into_exchangeable_part`]. [`SerdeLeasedBatchPart`] is exchangeable,
+///   `Self::into_exchangeable_part`. [`SerdeLeasedBatchPart`] is exchangeable,
 ///   including over the network.
 ///
 /// n.b. `Self::into_exchangeable_part` is known to be equivalent to
@@ -388,9 +437,12 @@ pub struct LeasedBatchPart<T> {
     pub(crate) desc: Description<T>,
     pub(crate) part: BatchPart<T>,
     /// The `SeqNo` from which this part originated; we track this value as
-    /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
+    /// to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
-    pub(crate) leased_seqno: Option<SeqNo>,
+    pub(crate) leased_seqno: SeqNo,
+    /// The lease that prevents this part from being GCed. Code should ensure that this lease
+    /// lives as long as the part is needed.
+    pub(crate) lease: Option<Lease>,
     pub(crate) filter_pushdown_audit: bool,
 }
 
@@ -403,36 +455,19 @@ where
     ///
     /// !!!WARNING!!!
     ///
-    /// This semantically transfers the lease to the returned
-    /// SerdeLeasedBatchPart. If `self` has a `leased_seqno`, failing to take
-    /// the returned `SerdeLeasedBatchPart` back into a `LeasedBatchPart` will
-    /// leak `SeqNo`s and prevent persist GC.
-    pub fn into_exchangeable_part(mut self) -> SerdeLeasedBatchPart {
+    /// This method also returns the [Lease] associated with the given part, since
+    /// that can't travel across process boundaries. The caller is responsible for
+    /// ensuring that the lease is held for as long as the batch part may be in use:
+    /// dropping it too early may cause a fetch to fail.
+    pub(crate) fn into_exchangeable_part(mut self) -> (SerdeLeasedBatchPart, Option<Lease>) {
         let (proto, _metrics) = self.into_proto();
         // If `x` has a lease, we've effectively transferred it to `r`.
-        let _ = self.leased_seqno.take();
-        SerdeLeasedBatchPart {
+        let lease = self.lease.take();
+        let part = SerdeLeasedBatchPart {
             encoded_size_bytes: self.part.encoded_size_bytes(),
             proto: LazyProto::from(&proto),
-        }
-    }
-
-    /// Because sources get dropped without notice, we need to permit another
-    /// operator to safely expire leases.
-    ///
-    /// The part's `reader_id` is intentionally inaccessible, and should
-    /// be obtained from the issuing [`crate::ReadHandle`], or one of its derived
-    /// structures, e.g. [`crate::read::Subscribe`].
-    ///
-    /// # Panics
-    /// - If `reader_id` is different than the [`LeasedReaderId`] from
-    ///   the part issuer.
-    pub(crate) fn return_lease(&mut self, reader_id: &LeasedReaderId) -> Option<SeqNo> {
-        assert!(
-            &self.reader_id == reader_id,
-            "only issuing reader can authorize lease expiration"
-        );
-        self.leased_seqno.take()
+        };
+        (part, lease)
     }
 
     /// The encoded size of this part in bytes
@@ -451,6 +486,27 @@ where
     /// Returns the pushdown stats for this part.
     pub fn stats(&self) -> Option<PartStats> {
         self.part.stats().map(|x| x.decode())
+    }
+
+    /// Apply any relevant projection pushdown optimizations.
+    ///
+    /// NB: Until we implement full projection pushdown, this doesn't guarantee
+    /// any projection.
+    pub fn maybe_optimize(&mut self, cfg: &ConfigSet, project: &ProjectionPushdown) {
+        let as_of = match &self.filter {
+            FetchBatchFilter::Snapshot { as_of } => as_of,
+            FetchBatchFilter::Listen { .. } | FetchBatchFilter::Compaction { .. } => return,
+        };
+        let faked_part = project.try_optimize_ignored_data_fetch(
+            cfg,
+            &self.metrics,
+            as_of,
+            &self.desc,
+            &self.part,
+        );
+        if let Some(faked_part) = faked_part {
+            self.part = faked_part;
+        }
     }
 }
 
@@ -474,6 +530,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     schemas: Schemas<K, V>,
     filter: FetchBatchFilter<T>,
     filter_pushdown_audit: bool,
+    fetch_permit: Option<Arc<MetricsPermits>>,
     _phantom: PhantomData<fn() -> D>,
 }
 
@@ -500,14 +557,48 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
             schemas: self.schemas.clone(),
             filter: self.filter.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
+            fetch_permit: self.fetch_permit.clone(),
             _phantom: self._phantom.clone(),
         }
     }
 }
 
+/// [FetchedPart] but with an accompanying permit from the fetch mem/disk
+/// semaphore.
+pub struct ShardSourcePart<K: Codec, V: Codec, T, D> {
+    /// The underlying [FetchedPart].
+    pub part: FetchedPart<K, V, T, D>,
+    fetch_permit: Option<Arc<MetricsPermits>>,
+}
+
+impl<K: Codec, V: Codec, T: Clone, D> Clone for ShardSourcePart<K, V, T, D> {
+    fn clone(&self) -> Self {
+        Self {
+            part: self.part.clone(),
+            fetch_permit: self.fetch_permit.clone(),
+        }
+    }
+}
+
+impl<K, V, T: Debug, D: Debug> Debug for ShardSourcePart<K, V, T, D>
+where
+    K: Codec + Debug,
+    <K as Codec>::Storage: Debug,
+    V: Codec + Debug,
+    <V as Codec>::Storage: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ShardSourcePart { part, fetch_permit } = self;
+        f.debug_struct("ShardSourcePart")
+            .field("part", part)
+            .field("fetch_permit", fetch_permit)
+            .finish()
+    }
+}
+
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, T, D> {
     /// Partially decodes this blob into a [FetchedPart].
-    pub fn parse(&self) -> FetchedPart<K, V, T, D> {
+    pub fn parse(&self) -> ShardSourcePart<K, V, T, D> {
         let (part, stats) = match &self.buf {
             FetchedBlobBuf::Hollow { buf, part } => {
                 let parsed = decode_batch_part_blob(
@@ -534,14 +625,26 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                 (parsed, None)
             }
         };
-        FetchedPart::new(
+        let part = FetchedPart::new(
             Arc::clone(&self.metrics),
             part,
             self.schemas.clone(),
             self.filter.clone(),
             self.filter_pushdown_audit,
             stats,
-        )
+        );
+        ShardSourcePart {
+            part,
+            fetch_permit: self.fetch_permit.clone(),
+        }
+    }
+
+    /// Decodes and returns the pushdown stats for this part, if known.
+    pub fn stats(&self) -> Option<PartStats> {
+        match &self.buf {
+            FetchedBlobBuf::Hollow { part, .. } => part.stats.as_ref().map(|x| x.decode()),
+            FetchedBlobBuf::Inline { .. } => None,
+        }
     }
 }
 
@@ -635,10 +738,14 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// [Self::next] but optionally providing a `K` and `V` for alloc reuse.
+    ///
+    /// When `result_override` is specified, return it instead of decoding data.
+    /// This is used when we know the decoded result will be ignored.
     pub fn next_with_storage(
         &mut self,
         key: &mut Option<K>,
         val: &mut Option<V>,
+        result_override: Option<(K, V)>,
     ) -> Option<((Result<K, String>, Result<V, String>), T, D)> {
         while let Some((k, v, mut t, d)) = self.part_cursor.pop(&self.part) {
             if !self.ts_filter.filter_ts(&mut t) {
@@ -672,21 +779,25 @@ where
                 continue;
             }
 
-            let k = self.metrics.codecs.key.decode(|| match key.take() {
-                Some(mut key) => match K::decode_from(&mut key, k, &mut self.key_storage) {
-                    Ok(()) => Ok(key),
-                    Err(err) => Err(err),
-                },
-                None => K::decode(k),
-            });
-            let v = self.metrics.codecs.val.decode(|| match val.take() {
-                Some(mut val) => match V::decode_from(&mut val, v, &mut self.val_storage) {
-                    Ok(()) => Ok(val),
-                    Err(err) => Err(err),
-                },
-                None => V::decode(v),
-            });
-            return Some(((k, v), t, d));
+            if let Some((key, val)) = result_override {
+                return Some(((Ok(key), Ok(val)), t, d));
+            } else {
+                let k = self.metrics.codecs.key.decode(|| match key.take() {
+                    Some(mut key) => match K::decode_from(&mut key, k, &mut self.key_storage) {
+                        Ok(()) => Ok(key),
+                        Err(err) => Err(err),
+                    },
+                    None => K::decode(k),
+                });
+                let v = self.metrics.codecs.val.decode(|| match val.take() {
+                    Some(mut val) => match V::decode_from(&mut val, v, &mut self.val_storage) {
+                        Ok(()) => Ok(val),
+                        Err(err) => Err(err),
+                    },
+                    None => V::decode(v),
+                });
+                return Some(((k, v), t, d));
+            }
         }
         None
     }
@@ -702,7 +813,7 @@ where
     type Item = ((Result<K, String>, Result<V, String>), T, D);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next_with_storage(&mut None, &mut None)
+        self.next_with_storage(&mut None, &mut None, None)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -977,7 +1088,7 @@ impl<T: Timestamp + Codec64> RustType<(ProtoLeasedBatchPart, Arc<Metrics>)> for 
             part: Some(self.part.into_proto()),
             lease: Some(ProtoLease {
                 reader_id: self.reader_id.into_proto(),
-                seqno: self.leased_seqno.map(|x| x.into_proto()),
+                seqno: Some(self.leased_seqno.into_proto()),
             }),
             filter_pushdown_audit: self.filter_pushdown_audit,
         };
@@ -998,7 +1109,8 @@ impl<T: Timestamp + Codec64> RustType<(ProtoLeasedBatchPart, Arc<Metrics>)> for 
             desc: proto.desc.into_rust_if_some("ProtoLeasedBatchPart::desc")?,
             part: proto.part.into_rust_if_some("ProtoLeasedBatchPart::part")?,
             reader_id: lease.reader_id.into_rust()?,
-            leased_seqno: lease.seqno.map(|x| x.into_rust()).transpose()?,
+            leased_seqno: lease.seqno.into_rust_if_some("ProtoLease::seqno")?,
+            lease: None,
             filter_pushdown_audit: proto.filter_pushdown_audit,
         })
     }

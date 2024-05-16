@@ -16,7 +16,7 @@ fn main() {
         .btree_map(["."])
         .type_attribute(
             ".",
-            "#[derive(Eq, serde::Serialize, serde::Deserialize, proptest_derive::Arbitrary)]",
+            "#[derive(serde::Serialize, serde::Deserialize, proptest_derive::Arbitrary)]",
         )
         .extern_path(".mz_proto", "::mz_proto")
         .compile_protos(&["dyncfg/src/dyncfg.proto"], &[".."])

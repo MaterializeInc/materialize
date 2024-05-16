@@ -13,6 +13,7 @@ import os
 from typing import Any
 
 import requests
+from requests import Response
 
 BUILDKITE_API_URL = "https://api.buildkite.com/v2"
 
@@ -24,22 +25,13 @@ class RateLimitExceeded(Exception):
         self.partial_result = partial_result
 
 
-def get(request_path: str, params: dict[str, Any]) -> Any:
-    headers = {}
-    token = os.getenv("BUILDKITE_CI_API_KEY") or os.getenv("BUILDKITE_TOKEN")
+def get(request_path: str, params: dict[str, Any], as_json: bool = True) -> Any:
+    response = _perform_get_request(request_path, params)
 
-    if token is not None and len(token) > 0:
-        headers["Authorization"] = f"Bearer {token}"
+    if as_json:
+        return response.json()
     else:
-        print("Authentication token is not specified or empty!")
-
-    url = f"{BUILDKITE_API_URL}/{request_path}"
-    r = requests.get(headers=headers, url=url, params=params)
-
-    if r.status_code == STATUS_CODE_RATE_LIMIT_EXCEEDED:
-        raise RateLimitExceeded([])
-
-    return r.json()
+        return response.text
 
 
 def get_multiple(
@@ -82,3 +74,35 @@ def get_multiple(
             break
 
     return results
+
+
+def get_and_download_to_file(
+    request_path: str, params: dict[str, Any], file_path: str
+) -> Any:
+    response = _perform_get_request(request_path, params)
+
+    with open(file_path, "wb") as f:
+        f.write(response.content)
+
+
+def _perform_get_request(request_path: str, params: dict[str, Any]) -> Response:
+    headers = {}
+    token = os.getenv("BUILDKITE_CI_API_KEY") or os.getenv("BUILDKITE_TOKEN")
+
+    if token is not None and len(token) > 0:
+        headers["Authorization"] = f"Bearer {token}"
+    else:
+        print("Authentication token is not specified or empty!")
+
+    url = f"{BUILDKITE_API_URL}/{request_path}"
+    response = requests.get(headers=headers, url=url, params=params)
+
+    if response.status_code == STATUS_CODE_RATE_LIMIT_EXCEEDED:
+        raise RateLimitExceeded([])
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Status code for request {request_path} was {response.status_code}"
+        )
+
+    return response

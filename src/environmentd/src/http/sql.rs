@@ -34,9 +34,9 @@ use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
-use mz_repr::{Datum, RelationDesc, Row, RowArena};
+use mz_repr::{Datum, RelationDesc, RowArena, RowIterator};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Raw, Statement, StatementKind};
+use mz_sql::ast::{CopyDirection, CopyStatement, CopyTarget, Raw, Statement, StatementKind};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
@@ -111,11 +111,6 @@ pub async fn handle_sql(
         Ok(()) => Ok(Json(res)),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
     }
-}
-
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: String,
 }
 
 pub async fn handle_sql_ws(
@@ -411,18 +406,24 @@ pub enum SqlResult {
 impl SqlResult {
     /// Convert adapter Row results into the web row result format. Error if the row format does not
     /// match the expected descriptor.
-    fn rows(client: &mut SessionClient, sql_rows: Vec<Row>, desc: &RelationDesc) -> SqlResult {
-        if let Err(err) = verify_datum_desc(desc, &sql_rows) {
+    fn rows(
+        client: &mut SessionClient,
+        mut sql_rows: Box<dyn RowIterator>,
+        desc: &RelationDesc,
+    ) -> SqlResult {
+        if let Err(err) = verify_datum_desc(desc, &mut sql_rows) {
             return SqlResult::Err {
                 error: err.into(),
                 notices: make_notices(client),
             };
         }
+
         let mut rows: Vec<Vec<serde_json::Value>> = vec![];
         let mut datum_vec = mz_repr::DatumVec::new();
         let types = &desc.typ().column_types;
-        for row in sql_rows {
-            let datums = datum_vec.borrow_with(&row);
+
+        while let Some(row) = sql_rows.next() {
+            let datums = datum_vec.borrow_with(row);
             rows.push(
                 datums
                     .iter()
@@ -434,6 +435,7 @@ impl SqlResult {
                     .collect(),
             );
         }
+
         let tag = format!("SELECT {}", rows.len());
         SqlResult::Rows {
             tag,
@@ -755,8 +757,8 @@ impl ResultSender for WebSocket {
                         }
                     };
                     match res {
-                        Some(PeekResponseUnary::Rows(rows)) => {
-                            if let Err(err) = verify_datum_desc(desc, &rows) {
+                        Some(PeekResponseUnary::Rows(mut rows)) => {
+                            if let Err(err) = verify_datum_desc(desc, &mut rows) {
                                 let error = err.to_string();
                                 break (
                                     true,
@@ -767,9 +769,10 @@ impl ResultSender for WebSocket {
                                     )),
                                 );
                             }
-                            rows_returned += rows.len();
-                            for row in rows {
-                                let datums = datum_vec.borrow_with(&row);
+
+                            rows_returned += rows.count();
+                            while let Some(row) = rows.next() {
+                                let datums = datum_vec.borrow_with(row);
                                 let types = &desc.typ().column_types;
                                 if let Err(e) = send_ws_response(
                                     self,
@@ -975,23 +978,37 @@ async fn execute_request<S: ResultSender>(
             .flatten()
             .collect::<Vec<_>>();
 
-        if execute_responses.iter().any(|execute_response| {
-            // Returns true if a statement or execute response are unsupported.
-            match execute_response {
-                ExecuteResponseKind::Subscribing if sender.allow_subscribe() => false,
-                ExecuteResponseKind::Fetch
-                | ExecuteResponseKind::Subscribing
-                | ExecuteResponseKind::CopyFrom
-                | ExecuteResponseKind::DeclaredCursor
-                | ExecuteResponseKind::ClosedCursor => true,
-                // Various statements generate `PeekPlan` (`SELECT`, `COPY`,
-                // `EXPLAIN`, `SHOW`) which has both `SendRows` and `CopyTo` as its
-                // possible response types. but `COPY` needs be picked out because
-                // http don't support its response type
-                ExecuteResponseKind::CopyTo if matches!(kind, StatementKind::Copy) => true,
-                _ => false,
-            }
-        }) {
+        // Special-case `COPY TO` statements that are not `COPY ... TO STDOUT`, since
+        // StatementKind::Copy links to several `ExecuteResponseKind`s that are not supported,
+        // but this specific statement should be allowed.
+        let is_valid_copy_to = matches!(
+            stmt,
+            Statement::Copy(CopyStatement {
+                direction: CopyDirection::To,
+                target: CopyTarget::Expr(_),
+                ..
+            })
+        );
+
+        if !is_valid_copy_to
+            && execute_responses.iter().any(|execute_response| {
+                // Returns true if a statement or execute response are unsupported.
+                match execute_response {
+                    ExecuteResponseKind::Subscribing if sender.allow_subscribe() => false,
+                    ExecuteResponseKind::Fetch
+                    | ExecuteResponseKind::Subscribing
+                    | ExecuteResponseKind::CopyFrom
+                    | ExecuteResponseKind::DeclaredCursor
+                    | ExecuteResponseKind::ClosedCursor => true,
+                    // Various statements generate `PeekPlan` (`SELECT`, `COPY`,
+                    // `EXPLAIN`, `SHOW`) which has both `SendRows` and `CopyTo` as its
+                    // possible response types. but `COPY` needs be picked out because
+                    // http don't support its response type
+                    ExecuteResponseKind::CopyTo if matches!(kind, StatementKind::Copy) => true,
+                    _ => false,
+                }
+            })
+        {
             return Err(Error::Unsupported(stmt.to_ast_string()));
         }
         Ok(())

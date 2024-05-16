@@ -22,7 +22,7 @@ use mz_prof::{ProfStartTime, StackProfile};
 use once_cell::sync::Lazy;
 
 cfg_if! {
-    if #[cfg(any(target_os = "macos", not(feature = "jemalloc"), miri))] {
+    if #[cfg(any(not(feature = "jemalloc"), miri))] {
         use disabled::{handle_get, handle_post, handle_get_heap};
     } else {
         use enabled::{handle_get, handle_post, handle_get_heap};
@@ -95,7 +95,7 @@ async fn time_prof<'a>(
 ) -> impl IntoResponse {
     let ctl_lock;
     cfg_if! {
-        if #[cfg(any(target_os = "macos", not(feature = "jemalloc"), miri))] {
+        if #[cfg(any(not(feature = "jemalloc"), miri))] {
             ctl_lock = ();
         } else {
             ctl_lock = if let Some(ctl) = mz_prof::jemalloc::PROF_CTL.as_ref() {
@@ -151,7 +151,7 @@ fn flamegraph(
     })
 }
 
-#[cfg(any(target_os = "macos", not(feature = "jemalloc"), miri))]
+#[cfg(any(not(feature = "jemalloc"), miri))]
 mod disabled {
     use axum::extract::{Form, Query};
     use axum::response::IntoResponse;
@@ -234,7 +234,7 @@ mod disabled {
     }
 }
 
-#[cfg(all(not(target_os = "macos"), feature = "jemalloc", not(miri)))]
+#[cfg(all(feature = "jemalloc", not(miri)))]
 mod enabled {
     use std::io::{BufReader, Read};
     use std::sync::Arc;
@@ -289,8 +289,10 @@ mod enabled {
                     "Allocated for allocator metadata",
                     ByteSize(u64::cast_from(stats.metadata)).to_string_as(true),
                 ),
-                // Don't print `stats.resident` since it is a bit hard to interpret;
-                // see `man jemalloc` for details.
+                (
+                    "Maximum number of bytes in physically resident data pages mapped by the allocator",
+                    ByteSize(u64::cast_from(stats.resident)).to_string_as(true),
+                ),
                 (
                     "Bytes unused, but retained by allocator",
                     ByteSize(u64::cast_from(stats.retained)).to_string_as(true),

@@ -133,13 +133,17 @@ async fn try_run_sql(
     expected_output: &SqlOutput,
 ) -> Result<(), anyhow::Error> {
     let stmt = state
+        .materialize
         .pgclient
         .prepare(query)
         .await
         .context("preparing query failed")?;
 
-    let query_with_timeout =
-        tokio::time::timeout(state.timeout.clone(), state.pgclient.query(&stmt, &[])).await;
+    let query_with_timeout = tokio::time::timeout(
+        state.timeout.clone(),
+        state.materialize.pgclient.query(&stmt, &[]),
+    )
+    .await;
 
     if query_with_timeout.is_err() {
         bail!("query timed out")
@@ -423,7 +427,7 @@ async fn try_run_fail_sql(
     expected_detail: Option<&ErrorMatcher>,
     expected_hint: Option<&ErrorMatcher>,
 ) -> Result<(), anyhow::Error> {
-    match state.pgclient.query(query, &[]).await {
+    match state.materialize.pgclient.query(query, &[]).await {
         Ok(_) => bail!("query succeeded, but expected {}", expected_error),
         Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
             Some(err) => {

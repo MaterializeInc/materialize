@@ -26,7 +26,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
 use mz_repr::user::ExternalUserMetadata;
-use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowIterator, ScalarType, TimestampManipulation};
 use mz_sql::ast::{AstInfo, Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
@@ -901,7 +901,7 @@ pub enum PortalState {
 /// State of an in-progress, rows-returning portal.
 pub struct InProgressRows {
     /// The current batch of rows.
-    pub current: Option<Vec<Row>>,
+    pub current: Option<Box<dyn RowIterator + Send + Sync>>,
     /// A stream from which to fetch more row batches.
     pub remaining: RecordFirstRowStream,
 }

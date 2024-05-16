@@ -6,3 +6,8 @@ platforms = [
     "x86_64-apple-darwin",
 ]
 exact-versions = true
+
+[final-excludes]
+third-party = [
+    { "name" = "tikv-jemalloc-sys" }
+]

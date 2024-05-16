@@ -23,11 +23,11 @@ use mz_controller::clusters::{
     ClusterRole, ClusterStatus, ProcessId, ReplicaConfig, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::optimize::OptimizerFeatureOverrides;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_sql::ast::display::AstDisplay;
@@ -242,7 +242,7 @@ impl Cluster {
     pub fn rename_replica(&mut self, replica_id: ReplicaId, to_name: String) {
         let replica = self.replica_mut(replica_id).expect("Must exist");
         let old_name = std::mem::take(&mut replica.name);
-        replica.name = to_name.clone();
+        replica.name.clone_from(&to_name);
 
         assert!(self.replica_id_by_name_.remove(&old_name).is_some());
         assert!(self
@@ -710,8 +710,9 @@ pub struct MaterializedView {
     pub non_null_assertions: Vec<usize>,
     pub custom_logical_compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
-    // The initial `as_of` of the storage collection associated with the materialized view.
-    // (The dataflow's initial `as_of` can be different.)
+    /// The initial `as_of` of the storage collection associated with the materialized view.
+    /// Note that this doesn't change upon restarts.
+    /// (The dataflow's initial `as_of` can be different.)
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
 }
 

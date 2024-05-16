@@ -12,7 +12,8 @@ MZFROM testdrive-base
 COPY testdrive /usr/local/bin/
 
 # Install the Protobuf compiler from protobuf-src.
-COPY protobuf-install /usr/local/
+COPY protobuf-bin /usr/local/bin
+COPY protobuf-include /usr/local/include
 ENV PROTOC /usr/local/bin/protoc
 
 WORKDIR /workdir

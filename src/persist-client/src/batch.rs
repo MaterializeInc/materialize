@@ -48,7 +48,9 @@ use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
-use crate::internal::state::{BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart};
+use crate::internal::state::{
+    BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart, WRITE_DIFFS_SUM,
+};
 use crate::stats::{
     part_stats_for_legacy_part, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
 };
@@ -90,10 +92,10 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     fn drop(&mut self) {
-        if self.batch.parts.len() > 0 {
+        if self.batch.part_count() > 0 {
             warn!(
                 "un-consumed Batch, with {} parts and dangling blob keys: {:?}",
-                self.batch.parts.len(),
+                self.batch.part_count(),
                 self.batch
                     .parts
                     .iter()
@@ -230,6 +232,7 @@ where
                 .decode::<T>(&self.metrics.columnar)
                 .expect("valid inline part");
             let key_lower = updates.key_lower().to_vec();
+            let diffs_sum = diffs_sum::<D>(&updates.updates).expect("inline parts are not empty");
 
             let write_span =
                 debug_span!("batch::flush_to_blob", shard = %self.shard_metrics.shard_id)
@@ -246,6 +249,7 @@ where
                     updates,
                     key_lower,
                     ts_rewrite,
+                    D::encode(&diffs_sum),
                     stats_schemas.clone(),
                 )
                 .instrument(write_span),
@@ -330,6 +334,7 @@ pub struct BatchBuilderConfig {
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
+    pub(crate) write_diffs_sum: bool,
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
@@ -380,6 +385,7 @@ impl BatchBuilderConfig {
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
             stats_budget: STATS_BUDGET_BYTES.get(value),
             stats_untrimmable_columns: Arc::new(untrimmable_columns(value)),
+            write_diffs_sum: WRITE_DIFFS_SUM.get(value),
         }
     }
 }
@@ -627,12 +633,7 @@ where
             self.blob,
             shard_metrics,
             self.version,
-            HollowBatch {
-                desc,
-                parts,
-                len: self.num_updates,
-                runs: self.runs,
-            },
+            HollowBatch::new(desc, parts, self.num_updates, self.runs),
         );
 
         Ok(batch)
@@ -684,6 +685,7 @@ where
         if num_updates == 0 {
             return;
         }
+        let diffs_sum = diffs_sum::<D>(std::iter::once(&columnar)).expect("part is non empty");
 
         if self.consolidate {
             // if our parts are consolidated, we can rely on their sorted order to
@@ -729,6 +731,7 @@ where
                 columnar,
                 self.inline_upper.clone(),
                 self.since.clone(),
+                diffs_sum,
             )
             .await;
         self.metrics
@@ -922,13 +925,14 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
-    pub(crate) async fn write<K: Codec, V: Codec>(
+    pub(crate) async fn write<K: Codec, V: Codec, D: Codec64>(
         &mut self,
         schemas: &Schemas<K, V>,
         key_lower: Vec<u8>,
         updates: ColumnarRecords,
         upper: Antichain<T>,
         since: Antichain<T>,
+        diffs_sum: D,
     ) {
         let desc = Description::new(self.lower.clone(), upper, since);
         let batch_metrics = self.batch_metrics.clone();
@@ -976,6 +980,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     part,
                     key_lower,
                     ts_rewrite,
+                    D::encode(&diffs_sum),
                     schemas.clone(),
                 )
                 .instrument(write_span),
@@ -1007,11 +1012,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         updates: BlobTraceBatchPart<T>,
         key_lower: Vec<u8>,
         ts_rewrite: Option<Antichain<T>>,
+        diffs_sum: [u8; 8],
         schemas: Schemas<K, V>,
     ) -> BatchPart<T> {
         let partial_key = PartialBatchKey::new(&cfg.writer_key, &PartId::new());
         let key = partial_key.complete(&shard_metrics.shard_id);
         let goodbytes = updates.updates.iter().map(|x| x.goodbytes()).sum::<usize>();
+        let metrics_ = Arc::clone(&metrics);
 
         let (stats, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
@@ -1038,7 +1045,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
                 let encode_start = Instant::now();
                 let mut buf = Vec::new();
-                updates.encode(&mut buf);
+                updates.encode(&mut buf, &metrics_.columnar);
 
                 // Drop batch as soon as we can to reclaim its memory.
                 drop(updates);
@@ -1086,6 +1093,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             key_lower,
             stats,
             ts_rewrite,
+            diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
         })
     }
 
@@ -1189,6 +1197,23 @@ impl Deref for PartDeletes {
     }
 }
 
+/// Returns the total sum of diffs or None if there were no updates.
+fn diffs_sum<'a, D: Semigroup + Codec64>(
+    updates: impl IntoIterator<Item = &'a ColumnarRecords>,
+) -> Option<D> {
+    let mut sum = None;
+    for updates in updates.into_iter() {
+        for (_kv, _t, d) in updates.iter() {
+            let d = D::decode(d);
+            match &mut sum {
+                None => sum = Some(d),
+                Some(x) => x.plus_equals(&d),
+            }
+        }
+    }
+    sum
+}
+
 #[cfg(test)]
 mod tests {
     use mz_dyncfg::ConfigUpdates;
@@ -1282,7 +1307,7 @@ mod tests {
             .finish(&schemas, Antichain::from_elem(4))
             .await
             .expect("invalid usage");
-        assert_eq!(batch.batch.parts.len(), 3);
+        assert_eq!(batch.batch.part_count(), 3);
         write
             .append_batch(batch, Antichain::from_elem(0), Antichain::from_elem(4))
             .await
@@ -1318,7 +1343,7 @@ mod tests {
             )
             .await;
 
-        assert_eq!(batch.batch.parts.len(), 3);
+        assert_eq!(batch.batch.part_count(), 3);
         for part in &batch.batch.parts {
             let part = match part {
                 BatchPart::Hollow(x) => x,
@@ -1361,7 +1386,7 @@ mod tests {
             .await
             .expect("invalid usage");
 
-        assert_eq!(batch.batch.parts.len(), 2);
+        assert_eq!(batch.batch.part_count(), 2);
         for part in &batch.batch.parts {
             let part = match part {
                 BatchPart::Hollow(x) => x,

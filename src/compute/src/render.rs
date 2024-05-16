@@ -112,9 +112,9 @@ use std::task::Poll;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
-use differential_dataflow::{AsCollection, Collection, Data, ExchangeData, Hashable};
+use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::TraceReader;
+use differential_dataflow::{AsCollection, Collection, Data};
 use futures::channel::oneshot;
 use futures::FutureExt;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
@@ -122,7 +122,7 @@ use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
 use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
-use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
+use mz_repr::{Datum, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
@@ -143,7 +143,7 @@ use timely::PartialOrder;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::{
@@ -603,32 +603,14 @@ where
     ) -> MzArrangement<G> {
         match oks {
             MzArrangement::RowRow(inner) => {
-                let oks = self.rearrange_iterative(inner, name);
+                use differential_dataflow::trace::cursor::MyTrait;
+                let oks = inner
+                    .as_collection(|k, v| (k.into_owned(), v.into_owned()))
+                    .leave()
+                    .mz_arrange(name);
                 MzArrangement::RowRow(oks)
             }
         }
-    }
-
-    /// Rearranges an arrangement coming from an iterative scope into an arrangement
-    /// in the outer timestamp scope.
-    fn rearrange_iterative<Tr1, Tr2>(
-        &self,
-        oks: Arranged<Child<'g, G, T>, TraceAgent<Tr1>>,
-        name: &str,
-    ) -> Arranged<G, TraceAgent<Tr2>>
-    where
-        Tr1: TraceReader<Time = T, Diff = Diff>,
-        Tr1::KeyOwned: Columnation + ExchangeData + Hashable,
-        Tr1::ValOwned: Columnation + ExchangeData,
-        Tr2: Trace + TraceReader<Time = G::Timestamp, Diff = Diff> + 'static,
-        Tr2::Batch: Batch,
-        Tr2::Batcher: Batcher<Input = Vec<((Tr1::KeyOwned, Tr1::ValOwned), G::Timestamp, Diff)>>,
-        Arranged<G, TraceAgent<Tr2>>: ArrangementSize,
-    {
-        use differential_dataflow::trace::cursor::MyTrait;
-        oks.as_collection(|k, v| (k.into_owned(), v.into_owned()))
-            .leave()
-            .mz_arrange(name)
     }
 }
 
@@ -717,8 +699,9 @@ where
                 let err: KeyCollection<_, _, _> = err.into();
                 let mut errs = err
                     .mz_arrange::<ErrSpine<_, _>>("Arrange recursive err")
-                    .mz_reduce_abelian::<_, ErrSpine<_, _>>(
+                    .mz_reduce_abelian::<_, _, _, ErrSpine<_, _>>(
                         "Distinct recursive err",
+                        Clone::clone,
                         move |_k, _s, t| t.push(((), 1)),
                     )
                     .as_collection(|k, _| k.clone());
@@ -1049,7 +1032,7 @@ where
                 // Pass through inputs.
                 input.for_each(|cap, data| {
                     data.swap(&mut buffer);
-                    output.session(&cap).give_vec(&mut buffer);
+                    output.session(&cap).give_container(&mut buffer);
                 });
 
                 if hydrated {
@@ -1066,6 +1049,7 @@ where
     }
 }
 
+#[allow(dead_code)] // Some of the methods on this trait are unused, but useful to have.
 /// A timestamp type that can be used for operations within MZ's dataflow layer.
 pub trait RenderTimestamp: Timestamp + Lattice + Refines<mz_repr::Timestamp> + Columnation {
     /// The system timestamp component of the timestamp.
@@ -1308,7 +1292,7 @@ where
                     let cap = early_cap.as_ref().expect("early_cap can't be dropped yet");
                     output.session(cap)
                 };
-                session.give_vec(&mut buffer);
+                session.give_container(&mut buffer);
             });
 
             let frontier = input.frontier().frontier();

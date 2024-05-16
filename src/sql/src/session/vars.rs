@@ -1150,7 +1150,6 @@ impl SystemVars {
             &PG_SOURCE_KEEPALIVES_RETRIES,
             &PG_SOURCE_TCP_USER_TIMEOUT,
             &PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT,
-            &PG_SOURCE_WAL_SENDER_TIMEOUT,
             &PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT,
             &PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT,
             &PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT,
@@ -1200,6 +1199,7 @@ impl SystemVars {
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
             &cluster_scheduling::CLUSTER_ALWAYS_USE_DISK,
             &cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL,
+            &cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED,
             &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
             &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
             &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
@@ -1231,6 +1231,9 @@ impl SystemVars {
                     VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
                 }
                 ConfigVal::OptUsize(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                }
+                ConfigVal::F64(default) => {
                     VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
                 }
                 ConfigVal::String(default) => {
@@ -1721,11 +1724,6 @@ impl SystemVars {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
     }
 
-    /// Returns the `pg_source_wal_sender_timeout` configuration parameter.
-    pub fn pg_source_wal_sender_timeout(&self) -> Duration {
-        *self.expect_value(&PG_SOURCE_WAL_SENDER_TIMEOUT)
-    }
-
     /// Returns the `pg_source_snapshot_collect_strict_count` configuration parameter.
     pub fn pg_source_snapshot_collect_strict_count(&self) -> bool {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT)
@@ -1871,6 +1869,7 @@ impl SystemVars {
                 ConfigVal::OptUsize(_) => {
                     ConfigVal::from(*self.expect_config_value::<Option<usize>>(name))
                 }
+                ConfigVal::F64(_) => ConfigVal::from(*self.expect_config_value::<f64>(name)),
                 ConfigVal::String(_) => {
                     ConfigVal::from(self.expect_config_value::<String>(name).clone())
                 }
@@ -2041,6 +2040,10 @@ impl SystemVars {
         *self.expect_value(&cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL)
     }
 
+    pub fn cluster_security_context_enabled(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED)
+    }
+
     /// Returns the `privatelink_status_update_quota_per_minute` configuration parameter.
     pub fn privatelink_status_update_quota_per_minute(&self) -> u32 {
         *self.expect_value(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
@@ -2123,7 +2126,6 @@ impl SystemVars {
             || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
             || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
             || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
-            || name == PG_SOURCE_WAL_SENDER_TIMEOUT.name()
             || name == PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT.name()
             || name == PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT.name()
             || name == PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT.name()

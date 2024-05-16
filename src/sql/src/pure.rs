@@ -34,7 +34,7 @@ use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
-    CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkStatement,
+    ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkStatement,
     CreateSubsourceOption, CreateSubsourceOptionName, CsrConfigOption, CsrConfigOptionName,
     CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DeferredItemName,
     DocOnIdentifier, DocOnSchema, Expr, Function, FunctionArgs, Ident, KafkaSourceConfigOption,
@@ -64,7 +64,7 @@ use crate::ast::{
 use crate::catalog::{CatalogItemType, SessionCatalog, SubsourceCatalog};
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
-    Aug, FullItemName, PartialItemName, ResolvedColumnName, ResolvedDataType, ResolvedIds,
+    Aug, FullItemName, PartialItemName, ResolvedColumnReference, ResolvedDataType, ResolvedIds,
     ResolvedItemName,
 };
 use crate::plan::error::PlanError;
@@ -332,10 +332,12 @@ pub(crate) fn add_materialize_comments(
                         let comment = comments_map.get(&Some(pos + 1));
                         if let Some(comment_str) = comment {
                             let doc_on_column_key = AvroDocOn {
-                                identifier: DocOnIdentifier::Column(ResolvedColumnName::Column {
+                                identifier: DocOnIdentifier::Column(ColumnName {
                                     relation: full_resolved_name.clone(),
-                                    name: column_name.to_owned(),
-                                    index: pos,
+                                    column: ResolvedColumnReference::Column {
+                                        name: column_name.to_owned(),
+                                        index: pos,
+                                    },
                                 }),
                                 for_schema: DocOnSchema::All,
                             };

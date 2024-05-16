@@ -254,7 +254,7 @@ where
         // (especially in aggregate). This heuristic is something we'll need to
         // tune over time.
         let should_compact = req.inputs.len() >= self.cfg.dynamic.compaction_heuristic_min_inputs()
-            || req.inputs.iter().map(|x| x.parts.len()).sum::<usize>()
+            || req.inputs.iter().map(|x| x.part_count()).sum::<usize>()
                 >= self.cfg.dynamic.compaction_heuristic_min_parts()
             || req.inputs.iter().map(|x| x.len).sum::<usize>()
                 >= self.cfg.dynamic.compaction_heuristic_min_updates();
@@ -305,8 +305,7 @@ where
         let total_input_bytes = req
             .inputs
             .iter()
-            .flat_map(|batch| batch.parts.iter())
-            .map(|parts| parts.encoded_size_bytes())
+            .map(|batch| batch.encoded_size_bytes())
             .sum::<usize>();
         let timeout = Duration::max(
             // either our minimum timeout
@@ -909,7 +908,7 @@ mod tests {
 
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 1);
-        assert_eq!(res.output.parts.len(), 1);
+        assert_eq!(res.output.part_count(), 1);
         let part = match &res.output.parts[0] {
             BatchPart::Hollow(x) => x,
             BatchPart::Inline { .. } => panic!("test outputs a hollow part"),
@@ -987,7 +986,7 @@ mod tests {
 
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 2);
-        assert_eq!(res.output.parts.len(), 1);
+        assert_eq!(res.output.part_count(), 1);
         let part = match &res.output.parts[0] {
             BatchPart::Hollow(x) => x,
             BatchPart::Inline { .. } => panic!("test outputs a hollow part"),

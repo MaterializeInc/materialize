@@ -58,7 +58,7 @@
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering::SeqCst;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -287,6 +287,8 @@ pub enum ConfigVal {
     Usize(usize),
     /// An `Option<usize>` value.
     OptUsize(Option<usize>),
+    /// An `f64` value.
+    F64(f64),
     /// A `String` value.
     String(String),
     /// A `Duration` value.
@@ -308,6 +310,8 @@ enum ConfigValAtomic {
     U32(Arc<AtomicU32>),
     Usize(Arc<AtomicUsize>),
     OptUsize(Arc<RwLock<Option<usize>>>),
+    // Shared via to_bits/from_bits so we can use the atomic instead of Mutex.
+    F64(Arc<AtomicU64>),
     String(Arc<RwLock<String>>),
     Duration(Arc<RwLock<Duration>>),
     Json(Arc<RwLock<serde_json::Value>>),
@@ -320,6 +324,7 @@ impl From<ConfigVal> for ConfigValAtomic {
             ConfigVal::U32(x) => ConfigValAtomic::U32(Arc::new(AtomicU32::new(x))),
             ConfigVal::Usize(x) => ConfigValAtomic::Usize(Arc::new(AtomicUsize::new(x))),
             ConfigVal::OptUsize(x) => ConfigValAtomic::OptUsize(Arc::new(RwLock::new(x))),
+            ConfigVal::F64(x) => ConfigValAtomic::F64(Arc::new(AtomicU64::new(x.to_bits()))),
             ConfigVal::String(x) => ConfigValAtomic::String(Arc::new(RwLock::new(x))),
             ConfigVal::Duration(x) => ConfigValAtomic::Duration(Arc::new(RwLock::new(x))),
             ConfigVal::Json(x) => ConfigValAtomic::Json(Arc::new(RwLock::new(x))),
@@ -334,6 +339,7 @@ impl ConfigValAtomic {
             ConfigValAtomic::U32(x) => ConfigVal::U32(x.load(SeqCst)),
             ConfigValAtomic::Usize(x) => ConfigVal::Usize(x.load(SeqCst)),
             ConfigValAtomic::OptUsize(x) => ConfigVal::OptUsize(*x.read().expect("lock poisoned")),
+            ConfigValAtomic::F64(x) => ConfigVal::F64(f64::from_bits(x.load(SeqCst))),
             ConfigValAtomic::String(x) => {
                 ConfigVal::String(x.read().expect("lock poisoned").clone())
             }
@@ -350,6 +356,7 @@ impl ConfigValAtomic {
             (ConfigValAtomic::OptUsize(x), ConfigVal::OptUsize(val)) => {
                 *x.write().expect("lock poisoned") = val
             }
+            (ConfigValAtomic::F64(x), ConfigVal::F64(val)) => x.store(val.to_bits(), SeqCst),
             (ConfigValAtomic::String(x), ConfigVal::String(val)) => {
                 *x.write().expect("lock poisoned") = val
             }
@@ -363,6 +370,7 @@ impl ConfigValAtomic {
             | (ConfigValAtomic::U32(_), val)
             | (ConfigValAtomic::Usize(_), val)
             | (ConfigValAtomic::OptUsize(_), val)
+            | (ConfigValAtomic::F64(_), val)
             | (ConfigValAtomic::String(_), val)
             | (ConfigValAtomic::Duration(_), val)
             | (ConfigValAtomic::Json(_), val) => {
@@ -503,6 +511,21 @@ mod impls {
         }
     }
 
+    impl ConfigType for f64 {
+        fn from_val(val: ConfigVal) -> Self {
+            match val {
+                ConfigVal::F64(x) => x,
+                x => panic!("expected f64 value got {:?}", x),
+            }
+        }
+    }
+
+    impl From<f64> for ConfigVal {
+        fn from(val: f64) -> ConfigVal {
+            ConfigVal::F64(val)
+        }
+    }
+
     impl ConfigType for String {
         fn from_val(val: ConfigVal) -> Self {
             match val {
@@ -566,6 +589,7 @@ mod impls {
                 ConfigVal::OptUsize(x) => Val::OptUsize(ProtoOptionU64 {
                     val: x.map(u64::cast_from),
                 }),
+                ConfigVal::F64(x) => Val::F64(*x),
                 ConfigVal::String(x) => Val::String(x.into_proto()),
                 ConfigVal::Duration(x) => Val::Duration(x.into_proto()),
                 ConfigVal::Json(x) => Val::Json(x.to_string()),
@@ -581,6 +605,7 @@ mod impls {
                 Some(proto_config_val::Val::OptUsize(ProtoOptionU64 { val })) => {
                     ConfigVal::OptUsize(val.map(usize::cast_from))
                 }
+                Some(proto_config_val::Val::F64(x)) => ConfigVal::F64(x),
                 Some(proto_config_val::Val::String(x)) => ConfigVal::String(x),
                 Some(proto_config_val::Val::Duration(x)) => ConfigVal::Duration(x.into_rust()?),
                 Some(proto_config_val::Val::Json(x)) => ConfigVal::Json(serde_json::from_str(&x)?),
@@ -609,8 +634,10 @@ mod tests {
     use super::*;
 
     const BOOL: Config<bool> = Config::new("bool", true, "");
+    const U32: Config<u32> = Config::new("u32", 4, "");
     const USIZE: Config<usize> = Config::new("usize", 1, "");
     const OPT_USIZE: Config<Option<usize>> = Config::new("opt_usize", Some(2), "");
+    const F64: Config<f64> = Config::new("f64", 5.0, "");
     const STRING: Config<&str> = Config::new("string", "a", "");
     const DURATION: Config<Duration> = Config::new("duration", Duration::from_nanos(3), "");
     const JSON: Config<fn() -> serde_json::Value> =
@@ -621,29 +648,37 @@ mod tests {
         let configs = ConfigSet::default()
             .add(&BOOL)
             .add(&USIZE)
+            .add(&U32)
             .add(&OPT_USIZE)
+            .add(&F64)
             .add(&STRING)
             .add(&DURATION)
             .add(&JSON);
         assert_eq!(BOOL.get(&configs), true);
+        assert_eq!(U32.get(&configs), 4);
         assert_eq!(USIZE.get(&configs), 1);
         assert_eq!(OPT_USIZE.get(&configs), Some(2));
+        assert_eq!(F64.get(&configs), 5.0);
         assert_eq!(STRING.get(&configs), "a");
         assert_eq!(DURATION.get(&configs), Duration::from_nanos(3));
         assert_eq!(JSON.get(&configs), serde_json::json!({}));
 
         let mut updates = ConfigUpdates::default();
         updates.add(&BOOL, false);
+        updates.add(&U32, 7);
         updates.add(&USIZE, 2);
         updates.add(&OPT_USIZE, None);
+        updates.add(&F64, 8.0);
         updates.add(&STRING, "b");
         updates.add(&DURATION, Duration::from_nanos(4));
         updates.add(&JSON, serde_json::json!({"a": 1}));
         updates.apply(&configs);
 
         assert_eq!(BOOL.get(&configs), false);
+        assert_eq!(U32.get(&configs), 7);
         assert_eq!(USIZE.get(&configs), 2);
         assert_eq!(OPT_USIZE.get(&configs), None);
+        assert_eq!(F64.get(&configs), 8.0);
         assert_eq!(STRING.get(&configs), "b");
         assert_eq!(DURATION.get(&configs), Duration::from_nanos(4));
         assert_eq!(JSON.get(&configs), serde_json::json!({"a": 1}));

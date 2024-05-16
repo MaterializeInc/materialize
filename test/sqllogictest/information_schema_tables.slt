@@ -109,6 +109,10 @@ mz_base_types
 BASE TABLE
 materialize
 mz_catalog
+mz_cluster_replica_sizes
+BASE TABLE
+materialize
+mz_catalog
 mz_cluster_replicas
 BASE TABLE
 materialize
@@ -345,10 +349,6 @@ mz_cluster_replica_metrics
 BASE TABLE
 materialize
 mz_internal
-mz_cluster_replica_sizes
-BASE TABLE
-materialize
-mz_internal
 mz_cluster_replica_statuses
 BASE TABLE
 materialize
@@ -547,6 +547,10 @@ materialize
 mz_internal
 mz_materialized_view_refresh_strategies
 BASE TABLE
+materialize
+mz_internal
+mz_materialized_view_refreshes
+SOURCE
 materialize
 mz_internal
 mz_message_batch_counts_received_raw

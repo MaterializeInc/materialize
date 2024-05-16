@@ -654,6 +654,15 @@ impl ExplainContext {
         };
         optimizer_trace.map(|optimizer_trace| optimizer_trace.as_guard())
     }
+
+    fn needs_cluster(&self) -> bool {
+        match self {
+            ExplainContext::None => true,
+            ExplainContext::Plan(..) => false,
+            ExplainContext::PlanInsightsNotice(..) => true,
+            ExplainContext::Pushdown => false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1491,14 +1500,21 @@ impl Coordinator {
         for entry in &entries {
             // TODO(#26794): we should move this invariant into `CatalogEntry`.
             mz_ore::soft_assert_or_log!(
-                entry
-                    .used_by()
-                    .iter()
-                    .all(|dependent_id| *dependent_id > entry.id),
-                "item dependencies should respect `GlobalId`'s PartialOrd \
-                but {:?} depends on {:?}",
+                // We only expect user objects to objects obey this invariant.
+                // System objects, for instance, can depend on other system
+                // objects that belong to a schema that is simply loaded first.
+                // To meaningfully resolve this, we could need more careful
+                // loading order or more complex IDs, neither of which seem very
+                // beneficial.
+                !entry.id().is_user()
+                    || entry
+                        .uses()
+                        .iter()
+                        .all(|dependency_id| *dependency_id < entry.id),
+                "entries should only use to items with lesser `GlobalId`s, but \
+                but {:?} uses {:?}",
                 entry.id,
-                entry.used_by()
+                entry.uses()
             );
 
             debug!(
@@ -1649,6 +1665,9 @@ impl Coordinator {
                         local_read_ts_for_index_bootstrapping,
                     );
                     df_desc.set_as_of(as_of);
+                    if let Some(initial_as_of) = mview.initial_as_of.clone() {
+                        df_desc.set_initial_as_of(initial_as_of);
+                    }
 
                     // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
                     let until = mview

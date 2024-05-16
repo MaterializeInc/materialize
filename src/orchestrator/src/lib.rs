@@ -101,6 +101,14 @@ pub enum NotReadyReason {
     OomKilled,
 }
 
+impl fmt::Display for NotReadyReason {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            NotReadyReason::OomKilled => f.write_str("oom-killed"),
+        }
+    }
+}
+
 /// Describes the status of an orchestrated service.
 #[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
 pub enum ServiceStatus {
@@ -441,6 +449,8 @@ pub mod scheduling_config {
         ///
         /// Defaults to `false`.
         pub always_use_disk: bool,
+        // Whether to enable security context for the service.
+        pub security_context_enabled: bool,
     }
 
     pub const DEFAULT_POD_AZ_AFFINITY_WEIGHT: Option<i32> = Some(100);
@@ -455,6 +465,7 @@ pub mod scheduling_config {
     pub const DEFAULT_SOFTEN_AZ_AFFINITY: bool = false;
     pub const DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT: i32 = 100;
     pub const DEFAULT_ALWAYS_USE_DISK: bool = false;
+    pub const DEFAULT_SECURITY_CONTEXT_ENABLED: bool = true;
 
     impl Default for ServiceSchedulingConfig {
         fn default() -> Self {
@@ -472,6 +483,7 @@ pub mod scheduling_config {
                 soften_az_affinity: DEFAULT_SOFTEN_AZ_AFFINITY,
                 soften_az_affinity_weight: DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT,
                 always_use_disk: DEFAULT_ALWAYS_USE_DISK,
+                security_context_enabled: DEFAULT_SECURITY_CONTEXT_ENABLED,
             }
         }
     }

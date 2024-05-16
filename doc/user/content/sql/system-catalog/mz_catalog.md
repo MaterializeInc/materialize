@@ -65,6 +65,30 @@ Field          | Type       | Meaning
 ---------------|------------|----------
 `id`           | [`text`]   | The ID of the type.
 
+### `mz_cluster_replica_sizes`
+{{< warn-if-unreleased v0.99 >}}
+The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
+(e.g. `100cc`) to physical sizes (number of processes, and CPU and memory allocations per process).
+
+This table was previously in the `mz_internal` schema. All queries previously referencing
+`mz_internal.mz_cluster_replica_sizes` should now reference `mz_catalog.mz_cluster_replica_sizes`.
+
+{{< warning >}}
+The values in this table may change at any time. You should not rely on them for
+any kind of capacity planning.
+{{< /warning >}}
+
+<!-- RELATION_SPEC mz_catalog.mz_cluster_replica_sizes -->
+| Field                  | Type        | Meaning                                                                                                                                                      |
+|------------------------|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `size`                 | [`text`]    | The human-readable replica size.                                                                                                                             |
+| `processes`            | [`uint8`]   | The number of processes in the replica.                                                                                                                      |
+| `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.                                                                                                           |
+| `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core.                                                                                                |
+| `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.                                                                                                |
+| `disk_bytes`           | [`uint8`]   | The disk allocation per process.                                                                                                                             |
+| `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
+
 ### `mz_cluster_replicas`
 
 The `mz_cluster_replicas` table contains a row for each cluster replica in the system.

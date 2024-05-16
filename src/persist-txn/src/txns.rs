@@ -19,6 +19,7 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
@@ -153,6 +154,7 @@ where
                     shard_name: "txns".to_owned(),
                     handle_purpose: "commit txns".to_owned(),
                 },
+                USE_CRITICAL_SINCE_TXN.get(client.dyncfgs()),
             )
             .await
             .expect("txns schema shouldn't change");
@@ -551,7 +553,7 @@ where
 
             let mut unapplied_by_data = BTreeMap::<_, Vec<_>>::new();
             for (data_id, unapplied, unapplied_ts) in self.txns_cache.unapplied() {
-                if ts < &unapplied_ts {
+                if ts < unapplied_ts {
                     break;
                 }
                 unapplied_by_data

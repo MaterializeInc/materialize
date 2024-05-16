@@ -22,13 +22,13 @@
       );
     ```
 
-    - Replace `<host>` with your Postgres endpoint.
+    - Replace `<host>` with your PostgreSQL endpoint.
 
     - Replace `<database>` with the name of the database containing the tables
       you want to replicate to Materialize.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-to your Postgres instance and start ingesting data from the publication you
+to your PostgreSQL instance and start ingesting data from the publication you
 created [earlier](#step-2-create-a-publication):
 
     ```sql
@@ -45,5 +45,5 @@ created [earlier](#step-2-create-a-publication):
     ALL TABLES`.
 
 1. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes)
-   for specific replicated tables using the [`ALTER SOURCE...{ADD | DROP SUBSOURCE`](/sql/alter-source/#context)
-   syntax.
+   for specific replicated tables using the [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/#context)
+   and [`DROP SOURCE`](/sql/drop-source) syntax.

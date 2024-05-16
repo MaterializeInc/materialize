@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING
 import pg8000
 import requests
 import websocket
+from pg8000 import Connection
+from pg8000.exceptions import InterfaceError
 from pg8000.native import identifier
 
 import materialize.parallel_workload.database
@@ -885,6 +887,82 @@ class CommitRollbackAction(Action):
             exe.rollback()
         exe.action_run_since_last_commit_rollback = False
         return True
+
+
+class FlipFlagsAction(Action):
+    def __init__(
+        self,
+        rng: random.Random,
+        composition: Composition | None,
+    ):
+        super().__init__(rng, composition)
+
+        BOOLEAN_FLAG_VALUES = ["TRUE", "FALSE"]
+
+        self.flags_with_values: dict[str, list[str]] = dict()
+        for flag in ["catalog", "source", "snapshot", "txn"]:
+            self.flags_with_values[
+                f"persist_use_critical_since_{flag}"
+            ] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_roundtrip_spine"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values[
+            "persist_optimize_ignored_data_fetch"
+        ] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values[
+            "persist_optimize_ignored_data_decode"
+        ] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_write_diffs_sum"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values[
+            "enable_variadic_left_join_lowering"
+        ] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_use_arrow_rs_library"] = [
+            "off",
+            "read",
+            "read_and_write",
+        ]
+
+    def run(self, exe: Executor) -> bool:
+        flag_name = self.rng.choice(list(self.flags_with_values.keys()))
+        flag_value = self.rng.choice(self.flags_with_values[flag_name])
+
+        conn = None
+
+        try:
+            conn = self.create_system_connection(exe)
+            self.flip_flag(conn, flag_name, flag_value)
+            return True
+        except InterfaceError:
+            if conn is not None:
+                conn.close()
+
+            # ignore it
+            return False
+
+    def create_system_connection(
+        self, exe: Executor, num_attempts: int = 10
+    ) -> Connection:
+        try:
+            conn = pg8000.connect(
+                host=exe.db.host,
+                port=exe.db.ports["mz_system"],
+                user="mz_system",
+                database="materialize",
+            )
+            conn.autocommit = True
+            return conn
+        except:
+            if num_attempts == 0:
+                raise
+            else:
+                time.sleep(1)
+                return self.create_system_connection(exe, num_attempts - 1)
+
+    def flip_flag(self, conn: Connection, flag_name: str, flag_value: str) -> None:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"ALTER SYSTEM SET {flag_name} = {flag_value};",
+            )
 
 
 class CreateViewAction(Action):
@@ -1855,6 +1933,7 @@ read_action_list = ActionList(
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
+        (FlipFlagsAction, 2),
     ],
     autocommit=False,
 )
@@ -1864,6 +1943,7 @@ fetch_action_list = ActionList(
         (FetchAction, 30),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (ReconnectAction, 1),
+        (FlipFlagsAction, 2),
     ],
     autocommit=False,
 )
@@ -1877,6 +1957,7 @@ write_action_list = ActionList(
         (CommitRollbackAction, 10),
         (ReconnectAction, 1),
         (SourceInsertAction, 50),
+        (FlipFlagsAction, 2),
     ],
     autocommit=False,
 )
@@ -1889,6 +1970,7 @@ dml_nontrans_action_list = ActionList(
         (CommentAction, 5),
         (SetClusterAction, 1),
         (ReconnectAction, 1),
+        (FlipFlagsAction, 2),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,  # deletes can't be inside of transactions
@@ -1932,6 +2014,7 @@ ddl_action_list = ActionList(
         (RenameViewAction, 10),
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
+        (FlipFlagsAction, 2),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,

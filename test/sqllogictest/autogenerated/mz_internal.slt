@@ -116,17 +116,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  disk_bytes  uint8
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_sizes' ORDER BY position
-----
-1  size  text
-2  processes  uint8
-3  workers  uint8
-4  cpu_nano_cores  uint8
-5  memory_bytes  uint8
-6  disk_bytes  uint8
-7  credits_per_hour  numeric
-
-query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_statuses' ORDER BY position
 ----
 1  replica_id  text
@@ -242,6 +231,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  at  timestamp␠with␠time␠zone
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialized_view_refreshes' ORDER BY position
+----
+1  materialized_view_id  text
+2  last_completed_refresh  mz_timestamp
+3  next_refresh  mz_timestamp
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_dependencies' ORDER BY position
 ----
 1  object_id  text
@@ -253,8 +249,10 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 1  id  text
 2  name  text
 3  object_type  text
-4  schema_name  text
-5  database_name  text
+4  schema_id  text
+5  schema_name  text
+6  database_id  text
+7  database_name  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_lifetimes' ORDER BY position
@@ -772,7 +770,6 @@ mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
 mz_cluster_replica_history
 mz_cluster_replica_metrics
-mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
 mz_cluster_schedules
@@ -823,6 +820,7 @@ mz_internal_cluster_replicas
 mz_kafka_sources
 mz_materialization_lag
 mz_materialized_view_refresh_strategies
+mz_materialized_view_refreshes
 mz_message_batch_counts_received_raw
 mz_message_batch_counts_sent_raw
 mz_message_counts

@@ -57,6 +57,8 @@ ERROR_RE = re.compile(
     | environmentd .* unrecognized\ configuration\ parameter
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     | SUMMARY:\ .*Sanitizer
+    # for miri test summary
+    | FAIL\ \[\s*\d+\.\d+s\]
     )
     .* $
     """,
@@ -136,6 +138,7 @@ class ErrorLog:
 
 @dataclass
 class JunitError:
+    testclass: str
     testcase: str
     message: str
     text: str
@@ -230,7 +233,7 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     # Keep track of known errors so we log each only once
     already_reported_issue_numbers: set[int] = set()
 
-    def handle_error(error_message: bytes, location: str):
+    def handle_log_error(error_message: bytes, location: str):
         # Don't have too huge output, so truncate
         formatted_error_message = f"```\n{sanitize_text(truncate_str(error_message.decode('utf-8'), 10_000))}\n```"
 
@@ -270,6 +273,24 @@ def annotate_logged_errors(log_files: list[str]) -> int:
                     f"Unknown error in {location}:\n{formatted_error_message}"
                 )
 
+    def handle_junit_error(
+        error_message: str | None, details: str | None, location: str
+    ):
+        # Don't have too huge output, so truncate
+        formatted_error_message = (
+            f" `{sanitize_text(truncate_str(error_message, 1_000))}`"
+            if error_message is not None and len(error_message) > 0
+            else ""
+        )
+        formatted_error_details = (
+            f"```\n{sanitize_text(truncate_str(details, 9_000))}\n```"
+            if details is not None and len(details) > 0
+            else ""
+        )
+        unknown_errors.append(
+            f"Failure in {location}:{formatted_error_message}\n{formatted_error_details}"
+        )
+
     for error in errors:
         if isinstance(error, ErrorLog):
             for artifact in artifacts:
@@ -281,15 +302,16 @@ def annotate_logged_errors(log_files: list[str]) -> int:
             else:
                 linked_file: str = error.file
 
-            handle_error(error.match, linked_file)
-
-        else:
-            msg = "\n".join(filter(None, [error.message, error.text]))
+            handle_log_error(error.match, linked_file)
+        elif isinstance(error, JunitError):
             if "in Code Coverage" in error.text or "covered" in error.message:
+                msg = "\n".join(filter(None, [error.message, error.text]))
                 # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
                 known_errors.append(f"{error.testcase}:\n```\n{msg}\n```")
             else:
-                handle_error(msg.encode("utf-8"), error.testcase)
+                handle_junit_error(error.message, error.text, error.testcase)
+        else:
+            raise RuntimeError(f"Unexpected error type: {type(error)}")
 
     failures_on_main = get_failures_on_main()
     annotate_errors(unknown_errors, known_errors, failures_on_main)
@@ -324,30 +346,44 @@ def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError]:
         # junit_testdrive_* is excluded by this, but currently
         # not more useful than junit_mzcompose anyway
         if "junit_" in log_file_name and "junit_testdrive_" not in log_file_name:
-            xml = JUnitXml.fromfile(log_file_name)
-            for suite in xml:
-                for case in suite:
-                    for result in case.result:
-                        if not isinstance(result, Error) and not isinstance(
-                            result, Failure
-                        ):
-                            continue
-                        error_logs.append(
-                            JunitError(
-                                case.name, result.message or "", result.text or ""
-                            )
-                        )
+            error_logs.extend(_get_errors_from_junit_file(log_file_name))
         else:
-            with open(log_file_name, "r+") as f:
-                try:
-                    data: Any = mmap.mmap(f.fileno(), 0)
-                except ValueError:
-                    # empty file, ignore
-                    continue
+            error_logs.extend(_get_errors_from_log_file(log_file_name))
 
-                error_logs.extend(_collect_errors_in_logs(data, log_file_name))
-                data.seek(0)
-                error_logs.extend(_collect_service_panics_in_logs(data, log_file_name))
+    return error_logs
+
+
+def _get_errors_from_junit_file(log_file_name: str) -> list[JunitError]:
+    error_logs = []
+    xml = JUnitXml.fromfile(log_file_name)
+    for suite in xml:
+        for testcase in suite:
+            for result in testcase.result:
+                if not isinstance(result, Error) and not isinstance(result, Failure):
+                    continue
+                error_logs.append(
+                    JunitError(
+                        testcase.classname,
+                        testcase.name,
+                        result.message or "",
+                        result.text or "",
+                    )
+                )
+    return error_logs
+
+
+def _get_errors_from_log_file(log_file_name: str) -> list[ErrorLog]:
+    error_logs = []
+    with open(log_file_name, "r+") as f:
+        try:
+            data: Any = mmap.mmap(f.fileno(), 0)
+        except ValueError:
+            # empty file, ignore
+            return error_logs
+
+        error_logs.extend(_collect_errors_in_logs(data, log_file_name))
+        data.seek(0)
+        error_logs.extend(_collect_service_panics_in_logs(data, log_file_name))
 
     return error_logs
 

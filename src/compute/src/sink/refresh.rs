@@ -7,11 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::{AsCollection, Collection, Data};
-use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_ore::soft_panic_or_log;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Diff, Timestamp};
-use mz_timely_util::buffer::ConsolidateBuffer;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
@@ -35,7 +35,7 @@ where
     // like to round up frontiers as well as data: as soon as our input frontier passes a refresh
     // time, we'll round it up to the next refresh time.
     let mut builder = OperatorBuilder::new("apply_refresh".to_string(), coll.scope());
-    let (mut output_buf, output_stream) = builder.new_output();
+    let (mut output_buf, output_stream) = builder.new_output::<ConsolidatingContainerBuilder<_>>();
     let mut input = builder.new_input_connection(&coll.inner, Pipeline, vec![Antichain::new()]);
     builder.build(move |capabilities| {
         // This capability directly controls this operator's output frontier (because we have
@@ -46,7 +46,6 @@ where
         let mut buffer = Vec::new();
         move |frontiers| {
             let mut output_handle_core = output_buf.activate();
-            let mut output_buf = ConsolidateBuffer::new(&mut output_handle_core, 0);
             input.for_each(|input_cap, data| {
                 // Note that we can't use `input_cap` to get an output session because we might have
                 // advanced our output frontier already beyond the frontier of this capability.
@@ -62,6 +61,7 @@ where
                     );
                     return;
                 };
+                let mut output_buf = output_handle_core.session_with_builder(&capability);
 
                 data.swap(&mut buffer);
                 let mut cached_ts: Option<Timestamp> = None;
@@ -82,7 +82,7 @@ where
                     };
                     match rounded_up_data_ts {
                         Some(rounded_up_ts) => {
-                            output_buf.give_at(capability, (d, rounded_up_ts, r));
+                            output_buf.give((d, rounded_up_ts, r));
                         }
                         None => {
                             // This record is after the last refresh, which is not possible because

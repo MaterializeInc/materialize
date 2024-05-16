@@ -21,7 +21,7 @@ use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_ore::instrument;
-use mz_persist_client::cfg::TXN_USE_CRITICAL_SINCE;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
 use mz_persist_client::fetch::LeasedBatchPart;
 use mz_persist_client::metrics::encode_ts_metric;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
@@ -79,12 +79,13 @@ use crate::TxnsCodecDefault;
 #[derive(Debug)]
 pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     txns_id: ShardId,
-    // TODO(jkosh44) These invariants are not upheld. The current code allows us to compact this
+    // TODO(jkosh44) These first two invariants are not upheld. The current code allows us to compact this
     // cache arbitrarily ahead of the `since` of the txns shard. Either these invariants are
     // incorrect or the current code is incorrect, currently it's not clear which.
     // See https://github.com/MaterializeInc/materialize/issues/26893.
     /// Invariant: <= the minimum unapplied batch.
     /// Invariant: <= the minimum unapplied register.
+    /// Invariant: <= progress_exclusive.
     since_ts: T,
     /// The contents of this cache are updated up to, but not including, this time.
     pub(crate) progress_exclusive: T,
@@ -132,10 +133,15 @@ pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecD
 }
 
 impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState<T> {
-    pub(crate) fn new(txns_id: ShardId, since_ts: T, only_data_id: Option<ShardId>) -> Self {
+    /// Creates a new [`TxnsCacheState`] that is valid as of the beginning of
+    /// time.
+    ///
+    /// All callers should be using [`TxnsCacheState::init`] instead, since the
+    /// actual txn shard is likely compacted past the beginning of time.
+    fn new(txns_id: ShardId, only_data_id: Option<ShardId>) -> Self {
         TxnsCacheState {
             txns_id,
-            since_ts,
+            since_ts: T::minimum(),
             progress_exclusive: T::minimum(),
             next_batch_id: 0,
             unapplied_batches: BTreeMap::new(),
@@ -145,6 +151,40 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             datas_min_write_ts: BinaryHeap::new(),
             only_data_id,
         }
+    }
+
+    /// Creates and initializes a new [`TxnsCacheState`].
+    ///
+    /// `txns_read` is a [`ReadHandle`] on the txn shard.
+    pub(crate) async fn init<C: TxnsCodec>(
+        only_data_id: Option<ShardId>,
+        txns_read: ReadHandle<C::Key, C::Val, T, i64>,
+    ) -> (Self, Subscribe<C::Key, C::Val, T, i64>) {
+        let txns_id = txns_read.shard_id();
+        let as_of = txns_read.since().clone();
+        let since_ts = as_of.as_option().expect("txns shard is not closed").clone();
+        let mut txns_subscribe = txns_read
+            .subscribe(as_of)
+            .await
+            .expect("handle holds a capability");
+        let mut state = Self::new(txns_id, only_data_id.clone());
+        let mut buf = Vec::new();
+        // The cache must be updated to `since_ts` to maintain the invariant
+        // that `state.since_ts <= state.progress_exclusive`.
+        TxnsCache::<T, C>::update(
+            &mut state,
+            &mut txns_subscribe,
+            &mut buf,
+            only_data_id,
+            |progress_exclusive| progress_exclusive >= &since_ts,
+        )
+        .await;
+        // The cache must be compacted to `since_ts` because we may have fully
+        // compacted and forgotten about events earlier than the txn shard
+        // since.
+        state.compact_to(&since_ts);
+        debug_assert_eq!(state.validate(), Ok(()));
+        (state, txns_subscribe)
     }
 
     /// Returns the [ShardId] of the txns shard.
@@ -197,8 +237,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     /// of invariants maintained by this txn system. As a result, this method
     /// discovers the latest potentially unapplied write before the `as_of`.
     ///
-    /// Callers must first wait for `update_gt` with the same or later timestamp
-    /// to return. Panics otherwise.
+    /// Callers must first wait for [`TxnsCache::update_gt`] with the same or
+    /// later timestamp to return. Panics otherwise.
     pub fn data_snapshot(&self, data_id: ShardId, as_of: T) -> DataSnapshot<T> {
         self.assert_only_data_id(&data_id);
         assert!(self.progress_exclusive > as_of);
@@ -390,8 +430,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     /// attempt with the new expected upper (new retractions may have made it
     /// into the txns shard in the meantime).
     ///
-    /// Callers must first wait for `update_ge` with the same or later timestamp
-    /// to return. Panics otherwise.
+    /// Callers must first wait for [`TxnsCache::update_ge`] with the same or
+    /// later timestamp to return. Panics otherwise.
     pub(crate) fn filter_retractions<'a>(
         &'a self,
         expected_txns_upper: &T,
@@ -674,6 +714,14 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
+        // Compaction has not passed progress.
+        if self.progress_exclusive < self.since_ts {
+            return Err(format!(
+                "progress exclusive ts {:?} not past since ts {:?}",
+                self.progress_exclusive, self.since_ts
+            ));
+        }
+
         // Unapplied batches are all indexed and sorted.
         if self.batch_idx.len() != self.unapplied_batches.len() {
             return Err(format!(
@@ -763,8 +811,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         txns_write: &mut WriteHandle<C::Key, C::Val, T, i64>,
     ) -> Self {
         let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
-        let as_of = txns_read.since().clone();
-        let mut ret = Self::from_read(txns_read, as_of, None).await;
+        let mut ret = Self::from_read(txns_read, None).await;
         ret.update_gt(&init_ts).await;
         ret
     }
@@ -789,26 +836,18 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
                     shard_name: "txns".to_owned(),
                     handle_purpose: "read txns".to_owned(),
                 },
-                TXN_USE_CRITICAL_SINCE.get(client.dyncfgs()),
+                USE_CRITICAL_SINCE_TXN.get(client.dyncfgs()),
             )
             .await
             .expect("txns schema shouldn't change");
-        let as_of = txns_read.since().clone();
-        Self::from_read(txns_read, as_of, only_data_id).await
+        Self::from_read(txns_read, only_data_id).await
     }
 
     async fn from_read(
         txns_read: ReadHandle<C::Key, C::Val, T, i64>,
-        as_of: Antichain<T>,
         only_data_id: Option<ShardId>,
     ) -> Self {
-        let txns_id = txns_read.shard_id();
-        let since_ts = as_of.as_option().expect("txns shard is not closed").clone();
-        let txns_subscribe = txns_read
-            .subscribe(as_of)
-            .await
-            .expect("handle holds a capability");
-        let state = TxnsCacheState::new(txns_id, since_ts, only_data_id);
+        let (state, txns_subscribe) = TxnsCacheState::init::<C>(only_data_id, txns_read).await;
         TxnsCache {
             txns_subscribe,
             buf: Vec::new(),
@@ -819,8 +858,15 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     /// Invariant: afterward, self.progress_exclusive will be > ts
     #[instrument(level = "debug", fields(ts = ?ts))]
     pub async fn update_gt(&mut self, ts: &T) {
-        self.update(|progress_exclusive| progress_exclusive > ts)
-            .await;
+        let only_data_id = self.only_data_id.clone();
+        Self::update(
+            &mut self.state,
+            &mut self.txns_subscribe,
+            &mut self.buf,
+            only_data_id,
+            |progress_exclusive| progress_exclusive > ts,
+        )
+        .await;
         debug_assert!(&self.progress_exclusive > ts);
         debug_assert_eq!(self.validate(), Ok(()));
     }
@@ -828,42 +874,49 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     /// Invariant: afterward, self.progress_exclusive will be >= ts
     #[instrument(level = "debug", fields(ts = ?ts))]
     pub async fn update_ge(&mut self, ts: &T) {
-        self.update(|progress_exclusive| progress_exclusive >= ts)
-            .await;
+        let only_data_id = self.only_data_id.clone();
+        Self::update(
+            &mut self.state,
+            &mut self.txns_subscribe,
+            &mut self.buf,
+            only_data_id,
+            |progress_exclusive| progress_exclusive >= ts,
+        )
+        .await;
         debug_assert!(&self.progress_exclusive >= ts);
         debug_assert_eq!(self.validate(), Ok(()));
     }
 
-    async fn update<F: Fn(&T) -> bool>(&mut self, done: F) {
-        while !done(&self.progress_exclusive) {
-            let events = self.txns_subscribe.next(None).await;
+    async fn update<F: Fn(&T) -> bool>(
+        state: &mut TxnsCacheState<T>,
+        txns_subscribe: &mut Subscribe<C::Key, C::Val, T, i64>,
+        buf: &mut Vec<(TxnsEntry, T, i64)>,
+        only_data_id: Option<ShardId>,
+        done: F,
+    ) {
+        while !done(&state.progress_exclusive) {
+            let events = txns_subscribe.next(None).await;
             for event in events {
                 match event {
                     ListenEvent::Progress(frontier) => {
                         let progress = frontier
                             .into_option()
                             .expect("nothing should close the txns shard");
-                        self.state
-                            .push_entries(std::mem::take(&mut self.buf), progress);
+                        state.push_entries(std::mem::take(buf), progress);
                     }
                     ListenEvent::Updates(parts) => {
-                        Self::fetch_parts(
-                            self.only_data_id.clone(),
-                            &mut self.txns_subscribe,
-                            parts,
-                            &mut self.buf,
-                        )
-                        .await;
+                        Self::fetch_parts(only_data_id, txns_subscribe, parts, buf).await;
                     }
                 };
             }
         }
-        debug_assert_eq!(self.validate(), Ok(()));
+        debug_assert_eq!(state.validate(), Ok(()));
         debug!(
             "cache correct before {:?} len={} least_ts={:?}",
-            self.progress_exclusive,
-            self.unapplied_batches.len(),
-            self.unapplied_batches
+            state.progress_exclusive,
+            state.unapplied_batches.len(),
+            state
+                .unapplied_batches
                 .first_key_value()
                 .map(|(_, (_, _, ts))| ts),
         );
@@ -889,7 +942,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
                 part.stats()
             );
             if !should_fetch_part {
-                txns_subscribe.return_leased_part(part);
+                drop(part);
                 continue;
             }
             let part_updates = txns_subscribe.fetch_batch_part(part).await;
@@ -1147,7 +1200,7 @@ mod tests {
         // - Registrations at: [2,8], [12,13]
         // - Direct writes at: 1, 10
         // - Writes via txns at: 4, 5, 7
-        let mut c = TxnsCacheState::new(ShardId::new(), 0, None);
+        let mut c = TxnsCacheState::new(ShardId::new(), None);
 
         // empty
         assert_eq!(c.progress_exclusive, 0);
@@ -1354,7 +1407,7 @@ mod tests {
         assert_eq!(txns.txns_cache.min_unapplied_ts(), &15);
         txns.compact_to(10).await;
 
-        let txns_read = client
+        let mut txns_read = client
             .open_leased_reader(
                 txns.txns_id(),
                 Arc::new(ShardIdSchema),
@@ -1364,9 +1417,8 @@ mod tests {
             )
             .await
             .expect("txns schema shouldn't change");
-        let mut cache =
-            TxnsCache::<_, TxnsCodecDefault>::from_read(txns_read, Antichain::from_elem(10), None)
-                .await;
+        txns_read.downgrade_since(&Antichain::from_elem(10)).await;
+        let mut cache = TxnsCache::<_, TxnsCodecDefault>::from_read(txns_read, None).await;
         cache.update_gt(&15).await;
         let snap = cache.data_snapshot(d0, 12);
         assert_eq!(snap.latest_write, None);

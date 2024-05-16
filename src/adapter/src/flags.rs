@@ -43,7 +43,6 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             tcp_user_timeout: Some(config.pg_source_tcp_user_timeout()),
         },
         pg_source_snapshot_statement_timeout: config.pg_source_snapshot_statement_timeout(),
-        pg_source_wal_sender_timeout: config.pg_source_wal_sender_timeout(),
         mysql_source_timeouts: mz_mysql_util::TimeoutConfig::build(
             config.mysql_source_snapshot_max_execution_time(),
             config.mysql_source_snapshot_lock_wait_timeout(),
@@ -209,5 +208,6 @@ pub fn orchestrator_scheduling_config(config: &SystemVars) -> ServiceSchedulingC
         soften_az_affinity: config.cluster_soften_az_affinity(),
         soften_az_affinity_weight: config.cluster_soften_az_affinity_weight(),
         always_use_disk: config.cluster_always_use_disk(),
+        security_context_enabled: config.cluster_security_context_enabled(),
     }
 }

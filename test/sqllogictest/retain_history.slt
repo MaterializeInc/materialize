@@ -26,9 +26,6 @@ CREATE INDEX idx_a ON view_a (a) WITH (RETAIN HISTORY FOR '1m')
 statement ok
 CREATE VIEW view_b AS SELECT a AS b FROM view_a
 
-statement error db error: ERROR: dependent index materialize\.public\.idx_a has a RETAIN HISTORY of 60s, but must be at least 120s
-CREATE INDEX idx_b ON view_b (b) WITH (RETAIN HISTORY FOR '2m')
-
 statement ok
 CREATE INDEX idx_b ON view_b (b)
 
@@ -42,18 +39,8 @@ DROP INDEX idx_a
 statement ok
 CREATE INDEX idx_a ON view_a (a)
 
-statement error db error: ERROR: dependent index materialize\.public\.idx_a has a RETAIN HISTORY of 1s, but must be at least 120s
-CREATE INDEX idx_b ON view_b (b) WITH (RETAIN HISTORY FOR '2m')
-
 statement ok
 CREATE INDEX idx_b ON view_b (b) WITH (RETAIN HISTORY FOR '1ms')
-
-# Unitless intervals are seconds.
-statement error db error: ERROR: dependent index materialize\.public\.idx_a has a RETAIN HISTORY of 1s, but must be at least 5s
-CREATE INDEX idx_c ON view_b (b) WITH (RETAIN HISTORY FOR 5)
-
-statement error db error: ERROR: dependent index materialize\.public\.idx_a has a RETAIN HISTORY of 1s, but must be at least 300s
-ALTER INDEX idx_b SET (RETAIN HISTORY FOR '5m')
 
 statement ok
 ALTER INDEX idx_a SET (RETAIN HISTORY FOR '5m')
@@ -79,12 +66,6 @@ ORDER BY o.name
 idx_a  FOR  300000
 idx_b  FOR  180000
 idx_c  FOR  60000
-
-statement error db error: ERROR: dependent index materialize\.public\.idx_a has a RETAIN HISTORY of 300s, but must be at least 360s
-ALTER INDEX idx_b SET (RETAIN HISTORY FOR '6m')
-
-statement error db error: ERROR: dependent index materialize\.public\.idx_b has a RETAIN HISTORY of 180s, but must be at least 240s
-ALTER INDEX idx_c SET (RETAIN HISTORY FOR '4m')
 
 statement ok
 ALTER INDEX idx_a SET (RETAIN HISTORY FOR '7m')
@@ -186,9 +167,6 @@ ALTER SOURCE counter RESET (RETAIN HISTORY)
 
 statement ok
 ALTER SOURCE auction_house RESET (RETAIN HISTORY)
-
-statement error db error: ERROR: dependent index materialize\.public\.idx_c has a RETAIN HISTORY of 1s, but must be at least 240s
-ALTER INDEX idx_b RESET (RETAIN HISTORY)
 
 statement ok
 ALTER INDEX idx_c RESET (RETAIN HISTORY)

@@ -1438,6 +1438,50 @@ SELECT LIST(WITH usps AS (SELECT 42) SELECT * FROM usps)
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: ListSubquery(Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("usps"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("42")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("usps")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
+# Map subqueries
+parse-statement
+SELECT MAP[1 => a, b => 1 + 2, a || 'b' => (SELECT 1), c => LIST[4, 5]]
+----
+SELECT MAP[1 => a, b => 1 + 2, a || 'b' => (SELECT 1), c => LIST[4, 5]]
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Map([MapEntry { key: Value(Number("1")), value: Identifier([Ident("a")]) }, MapEntry { key: Identifier([Ident("b")]), value: Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) } }, MapEntry { key: Op { op: Op { namespace: None, op: "||" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("b"))) }, value: Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) }, MapEntry { key: Identifier([Ident("c")]), value: List([Value(Number("4")), Value(Number("5"))]) }]), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+# Map subqueries
+parse-statement
+SELECT MAP[]
+----
+SELECT MAP[]
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Map([]), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT MAP['a' => MAP['b' => MAP['c' => 'd', 'e' => 'f'], 'g' => h], 'i' => MAP['j' => 'k']]
+----
+SELECT MAP['a' => MAP['b' => MAP['c' => 'd', 'e' => 'f'], 'g' => h], 'i' => MAP['j' => 'k']]
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Map([MapEntry { key: Value(String("a")), value: Map([MapEntry { key: Value(String("b")), value: Map([MapEntry { key: Value(String("c")), value: Value(String("d")) }, MapEntry { key: Value(String("e")), value: Value(String("f")) }]) }, MapEntry { key: Value(String("g")), value: Identifier([Ident("h")]) }]) }, MapEntry { key: Value(String("i")), value: Map([MapEntry { key: Value(String("j")), value: Value(String("k")) }]) }]), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT MAP[1, 2]
+----
+error: Expected arrow, found comma
+SELECT MAP[1, 2]
+            ^
+
+parse-statement
+SELECT MAP[1]
+----
+error: Expected arrow, found right square bracket
+SELECT MAP[1]
+            ^
+
+parse-statement
+SELECT MAP(SELECT 2 * 10)
+----
+SELECT MAP(SELECT 2 * 10)
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: MapSubquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Op { op: Op { namespace: None, op: "*" }, expr1: Value(Number("2")), expr2: Some(Value(Number("10"))) }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
 # Array subqueries
 parse-statement
 SELECT ARRAY[1, 2, 3]

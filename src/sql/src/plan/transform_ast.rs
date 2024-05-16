@@ -613,6 +613,38 @@ impl<'a> Desugarer<'a> {
             }
         }
 
+        // When `$expr` is a `ROW` constructor, we need to desugar as described
+        // below in order to enable the row comparision expansion at the end of
+        // this function. We don't do this desugaring unconditionally (i.e.,
+        // when `$expr` is not a `ROW` constructor) because the implementation
+        // in `plan_in_list` is more efficient when row comparison expansion is
+        // not required.
+        //
+        // `$expr IN ($list)` => `$expr = $list[0] OR $expr = $list[1] ... OR $expr = $list[n]`
+        // `$expr NOT IN ($list)` => `$expr <> $list[0] AND $expr <> $list[1] ... AND $expr <> $list[n]`
+        if let Expr::InList {
+            expr: e,
+            list,
+            negated,
+        } = expr
+        {
+            if let Expr::Row { .. } = &**e {
+                if *negated {
+                    *expr = list
+                        .drain(..)
+                        .map(|r| e.clone().not_equals(r))
+                        .reduce(|e1, e2| e1.and(e2))
+                        .expect("list known to contain at least one element");
+                } else {
+                    *expr = list
+                        .drain(..)
+                        .map(|r| e.clone().equals(r))
+                        .reduce(|e1, e2| e1.or(e2))
+                        .expect("list known to contain at least one element");
+                }
+            }
+        }
+
         // `$expr IN ($subquery)` => `$expr = ANY ($subquery)`
         // `$expr NOT IN ($subquery)` => `$expr <> ALL ($subquery)`
         if let Expr::InSubquery {

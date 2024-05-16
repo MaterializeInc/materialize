@@ -3664,9 +3664,16 @@ static EMPTY_ARRAY_ROW: Lazy<Row> = Lazy::new(|| {
         .expect("array known to be valid");
     row
 });
+
 static EMPTY_LIST_ROW: Lazy<Row> = Lazy::new(|| {
     let mut row = Row::default();
     row.packer().push_list(iter::empty::<Datum>());
+    row
+});
+
+static EMPTY_MAP_ROW: Lazy<Row> = Lazy::new(|| {
+    let mut row = Row::default();
+    row.packer().push_dict(iter::empty::<(_, Datum)>());
     row
 });
 
@@ -3677,6 +3684,10 @@ impl Datum<'_> {
 
     pub fn empty_list() -> Datum<'static> {
         EMPTY_LIST_ROW.unpack_first()
+    }
+
+    pub fn empty_map() -> Datum<'static> {
+        EMPTY_MAP_ROW.unpack_first()
     }
 }
 

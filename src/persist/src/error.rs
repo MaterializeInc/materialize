@@ -98,6 +98,18 @@ impl From<arrow2::error::Error> for Error {
     }
 }
 
+impl From<parquet::errors::ParquetError> for Error {
+    fn from(e: parquet::errors::ParquetError) -> Self {
+        Error::String(e.to_string())
+    }
+}
+
+impl From<arrow::error::ArrowError> for Error {
+    fn from(e: arrow::error::ArrowError) -> Self {
+        Error::String(e.to_string())
+    }
+}
+
 impl<T> From<sync::PoisonError<T>> for Error {
     fn from(e: sync::PoisonError<T>) -> Self {
         Error::String(format!("poison: {}", e))

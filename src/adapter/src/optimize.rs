@@ -141,6 +141,7 @@ where
     /// Execute the optimization stage and panic if an error occurs.
     ///
     /// See [`Optimize::optimize`].
+    #[allow(dead_code)] // This function is never used, but it's useful to keep around.
     fn must_optimize(&mut self, expr: From) -> Self::To {
         match self.optimize(expr) {
             Ok(ok) => ok,

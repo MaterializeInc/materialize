@@ -21,7 +21,7 @@ use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Row};
+use mz_repr::{GlobalId, RowIterator};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
@@ -359,7 +359,10 @@ pub enum ExecuteResponse {
     },
     /// Like `SendingRows`, but the rows are known to be available
     /// immediately, and thus the execution is considered ended in the coordinator.
-    SendingRowsImmediate { rows: Vec<Row> },
+    SendingRowsImmediate {
+        #[derivative(Debug = "ignore")]
+        rows: Box<dyn RowIterator + Send + Sync>,
+    },
     /// The specified variable was set to a new value.
     SetVariable {
         name: String,

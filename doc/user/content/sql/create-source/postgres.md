@@ -35,6 +35,10 @@ your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
 
 {{< diagram "create-source-postgres.svg" >}}
 
+### `with_options`
+
+{{< diagram "with-options-retain-history.svg" >}}
+
 Field | Use
 ------|-----
 _src_name_  | The name for the source.
@@ -45,6 +49,7 @@ _src_name_  | The name for the source.
 **FOR SCHEMAS (** _schema_list_ **)** | Create subsources for specific schemas in the publication.
 **FOR TABLES (** _table_list_ **)** | Create subsources for specific tables in the publication.
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
+**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 ### `CONNECTION` options
 
@@ -210,7 +215,7 @@ the table and, unfortunately, is wholly unaware that this occurred.
 
 To mitigate this issue, if you need to drop and re-add a table to a publication,
 ensure that you remove the table/subsource from the source _before_ re-adding it
-(i.e. [`ALTER SOURCE...DROP SUBSOURCE`](/sql/alter-source/#context)).
+using the [`DROP SOURCE`](/sql/drop-source/) command.
 
 ##### Supported types
 
@@ -429,16 +434,16 @@ CREATE SOURCE mz_source
 ### Adding/dropping tables to/from a source
 
 To handle upstream [schema changes](#schema-changes), use the
-[`ALTER SOURCE...DROP SUBSOURCE`](/sql/alter-source/#context) syntax to drop
-the affected subsource, and then `ALTER SOURCE...ADD SUBSOURCE` to add the
-subsource back to the source.
+[`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
+subsource, and then `ALTER SOURCE...ADD SUBSOURCE` to add the subsource back to
+the source.
 
 ```sql
 -- List all subsources in mz_source
 SHOW SUBSOURCES ON mz_source;
 
 -- Get rid of an outdated or errored subsource
-ALTER SOURCE mz_source DROP SUBSOURCE table_1;
+DROP SOURCE table_1;
 
 -- Start ingesting the table with the updated schema or fix
 ALTER SOURCE mz_source ADD SUBSOURCE table_1;

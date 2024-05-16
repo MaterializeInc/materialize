@@ -85,11 +85,11 @@ phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.4" }
-proc-macro2 = { version = "1.0.69", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.82", features = ["span-locations"] }
 prost = { version = "0.11.9", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.11.4", default-features = false, features = ["serde"] }
 prost-types = { version = "0.11.9" }
-quote = { version = "1.0.28" }
+quote = { version = "1.0.36" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
@@ -108,7 +108,7 @@ smallvec = { version = "1.10.0", default-features = false, features = ["const_ge
 socket2 = { version = "0.5.3", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
-syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.39", features = ["extra-traits", "full", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.63", features = ["extra-traits", "full", "visit-mut"] }
 textwrap = { version = "0.16.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 tokio = { version = "1.32.0", features = ["full", "stats", "test-util", "tracing"] }
@@ -124,6 +124,7 @@ tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tungstenite = { version = "0.20.1" }
+twox-hash = { version = "1.6.3" }
 uncased = { version = "0.9.7" }
 unicode-bidi = { version = "0.3.15" }
 unicode-normalization = { version = "0.1.23" }
@@ -207,11 +208,11 @@ phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.4" }
-proc-macro2 = { version = "1.0.69", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.82", features = ["span-locations"] }
 prost = { version = "0.11.9", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.11.4", default-features = false, features = ["serde"] }
 prost-types = { version = "0.11.9" }
-quote = { version = "1.0.28" }
+quote = { version = "1.0.36" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
@@ -230,7 +231,7 @@ smallvec = { version = "1.10.0", default-features = false, features = ["const_ge
 socket2 = { version = "0.5.3", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
-syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.39", features = ["extra-traits", "full", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.63", features = ["extra-traits", "full", "visit-mut"] }
 textwrap = { version = "0.16.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
@@ -247,6 +248,7 @@ tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tungstenite = { version = "0.20.1" }
+twox-hash = { version = "1.6.3" }
 uncased = { version = "0.9.7" }
 unicode-bidi = { version = "0.3.15" }
 unicode-normalization = { version = "0.1.23" }
@@ -262,14 +264,12 @@ bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
 ring = { version = "0.17.7", features = ["std"] }
-tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
 ring = { version = "0.17.7", features = ["std"] }
-tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-apple-darwin.dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }

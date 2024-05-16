@@ -16,7 +16,7 @@ use mz_compute_client::controller::error::{
 use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{halt, soft_assert_no_log};
-use mz_repr::{RelationDesc, Row, ScalarType};
+use mz_repr::{RelationDesc, RowIterator, ScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
 use mz_sql::session::metadata::SessionMetadata;
@@ -448,31 +448,41 @@ pub(crate) fn viewable_variables<'a>(
         })
 }
 
-/// Verify that the row datums match the expected desc.
-pub fn verify_datum_desc(desc: &RelationDesc, rows: &[Row]) -> Result<(), AdapterError> {
+/// Verify that the rows in [`RowIterator`] match the expected [`RelationDesc`].
+pub fn verify_datum_desc(
+    desc: &RelationDesc,
+    rows: &mut dyn RowIterator,
+) -> Result<(), AdapterError> {
     // Verify the first row is of the expected type. This is often good enough to
-    // find problems. Notably it failed to find #6304 when "FETCH 2" was used in a
-    // test, instead we had to use "FETCH 1" twice.
-    if let [row, ..] = rows {
-        let datums = row.unpack();
-        let col_types = &desc.typ().column_types;
-        if datums.len() != col_types.len() {
+    // find problems.
+    //
+    // Notably it failed to find #6304 when "FETCH 2" was used in a test, instead
+    // we had to use "FETCH 1" twice.
+
+    let Some(row) = rows.peek() else {
+        return Ok(());
+    };
+
+    let datums = row.unpack();
+    let col_types = &desc.typ().column_types;
+    if datums.len() != col_types.len() {
+        let msg = format!(
+            "internal error: row descriptor has {} columns but row has {} columns",
+            col_types.len(),
+            datums.len(),
+        );
+        return Err(AdapterError::Internal(msg));
+    }
+
+    for (i, (d, t)) in datums.iter().zip(col_types).enumerate() {
+        if !d.is_instance_of(t) {
             let msg = format!(
-                "internal error: row descriptor has {} columns but row has {} columns",
-                col_types.len(),
-                datums.len(),
+                "internal error: column {} is not of expected type {:?}: {:?}",
+                i, t, d
             );
             return Err(AdapterError::Internal(msg));
         }
-        for (i, (d, t)) in datums.iter().zip(col_types).enumerate() {
-            if !d.is_instance_of(t) {
-                let msg = format!(
-                    "internal error: column {} is not of expected type {:?}: {:?}",
-                    i, t, d
-                );
-                return Err(AdapterError::Internal(msg));
-            }
-        }
     }
+
     Ok(())
 }

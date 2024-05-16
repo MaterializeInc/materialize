@@ -22,7 +22,6 @@ use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_
 use mz_controller_types::{
     is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
 };
-use mz_expr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
@@ -34,6 +33,7 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
 use mz_repr::optimize::OptimizerFeatureOverrides;
+use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType, Timestamp,
@@ -106,7 +106,7 @@ use crate::catalog::{
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
     Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
-    RawDatabaseSpecifier, ResolvedClusterName, ResolvedColumnName, ResolvedDataType,
+    RawDatabaseSpecifier, ResolvedClusterName, ResolvedColumnReference, ResolvedDataType,
     ResolvedDatabaseSpecifier, ResolvedItemName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize::{self, ident};
@@ -2835,10 +2835,9 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
                     })?)
                     .map_err(better_error)?;
                     let key = match doc_on.identifier {
-                        DocOnIdentifier::Column(ResolvedColumnName::Column {
+                        DocOnIdentifier::Column(ast::ColumnName {
                             relation: ResolvedItemName::Item { id, .. },
-                            name,
-                            index: _,
+                            column: ResolvedColumnReference::Column { name, index: _ },
                         }) => DocTarget::Field {
                             object_id: id,
                             column_name: name,
@@ -3927,7 +3926,6 @@ pub fn plan_create_connection(
         if_not_exists,
         with_options,
     } = stmt;
-
     let connection_options_extracted = connection::ConnectionOptionExtracted::try_from(values)?;
     let connection = connection_options_extracted.try_into_connection(scx, connection_type)?;
     if let Connection::Aws(_) = &connection {

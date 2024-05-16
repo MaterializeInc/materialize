@@ -1,0 +1,43 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Disable persist inline writes so we get hollow parts with diffs_sum below
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_inline_writes_single_max_bytes = 0
+----
+COMPLETE 0
+
+# Create a one batch shard with a `SourceData(Err(_))` in it and an empty upper.
+# This guarantees that the query timestamp of the select is within our one
+# batch.
+statement ok
+CREATE MATERIALIZED VIEW foo AS (VALUES (1/0));
+
+# Make sure we get the error even if we project away all columns.
+query error division by zero
+SELECT count(*) FROM foo;
+
+# Create another shard with an error in it, and then some batch with no error
+# past it. This means we should have a batch with an error that is entirely
+# before the query timestamp of the select below.
+statement ok
+CREATE TABLE bar (a INT);
+
+statement ok
+INSERT INTO bar VALUES (0);
+
+statement ok
+CREATE MATERIALIZED VIEW baz AS SELECT 1/a FROM bar;
+
+statement ok
+INSERT INTO bar VALUES (1);
+
+# Make sure we get the error even if we project away all columns.
+query error division by zero
+SELECT count(*) FROM baz;

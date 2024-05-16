@@ -315,6 +315,22 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             )
             .await?;
 
+            mz_ore::soft_assert_no_log! {{
+                let row = simple_query_opt(&client, "SHOW statement_timeout;")
+                    .await?
+                    .unwrap();
+                let timeout = row.get("statement_timeout").unwrap().to_owned(
+                );
+
+                // This only needs to be compatible for values we test; doesn't
+                // need to generalize all possible interval/duration mappings.
+                mz_repr::adt::interval::Interval::from_str(&timeout)
+                    .map(|i| i.duration())
+                    .unwrap()
+                    .unwrap()
+                    == config.config.parameters.pg_source_snapshot_statement_timeout
+            }, "SET statement_timeout in PG snapshot did not take effect"};
+
             let (snapshot, snapshot_lsn) = loop {
                 match snapshot_input.next().await {
                     Some(AsyncEvent::Data(_, mut data)) => {
@@ -332,14 +348,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 trace!(%id, "timely-{worker_id} using snapshot id {snapshot:?}");
                 use_snapshot(&client, &snapshot).await?;
             }
-
-            // We have established a snapshot LSN so we can broadcast the rewind requests
-            for &oid in reader_snapshot_table_info.keys() {
-                trace!(%id, "timely-{worker_id} producing rewind request for {oid}");
-                let req = RewindRequest { oid, snapshot_lsn };
-                rewinds_handle.give(&rewind_cap_set[0], req).await;
-            }
-            *rewind_cap_set = CapabilitySet::new();
 
             let upstream_info = match mz_postgres_util::publication_info(
                 &config.config.connection_context.ssh_tunnel_manager,
@@ -451,6 +459,19 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     }
                 }
             }
+
+            // We are done with the snapshot so now we will emit rewind requests. It is important
+            // that this happens after the snapshot has finished because this is what unblocks the
+            // replication operator and we want this to happen serially. It might seem like a good
+            // idea to read the replication stream concurrently with the snapshot but it actually
+            // leads to a lot of data being staged for the future, which needlesly consumed memory
+            // in the cluster.
+            for &oid in reader_snapshot_table_info.keys() {
+                trace!(%id, "timely-{worker_id} producing rewind request for {oid}");
+                let req = RewindRequest { oid, snapshot_lsn };
+                rewinds_handle.give(&rewind_cap_set[0], req).await;
+            }
+            *rewind_cap_set = CapabilitySet::new();
 
             if snapshot_staged < snapshot_total {
                 error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow
@@ -568,27 +589,6 @@ async fn set_statement_timeout(client: &Client, timeout: Duration) -> Result<(),
     client
         .simple_query(&format!("SET statement_timeout = {}", timeout.as_millis()))
         .await?;
-
-    mz_ore::soft_assert_or_log! {
-        {
-            let row = simple_query_opt(client, "SHOW statement_timeout;")
-                .await?
-                .unwrap();
-            let session_timeout = row.get("statement_timeout").unwrap().to_owned();
-
-            // This only needs to be compatible for values we test; doesn't need to
-            // generalize all possible interval/duration mappings. This is also
-            // possible to fool if the value is set to the out-of-the-box default,
-            // so we have to ensure that our tests use a distinct value.
-            mz_repr::adt::interval::Interval::from_str(&session_timeout)
-                .map(|i| i.duration())
-                .unwrap()
-                .unwrap()
-                == timeout
-        },
-        "SET statement_timeout in PG snapshot did not take effect"
-    };
-
     Ok(())
 }
 

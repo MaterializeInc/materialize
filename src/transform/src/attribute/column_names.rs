@@ -191,7 +191,7 @@ impl<'c> ColumnNames<'c> {
                 for (i, mut column_name) in base_results.iter().cloned().enumerate() {
                     for input_results in inputs_results.iter() {
                         if column_name.is_empty() && !input_results[i].is_empty() {
-                            column_name = input_results[i].clone();
+                            column_name.clone_from(&input_results[i]);
                             break;
                         }
                     }

@@ -59,6 +59,7 @@ pub mod critical;
 pub mod error;
 pub mod fetch;
 pub mod internals_bench;
+pub mod iter;
 pub mod metrics {
     //! Utilities related to metrics.
     pub use crate::internal::metrics::{
@@ -104,7 +105,7 @@ pub mod operators {
         operator before yielding.",
     );
 }
-pub mod iter;
+pub mod project;
 pub mod read;
 pub mod rpc;
 pub mod stats;
@@ -185,7 +186,7 @@ impl Diagnostics {
 /// # let diagnostics = mz_persist_client::Diagnostics { shard_name: "".into(), handle_purpose: "".into() };
 /// # async {
 /// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id,
-///     Arc::new(StringSchema),Arc::new(StringSchema),diagnostics)).await
+///     Arc::new(StringSchema),Arc::new(StringSchema),diagnostics, true)).await
 /// # };
 /// ```
 #[derive(Debug, Clone)]
@@ -296,6 +297,7 @@ impl PersistClient {
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
         diagnostics: Diagnostics,
+        use_critical_since: bool,
     ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -311,8 +313,14 @@ impl PersistClient {
                 diagnostics.clone(),
             )
             .await?,
-            self.open_leased_reader(shard_id, key_schema, val_schema, diagnostics, false)
-                .await?,
+            self.open_leased_reader(
+                shard_id,
+                key_schema,
+                val_schema,
+                diagnostics,
+                use_critical_since,
+            )
+            .await?,
         ))
     }
 
@@ -645,6 +653,7 @@ impl PersistClient {
             Arc::new(K::Schema::default()),
             Arc::new(V::Schema::default()),
             Diagnostics::for_tests(),
+            true,
         )
         .await
         .expect("codec mismatch")
@@ -835,7 +844,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
-                false,
+                true,
             )
             .await
             .expect("codec mismatch");
@@ -845,7 +854,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
-                false,
+                true,
             )
             .await
             .expect("codec mismatch");
@@ -907,6 +916,7 @@ mod tests {
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
+                        true,
                     )
                     .await
                     .unwrap_err(),
@@ -922,6 +932,7 @@ mod tests {
                         Arc::new(StringSchema),
                         Arc::new(VecU8Schema),
                         Diagnostics::for_tests(),
+                        true,
                     )
                     .await
                     .unwrap_err(),
@@ -937,6 +948,7 @@ mod tests {
                         Arc::new(StringSchema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
+                        true,
                     )
                     .await
                     .unwrap_err(),
@@ -952,6 +964,7 @@ mod tests {
                         Arc::new(StringSchema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
+                        true,
                     )
                     .await
                     .unwrap_err(),
@@ -971,7 +984,7 @@ mod tests {
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
-                        false,
+                        true,
                     )
                     .await
                     .unwrap_err(),
@@ -1017,7 +1030,6 @@ mod tests {
                 .await;
             for batch in snap {
                 let res = fetcher1.fetch_leased_part(&batch).await;
-                read0.process_returned_leased_part(batch);
                 assert_eq!(
                     res.unwrap_err(),
                     InvalidUsage::BatchNotFromThisShard {
@@ -1775,6 +1787,123 @@ mod tests {
         // Verify that heartbeating doesn't panic.
         read.last_heartbeat = 0;
         read.maybe_heartbeat_reader().await;
+    }
+
+    /// Verify that shard finalization works with empty shards, shards that have
+    /// an empty write up to the empty upper Antichain.
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn finalize_empty_shard(dyncfgs: ConfigUpdates) {
+        const EMPTY: &[(((), ()), u64, i64)] = &[];
+        let persist_client = new_test_client(&dyncfgs).await;
+
+        let shard_id = ShardId::new();
+        pub const CRITICAL_SINCE: CriticalReaderId =
+            CriticalReaderId([0, 0, 0, 0, 17, 17, 34, 34, 51, 51, 68, 68, 68, 68, 68, 68]);
+
+        let (mut write, mut read) = persist_client
+            .expect_open::<(), (), u64, i64>(shard_id)
+            .await;
+
+        // Advance since and upper to empty, which is a pre-requisite for
+        // finalization/tombstoning.
+        let () = read.downgrade_since(&Antichain::new()).await;
+        let () = write
+            .compare_and_append(EMPTY, Antichain::from_elem(0), Antichain::new())
+            .await
+            .expect("usage should be valid")
+            .expect("upper should match");
+
+        let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
+            .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
+            .await
+            .expect("invalid persist usage");
+
+        let epoch = since_handle.opaque().clone();
+        let new_since = Antichain::new();
+        let downgrade = since_handle
+            .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+            .await;
+
+        assert!(
+            downgrade.is_ok(),
+            "downgrade of critical handle must succeed"
+        );
+
+        let finalize = persist_client
+            .finalize_shard::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await;
+
+        assert!(finalize.is_ok(), "finalization must succeed");
+
+        let is_finalized = persist_client
+            .is_finalized::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("invalid persist usage");
+        assert!(is_finalized, "shard must still be finalized");
+    }
+
+    /// Verify that shard finalization works with shards that had some data
+    /// written to them, plus then an empty batch to bring their upper to the
+    /// empty Antichain.
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn finalize_shard(dyncfgs: ConfigUpdates) {
+        const EMPTY: &[(((), ()), u64, i64)] = &[];
+        const DATA: &[(((), ()), u64, i64)] = &[(((), ()), 0, 1)];
+        let persist_client = new_test_client(&dyncfgs).await;
+
+        let shard_id = ShardId::new();
+        pub const CRITICAL_SINCE: CriticalReaderId =
+            CriticalReaderId([0, 0, 0, 0, 17, 17, 34, 34, 51, 51, 68, 68, 68, 68, 68, 68]);
+
+        let (mut write, mut read) = persist_client
+            .expect_open::<(), (), u64, i64>(shard_id)
+            .await;
+
+        // Write some data.
+        let () = write
+            .compare_and_append(DATA, Antichain::from_elem(0), Antichain::from_elem(1))
+            .await
+            .expect("usage should be valid")
+            .expect("upper should match");
+
+        // Advance since and upper to empty, which is a pre-requisite for
+        // finalization/tombstoning.
+        let () = read.downgrade_since(&Antichain::new()).await;
+        let () = write
+            .compare_and_append(EMPTY, Antichain::from_elem(1), Antichain::new())
+            .await
+            .expect("usage should be valid")
+            .expect("upper should match");
+
+        let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
+            .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
+            .await
+            .expect("invalid persist usage");
+
+        let epoch = since_handle.opaque().clone();
+        let new_since = Antichain::new();
+        let downgrade = since_handle
+            .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+            .await;
+
+        assert!(
+            downgrade.is_ok(),
+            "downgrade of critical handle must succeed"
+        );
+
+        let finalize = persist_client
+            .finalize_shard::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await;
+
+        assert!(finalize.is_ok(), "finalization must succeed");
+
+        let is_finalized = persist_client
+            .is_finalized::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("invalid persist usage");
+        assert!(is_finalized, "shard must still be finalized");
     }
 
     proptest! {

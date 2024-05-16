@@ -74,3 +74,8 @@ query T
 SELECT 1::mz_catalog.mz_timestamp
 ----
 1
+
+query T
+SELECT '1 hour'::interval::mz_timestamp
+----
+3600000

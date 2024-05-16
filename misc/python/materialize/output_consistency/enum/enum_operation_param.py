@@ -17,6 +17,8 @@ from materialize.output_consistency.expression.expression_characteristics import
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
 
+_INDEX_OF_NULL_VALUE = 0
+
 
 class EnumConstantOperationParam(OperationParam):
     def __init__(
@@ -24,6 +26,7 @@ class EnumConstantOperationParam(OperationParam):
         values: list[str],
         add_quotes: bool,
         add_invalid_value: bool = True,
+        add_null_value: bool = True,
         optional: bool = False,
         invalid_value: str = "invalid_value_123",
     ):
@@ -42,9 +45,17 @@ class EnumConstantOperationParam(OperationParam):
         else:
             self.invalid_value = None
 
+        self.add_null_value = add_null_value
+        if add_null_value:
+            # NULL value must be at the beginning
+            self.values.insert(
+                _INDEX_OF_NULL_VALUE,
+                "NULL",
+            )
+
         self.add_quotes = add_quotes
         self.characteristics_per_index: list[set[ExpressionCharacteristics]] = [
-            set() for _ in values
+            set() for _ in self.values
         ]
 
     def supports_type(
@@ -58,10 +69,17 @@ class EnumConstantOperationParam(OperationParam):
         ), f"Index {index} out of range in list with {len(self.values)} values: {self.values}"
         value = self.values[index]
         characteristics = self.characteristics_per_index[index]
-        return EnumConstant(value, self.add_quotes, characteristics)
+
+        quote_value = self.add_quotes
+        if self.add_null_value and index == 0:
+            quote_value = False
+
+        return EnumConstant(value, quote_value, characteristics)
 
     def get_valid_values(self) -> list[str]:
-        if self.invalid_value is None:
-            return self.values
-
-        return [value for value in self.values if value != self.invalid_value]
+        return [
+            value
+            for index, value in enumerate(self.values)
+            if value != self.invalid_value
+            and (index != _INDEX_OF_NULL_VALUE or not self.add_null_value)
+        ]

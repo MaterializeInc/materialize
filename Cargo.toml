@@ -3,6 +3,7 @@ members = [
     "src/adapter",
     "src/adapter-types",
     "src/alloc",
+    "src/alloc-default",
     "src/arrow-util",
     "src/audit-log",
     "src/avro",
@@ -138,7 +139,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.77.0"
+rust-version = "1.78.0"
 
 [profile.dev]
 split-debuginfo = "unpacked"

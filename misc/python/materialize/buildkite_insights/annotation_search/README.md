@@ -22,7 +22,9 @@ usage: buildkite-annotation-search [-h]
 ### Authentication
 
 You will need an environment variable called `BUILDKITE_TOKEN`, which contains a Buildkite token. Such a token can be
-created on https://buildkite.com/user/api-access-tokens/new and will require at least `read_builds`.
+created on https://buildkite.com/user/api-access-tokens/new.
+This tool will need:
+* `read_builds`
 
 ## Examples
 

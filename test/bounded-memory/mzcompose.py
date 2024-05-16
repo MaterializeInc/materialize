@@ -463,29 +463,28 @@ SCENARIOS = [
             [
                 dedent(
                     f"""
-                    INSERT INTO t1 (f3) SELECT CONCAT('{i}', REPEAT('a', {PAD_LEN})) FROM series_helper LIMIT {int(REPEAT / 24)};
+                    INSERT INTO t1 (f3) SELECT CONCAT('{i}', REPEAT('a', {PAD_LEN})) FROM series_helper LIMIT {int(REPEAT / 128)};
                     """
                 )
-                for i in range(0, ITERATIONS * 20)
+                for i in range(0, ITERATIONS * 10)
             ]
         )
         + "COMMIT;\n"
         + dedent(
             f"""
-            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20) * int(REPEAT / 24)} */
-            {int(ITERATIONS * 20) * int(REPEAT / 24)}
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
+            {int(ITERATIONS * 10) * int(REPEAT / 128)}
             """
         ),
         post_restart=dedent(
             f"""
             # We do not do DELETE post-restart, as it will cause OOM for clusterd
-            > SELECT * FROM v1; /* expect {int(ITERATIONS * 20) * int(REPEAT / 24)} */
-            {int(ITERATIONS * 20) * int(REPEAT / 24)}
+            > SELECT * FROM v1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
+            {int(ITERATIONS * 10) * int(REPEAT / 128)}
             """
         ),
-        materialized_memory="4.5Gb",
-        clusterd_memory="8.0Gb",
-        disabled=True,
+        materialized_memory="3.5Gb",
+        clusterd_memory="8.5Gb",
     ),
     KafkaScenario(
         name="upsert-snapshot",
@@ -904,6 +903,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             print(f"+++ Scenario {scenario.name} is disabled, skipping.")
             continue
 
+        c.override_current_testcase_name(f"Scenario '{scenario.name}'")
+
         if args.find_minimal_memory:
             print(f"+++ Starting memory search for scenario {scenario.name}")
 
@@ -1023,10 +1024,12 @@ def find_minimal_memory(
     reduce_materialized_memory_by_gb: float,
     reduce_clusterd_memory_by_gb: float,
 ) -> tuple[str, str]:
-    assert reduce_materialized_memory_by_gb > 0 or reduce_clusterd_memory_by_gb > 0
+    assert (
+        reduce_materialized_memory_by_gb >= 0.1 or reduce_clusterd_memory_by_gb >= 0.1
+    )
 
-    min_allowed_materialized_memory_in_gb = 4.5
-    min_allowed_clusterd_memory_in_gb = 3.5
+    min_allowed_materialized_memory_in_gb = 4.0
+    min_allowed_clusterd_memory_in_gb = 2.0
 
     materialized_memory = initial_materialized_memory
     clusterd_memory = initial_clusterd_memory
@@ -1126,13 +1129,16 @@ def _reduce_memory(
         raise RuntimeError(f"Unsupported memory specification: {memory_spec}")
 
     if math.isclose(reduce_by_gb, 0.0, abs_tol=0.01):
+        # allow staying at the same value
         return memory_spec
 
     current_gb = float(memory_spec.removesuffix("Gb"))
-    new_gb = current_gb - reduce_by_gb
 
-    if new_gb == lower_bound_in_gb:
+    if math.isclose(current_gb, lower_bound_in_gb, abs_tol=0.01):
+        # lower bound already reached
         return None
+
+    new_gb = current_gb - reduce_by_gb
 
     if new_gb < lower_bound_in_gb:
         new_gb = lower_bound_in_gb

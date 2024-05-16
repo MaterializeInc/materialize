@@ -20,6 +20,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use mz_ore::task::RuntimeExt;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
+use mz_persist::metrics::ColumnarMetrics;
 use mz_persist::workload::{self, DataGenerator};
 use mz_persist_client::internals_bench::trace_push_batch_one_iter;
 use mz_persist_client::ShardId;
@@ -189,6 +190,7 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
         g.throughput(Throughput::Bytes(data.goodput_bytes()));
     }
 
+    let metrics = ColumnarMetrics::disconnected();
     let trace = BlobTraceBatchPart {
         desc: Description::new(
             Antichain::from_elem(0u64),
@@ -203,7 +205,7 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
         b.iter(|| {
             // Intentionally alloc a new buf each iter.
             let mut buf = Vec::new();
-            trace.encode(&mut buf);
+            trace.encode(&mut buf, &metrics);
         })
     });
 }

@@ -38,7 +38,7 @@ use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
     CompactScalars, IndexUsageType, Indices, PlanRenderingContext, UsedIndexes,
 };
-use mz_repr::{Diff, GlobalId, RelationType, Row};
+use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowCollection, RowIterator};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
@@ -67,9 +67,9 @@ pub(crate) struct PendingPeek {
 ///
 /// Note that each `Peek` expects to generate exactly one `PeekResponse`, i.e.
 /// we expect a 1:1 contract between `Peek` and `PeekResponseUnary`.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug)]
 pub enum PeekResponseUnary {
-    Rows(Vec<Row>),
+    Rows(Box<dyn RowIterator + Send + Sync>),
     Error(String),
     Canceled,
 }
@@ -442,6 +442,7 @@ impl crate::coord::Coordinator {
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         max_result_size: u64,
+        max_returned_query_size: Option<u64>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         let PlannedPeek {
             plan: fast_path,
@@ -478,23 +479,26 @@ impl crate::coord::Coordinator {
                     ));
                 }
             }
-            let results = finishing.finish(results, max_result_size);
-            let (ret, reason) = match results {
-                Ok(rows) => {
-                    let rows_returned = u64::cast_from(rows.len());
-                    (
-                        Ok(Self::send_immediate_rows(rows)),
-                        StatementEndedExecutionReason::Success {
-                            rows_returned: Some(rows_returned),
-                            execution_strategy: Some(StatementExecutionStrategy::Constant),
-                        },
-                    )
-                }
-                Err(error) => (
-                    Err(AdapterError::ResultSize(error.clone())),
-                    StatementEndedExecutionReason::Errored { error },
-                ),
-            };
+            let row_collection = RowCollection::new(&results);
+            let row_count = row_collection.count();
+
+            let (ret, reason) =
+                match finishing.finish(row_collection, max_result_size, max_returned_query_size) {
+                    Ok(rows) => {
+                        let rows_returned = u64::cast_from(row_count);
+                        (
+                            Ok(Self::send_immediate_rows(rows)),
+                            StatementEndedExecutionReason::Success {
+                                rows_returned: Some(rows_returned),
+                                execution_strategy: Some(StatementExecutionStrategy::Constant),
+                            },
+                        )
+                    }
+                    Err(error) => (
+                        Err(AdapterError::ResultSize(error.clone())),
+                        StatementEndedExecutionReason::Errored { error },
+                    ),
+                };
             self.retire_execution(reason, std::mem::take(ctx_extra));
             return ret;
         }
@@ -635,10 +639,12 @@ impl crate::coord::Coordinator {
         let rows_rx = rows_rx.map_ok_or_else(
             |e| PeekResponseUnary::Error(e.to_string()),
             move |resp| match resp {
-                PeekResponse::Rows(rows) => match finishing.finish(rows, max_result_size) {
-                    Ok(rows) => PeekResponseUnary::Rows(rows),
-                    Err(e) => PeekResponseUnary::Error(e),
-                },
+                PeekResponse::Rows(rows) => {
+                    match finishing.finish(rows, max_result_size, max_returned_query_size) {
+                        Ok(rows) => PeekResponseUnary::Rows(Box::new(rows)),
+                        Err(e) => PeekResponseUnary::Error(e),
+                    }
+                }
                 PeekResponse::Canceled => PeekResponseUnary::Canceled,
                 PeekResponse::Error(e) => PeekResponseUnary::Error(e),
             },
@@ -708,17 +714,14 @@ impl crate::coord::Coordinator {
         }) = self.remove_pending_peek(&uuid)
         {
             let reason = match &response {
-                PeekResponse::Rows(r) => {
-                    let rows_returned: u64 = r.iter().map(|(_, n)| u64::cast_from(n.get())).sum();
-                    StatementEndedExecutionReason::Success {
-                        rows_returned: Some(rows_returned),
-                        execution_strategy: Some(if is_fast_path {
-                            StatementExecutionStrategy::FastPath
-                        } else {
-                            StatementExecutionStrategy::Standard
-                        }),
-                    }
-                }
+                PeekResponse::Rows(r) => StatementEndedExecutionReason::Success {
+                    rows_returned: Some(u64::cast_from(r.count())),
+                    execution_strategy: Some(if is_fast_path {
+                        StatementExecutionStrategy::FastPath
+                    } else {
+                        StatementExecutionStrategy::Standard
+                    }),
+                },
                 PeekResponse::Error(e) => {
                     StatementEndedExecutionReason::Errored { error: e.clone() }
                 }
@@ -753,7 +756,12 @@ impl crate::coord::Coordinator {
     /// Constructs an [`ExecuteResponse`] that that will send some rows to the
     /// client immediately, as opposed to asking the dataflow layer to send along
     /// the rows after some computation.
-    pub(crate) fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
+    pub(crate) fn send_immediate_rows<I>(rows: I) -> ExecuteResponse
+    where
+        I: IntoRowIterator,
+        I::Iter: Send + Sync + 'static,
+    {
+        let rows = Box::new(rows.into_row_iter());
         ExecuteResponse::SendingRowsImmediate { rows }
     }
 }

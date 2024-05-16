@@ -30,6 +30,7 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use regex::Regex;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Map, Operator};
 use timely::dataflow::{Scope, Stream};
@@ -440,7 +441,7 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
 
     let mut builder = AsyncOperatorBuilder::new(op_name, input.scope());
 
-    let (mut output_handle, output) = builder.new_output();
+    let (mut output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut input = builder.new_input_for(&input.inner, Exchange::new(dist), &output_handle);
 
     let (_, transient_errors) = builder.build_fallible(move |caps| {

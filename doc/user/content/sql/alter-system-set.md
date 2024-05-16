@@ -23,6 +23,11 @@ _value_                 | The value to assign to the configuration parameter.
 
 {{% configuration-parameters %}}
 
+## Privileges
+
+[_Superuser_ privileges](/manage/access-control/#account-management) are required to execute
+this statement.
+
 ## Examples
 
 ### Enable RBAC

@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::{Capability, InputCapability, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
@@ -141,6 +141,7 @@ impl<H: Digest> Hasher for DigestHasher<H> {
 }
 
 use std::convert::Infallible;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 
 use self::types::ValueMetadata;
@@ -205,7 +206,7 @@ pub(crate) fn upsert<G: Scope, FromTime>(
 )
 where
     G::Timestamp: TotalOrder,
-    FromTime: timely::ExchangeData + Ord,
+    FromTime: Timestamp,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(
         source_config.id,
@@ -234,6 +235,8 @@ where
             .parameters
             .shrink_upsert_unused_buffers_by_ratio,
     };
+
+    let thin_input = upsert_thinning(input);
 
     if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
         let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
@@ -268,7 +271,7 @@ where
 
         if allow_auto_spill {
             upsert_inner(
-                input,
+                &thin_input,
                 upsert_envelope.key_indices,
                 resume_upper,
                 previous,
@@ -295,7 +298,7 @@ where
             )
         } else {
             upsert_inner(
-                input,
+                &thin_input,
                 upsert_envelope.key_indices,
                 resume_upper,
                 previous,
@@ -306,16 +309,17 @@ where
                     rocksdb::RocksDB::new(
                         mz_rocksdb::RocksDBInstance::new(
                             &rocksdb_dir,
-                            mz_rocksdb::InstanceOptions::defaults_with_env(
+                            mz_rocksdb::InstanceOptions::<_, _, mz_rocksdb::StubMergeOperator<_>>::new(
                                 env,
                                 rocksdb_cleanup_tries,
+                                None,
+                                // For now, just use the same config as the one used for
+                                // merging snapshots.
+                                upsert_bincode_opts(),
                             ),
                             tuning,
                             rocksdb_shared_metrics,
                             rocksdb_instance_metrics,
-                            // For now, just use the same config as the one used for
-                            // merging snapshots.
-                            upsert_bincode_opts(),
                         )
                         .await
                         .unwrap(),
@@ -333,7 +337,7 @@ where
             source_config.id
         );
         upsert_inner(
-            input,
+            &thin_input,
             upsert_envelope.key_indices,
             resume_upper,
             previous,
@@ -346,6 +350,68 @@ where
             snapshot_buffering_max,
         )
     }
+}
+
+/// Renders an operator that discards updates that are known to not affect the outcome of upsert in
+/// a streaming fashion. For each distinct (key, time) in the input it emits the value with the
+/// highest from_time. Its purpose is to thin out data as much as possible before exchanging them
+/// across workers.
+fn upsert_thinning<G, K, V, FromTime>(
+    input: &Collection<G, (K, V, FromTime), Diff>,
+) -> Collection<G, (K, V, FromTime), Diff>
+where
+    G: Scope,
+    G::Timestamp: TotalOrder,
+    K: timely::Data + Eq + Ord,
+    V: timely::Data,
+    FromTime: Timestamp,
+{
+    input
+        .inner
+        .unary(Pipeline, "UpsertThinning", |_, _| {
+            // A capability suitable to emit all updates in `updates`, if any.
+            let mut capability: Option<InputCapability<G::Timestamp>> = None;
+            // A batch of received updates
+            let mut updates = Vec::new();
+            let mut tmp = Vec::new();
+            move |input, output| {
+                while let Some((cap, data)) = input.next() {
+                    assert!(
+                        data.iter().all(|(_, _, diff)| *diff > 0),
+                        "invalid upsert input"
+                    );
+                    data.swap(&mut tmp);
+                    updates.append(&mut tmp);
+                    match capability.as_mut() {
+                        Some(capability) => {
+                            if cap.time() <= capability.time() {
+                                *capability = cap;
+                            }
+                        }
+                        None => capability = Some(cap),
+                    }
+                }
+                if let Some(capability) = capability.take() {
+                    // Sort by (key, time, Reverse(from_time)) so that deduping by (key, time) gives
+                    // the latest change for that key.
+                    updates.sort_unstable_by(|a, b| {
+                        let ((key1, _, from_time1), time1, _) = a;
+                        let ((key2, _, from_time2), time2, _) = b;
+                        Ord::cmp(
+                            &(key1, time1, Reverse(from_time1)),
+                            &(key2, time2, Reverse(from_time2)),
+                        )
+                    });
+                    let mut session = output.session(&capability);
+                    session.give_iterator(updates.drain(..).dedup_by(|a, b| {
+                        let ((key1, _, _), time1, _) = a;
+                        let ((key2, _, _), time2, _) = b;
+                        (key1, time1) == (key2, time2)
+                    }))
+                }
+            }
+        })
+        .as_collection()
 }
 
 /// Helper method for `upsert_inner` used to stage `data` updates
@@ -915,7 +981,7 @@ impl<G: Scope> UpsertErrorEmitter<G>
     for (
         &mut AsyncOutputHandle<
             <G as ScopeParent>::Timestamp,
-            Vec<(OutputIndex, HealthStatusUpdate)>,
+            CapacityContainerBuilder<Vec<(OutputIndex, HealthStatusUpdate)>>,
             Tee<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
         >,
         &Capability<<G as ScopeParent>::Timestamp>,
@@ -932,7 +998,7 @@ async fn process_upsert_state_error<G: Scope>(
     e: anyhow::Error,
     health_output: &mut AsyncOutputHandle<
         <G as ScopeParent>::Timestamp,
-        Vec<(OutputIndex, HealthStatusUpdate)>,
+        CapacityContainerBuilder<Vec<(OutputIndex, HealthStatusUpdate)>>,
         Tee<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
     >,
     health_cap: &Capability<<G as ScopeParent>::Timestamp>,

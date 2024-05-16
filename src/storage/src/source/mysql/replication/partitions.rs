@@ -91,7 +91,7 @@ impl GtidReplicationPartitions {
                 // Since we start replication at a specific upper, we
                 // should only see GTID transaction-ids
                 // in a monotonic order for each source, starting at that upper.
-                if active_part.timestamp() > &new_part.timestamp() {
+                if active_part.timestamp() > new_part.timestamp() {
                     let err = DefiniteError::BinlogGtidMonotonicityViolation(
                         source_id.to_string(),
                         new_part.timestamp().clone(),

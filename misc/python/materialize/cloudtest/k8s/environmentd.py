@@ -190,6 +190,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
             "--orchestrator=kubernetes",
             "--orchestrator-kubernetes-image-pull-policy=if-not-present",
+            "--orchestrator-kubernetes-service-fs-group=999",
             f"--persist-consensus-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=consensus",
             f"--storage-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=storage",
             "--internal-sql-listen-addr=0.0.0.0:6877",

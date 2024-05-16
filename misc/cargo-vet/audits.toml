@@ -15,6 +15,12 @@ who = "Matt Arthur <matthewleearthur@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.5.2"
 
+[[audits.arrayvec]]
+who = "Ben Kirwin <bkirwi@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.7.4"
+notes = "We need collections with a known-small maximum size in contexts like Persist's spine, and arrayvec is a popular and actively-maintained implementation."
+
 [[audits.arrow]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -125,6 +131,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.2.1"
 
+[[audits.cmake]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "0.1.50"
+
 [[audits.core_affinity]]
 who = "Jan Teske <jteske@posteo.net>"
 criteria = "safe-to-deploy"
@@ -144,7 +155,7 @@ notes = "Reads and writes files under a prefix controlled by the caller."
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:07ed40c3c44e6fc43efa5decdaa6e57ba9ce7fac"
+version = "0.12.0@git:8d077e51068d4c6a073b3b34d66351c789a49a0d"
 
 [[audits.domain]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
@@ -377,6 +388,16 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.2.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 
+[[audits.proc-macro2]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.82"
+
+[[audits.protobuf-src]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "2.0.0+26.1"
+
 [[audits.quanta]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -452,6 +473,16 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "0.5.2 -> 0.9.8"
 
+[[audits.spin]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "0.5.2 -> 0.9.8"
+
+[[audits.spin]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "0.5.2 -> 0.9.8"
+
 [[audits.sync_wrapper]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
@@ -480,22 +511,22 @@ version = "0.17.0"
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
+version = "0.12.0@git:89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
 
 [[audits.timely_bytes]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
+version = "0.12.0@git:89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
 
 [[audits.timely_communication]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
+version = "0.12.0@git:89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
 
 [[audits.timely_logging]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:dfb4721ac698a3a26dcecf7826d8a3f4fd23952f"
+version = "0.12.0@git:89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
 
 [[audits.tokio-postgres]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -1325,6 +1356,12 @@ criteria = "maintained-and-necessary"
 user-id = 359 # Sean McArthur (seanmonstar)
 start = "2020-07-10"
 end = "2024-12-17"
+
+[[trusted.twox-hash]]
+criteria = "safe-to-deploy"
+user-id = 1060 # Jake Goulding (shepmaster)
+start = "2019-04-12"
+end = "2025-05-07"
 
 [[trusted.unicode-ident]]
 criteria = "safe-to-deploy"

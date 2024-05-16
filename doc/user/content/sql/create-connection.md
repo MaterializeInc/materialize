@@ -285,7 +285,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
     SECURITY PROTOCOL = 'SASL_PLAINTEXT',
     SASL MECHANISMS = 'SCRAM-SHA-256', -- or `PLAIN` or `SCRAM-SHA-512`
     SASL USERNAME = 'foo',
-    SASL PASSWORD = SECRET kafka_password
+    SASL PASSWORD = SECRET kafka_password,
     SSH TUNNEL ssh_connection
 );
 ```
@@ -672,12 +672,12 @@ Field                       | Value            | Required | Description
 CREATE CONNECTION tunnel TO SSH TUNNEL (
     HOST 'bastion-host',
     PORT 22,
-    USER 'materialize',
+    USER 'materialize'
 );
 
 CREATE CONNECTION mysql_connection TO MYSQL (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
-    SSH TUNNEL ssh_connection,
+    SSH TUNNEL ssh_connection
 );
 ```
 
@@ -782,7 +782,7 @@ Field                       | Value            | Required | Description
 CREATE CONNECTION tunnel TO SSH TUNNEL (
     HOST 'bastion-host',
     PORT 22,
-    USER 'materialize',
+    USER 'materialize'
 );
 
 CREATE CONNECTION pg_connection TO POSTGRES (

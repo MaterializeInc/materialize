@@ -188,6 +188,9 @@ pub enum Expr<T: AstInfo> {
     /// `LIST[<expr>*]`
     List(Vec<Expr<T>>),
     ListSubquery(Box<Query<T>>),
+    /// `MAP[<expr>*]`
+    Map(Vec<MapEntry<T>>),
+    MapSubquery(Box<Query<T>>),
     /// `<expr>([<expr>(:<expr>)?])+`
     Subscript {
         expr: Box<Expr<T>>,
@@ -448,14 +451,8 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::Array(exprs) => {
-                let mut exprs = exprs.iter().peekable();
                 f.write_str("ARRAY[");
-                while let Some(expr) = exprs.next() {
-                    f.write_node(expr);
-                    if exprs.peek().is_some() {
-                        f.write_str(", ");
-                    }
-                }
+                f.write_node(&display::comma_separated(exprs));
                 f.write_str("]");
             }
             Expr::ArraySubquery(s) => {
@@ -464,18 +461,22 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::List(exprs) => {
-                let mut exprs = exprs.iter().peekable();
                 f.write_str("LIST[");
-                while let Some(expr) = exprs.next() {
-                    f.write_node(expr);
-                    if exprs.peek().is_some() {
-                        f.write_str(", ");
-                    }
-                }
+                f.write_node(&display::comma_separated(exprs));
                 f.write_str("]");
             }
             Expr::ListSubquery(s) => {
                 f.write_str("LIST(");
+                f.write_node(&s);
+                f.write_str(")");
+            }
+            Expr::Map(exprs) => {
+                f.write_str("MAP[");
+                f.write_node(&display::comma_separated(exprs));
+                f.write_str("]");
+            }
+            Expr::MapSubquery(s) => {
+                f.write_str("MAP(");
                 f.write_node(&s);
                 f.write_str(")");
             }
@@ -559,6 +560,10 @@ impl<T: AstInfo> Expr<T> {
 
     pub fn equals(self, right: Expr<T>) -> Expr<T> {
         self.binop(Op::bare("="), right)
+    }
+
+    pub fn not_equals(self, right: Expr<T>) -> Expr<T> {
+        self.binop(Op::bare("<>"), right)
     }
 
     pub fn minus(self, right: Expr<T>) -> Expr<T> {
@@ -663,6 +668,21 @@ impl AstDisplay for HomogenizingFunction {
     }
 }
 impl_display!(HomogenizingFunction);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MapEntry<T: AstInfo> {
+    pub key: Expr<T>,
+    pub value: Expr<T>,
+}
+
+impl<T: AstInfo> AstDisplay for MapEntry<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.key);
+        f.write_str(" => ");
+        f.write_node(&self.value);
+    }
+}
+impl_display_t!(MapEntry);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SubscriptPosition<T: AstInfo> {

@@ -35,6 +35,7 @@ message ProtoConfigVal {
         uint32 u32 = 6;
         uint64 usize = 3;
         ProtoOptionU64 opt_usize = 7;
+        double f64 = 9;
         string string = 4;
         mz_proto.ProtoDuration duration = 5;
         // Switch to Protobuf's native JSON representation,

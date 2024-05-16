@@ -9,7 +9,7 @@
 
 //! An `UpsertStateBackend` that stores values in RocksDB.
 
-use mz_rocksdb::RocksDBInstance;
+use mz_rocksdb::{KeyUpdate, RocksDBInstance};
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::types::{
@@ -34,6 +34,7 @@ impl<O> UpsertStateBackend<O> for RocksDB<O>
 where
     O: Send + Sync + Serialize + DeserializeOwned + 'static,
 {
+    // TODO: Refactor this to allow using using Merge instead of Put for updates.
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
@@ -41,7 +42,7 @@ where
         let mut p_stats = PutStats::default();
         let stats = self
             .rocksdb
-            .multi_put(puts.into_iter().map(
+            .multi_update(puts.into_iter().map(
                 |(
                     k,
                     PutValue {
@@ -50,11 +51,15 @@ where
                     },
                 )| {
                     p_stats.adjust(value.as_ref(), None, &previous_value_metadata);
+                    let value = match value {
+                        Some(v) => KeyUpdate::Put(v),
+                        None => KeyUpdate::Delete,
+                    };
                     (k, value)
                 },
             ))
             .await?;
-        p_stats.processed_puts += stats.processed_puts;
+        p_stats.processed_puts += stats.processed_updates;
         let size: i64 = stats.size_written.try_into().expect("less than i64 size");
         p_stats.size_diff += size;
 

@@ -34,6 +34,7 @@ use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -973,7 +974,8 @@ where
                         IntrospectionType::ComputeDependencies
                         | IntrospectionType::ComputeReplicaHeartbeats
                         | IntrospectionType::ComputeHydrationStatus
-                        | IntrospectionType::ComputeOperatorHydrationStatus => {
+                        | IntrospectionType::ComputeOperatorHydrationStatus
+                        | IntrospectionType::ComputeMaterializedViewRefreshes => {
                             self.reconcile_managed_collection(id, vec![]).await;
                         }
 
@@ -1846,7 +1848,7 @@ where
         for (id, new_upper) in updates.iter() {
             if let Some(collection) = self.collections.get_mut(id) {
                 if PartialOrder::less_than(&collection.write_frontier, new_upper) {
-                    collection.write_frontier = new_upper.clone();
+                    collection.write_frontier.clone_from(new_upper);
                 }
 
                 let mut new_read_capability = collection
@@ -1865,7 +1867,7 @@ where
                 }
             } else if let Ok(export) = self.export_mut(*id) {
                 if PartialOrder::less_than(&export.write_frontier, new_upper) {
-                    export.write_frontier = new_upper.clone();
+                    export.write_frontier.clone_from(new_upper);
                 }
 
                 // Ignore read policy for sinks whose write frontiers are closed, which identifies
@@ -1977,7 +1979,7 @@ where
                     });
 
                 changes.extend(update.drain());
-                *frontier = export.read_capability.clone();
+                frontier.clone_from(&export.read_capability);
             } else {
                 // This is confusing and we should probably error.
                 panic!("Unknown collection identifier {}", key);
@@ -2199,9 +2201,9 @@ where
             let client = cluster_id.and_then(|cluster_id| self.clients.get_mut(&cluster_id));
 
             if cluster_id.is_some() && read_frontier.is_empty() {
-                if self.collections.get(&id).is_some() {
+                if self.collections.contains_key(&id) {
                     pending_source_drops.push(id);
-                } else if self.exports.get(&id).is_some() {
+                } else if self.exports.contains_key(&id) {
                     pending_sink_drops.push(id);
                 } else {
                     panic!("Reference to absent collection {id}");
@@ -2242,7 +2244,7 @@ where
                         // do not yet track the cluster on pending compaction
                         // commands.
                         //
-                        // TODO(#24235): place the cluster ID in the pending compaction
+                        // TODO(#8185): place the cluster ID in the pending compaction
                         // commands of IngestionExports.
                         pending_source_drops.push(id);
                         None
@@ -2281,7 +2283,7 @@ where
             // Sources can have subsources, which don't have associated clusters, which
             // is why this operates differently than sinks.
             if read_frontier.is_empty() {
-                if self.collections.get(&id).is_some() {
+                if self.collections.contains_key(&id) {
                     source_statistics_to_drop.push(id);
                 }
             }
@@ -3611,7 +3613,7 @@ where
                     shard_name: id.to_string(),
                     handle_purpose: format!("snapshot {}", id),
                 },
-                false,
+                USE_CRITICAL_SINCE_SNAPSHOT.get(persist_client.dyncfgs()),
             )
             .await
             .expect("invalid persist usage");
@@ -3819,9 +3821,9 @@ impl<T: Timestamp> CollectionState<T> {
             DataSource::Webhook
             | DataSource::Introspection(_)
             | DataSource::Other(_)
-            // TODO(#24235) This isn't quite right because a source export runs on the
-            // ingestion's cluster, but we don't have the ability to perform
-            // cross-referenced lookups here (at least not yet).
+            // TODO(#8185) This isn't quite right because a source export runs
+            // on the ingestion's cluster, but we don't yet support announcing
+            // that.
             | DataSource::IngestionExport { .. }
             | DataSource::Progress => None,
         }

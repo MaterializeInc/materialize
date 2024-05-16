@@ -23,6 +23,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
 use mz_persist_client::cfg::RetryParameters;
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
+use mz_persist_client::project::ProjectionPushdown;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::txn::TxnsCodec;
@@ -31,6 +32,7 @@ use mz_timely_util::builder_async::{
     AsyncInputHandle, Event as AsyncEvent, InputConnection,
     OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::{Broadcast, Capture, Leave, Map, Probe};
@@ -312,7 +314,8 @@ where
         passthrough.scope().peers(),
         data_id.to_string(),
     );
-    let (mut passthrough_output, passthrough_stream) = builder.new_output();
+    let (mut passthrough_output, passthrough_stream) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
     let mut remap_input = builder.new_disconnected_input(&remap, Pipeline);
     let mut passthrough_input = builder.new_disconnected_input(&passthrough, Pipeline);
 
@@ -556,13 +559,14 @@ impl DataSubscribe {
                     |_, _| true,
                     false.then_some(|| unreachable!()),
                     async {},
+                    ProjectionPushdown::FetchAll,
                 );
                 (data_stream.leave(), token)
             });
             let (mut data, mut txns) = (ProbeHandle::new(), ProbeHandle::new());
             let data_stream = data_stream.flat_map(|part| {
                 let part = part.parse();
-                part.map(|((k, v), t, d)| {
+                part.part.map(|((k, v), t, d)| {
                     let (k, ()) = (k.unwrap(), v.unwrap());
                     (k, t, d)
                 })

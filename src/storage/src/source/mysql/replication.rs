@@ -43,7 +43,6 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::num::NonZeroU64;
 use std::pin::pin;
-use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
@@ -52,6 +51,7 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
 use mz_ore::future::InTask;
 use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
@@ -115,14 +115,15 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
-    let (mut data_output, data_stream) = builder.new_output();
-    let (upper_output, upper_stream) = builder.new_output();
+    let (mut data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     // Captures DefiniteErrors that affect the entire source, including all subsources
-    let (mut definite_error_handle, definite_errors) = builder.new_output();
-    let mut rewind_input = builder.new_input_for_many(
+    let (mut definite_error_handle, definite_errors) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
+    let mut rewind_input = builder.new_input_for(
         rewind_stream,
         Exchange::new(move |_| repl_reader_id),
-        [&data_output, &upper_output],
+        &data_output,
     );
 
     let output_indexes = table_info
@@ -305,6 +306,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
             let mut active_tx: Option<(Uuid, NonZeroU64)> = None;
 
+            let mut row_event_buffer = Vec::new();
+
             while let Some(event) = repl_context.stream.next().await {
                 use mysql_async::binlog::events::*;
                 let event = event?;
@@ -374,7 +377,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         let cur_gtid =
                             GtidPartition::new_singleton(source_id, GtidState::Active(tx_id));
 
-                        events::handle_rows_event(data, &mut repl_context, &cur_gtid).await?;
+                        events::handle_rows_event(
+                            data,
+                            &mut repl_context,
+                            &cur_gtid,
+                            &mut row_event_buffer,
+                        )
+                        .await?;
 
                         // Advance the frontier up to the point right before this GTID, since we
                         // might still see other events that are part of this same GTID, such as
@@ -502,10 +511,11 @@ async fn raw_stream<'a>(
     // Request that the stream provide us with a heartbeat message when no other messages have
     // been sent. This isn't strictly necessary, but is a lightweight additional general
     // health-check for the replication stream
-    let heartbeat = Duration::from_secs(30);
     conn.query_drop(format!(
         "SET @master_heartbeat_period = {};",
-        heartbeat.as_nanos()
+        mz_storage_types::dyncfgs::MYSQL_REPLICATION_HEARTBEAT_INTERVAL
+            .get(config.config.config_set())
+            .as_nanos()
     ))
     .await?;
 

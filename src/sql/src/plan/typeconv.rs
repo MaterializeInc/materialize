@@ -22,7 +22,10 @@ use once_cell::sync::Lazy;
 
 use crate::catalog::TypeCategory;
 use crate::plan::error::PlanError;
-use crate::plan::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
+use crate::plan::expr::{
+    AbstractColumnType, CoercibleScalarExpr, CoercibleScalarType, ColumnRef, HirScalarExpr,
+    UnaryFunc,
+};
 use crate::plan::query::{ExprContext, QueryContext};
 use crate::plan::scope::Scope;
 
@@ -440,6 +443,7 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         (Numeric, MzTimestamp) => Implicit: CastNumericToMzTimestamp(func::CastNumericToMzTimestamp),
         (Timestamp, MzTimestamp) => Implicit: CastTimestampToMzTimestamp(func::CastTimestampToMzTimestamp),
         (TimestampTz, MzTimestamp) => Implicit: CastTimestampTzToMzTimestamp(func::CastTimestampTzToMzTimestamp),
+        (Interval, MzTimestamp) => Implicit: CastIntervalToMzTimestamp(func::CastIntervalToMzTimestamp),
 
         // OID
         (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
@@ -985,15 +989,48 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 /// [union-type-conv]: https://www.postgresql.org/docs/12/typeconv-union-case.html
 pub fn guess_best_common_type(
     ecx: &ExprContext,
-    types: &[Option<ScalarType>],
+    types: &[CoercibleScalarType],
 ) -> Result<ScalarType, PlanError> {
     // This function is a translation of `select_common_type` in PostgreSQL with
     // the addition of our near match logic, which supports Materialize
     // non-linear type promotions.
     // https://github.com/postgres/postgres/blob/d1b307eef/src/backend/parser/parse_coerce.c#L1288-L1308
 
+    // If every type is a literal record with the same number of fields, the
+    // best common type is a record with that number of fields. We recursively
+    // guess the best type for each field.
+    if let Some(CoercibleScalarType::Record(field_tys)) = types.first() {
+        if types
+            .iter()
+            .all(|t| matches!(t, CoercibleScalarType::Record(fts) if field_tys.len() == fts.len()))
+        {
+            let mut fields = vec![];
+            for i in 0..field_tys.len() {
+                let name = ColumnName::from(format!("f{}", fields.len() + 1));
+                let mut guesses = vec![];
+                let mut nullable = false;
+                for ty in types {
+                    let field_ty = match ty {
+                        CoercibleScalarType::Record(fts) => fts[i].clone(),
+                        _ => unreachable!(),
+                    };
+                    if field_ty.nullable() {
+                        nullable = true;
+                    }
+                    guesses.push(field_ty.scalar_type());
+                }
+                let guess = guess_best_common_type(ecx, &guesses)?;
+                fields.push((name, guess.nullable(nullable)));
+            }
+            return Ok(ScalarType::Record {
+                fields,
+                custom_id: None,
+            });
+        }
+    }
+
     // Remove unknown types, and collect them.
-    let mut types: Vec<_> = types.into_iter().filter_map(|v| v.as_ref()).collect();
+    let mut types: Vec<_> = types.into_iter().filter_map(|v| v.as_coerced()).collect();
 
     // In the case of mixed ints and uints, replace uints with their near match
     let contains_int = types
