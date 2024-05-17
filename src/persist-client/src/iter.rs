@@ -41,7 +41,7 @@ use crate::fetch::{EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
 use crate::internal::paths::WriterKey;
-use crate::internal::state::{BatchPart, RunMeta, RunOrder};
+use crate::internal::state::{RunMeta, RunOrder, RunPart};
 use crate::metrics::Metrics;
 use crate::ShardId;
 
@@ -56,7 +56,7 @@ pub const MINIMUM_CONSOLIDATED_VERSION: Version = Version::new(0, 67, 0);
 pub(crate) struct FetchData<T> {
     run_meta: RunMeta,
     part_desc: Description<T>,
-    part: BatchPart<T>,
+    part: RunPart<T>,
     structured_lower: Option<ArrayBound>,
 }
 
@@ -304,6 +304,9 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         shard_metrics: &ShardMetrics,
         read_metrics: &ReadMetrics,
     ) -> anyhow::Result<EncodedPart<T>> {
+        let RunPart::Single(part) = self.part else {
+            todo!("run ref: recursively fetch the run data")
+        };
         EncodedPart::fetch(
             &shard_id,
             &*blob,
@@ -311,7 +314,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
             shard_metrics,
             read_metrics,
             &self.part_desc,
-            &self.part,
+            &part,
         )
         .await
         .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"))
@@ -492,7 +495,7 @@ where
         &mut self,
         desc: &Description<T>,
         run_meta: &RunMeta,
-        parts: impl IntoIterator<Item = BatchPart<T>>,
+        parts: impl IntoIterator<Item = RunPart<T>>,
     ) {
         let run = parts
             .into_iter()
@@ -1042,7 +1045,7 @@ mod tests {
 
     use crate::cfg::PersistConfig;
     use crate::internal::paths::PartialBatchKey;
-    use crate::internal::state::HollowBatchPart;
+    use crate::internal::state::{BatchPart, HollowBatchPart};
     use crate::metrics::Metrics;
     use crate::ShardId;
 
@@ -1198,7 +1201,7 @@ mod tests {
                 let parts: Vec<_> = run
                     .into_iter()
                     .map(|encoded_size_bytes| {
-                        BatchPart::Hollow(HollowBatchPart {
+                        RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                             key: PartialBatchKey(
                                 "n0000000/p00000000-0000-0000-0000-000000000000".into(),
                             ),
@@ -1210,7 +1213,7 @@ mod tests {
                             diffs_sum: None,
                             format: None,
                             schema_id: None,
-                        })
+                        }))
                     })
                     .collect();
                 consolidator.enqueue_run(&desc, &RunMeta::default(), parts)

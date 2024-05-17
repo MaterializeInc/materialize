@@ -27,6 +27,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::{FuturesUnordered, StreamExt};
+use futures_util::FutureExt;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
@@ -56,7 +57,7 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{
-    BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart, RunMeta, RunOrder,
+    BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart, RunMeta, RunOrder, RunPart,
     WRITE_DIFFS_SUM,
 };
 use crate::stats::{
@@ -225,15 +226,15 @@ where
         let mut parts = Vec::new();
         for part in self.batch.parts.drain(..) {
             let (updates, ts_rewrite, schema_id) = match part {
-                BatchPart::Hollow(x) => {
-                    parts.push(BatchPart::Hollow(x));
-                    continue;
-                }
-                BatchPart::Inline {
+                RunPart::Single(BatchPart::Inline {
                     updates,
                     ts_rewrite,
                     schema_id,
-                } => (updates, ts_rewrite, schema_id),
+                }) => (updates, ts_rewrite, schema_id),
+                other @ RunPart::Many(_) | other @ RunPart::Single(BatchPart::Hollow(_)) => {
+                    parts.push(other);
+                    continue;
+                }
             };
             let updates = updates
                 .decode::<T>(&self.metrics.columnar)
@@ -266,7 +267,7 @@ where
                 .instrument(write_span),
             );
             let part = handle.await.expect("part write task failed");
-            parts.push(part);
+            parts.push(RunPart::Single(part));
         }
         self.batch.parts = parts;
     }
@@ -976,8 +977,8 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob>,
     isolated_runtime: Arc<IsolatedRuntime>,
-    writing_parts: VecDeque<JoinHandle<BatchPart<T>>>,
-    finished_parts: Vec<BatchPart<T>>,
+    writing_parts: VecDeque<JoinHandle<RunPart<T>>>,
+    finished_parts: Vec<RunPart<T>>,
     batch_metrics: BatchWriteMetrics,
 }
 
@@ -1074,11 +1075,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     batch_metrics
                         .step_inline
                         .inc_by(start.elapsed().as_secs_f64());
-                    BatchPart::Inline {
+                    RunPart::Single(BatchPart::Inline {
                         updates,
                         ts_rewrite,
                         schema_id,
-                    }
+                    })
                 }
                 .instrument(span),
             )
@@ -1106,6 +1107,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     D::encode(&diffs_sum),
                     write_schemas.clone(),
                 )
+                .map(RunPart::Single)
                 .instrument(write_span),
             )
         };
@@ -1279,7 +1281,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(self) -> Vec<BatchPart<T>> {
+    pub(crate) async fn finish(self) -> Vec<RunPart<T>> {
         let mut parts = self.finished_parts;
         for handle in self.writing_parts {
             let part = handle.wait_and_assert_finished().await;
@@ -1342,10 +1344,13 @@ pub(crate) struct PartDeletes(BTreeSet<PartialBatchKey>);
 impl PartDeletes {
     // Adds the part to the set to be deleted and returns true if it was newly
     // inserted.
-    pub fn add<T>(&mut self, part: &BatchPart<T>) -> bool {
+    pub fn add<T>(&mut self, part: &RunPart<T>) -> bool {
         match part {
-            BatchPart::Hollow(x) => self.0.insert(x.key.clone()),
-            BatchPart::Inline { .. } => {
+            RunPart::Many(_) => {
+                todo!("walk the tree of parts and delete them individually.")
+            }
+            RunPart::Single(BatchPart::Hollow(x)) => self.0.insert(x.key.clone()),
+            RunPart::Single(BatchPart::Inline { .. }) => {
                 // Nothing to delete.
                 true
             }
@@ -1504,10 +1509,7 @@ mod tests {
 
         assert_eq!(batch.batch.part_count(), 3);
         for part in &batch.batch.parts {
-            let part = match part {
-                BatchPart::Hollow(x) => x,
-                BatchPart::Inline { .. } => panic!("batch unexpectedly used inline part"),
-            };
+            let part = part.expect_hollow_part();
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());
@@ -1547,10 +1549,7 @@ mod tests {
 
         assert_eq!(batch.batch.part_count(), 2);
         for part in &batch.batch.parts {
-            let part = match part {
-                BatchPart::Hollow(x) => x,
-                BatchPart::Inline { .. } => panic!("batch unexpectedly used inline part"),
-            };
+            let part = part.expect_hollow_part();
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());

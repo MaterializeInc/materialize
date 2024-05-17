@@ -39,7 +39,7 @@ use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::ShardMetrics;
-use crate::internal::state::{BatchPart, HollowBatch, RunMeta, RunOrder};
+use crate::internal::state::{HollowBatch, RunMeta, RunOrder, RunPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::{CodecSort, Consolidator, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
@@ -547,7 +547,7 @@ where
         metrics: &Metrics,
         run_reserved_memory_bytes: usize,
     ) -> Vec<(
-        Vec<(&'a Description<T>, &'a RunMeta, &'a [BatchPart<T>])>,
+        Vec<(&'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
         usize,
     )> {
         let ordered_runs = Self::order_runs(req, cfg.batch.expected_order);
@@ -559,7 +559,7 @@ where
         while let Some((desc, meta, run)) = ordered_runs.next() {
             let run_greatest_part_size = run
                 .iter()
-                .map(|x| x.encoded_size_bytes())
+                .map(|x| x.max_part_bytes())
                 .max()
                 .unwrap_or(cfg.batch.blob_target_size);
             current_chunk.push((*desc, *meta, *run));
@@ -568,7 +568,7 @@ where
             if let Some((_next_desc, _next_meta, next_run)) = ordered_runs.peek() {
                 let next_run_greatest_part_size = next_run
                     .iter()
-                    .map(|x| x.encoded_size_bytes())
+                    .map(|x| x.max_part_bytes())
                     .max()
                     .unwrap_or(cfg.batch.blob_target_size);
 
@@ -622,7 +622,7 @@ where
     fn order_runs(
         req: &CompactReq<T>,
         target_order: RunOrder,
-    ) -> Vec<(&Description<T>, &RunMeta, &[BatchPart<T>])> {
+    ) -> Vec<(&Description<T>, &RunMeta, &[RunPart<T>])> {
         let total_number_of_runs = req
             .inputs
             .iter()
@@ -671,7 +671,7 @@ where
         cfg: &'a CompactConfig,
         shard_id: &'a ShardId,
         desc: &'a Description<T>,
-        runs: Vec<(&'a Description<T>, &'a RunMeta, &'a [BatchPart<T>])>,
+        runs: Vec<(&'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
@@ -975,10 +975,7 @@ mod tests {
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 1);
         assert_eq!(res.output.part_count(), 1);
-        let part = match &res.output.parts[0] {
-            BatchPart::Hollow(x) => x,
-            BatchPart::Inline { .. } => panic!("test outputs a hollow part"),
-        };
+        let part = res.output.parts[0].expect_hollow_part();
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),
@@ -1055,10 +1052,7 @@ mod tests {
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 2);
         assert_eq!(res.output.part_count(), 1);
-        let part = match &res.output.parts[0] {
-            BatchPart::Hollow(x) => x,
-            BatchPart::Inline { .. } => panic!("test outputs a hollow part"),
-        };
+        let part = res.output.parts[0].expect_hollow_part();
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),

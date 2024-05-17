@@ -9,6 +9,8 @@
 
 //! CLI benchmarking tools for persist
 
+use futures_util::stream::StreamExt;
+use futures_util::{stream, TryStreamExt};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -70,14 +72,21 @@ async fn bench_s3(args: &S3FetchArgs) -> Result<(), anyhow::Error> {
         .snapshot(state.since())
         .expect("since should be available for reads");
 
+    let batch_parts: Vec<_> = stream::iter(&snap)
+        .flat_map(|batch| {
+            batch.part_stream(shard_id, &*state_versions.blob, &*state_versions.metrics)
+        })
+        .try_collect()
+        .await?;
+
     println!("iter,key,size_bytes,fetch_secs,parse_secs");
     for iter in 0..args.iters {
         let start = Instant::now();
         let mut fetches = Vec::new();
-        for part in snap.iter().flat_map(|x| x.parts.iter()) {
-            let key = match part {
+        for part in &batch_parts {
+            let key = match &**part {
                 BatchPart::Hollow(x) => x.key.complete(&shard_id),
-                BatchPart::Inline { .. } => continue,
+                _ => continue,
             };
             let blob = Arc::clone(&state_versions.blob);
             let metrics = Arc::clone(&state_versions.metrics);

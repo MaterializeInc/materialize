@@ -567,6 +567,14 @@ pub struct ArrayBound {
     index: usize,
 }
 
+impl PartialEq for ArrayBound {
+    fn eq(&self, other: &Self) -> bool {
+        self.get().eq(&other.get())
+    }
+}
+
+impl Eq for ArrayBound {}
+
 impl ArrayBound {
     /// Create a new `ArrayBound` for this array, with the bound at the provided index.
     pub fn new(array: ArrayRef, index: usize) -> Self {

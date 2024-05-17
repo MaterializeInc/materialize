@@ -11,12 +11,13 @@
 
 use crate::internal::encoding::UntypedState;
 use crate::internal::paths::BlobKey;
-use crate::internal::state::{BatchPart, State};
+use crate::internal::state::{BatchPart, RunPart, State};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::internal::state_versions::StateVersions;
 use crate::ShardId;
 use anyhow::anyhow;
 use mz_persist::location::Blob;
+use timely::Container;
 use tracing::info;
 
 /// Attempt to restore all the blobs referenced by the current state in consensus.
@@ -50,6 +51,8 @@ pub(crate) async fn restore_blob(
 
     for diff in diffs.0 {
         let mut diff: StateDiff<u64> = StateDiff::decode(build_version, diff.data);
+        let mut part_queue = vec![];
+
         for rollup in std::mem::take(&mut diff.rollups) {
             // We never actually reference rollups from before the first live diff.
             if rollup.key < first_live_seqno {
@@ -85,23 +88,29 @@ pub(crate) async fn restore_blob(
                 check_restored(&key, blob.restore(&key).await);
             }
             for batch in rollup_state.collections.trace.batches() {
-                for part in &batch.parts {
-                    let key = match part {
-                        BatchPart::Hollow(x) => x.key.complete(&shard_id),
-                        BatchPart::Inline { .. } => continue,
-                    };
-                    check_restored(&key, blob.restore(&key).await);
-                }
+                part_queue.extend(batch.parts.iter().cloned());
             }
         }
         for diff in diff.referenced_batches() {
             if let Some(after) = after(diff) {
-                for part in &after.parts {
-                    let key = match part {
-                        BatchPart::Hollow(x) => x.key.complete(&shard_id),
-                        BatchPart::Inline { .. } => continue,
-                    };
+                part_queue.extend(after.parts.iter().cloned())
+            }
+        }
+        while let Some(part) = part_queue.pop() {
+            match part {
+                RunPart::Single(BatchPart::Inline { .. }) => {}
+                RunPart::Single(BatchPart::Hollow(part)) => {
+                    let key = part.key.complete(&shard_id);
                     check_restored(&key, blob.restore(&key).await);
+                }
+                RunPart::Many(runs) => {
+                    let key = runs.key.complete(&shard_id);
+                    check_restored(&key, blob.restore(&key).await);
+                    let runs = runs
+                        .get(shard_id, blob)
+                        .await
+                        .ok_or_else(|| anyhow!("fetching just-restored run"))?;
+                    part_queue.extend(runs.parts);
                 }
             }
         }
