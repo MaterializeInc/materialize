@@ -795,13 +795,13 @@ SELECT * FROM mv_assertion_plus_refresh_every ORDER BY x;
 10  11  12
 
 # Sleep for the refresh interval, so that we get a refresh.
-# Actually, we sleep one more second than the refresh interval, because we don't have real-time recency guarantees:
-# When we query the MV at a particular wall clock time time `t`, there is no guarantee that we see a refresh that
-# happened at, say, `t - 1ms`. Note that the test was actually failing sometimes when it was sleeping for only 8s.
+# Actually, we sleep a bit more than the refresh interval, because we don't have real-time recency guarantees:
+# When we query the MV at a particular wall clock time `t`, there is no guarantee that we see a refresh that
+# happened at, say, `t - 1ms`. Note that the test was actually failing sometimes when it was sleeping for only 8s or 9s.
 # A proper solution might be to add `AS OF now()` to the following SELECT, but calling `now()` seems to not be currently
 # allowed in `AS OF`.
 statement ok
-SELECT mz_unsafe.mz_sleep(8+1);
+SELECT mz_unsafe.mz_sleep(8+2);
 
 # Now we should see the NULL that should error out the MV.
 query error db error: ERROR: Evaluation error: column "x" must not be null
@@ -983,9 +983,9 @@ NULL  -1  -2
 100  100  100
 
 # Wait until we are past the second refresh, which is the last one.
-# (See the explanation for the `+1` above at a similar `mz_sleep`.)
+# (See the explanation for the `+2` above at a similar `mz_sleep`.)
 statement ok
-SELECT mz_unsafe.mz_sleep(2+1);
+SELECT mz_unsafe.mz_sleep(2+2);
 
 # This insert will happen after the last refresh.
 statement ok
@@ -1152,7 +1152,7 @@ UNION ALL
 30
 
 statement ok
-SELECT mz_unsafe.mz_sleep(8+1);
+SELECT mz_unsafe.mz_sleep(8+2);
 
 # Visible now.
 query I
@@ -1230,7 +1230,7 @@ UNION ALL
 
 # Check that it's still queryable after the last refresh, but new input changes are not taken into account.
 statement ok
-SELECT mz_unsafe.mz_sleep(2+1);
+SELECT mz_unsafe.mz_sleep(2+2);
 
 statement ok
 INSERT INTO t3 VALUES (-1);
@@ -1383,7 +1383,7 @@ statement ok
 INSERT INTO t2 VALUES (1, 0, 1);
 
 statement ok
-SELECT mz_unsafe.mz_sleep(8+1);
+SELECT mz_unsafe.mz_sleep(8+2);
 
 query I
 SELECT * FROM mv9;
@@ -1546,7 +1546,7 @@ mz_system  manual  NULL
 quickstart  manual  NULL
 
 statement ok
-SELECT mz_unsafe.mz_sleep(3);
+SELECT mz_unsafe.mz_sleep(4);
 
 # If this fails with a recently created MV not yet being present, then bump the above sleep.
 query TBB

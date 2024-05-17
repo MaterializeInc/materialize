@@ -145,8 +145,8 @@ ALTER SYSTEM SET enable_cluster_schedule_refresh = true
 
 > INSERT INTO t2 VALUES (120);
 
-# (See the explanation for the `+1` in materialized_views.slt at a similar `mz_sleep`.)
-> SELECT mz_unsafe.mz_sleep(8+1);
+# (See the explanation for the `+2` in materialized_views.slt at a similar `mz_sleep`.)
+> SELECT mz_unsafe.mz_sleep(8+2);
 <null>
 
 # Turn it back on, and check that we recover. Data that were added while we slept should be visible now.
@@ -260,7 +260,7 @@ ALTER SYSTEM SET enable_cluster_schedule_refresh = true
 1
 2
 
-> SELECT mz_unsafe.mz_sleep(8+1);
+> SELECT mz_unsafe.mz_sleep(8+2);
 <null>
 
 > INSERT INTO t3 VALUES (3);
