@@ -24,6 +24,15 @@ steps:
         # sure we use the exact same version for testing here as was tagged and
         # will be released, and don't build our own version just for the tests.
         if: build.source == "ui" || build.source == "schedule" || build.source == "api"
+      # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
+      - id: build-x86_64
+        label: Build x86_64
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-x86_64
+
 
   - group: Zippy
     key: zippy
