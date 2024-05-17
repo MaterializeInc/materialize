@@ -1472,7 +1472,7 @@ mod tests {
                 data_id: d0,
                 latest_write: None,
                 as_of: 0,
-                empty_to: 11,
+                empty_to: 10,
             }
         );
     }
