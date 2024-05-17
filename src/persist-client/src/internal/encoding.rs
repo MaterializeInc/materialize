@@ -42,12 +42,13 @@ use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
     proto_hollow_batch_part, BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState,
-    HollowBatch, HollowBatchPart, HollowRollup, IdempotencyToken, LeasedReaderState, OpaqueState,
-    ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas, ProtoHandleDebugState,
-    ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup, ProtoIdHollowBatch, ProtoIdMerge,
-    ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge,
-    ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff,
-    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
+    HollowBatch, HollowBatchPart, HollowRollup, HollowRun, HollowRunRef, IdempotencyToken,
+    LeasedReaderState, OpaqueState, ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas,
+    ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
+    ProtoHollowRun, ProtoHollowRunRef, ProtoIdHollowBatch, ProtoIdMerge, ProtoIdSpineBatch,
+    ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge, ProtoRollup,
+    ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField,
+    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
     ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunMeta, RunOrder, RunPart, State,
     StateCollections, TypedState, WriterState,
 };
@@ -1285,6 +1286,20 @@ impl RustType<ProtoHandleDebugState> for HandleDebugState {
     }
 }
 
+impl<T: Timestamp + Codec64> RustType<ProtoHollowRun> for HollowRun<T> {
+    fn into_proto(&self) -> ProtoHollowRun {
+        ProtoHollowRun {
+            parts: self.parts.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowRun) -> Result<Self, TryFromProtoError> {
+        Ok(HollowRun {
+            parts: proto.parts.into_rust()?,
+        })
+    }
+}
+
 impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     fn into_proto(&self) -> ProtoHollowBatch {
         let mut run_meta = self.run_meta.into_proto();
@@ -1371,12 +1386,54 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for RunPart<T> {
     fn into_proto(&self) -> ProtoHollowBatchPart {
         match self {
             RunPart::Single(part) => part.into_proto(),
+            RunPart::Many(runs) => runs.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
-        let part = proto.into_rust()?;
-        Ok(RunPart::Single(part))
+        let run_part = if let Some(proto_hollow_batch_part::Kind::RunRef(_)) = proto.kind {
+            RunPart::Many(proto.into_rust()?)
+        } else {
+            RunPart::Single(proto.into_rust()?)
+        };
+        Ok(run_part)
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> {
+    fn into_proto(&self) -> ProtoHollowBatchPart {
+        let part = ProtoHollowBatchPart {
+            kind: Some(proto_hollow_batch_part::Kind::RunRef(ProtoHollowRunRef {
+                key: self.key.into_proto(),
+                max_part_bytes: self.max_part_bytes.into_proto(),
+            })),
+            encoded_size_bytes: self.hollow_bytes.into_proto(),
+            key_lower: Bytes::copy_from_slice(&self.key_lower),
+            diffs_sum: None,
+            key_stats: None,
+            ts_rewrite: self.ts_rewrite.into_proto(),
+            format: None,
+            schema_id: None,
+            structured_key_lower: None,
+        };
+        part
+    }
+
+    fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        let run_proto = match proto.kind {
+            Some(proto_hollow_batch_part::Kind::RunRef(proto_ref)) => proto_ref,
+            _ => Err(TryFromProtoError::UnknownEnumVariant(
+                "ProtoHollowBatchPart::kind".to_string(),
+            ))?,
+        };
+        Ok(Self {
+            key: run_proto.key.into_rust()?,
+            hollow_bytes: proto.encoded_size_bytes.into_rust()?,
+            max_part_bytes: run_proto.max_part_bytes.into_rust()?,
+            key_lower: proto.key_lower.to_vec(),
+            structured_key_lower: None,
+            ts_rewrite: proto.ts_rewrite.into_rust()?,
+        })
     }
 }
 
@@ -1444,7 +1501,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                     schema_id,
                 })
             }
-            None => Err(TryFromProtoError::unknown_enum_variant(
+            _ => Err(TryFromProtoError::unknown_enum_variant(
                 "ProtoHollowBatchPart::kind",
             )),
         }

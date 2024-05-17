@@ -12,6 +12,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::pin::pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -29,6 +30,7 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::RustType;
 use prost::Message;
 use serde_json::json;
+use tokio_stream::StreamExt;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
@@ -390,8 +392,8 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
 
     let mut updates = Vec::new();
     for batch in state.collections.trace.batches() {
-        // FIXME: recursively fetch runs
-        for RunPart::Single(part) in batch.parts.iter() {
+        let mut part_stream = pin!(batch.part_stream(shard_id, &*state_versions.blob));
+        while let Some(part) = part_stream.next().await {
             tracing::info!("fetching {}", part.printable_name());
             let encoded_part = EncodedPart::fetch(
                 &shard_id,
@@ -400,7 +402,7 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
                 &shard_metrics,
                 &state_versions.metrics.read.snapshot,
                 &batch.desc,
-                part,
+                &part,
             )
             .await
             .expect("part exists");
@@ -534,11 +536,7 @@ pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
                 empty_batches += 1;
             }
             for (_meta, run) in b.runs() {
-                let largest_part = run
-                    .iter()
-                    .map(|p| p.encoded_size_bytes())
-                    .max()
-                    .unwrap_or(0);
+                let largest_part = run.iter().map(|p| p.max_part_bytes()).max().unwrap_or(0);
                 runs += 1;
                 longest_run = longest_run.max(run.len());
                 byte_width += largest_part;
@@ -597,6 +595,10 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
                 match batch_part {
                     RunPart::Single(BatchPart::Hollow(x)) => known_parts.insert(x.key.clone()),
                     RunPart::Single(BatchPart::Inline { .. }) => continue,
+                    RunPart::Many(runs) => {
+                        known_parts.insert(runs.key.clone());
+                        todo!("recursively fetch")
+                    }
                 };
             }
         }

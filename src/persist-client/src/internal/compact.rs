@@ -976,9 +976,7 @@ mod tests {
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 1);
         assert_eq!(res.output.part_count(), 1);
-        let part = res.output.parts[0]
-            .as_hollow_part()
-            .expect("test outputs a hollow part");
+        let part = res.output.parts[0].expect_hollow_part();
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),
@@ -1055,9 +1053,7 @@ mod tests {
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 2);
         assert_eq!(res.output.part_count(), 1);
-        let part = res.output.parts[0]
-            .as_hollow_part()
-            .expect("test outputs a hollow part");
+        let part = res.output.parts[0].expect_hollow_part();
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),

@@ -17,6 +17,8 @@ use crate::internal::state_versions::StateVersions;
 use crate::ShardId;
 use anyhow::anyhow;
 use mz_persist::location::Blob;
+use std::collections::VecDeque;
+use timely::Container;
 use tracing::info;
 
 /// Attempt to restore all the blobs referenced by the current state in consensus.
@@ -50,6 +52,8 @@ pub(crate) async fn restore_blob(
 
     for diff in diffs.0 {
         let mut diff: StateDiff<u64> = StateDiff::decode(build_version, diff.data);
+        let mut part_queue = VecDeque::new();
+
         for rollup in std::mem::take(&mut diff.rollups) {
             // We never actually reference rollups from before the first live diff.
             if rollup.key < first_live_seqno {
@@ -85,27 +89,23 @@ pub(crate) async fn restore_blob(
                 check_restored(&key, blob.restore(&key).await);
             }
             for batch in rollup_state.collections.trace.batches() {
-                for part in &batch.parts {
-                    match part {
-                        RunPart::Single(BatchPart::Hollow(p)) => {
-                            let key = p.key.complete(&shard_id);
-                            check_restored(&key, blob.restore(&key).await)
-                        }
-                        RunPart::Single(BatchPart::Inline { .. }) => {}
-                    }
-                }
+                part_queue.extend(batch.parts.iter().cloned());
             }
         }
         for diff in diff.referenced_batches() {
             if let Some(after) = after(diff) {
-                for part in &after.parts {
-                    match part {
-                        RunPart::Single(BatchPart::Hollow(p)) => {
-                            let key = p.key.complete(&shard_id);
-                            check_restored(&key, blob.restore(&key).await)
-                        }
-                        RunPart::Single(BatchPart::Inline { .. }) => {}
-                    }
+                part_queue.extend(after.parts.iter().cloned())
+            }
+        }
+        while let Some(part) = part_queue.pop_front() {
+            match part {
+                RunPart::Single(BatchPart::Inline { .. }) => {}
+                RunPart::Single(BatchPart::Hollow(part)) => {
+                    let key = part.key.complete(&shard_id);
+                    check_restored(&key, blob.restore(&key).await);
+                }
+                RunPart::Many(_) => {
+                    todo!("FIXME: restore the runs ref, then add the referenced parts to the queue")
                 }
             }
         }

@@ -1404,6 +1404,7 @@ where
 #[cfg(test)]
 pub mod datadriven {
     use std::collections::BTreeMap;
+    use std::pin::pin;
     use std::sync::Arc;
 
     use anyhow::anyhow;
@@ -1828,12 +1829,12 @@ pub mod datadriven {
         let batch = datadriven.batches.get(input).expect("unknown batch");
 
         let mut s = String::new();
-        for (idx, part) in batch.parts.iter().enumerate() {
-            let part = match part {
-                RunPart::Single(part) => part,
-            };
+        let mut stream = pin!(batch
+            .part_stream(datadriven.shard_id, &*datadriven.state_versions.blob)
+            .enumerate());
+        while let Some((idx, part)) = stream.next().await {
             write!(s, "<part {idx}>\n");
-            let key_lower = match part {
+            let key_lower = match &*part {
                 BatchPart::Hollow(x) => x.key_lower.clone(),
                 BatchPart::Inline { updates, .. } => {
                     let updates: BlobTraceBatchPart<u64> =
@@ -1844,7 +1845,7 @@ pub mod datadriven {
             if stats == Some("lower") && !key_lower.is_empty() {
                 writeln!(s, "<key lower={}>", std::str::from_utf8(&key_lower)?)
             }
-            match part {
+            match &*part {
                 BatchPart::Hollow(part) => {
                     let blob_batch = datadriven
                         .client
@@ -1870,7 +1871,7 @@ pub mod datadriven {
                 datadriven.machine.applier.shard_metrics.as_ref(),
                 &datadriven.client.metrics.read.batch_fetcher,
                 &batch.desc,
-                part,
+                &part,
             )
             .await
             .expect("invalid batch part");
@@ -2105,11 +2106,12 @@ pub mod datadriven {
             );
             for (run, (_meta, parts)) in batch.runs().enumerate() {
                 writeln!(result, "<run {run}>");
-                for (part_id, part) in parts.into_iter().enumerate() {
-                    writeln!(result, "<part {part_id}>");
-                    let part = match part {
-                        RunPart::Single(part) => part,
-                    };
+                let mut stream = pin!(futures::stream::iter(parts)
+                    .flat_map(|part| part
+                        .part_stream(datadriven.shard_id, &*datadriven.state_versions.blob))
+                    .enumerate());
+                while let Some((idx, part)) = stream.next().await {
+                    writeln!(result, "<part {idx}>");
 
                     let part = EncodedPart::fetch(
                         &datadriven.shard_id,
@@ -2118,7 +2120,7 @@ pub mod datadriven {
                         datadriven.machine.applier.shard_metrics.as_ref(),
                         &datadriven.client.metrics.read.batch_fetcher,
                         &batch.desc,
-                        part,
+                        &part,
                     )
                     .await
                     .expect("invalid batch part");

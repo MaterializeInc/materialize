@@ -1400,11 +1400,12 @@ impl PartDeletes {
     // Adds the part to the set to be deleted and returns true if it was newly
     // inserted.
     pub fn add<T>(&mut self, part: &RunPart<T>) -> bool {
-        // FIXME: walk the tree of parts and delete them individually.
-        let RunPart::Single(part) = part;
         match part {
-            BatchPart::Hollow(x) => self.0.insert(x.key.clone()),
-            BatchPart::Inline { .. } => {
+            RunPart::Many(_) => {
+                todo!("walk the tree of parts and delete them individually.")
+            }
+            RunPart::Single(BatchPart::Hollow(x)) => self.0.insert(x.key.clone()),
+            RunPart::Single(BatchPart::Inline { .. }) => {
                 // Nothing to delete.
                 true
             }
@@ -1563,7 +1564,7 @@ mod tests {
 
         assert_eq!(batch.batch.part_count(), 3);
         for part in &batch.batch.parts {
-            let part = part.as_hollow_part().expect("hollow part");
+            let part = part.expect_hollow_part();
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());
@@ -1603,7 +1604,7 @@ mod tests {
 
         assert_eq!(batch.batch.part_count(), 2);
         for part in &batch.batch.parts {
-            let part = part.as_hollow_part().expect("hollow part");
+            let part = part.expect_hollow_part();
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());

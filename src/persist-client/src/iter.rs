@@ -304,7 +304,9 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         shard_metrics: &ShardMetrics,
         read_metrics: &ReadMetrics,
     ) -> anyhow::Result<EncodedPart<T>> {
-        let RunPart::Single(part) = self.part;
+        let RunPart::Single(part) = self.part else {
+            todo!("run ref: recursively fetch the run data")
+        };
         EncodedPart::fetch(
             &shard_id,
             &*blob,

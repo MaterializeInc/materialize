@@ -472,6 +472,7 @@ where
                                 assert_eq!(batch_parts_to_delete.get(&x.key), None)
                             }
                             RunPart::Single(BatchPart::Inline { .. }) => {}
+                            RunPart::Many(_) => todo!("runs: contains method in part deletes!"),
                         }
                     }
                 }

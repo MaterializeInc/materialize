@@ -9,10 +9,12 @@
 
 //! Read capabilities and handles
 
+use async_stream::stream;
 use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,6 +23,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
+use futures_util::StreamExt;
 use itertools::Either;
 use mz_dyncfg::Config;
 use mz_ore::instrument;
@@ -43,7 +46,7 @@ use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, Leas
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::{ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{BatchPart, HollowBatch, RunPart};
+use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
 use crate::iter::{CodecSort, Consolidator, StructuredSort};
 use crate::schema::SchemaCache;
@@ -348,7 +351,7 @@ where
             as_of: self.as_of.clone(),
             lower: self.frontier.clone(),
         };
-        let parts = self.handle.lease_batch_parts(batch, filter).collect();
+        let parts = self.handle.lease_batch_parts(batch, filter).collect().await;
 
         self.handle.maybe_downgrade_since(&self.since).await;
 
@@ -689,7 +692,11 @@ where
             // corresponds to a "part" or s3 object. This allows persist_source
             // to distribute work by parts (smallish, more even size) instead of
             // batches (arbitrarily large).
-            leased_parts.extend(self.lease_batch_parts(batch, filter.clone()));
+            leased_parts.extend(
+                self.lease_batch_parts(batch, filter.clone())
+                    .collect::<Vec<_>>()
+                    .await,
+            );
         }
         Ok(leased_parts)
     }
@@ -732,10 +739,15 @@ where
         &mut self,
         batch: HollowBatch<T>,
         filter: FetchBatchFilter<T>,
-    ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
-        batch.parts.into_iter().map(move |RunPart::Single(part)| {
-            self.lease_batch_part(batch.desc.clone(), part, filter.clone())
-        })
+    ) -> impl Stream<Item = LeasedBatchPart<T>> + '_ {
+        stream! {
+            let blob = Arc::clone(&self.blob);
+            let desc = batch.desc.clone();
+            let mut parts = pin!(batch.part_stream(self.shard_id(), &*blob));
+            while let Some(part) = parts.next().await {
+                yield self.lease_batch_part(desc.clone(), part.into_owned(), filter.clone())
+            }
+        }
     }
 
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
@@ -1167,6 +1179,7 @@ where
             .into_iter()
             .flat_map(|b| b.parts)
             .map(|p| SnapshotPartStats {
+                // FIXME: should this operate on a stream of parts?
                 encoded_size_bytes: p.encoded_size_bytes(),
                 stats: p.stats().cloned(),
             })
