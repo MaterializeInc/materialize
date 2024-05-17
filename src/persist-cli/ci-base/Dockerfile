@@ -18,6 +18,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     curl \
     git \
     gnuplot \
+    graphviz \
     openjdk-11-jre
 
 RUN mkdir -p /usr/local/share/java \
