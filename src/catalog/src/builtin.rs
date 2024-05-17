@@ -5164,6 +5164,7 @@ SELECT
     o.name AS table_name,
     c.name AS column_name,
     c.position::int8 AS ordinal_position,
+    c.default AS column_default,
     CASE WHEN c.nullable THEN 'YES' ELSE 'NO' END AS is_nullable,
     c.type AS data_type,
     NULL::pg_catalog.int4 AS character_maximum_length,
