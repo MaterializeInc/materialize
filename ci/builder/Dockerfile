@@ -97,7 +97,6 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     gdb \
     git \
     gnupg2 \
-    graphviz \
     jq \
     lcov \
     libc-dbg \
