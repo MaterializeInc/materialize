@@ -293,7 +293,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         );
         // There may be applied and tidied writes before the init_ts that the
         // cache is unaware of. So if this method is called with a timestamp
-        // less the initial since, it may mistakenly tell the caller to
+        // less than the initial since, it may mistakenly tell the caller to
         // `EmitLogicalProgress(self.progress_exclusive)` instead of the
         // correct answer of `ReadTo(tidied_write_ts)`.
         //
