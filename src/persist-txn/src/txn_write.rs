@@ -138,14 +138,6 @@ where
             loop {
                 // Validate that the involved data shards are all registered.
                 let () = handle.txns_cache.update_ge(&txns_upper).await;
-                for (data_id, _) in self.writes.iter() {
-                    assert!(
-                        handle.txns_cache.registered_at(data_id, &commit_ts),
-                        "{} should be registered to commit at {:?}",
-                        data_id,
-                        commit_ts
-                    );
-                }
 
                 // txns_upper is the (inclusive) minimum timestamp at which we
                 // could possibly write. If our requested commit timestamp is before
@@ -157,6 +149,14 @@ where
                         commit_ts, txns_upper
                     );
                     return Err(txns_upper);
+                }
+                for (data_id, _) in self.writes.iter() {
+                    assert!(
+                        handle.txns_cache.registered_at(data_id, &commit_ts),
+                        "{} should be registered to commit at {:?}",
+                        data_id,
+                        commit_ts
+                    );
                 }
                 debug!(
                     "commit_at {:?}: [{:?}, {:?}) begin",
@@ -454,9 +454,7 @@ mod tests {
         log.record_txn(2, &txn);
         assert_eq!(apply_2.is_empty(), false);
         cache.update_gt(&2).await;
-        // Manually delete the register from unapplied registers since there's no event to signal
-        // that it's been deleted.
-        cache.unapplied_registers.retain(|(d, _)| d != &d0);
+        cache.mark_register_applied(&2);
         assert_eq!(cache.min_unapplied_ts(), &2);
         assert_eq!(cache.unapplied().count(), 1);
 

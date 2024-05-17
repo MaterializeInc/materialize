@@ -371,15 +371,6 @@ where
 
                 // Ensure the latest writes for each shard has been applied, so we don't run into
                 // any issues trying to apply it later.
-                //
-                // TODO(jkosh44) While this comment accurately reflects the
-                // current behavior of `self.txns_cache`, the current behavior
-                // is not correct. See https://github.com/MaterializeInc/materialize/issues/26893.
-                //
-                // NB: It's _very_ important for correctness to get this from the
-                // unapplied batches (which compact themselves naturally) and not
-                // from the writes (which are artificially compacted based on when
-                // we need reads for).
                 {
                     let data_ids: HashSet<_> = data_ids.iter().cloned().collect();
                     let data_latest_unapplied = self
@@ -618,9 +609,7 @@ where
                 .collect();
 
             // Remove all the applied registers.
-            self.txns_cache
-                .unapplied_registers
-                .retain(|(_, register_ts)| ts < register_ts);
+            self.txns_cache.mark_register_applied(ts);
 
             debug!("apply_le {:?} success", ts);
             Tidy { retractions }
@@ -639,7 +628,22 @@ where
             let tidy = self.apply_le(ts).await;
 
             let data_writes = FuturesUnordered::new();
-            for data_id in self.txns_cache.all_registered_at(ts) {
+            // We only care about data shards whose last registration contains
+            // the provided timestamp. Data shards not included in this fall
+            // into one of the following categories:
+            //
+            //   - The timestamp is after the last registration, in which case
+            //     it would be invalid to write to the shard.
+            //   - The timestamp is before the last registration, in which case
+            //     applying the registration will have already advanced the
+            //     physical upper past the timestamp.
+            for data_id in self
+                .txns_cache
+                .datas
+                .iter()
+                .filter(|(_, data_times)| data_times.last_reg().contains(ts))
+                .map(|(data_id, _)| *data_id)
+            {
                 let mut data_write = self.datas.take_write(&data_id).await;
                 let current = data_write.shared_upper();
                 let advance_to = ts.step_forward();
@@ -693,19 +697,7 @@ where
         let op = &self.metrics.compact_to;
         op.run(async {
             tracing::debug!("compact_to {:?}", since_ts);
-            // TODO(jkosh44) While this comment accurately reflects the
-            // current behavior of `self.txns_cache`, the current behavior
-            // is not correct. See https://github.com/MaterializeInc/materialize/issues/26893.
-            //
-            // This call to compact the cache only affects the write and
-            // registration times, not the unapplied batches. The unapplied batches
-            // have a very important correctness invariant to hold, are
-            // self-compacting as batches are applied, and are handled below. This
-            // means it's always safe to compact the cache past where the txns shard
-            // is physically compacted to, so do that regardless of min_unapplied_ts
-            // and of whether the maybe_downgrade goes through.
             self.txns_cache.update_gt(&since_ts).await;
-            self.txns_cache.compact_to(&since_ts);
 
             // NB: A critical invariant for how this all works is that we never
             // allow the since of the txns shard to pass any unapplied writes, so
@@ -1193,9 +1185,8 @@ mod tests {
                 1 => self.register(data_id).await,
                 2 => self.forget(data_id).await,
                 3 => {
-                    debug!("stress compact {:.9} to {}", data_id.to_string(), self.ts);
+                    debug!("stress update {:.9} to {}", data_id.to_string(), self.ts);
                     self.txns.txns_cache.update_ge(&self.ts).await;
-                    self.txns.txns_cache.compact_to(&self.ts)
                 }
                 4 => self.start_read(data_id),
                 _ => unreachable!(""),
@@ -1210,6 +1201,8 @@ mod tests {
 
         async fn registered_at_ts(&mut self, data_id: ShardId) -> bool {
             self.txns.txns_cache.update_ge(&self.ts).await;
+            // Bump our timestamp up to match the progress of the cache.
+            self.ts = self.txns.txns_cache.progress_exclusive;
             self.txns.txns_cache.registered_at(&data_id, &self.ts)
         }
 
