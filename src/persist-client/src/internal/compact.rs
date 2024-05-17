@@ -761,10 +761,7 @@ where
         // `CompactConfig::new` by overriding the inline writes threshold
         // config. This is a bit action-at-a-distance, so defensively detect if
         // this breaks here and log and correct it if so.
-        let has_inline_parts = batch.batch.parts.iter().any(|x| match x {
-            BatchPart::Hollow(_) => false,
-            BatchPart::Inline { .. } => true,
-        });
+        let has_inline_parts = batch.batch.parts.iter().any(|x| x.is_inline());
         if has_inline_parts {
             error!(%shard_id, ?cfg, "compaction result unexpectedly had inline writes");
             let () = batch
