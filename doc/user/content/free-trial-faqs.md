@@ -34,7 +34,7 @@ is under the rate limit of 4 credits per hour.
 
 ## How long does a free trial last?
 
-14 days.
+7 days.
 
 If you need additional time, please [chat with our team](http://materialize.com/convert-account/).
 Otherwise, Materialize will delete your resources and data at the end of the
