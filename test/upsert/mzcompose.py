@@ -266,8 +266,8 @@ def workflow_failpoint(c: Composition) -> None:
 
     for failpoint in [
         (
-            "fail_merge_snapshot_chunk",
-            "upsert: Failed to rehydrate state: Error merging snapshot values",
+            "fail_consolidate_snapshot_chunk",
+            "upsert: Failed to rehydrate state: Error consolidating snapshot values",
         ),
         (
             "fail_state_multi_put",
