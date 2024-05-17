@@ -10,49 +10,40 @@
 //! An `UpsertStateBackend` that starts in memory and spills to RocksDB
 //! when the total size passes some threshold.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use mz_ore::metrics::DeleteOnDropGauge;
-use mz_rocksdb::RocksDBConfig;
 use prometheus::core::AtomicU64;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::memory::InMemoryHashMap;
 use super::rocksdb::RocksDB;
 use super::types::{
-    GetStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize,
+    GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue, UpsertStateBackend,
+    UpsertValueAndSize,
 };
-use super::upsert_bincode_opts;
 use super::UpsertKey;
 
 pub enum BackendType<O> {
     InMemory(InMemoryHashMap<O>),
     RocksDb(RocksDB<O>),
 }
-/// Params required to create rocksdb instance
-pub(crate) struct RocksDBParams {
-    pub(crate) instance_path: PathBuf,
-    pub(crate) env: rocksdb::Env,
-    pub(crate) tuning_config: RocksDBConfig,
-    pub(crate) shared_metrics: Arc<mz_rocksdb::RocksDBSharedMetrics>,
-    pub(crate) instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
-    pub(crate) cleanup_tries: usize,
-}
 
-pub struct AutoSpillBackend<O> {
+pub struct AutoSpillBackend<O, F> {
     backend_type: BackendType<O>,
-    rockdsdb_params: RocksDBParams,
     auto_spill_threshold_bytes: usize,
     rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+    rocksdb_init_fn: Option<F>,
 }
 
-impl<O> AutoSpillBackend<O>
+impl<O, F, Fut> AutoSpillBackend<O, F>
 where
     O: Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
+    F: FnOnce() -> Fut + 'static,
+    Fut: std::future::Future<Output = RocksDB<O>>,
 {
     pub(crate) fn new(
-        rockdsdb_params: RocksDBParams,
+        rocksdb_init_fn: F,
         auto_spill_threshold_bytes: usize,
         rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
     ) -> Self {
@@ -60,47 +51,29 @@ where
         rocksdb_autospill_in_use.set(0);
         Self {
             backend_type: BackendType::InMemory(InMemoryHashMap::default()),
-            rockdsdb_params,
+            rocksdb_init_fn: Some(rocksdb_init_fn),
             auto_spill_threshold_bytes,
             rocksdb_autospill_in_use,
         }
     }
-
-    async fn init_rocksdb(rocksdb_params: &RocksDBParams) -> RocksDB<O> {
-        let RocksDBParams {
-            instance_path,
-            env,
-            tuning_config,
-            shared_metrics,
-            instance_metrics,
-            cleanup_tries,
-        } = rocksdb_params;
-        tracing::info!("spilling to disk for upsert at {:?}", instance_path);
-
-        RocksDB::new(
-            mz_rocksdb::RocksDBInstance::new(
-                instance_path,
-                mz_rocksdb::InstanceOptions::<_, _, mz_rocksdb::StubMergeOperator<_>>::new(
-                    env.clone(),
-                    *cleanup_tries,
-                    None,
-                    upsert_bincode_opts(),
-                ),
-                tuning_config.clone(),
-                Arc::clone(shared_metrics),
-                Arc::clone(instance_metrics),
-            )
-            .await
-            .unwrap(),
-        )
-    }
 }
 
 #[async_trait::async_trait(?Send)]
-impl<O> UpsertStateBackend<O> for AutoSpillBackend<O>
+impl<O, F, Fut> UpsertStateBackend<O> for AutoSpillBackend<O, F>
 where
     O: Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
+    F: FnOnce() -> Fut + 'static,
+    Fut: std::future::Future<Output = RocksDB<O>>,
 {
+    fn supports_merge(&self) -> bool {
+        // We only support merge if the backend supports it; the in-memory backend does not
+        // and the rocksdb backend does if configure to do so.
+        match &self.backend_type {
+            BackendType::InMemory(_) => false,
+            BackendType::RocksDb(backend) => backend.supports_merge(),
+        }
+    }
+
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
@@ -115,8 +88,12 @@ where
                     .try_into()
                     .expect("unexpected error while casting");
                 if in_memory_size > self.auto_spill_threshold_bytes {
+                    tracing::info!("spilling to disk for upsert");
                     let mut rocksdb_backend =
-                        AutoSpillBackend::init_rocksdb(&self.rockdsdb_params).await;
+                        self.rocksdb_init_fn
+                            .take()
+                            .expect("Can only initialize once")()
+                        .await;
 
                     let (last_known_size, new_puts) = map.drain();
                     let new_puts = new_puts.map(|(k, v)| {
@@ -141,6 +118,18 @@ where
                 Ok(put_stats)
             }
             BackendType::RocksDb(rocks_db) => rocks_db.multi_put(puts).await,
+        }
+    }
+
+    async fn multi_merge<M>(&mut self, merges: M) -> Result<MergeStats, anyhow::Error>
+    where
+        M: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<O>>)>,
+    {
+        match &mut self.backend_type {
+            BackendType::InMemory(_) => {
+                anyhow::bail!("InMemoryHashMap does not support merging");
+            }
+            BackendType::RocksDb(rocks_db) => rocks_db.multi_merge(merges).await,
         }
     }
 

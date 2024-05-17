@@ -16,7 +16,7 @@
 //! into a differential collection, by indexing the data based on the key.
 //!
 //! _This module does not implement this transformation, instead exposing APIs designed
-//! for use within an UPSERT operator. There is one exception to this: `merge_snapshot_chunk`
+//! for use within an UPSERT operator. There is one exception to this: `consolidate_snapshot_chunk`
 //! implements an efficient upsert-like transformation to re-index a collection using the
 //! _output collection_ of an upsert transformation. More on this below.
 //!
@@ -44,13 +44,13 @@
 //!
 //! `multi_put` is implemented directly with `UpsertStateBackend::multi_put`.
 //!
-//! ### `merge_snapshot_chunk`
+//! ### `consolidate_snapshot_chunk`
 //!
-//! `merge_snapshot_chunk` re-indexes an UPSERT collection based on its _output collection_ (as
-//! opposed to its _input `Stream`_. Please see the docs on `merge_snapshot_chunk` and `StateValue`
+//! `consolidate_snapshot_chunk` re-indexes an UPSERT collection based on its _output collection_ (as
+//! opposed to its _input `Stream`_. Please see the docs on `consolidate_snapshot_chunk` and `StateValue`
 //! for more information.
 //!
-//! `merge_snapshot_chunk` is implemented with both `UpsertStateBackend::multi_put` and
+//! `consolidate_snapshot_chunk` is implemented with both `UpsertStateBackend::multi_put` and
 //! `UpsertStateBackend::multi_get`
 //!
 //! ## Order Keys
@@ -64,7 +64,7 @@
 //! There is currently no support for cleaning these tombstones up, as they are considered rare and
 //! small enough.
 //!
-//! Because `merge_snapshot_chunk` handles data that consolidates correctly, it does not handle
+//! Because `consolidate_snapshot_chunk` handles data that consolidates correctly, it does not handle
 //! order keys.
 //!
 //!
@@ -141,6 +141,15 @@ pub struct PutValue<V> {
     /// The value of the previous value for this key, if known.
     /// Passed into efficiently calculate statistics.
     pub previous_value_metadata: Option<ValueMetadata<i64>>,
+}
+
+/// A value to put in with a `multi_merge`.
+pub struct MergeValue<V> {
+    /// The value of the merge operand to write to the backend.
+    pub value: V,
+    /// The 'diff' of this merge operand value, used to estimate the the overall size diff
+    /// of the working set after this merge operand is merged by the backend.
+    pub diff: i64,
 }
 
 /// `UpsertState` has 2 modes:
@@ -341,11 +350,42 @@ impl<O: Default> StateValue<O> {
             }
 
             // Returns whether or not the value can be deleted. This allows us to delete values in
-            // `UpsertState::merge_snapshot_chunk` (even if they come back later) during snapshotting,
+            // `UpsertState::consolidate_snapshot_chunk` (even if they come back later) during snapshotting,
             // to minimize space usage.
             return diff_sum.0 == 0 && checksum_sum.0 == 0 && value_xor.iter().all(|&x| x == 0);
         } else {
             panic!("`merge_update` called after snapshot consolidation")
+        }
+    }
+
+    /// Merge an existing StateValue into this one, using the same method described in `merge_update`.
+    /// See the docstring above for more information on correctness and robustness.
+    pub fn merge_update_state(&mut self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Snapshotting(Snapshotting {
+                    value_xor,
+                    len_sum,
+                    checksum_sum,
+                    diff_sum,
+                }),
+                Self::Snapshotting(other_snapshotting),
+            ) => {
+                *diff_sum += other_snapshotting.diff_sum;
+                *len_sum += other_snapshotting.len_sum;
+                *checksum_sum += other_snapshotting.checksum_sum;
+                if other_snapshotting.value_xor.len() > value_xor.len() {
+                    value_xor.resize(other_snapshotting.value_xor.len(), 0);
+                }
+                for (acc, val) in value_xor
+                    .iter_mut()
+                    .zip(other_snapshotting.value_xor.iter())
+                {
+                    *acc ^= val;
+                }
+                diff_sum.0 == 0 && checksum_sum.0 == 0 && value_xor.iter().all(|&x| x == 0)
+            }
+            _ => panic!("`merge_update_state` called with non-snapshotting state"),
         }
     }
 
@@ -414,8 +454,6 @@ impl<O: Default> StateValue<O> {
                                 .collect::<Vec<_>>(),
                             snapshotting
                         );
-                        // TODO(guswynn): This is probably not necessary, as we should have deleted
-                        // the value from the state.
                         *self = Self::Value(Value::Tombstone(Default::default()));
                     }
                     other => panic!(
@@ -435,15 +473,15 @@ impl<O> Default for StateValue<O> {
     }
 }
 
-/// Statistics for a single call to `merge_snapshot_chunk`.
+/// Statistics for a single call to `consolidate_snapshot_chunk`.
 #[derive(Clone, Default, Debug)]
-pub struct MergeStats {
+pub struct SnapshotStats {
     /// The number of updates processed.
     pub updates: u64,
     /// The aggregated number of values inserted or deleted into `state`.
     pub values_diff: i64,
     /// The total aggregated size of values inserted, deleted, or updated in `state`.
-    /// If the current call to `merge_snapshot_chunk` deletes a lot of values,
+    /// If the current call to `consolidate_snapshot_chunk` deletes a lot of values,
     /// or updates values to smaller ones, this can be negative!
     pub size_diff: i64,
     /// The number of inserts i.e. +1 diff
@@ -452,7 +490,7 @@ pub struct MergeStats {
     pub deletes: u64,
 }
 
-impl std::ops::AddAssign for MergeStats {
+impl std::ops::AddAssign for SnapshotStats {
     fn add_assign(&mut self, rhs: Self) {
         self.updates += rhs.updates;
         self.values_diff += rhs.values_diff;
@@ -460,6 +498,22 @@ impl std::ops::AddAssign for MergeStats {
         self.inserts += rhs.inserts;
         self.deletes += rhs.deletes;
     }
+}
+
+/// Statistics for a single call to `multi_merge`.
+#[derive(Clone, Default, Debug)]
+pub struct MergeStats {
+    /// The number of updates written as merge operands to the backend, for the backend
+    /// to process async in the `snapshot_merge_function`.
+    /// Should be equal to number of inserts + deletes
+    pub written_merge_operands: u64,
+    /// The total size of values provided to `multi_merge`. The backend will write these
+    /// down and then later merge them in the `snapshot_merge_function`.
+    pub size_written: u64,
+    /// The estimated diff of the total size of the working set after the merge operands
+    /// are merged by the backend. This is an estimate since it can't account for the
+    /// size overhead of `StateValue` for values that consolidate to 0 (tombstoned-values).
+    pub size_diff: i64,
 }
 
 /// Statistics for a single call to `multi_put`.
@@ -594,6 +648,9 @@ pub trait UpsertStateBackend<O>
 where
     O: 'static,
 {
+    /// Whether this backend supports the `multi_merge` operation.
+    fn supports_merge(&self) -> bool;
+
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
     ///
@@ -623,6 +680,62 @@ where
     where
         G: IntoIterator<Item = UpsertKey>,
         R: IntoIterator<Item = &'r mut UpsertValueAndSize<O>>;
+
+    /// For each key in `merges` writes a 'merge operand' to the backend. The backend stores these
+    /// merge operands and periodically calls the `snapshot_merge_function` to merge them into
+    /// any existing value for each key. The backend will merge the merge operands in the order
+    /// they are provided, and the merge function will always be run for a given key when a `get`
+    /// operation is performed on that key, or when the backend decides to run the merge based
+    /// on its own internal logic.
+    /// This allows avoiding the read-modify-write method of updating many values to
+    /// improve performance.
+    ///
+    /// The `MergeValue` should include a `diff` field that represents the update diff for the
+    /// value. This is used to estimate the overall size diff of the working set
+    /// after the merge operands are merged by the backend `sum[merges: m](m.diff * m.size)`.
+    ///
+    /// `MergeStats` **must** be populated correctly, according to these semantics:
+    /// - `written_merge_operands` must record the number of merge operands written to the backend.
+    /// - `size_written` must record the total size of values written to the backend.
+    ///     Note that the size of the post-merge values are not known, so this is the size of the
+    ///     values written to the backend as merge operands.
+    /// - `size_diff` must record the estimated diff of the total size of the working set after the
+    ///    merge operands are merged by the backend.
+    async fn multi_merge<P>(&mut self, merges: P) -> Result<MergeStats, anyhow::Error>
+    where
+        P: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<O>>)>;
+}
+
+/// A function that merges a set of updates for a key into the existing value for the key, expected
+/// to only be used during the snapshotting-phase of an upsert operator. This is called by the
+/// backend implementation when it has accumulated a set of updates for a key, and needs to merge
+/// them into the existing value for the key.
+///
+/// The function is called with the following arguments:
+/// - The key for which the merge is being performed.
+/// - An iterator over any current value and merge operands queued for the key.
+/// The function should return the new value for the key after merging all the updates.
+pub(crate) fn snapshot_merge_function<O>(
+    _key: UpsertKey,
+    updates: impl Iterator<Item = StateValue<O>>,
+) -> StateValue<O>
+where
+    O: Default,
+{
+    let mut current = Default::default();
+    assert!(
+        matches!(current, StateValue::Snapshotting(_)),
+        "merge_function called with non-snapshotting default"
+    );
+    for update in updates {
+        assert!(
+            matches!(update, StateValue::Snapshotting(_)),
+            "merge_function called with non-snapshot update"
+        );
+        current.merge_update_state(&update);
+    }
+
+    current
 }
 
 /// An `UpsertStateBackend` wrapper that supports
@@ -630,9 +743,9 @@ where
 pub struct UpsertState<'metrics, S, O> {
     inner: S,
 
-    // The status, start time, and stats about calls to `merge_snapshot_chunk`.
+    // The status, start time, and stats about calls to `consolidate_snapshot_chunk`.
     snapshot_start: Instant,
-    snapshot_stats: MergeStats,
+    snapshot_stats: SnapshotStats,
     snapshot_completed: bool,
 
     // Metrics shared across all workers running the `upsert` operator.
@@ -643,16 +756,16 @@ pub struct UpsertState<'metrics, S, O> {
     stats: SourceStatistics,
 
     // Bincode options and buffer used
-    // in `merge_snapshot_chunk`.
+    // in `consolidate_snapshot_chunk`.
     bincode_opts: BincodeOpts,
     bincode_buffer: Vec<u8>,
 
-    // We need to iterator over `merges` in `merge_snapshot_chunk`
+    // We need to iterate over `updates` in `consolidate_snapshot_chunk`
     // twice, so we have a scratch vector for this.
-    merge_scratch: Vec<(UpsertKey, UpsertValue, mz_repr::Diff)>,
-    // "mini-upsert" map used in `merge_snapshot_chunk`, plus a
-    // scratch vector for calling `multi_get`
-    merge_upsert_scratch: indexmap::IndexMap<UpsertKey, UpsertValueAndSize<O>>,
+    consolidate_scratch: Vec<(UpsertKey, UpsertValue, mz_repr::Diff)>,
+    // "mini-upsert" map used in `consolidate_snapshot_chunk`
+    consolidate_upsert_scratch: indexmap::IndexMap<UpsertKey, UpsertValueAndSize<O>>,
+    // a scratch vector for calling `multi_get`
     multi_get_scratch: Vec<UpsertKey>,
     shrink_upsert_unused_buffers_by_ratio: usize,
 }
@@ -668,15 +781,15 @@ impl<'metrics, S, O> UpsertState<'metrics, S, O> {
         Self {
             inner,
             snapshot_start: Instant::now(),
-            snapshot_stats: MergeStats::default(),
+            snapshot_stats: SnapshotStats::default(),
             snapshot_completed: false,
             metrics,
             worker_metrics,
             stats,
             bincode_opts: upsert_bincode_opts(),
             bincode_buffer: Vec::new(),
-            merge_scratch: Vec::new(),
-            merge_upsert_scratch: indexmap::IndexMap::new(),
+            consolidate_scratch: Vec::new(),
+            consolidate_upsert_scratch: indexmap::IndexMap::new(),
             multi_get_scratch: Vec::new(),
             shrink_upsert_unused_buffers_by_ratio,
         }
@@ -688,121 +801,73 @@ where
     S: UpsertStateBackend<O>,
     O: Default + Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
 {
-    /// Merge and consolidate the following differential updates into the state, during snapshotting.
+    /// Consolidate the following differential updates into the state, during snapshotting.
     /// Updates provided to this method can be assumed to consolidate into a single value
     /// per-key, after all chunks have been processed.
     ///
-    /// Therefore, after an entire snapshot has been `merged`, all values must be in the correct state
-    /// (as determined by `StateValue::ensure_decoded`), and `merge_snapshot_chunk` must NOT
+    /// Therefore, after an entire snapshot has been `consolidated`, all values must be in the correct state
+    /// (as determined by `StateValue::ensure_decoded`), and `consolidate_snapshot_chunk` must NOT
     /// be called again.
     ///
     /// The `completed` boolean communicates whether or not this is the final chunk of updates
-    /// to be merged, to assert correct usage.
-    // Note that this does not allow `UpsertStateBackend` backends to optimize this functionality,
-    // (for example, using RocksDB's native merge functionality), which would be more
-    // performant. This is because:
-    // - We don't have proof we need that performance.
-    // - This implementation is simpler (things like the RocksDB merge API are quite difficult to use
-    // properly
-    //
-    // Additionally:
-    // - Keeping track of stats is way easier this way
-    // - The implementation is uses the exact same "mini-upsert" technique used in the upsert
-    // operator.
-    //
-    // Also note that we use `self.inner.multi_*`, not `self.multi_*`. This is to avoid
-    // erroneously changing metric and stats values.
-    pub async fn merge_snapshot_chunk<M>(
+    /// to be consolidated, to assert correct usage.
+    ///
+    /// If the backend supports it, this method will use `multi_merge` to consolidate the updates
+    /// to avoid having to read the existing value for each key first.
+    /// On some backends (like RocksDB), this can be significantly faster than the read-then-write
+    /// consolidation strategy.
+    ///
+    /// Also note that we use `self.inner.multi_*`, not `self.multi_*`. This is to avoid
+    /// erroneously changing metric and stats values.
+    pub async fn consolidate_snapshot_chunk<U>(
         &mut self,
-        merges: M,
+        updates: U,
         completed: bool,
     ) -> Result<(), anyhow::Error>
     where
-        M: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)> + ExactSizeIterator,
+        U: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)> + ExactSizeIterator,
     {
-        fail::fail_point!("fail_merge_snapshot_chunk", |_| {
-            Err(anyhow::anyhow!("Error merging snapshot values"))
+        fail::fail_point!("fail_consolidate_snapshot_chunk", |_| {
+            Err(anyhow::anyhow!("Error consolidating snapshot values"))
         });
 
         if completed && self.snapshot_completed {
             panic!("attempted completion of already completed upsert snapshot")
         }
-        let now = Instant::now();
-        let batch_size = merges.len();
-        let mut merges = merges.into_iter().peekable();
 
-        self.merge_scratch.clear();
-        self.merge_upsert_scratch.clear();
+        let now = Instant::now();
+        let batch_size = updates.len();
+
+        self.consolidate_scratch.clear();
+        self.consolidate_upsert_scratch.clear();
         self.multi_get_scratch.clear();
 
         // Shrinking the scratch vectors if the capacity is significantly more than batch size
         if self.shrink_upsert_unused_buffers_by_ratio > 0 {
             let reduced_capacity =
-                self.merge_scratch.capacity() / self.shrink_upsert_unused_buffers_by_ratio;
+                self.consolidate_scratch.capacity() / self.shrink_upsert_unused_buffers_by_ratio;
             if reduced_capacity > batch_size {
                 // These vectors have already been cleared above and should be empty here
-                self.merge_scratch.shrink_to(reduced_capacity);
-                self.merge_upsert_scratch.shrink_to(reduced_capacity);
+                self.consolidate_scratch.shrink_to(reduced_capacity);
+                self.consolidate_upsert_scratch.shrink_to(reduced_capacity);
                 self.multi_get_scratch.shrink_to(reduced_capacity);
             }
         }
 
-        let mut stats = MergeStats::default();
+        // Depending on if the backend supports multi_merge, call the appropriate method.
+        // This can change during the lifetime of the `UpsertState` instance (e.g.
+        // the Autospill backend will switch from in-memory to rocksdb after a certain
+        // number of updates have been processed and begin supporting multi_merge).
+        let stats = if self.inner.supports_merge() {
+            self.consolidate_snapshot_merge_inner(updates).await?
+        } else {
+            self.consolidate_snapshot_read_write_inner(updates).await?
+        };
 
-        if merges.peek().is_some() {
-            self.merge_scratch.extend(merges);
-            self.merge_upsert_scratch.extend(
-                self.merge_scratch
-                    .iter()
-                    .map(|(k, _, _)| (*k, UpsertValueAndSize::default())),
-            );
-            self.multi_get_scratch
-                .extend(self.merge_upsert_scratch.iter().map(|(k, _)| *k));
-            self.inner
-                .multi_get(
-                    self.multi_get_scratch.drain(..),
-                    self.merge_upsert_scratch.iter_mut().map(|(_, v)| v),
-                )
-                .await?;
-
-            for (key, value, diff) in self.merge_scratch.drain(..) {
-                stats.updates += 1;
-                if diff > 0 {
-                    stats.inserts += 1;
-                } else if diff < 0 {
-                    stats.deletes += 1;
-                }
-                let entry = self.merge_upsert_scratch.get_mut(&key).unwrap();
-                let val = entry.value.get_or_insert_with(Default::default);
-
-                if val.merge_update(value, diff, self.bincode_opts, &mut self.bincode_buffer) {
-                    entry.value = None;
-                }
-            }
-
-            // Note we do 1 `multi_get` and 1 `multi_put` while processing a _batch of updates_.
-            // Within the batch, we effectively consolidate each key, before persisting that
-            // consolidated value. Easy!!
-            let p_stats = self
-                .inner
-                .multi_put(self.merge_upsert_scratch.drain(..).map(|(k, v)| {
-                    (
-                        k,
-                        PutValue {
-                            value: v.value,
-                            previous_value_metadata: v.metadata.map(|v| ValueMetadata {
-                                size: v.size.try_into().expect("less than i64 size"),
-                                is_tombstone: v.is_tombstone,
-                            }),
-                        },
-                    )
-                }))
-                .await?;
-
-            stats.values_diff = p_stats.values_diff;
-            stats.size_diff = p_stats.size_diff;
-        }
-
+        // NOTE: These metrics use the term `merge` to refer to the consolidation of snapshot values.
+        // This is because they were introduced before we the `multi_merge` operation was added, and
+        // to differentiate the two separate `merge` notions we renamed `merge_snapshot_chunk` to
+        // `consolidate_snapshot_chunk`.
         self.metrics
             .merge_snapshot_latency
             .observe(now.elapsed().as_secs_f64());
@@ -842,9 +907,9 @@ where
         if completed {
             if self.shrink_upsert_unused_buffers_by_ratio > 0 {
                 // After rehydration is done, these scratch buffers should now be empty
-                // Shrinking them entirely
-                self.merge_scratch.shrink_to_fit();
-                self.merge_upsert_scratch.shrink_to_fit();
+                // shrinking them entirely
+                self.consolidate_scratch.shrink_to_fit();
+                self.consolidate_upsert_scratch.shrink_to_fit();
                 self.multi_get_scratch.shrink_to_fit();
             }
 
@@ -855,6 +920,132 @@ where
             self.snapshot_completed = true;
         }
         Ok(())
+    }
+
+    /// Consolidate the updates into the state during snapshotting. This method requires the
+    /// backend has support for the `multi_merge` operation, and will panic if
+    /// `self.inner.supports_merge()` was not checked before calling this method.
+    /// `multi_merge` will write the updates as 'merge operands' to the backend, and then the
+    /// backend will consolidate those updates with any existing state using the
+    /// `snapshot_merge_function`.
+    ///
+    /// This method can have significant performance benefits over the
+    /// read-then-write method of `consolidate_snapshot_read_write_inner`.
+    async fn consolidate_snapshot_merge_inner<U>(
+        &mut self,
+        updates: U,
+    ) -> Result<SnapshotStats, anyhow::Error>
+    where
+        U: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)> + ExactSizeIterator,
+    {
+        let mut updates = updates.into_iter().peekable();
+
+        let mut stats = SnapshotStats::default();
+
+        if updates.peek().is_some() {
+            let m_stats = self
+                .inner
+                .multi_merge(updates.map(|(k, v, diff)| {
+                    // Transform into a `StateValue<O>` that can be used by the `snapshot_merge_function`
+                    // to merge with any existing value for the key.
+                    let mut val: StateValue<O> = Default::default();
+                    val.merge_update(v, diff, self.bincode_opts, &mut self.bincode_buffer);
+
+                    stats.updates += 1;
+                    if diff > 0 {
+                        stats.inserts += 1;
+                    } else if diff < 0 {
+                        stats.deletes += 1;
+                    }
+
+                    // To keep track of the overall `values_diff` we can use the sum of diffs which
+                    // should be equal to the number of non-tombstoned values in the backend.
+                    // This is a bit misleading as this represents the eventual state after the
+                    // `snapshot_merge_function` has been called to merge all the updates,
+                    // and not the state after this `multi_merge` call.
+                    //
+                    // This does not accurately report values that have been consolidated to diff == 0, as tracking that
+                    // per-key is extremely difficult.
+                    stats.values_diff += diff;
+
+                    (k, MergeValue { value: val, diff })
+                }))
+                .await?;
+
+            stats.size_diff = m_stats.size_diff;
+        }
+
+        Ok(stats)
+    }
+
+    /// Consolidates the updates into the state during snapshotting. This method reads the existing
+    /// values for each key, consolidates the updates, and writes the new values back to the state.
+    async fn consolidate_snapshot_read_write_inner<U>(
+        &mut self,
+        updates: U,
+    ) -> Result<SnapshotStats, anyhow::Error>
+    where
+        U: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)> + ExactSizeIterator,
+    {
+        let mut updates = updates.into_iter().peekable();
+
+        let mut stats = SnapshotStats::default();
+
+        if updates.peek().is_some() {
+            self.consolidate_scratch.extend(updates);
+            self.consolidate_upsert_scratch.extend(
+                self.consolidate_scratch
+                    .iter()
+                    .map(|(k, _, _)| (*k, UpsertValueAndSize::default())),
+            );
+            self.multi_get_scratch
+                .extend(self.consolidate_upsert_scratch.iter().map(|(k, _)| *k));
+            self.inner
+                .multi_get(
+                    self.multi_get_scratch.drain(..),
+                    self.consolidate_upsert_scratch.iter_mut().map(|(_, v)| v),
+                )
+                .await?;
+
+            for (key, value, diff) in self.consolidate_scratch.drain(..) {
+                stats.updates += 1;
+                if diff > 0 {
+                    stats.inserts += 1;
+                } else if diff < 0 {
+                    stats.deletes += 1;
+                }
+                let entry = self.consolidate_upsert_scratch.get_mut(&key).unwrap();
+                let val = entry.value.get_or_insert_with(Default::default);
+
+                if val.merge_update(value, diff, self.bincode_opts, &mut self.bincode_buffer) {
+                    entry.value = None;
+                }
+            }
+
+            // Note we do 1 `multi_get` and 1 `multi_put` while processing a _batch of updates_.
+            // Within the batch, we effectively consolidate each key, before persisting that
+            // consolidated value. Easy!!
+            let p_stats = self
+                .inner
+                .multi_put(self.consolidate_upsert_scratch.drain(..).map(|(k, v)| {
+                    (
+                        k,
+                        PutValue {
+                            value: v.value,
+                            previous_value_metadata: v.metadata.map(|v| ValueMetadata {
+                                size: v.size.try_into().expect("less than i64 size"),
+                                is_tombstone: v.is_tombstone,
+                            }),
+                        },
+                    )
+                }))
+                .await?;
+
+            stats.values_diff = p_stats.values_diff;
+            stats.size_diff = p_stats.size_diff;
+        }
+
+        Ok(stats)
     }
 
     /// Insert or delete for all `puts` keys, prioritizing the last value for

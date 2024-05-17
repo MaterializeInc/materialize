@@ -13,6 +13,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_envelope_materialize = true
 ALTER SYSTEM SET enable_index_options = true
 ALTER SYSTEM SET enable_logical_compaction_window = true
+ALTER SYSTEM SET enable_unlimited_retain_history = true
 
 # Test consolidation and compaction behavior.
 #
@@ -191,8 +192,7 @@ mz_timestamp  mz_diff  num
 > SELECT * FROM nums AS OF 3
 5
 
-# Decrease the compaction window to 1ms and ingest some new data in transaction
-# 4.
+# Decrease the compaction window and ingest some new data in transaction 4.
 
 > ALTER INDEX materialize.public.nums_primary_idx
   SET (RETAIN HISTORY = FOR '1ms')

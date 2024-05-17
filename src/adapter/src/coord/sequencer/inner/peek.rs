@@ -27,7 +27,7 @@ use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::{CatalogCluster, SessionCatalog};
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
-use mz_persist_client::stats::{SnapshotPartStats, SnapshotPartsStats};
+use mz_persist_client::stats::SnapshotPartStats;
 use mz_sql::plan::QueryWhen;
 use mz_sql::plan::{self, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
@@ -277,8 +277,7 @@ impl Coordinator {
                     return;
                 }
                 ExplainPushdown(stage) => {
-                    let result = self.peek_stage_explain_pushdown(&mut ctx, stage).await;
-                    ctx.retire(result);
+                    self.peek_stage_explain_pushdown(ctx, stage).await;
                     return;
                 }
             }
@@ -992,11 +991,10 @@ impl Coordinator {
     #[instrument]
     async fn peek_stage_explain_pushdown(
         &mut self,
-        ctx: &mut ExecuteContext,
+        ctx: ExecuteContext,
         stage: PeekStageExplainPushdown,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        use futures::stream::TryStreamExt;
-
+    ) {
+        let explain_timeout = *ctx.session().vars().statement_timeout();
         let as_of = stage.determination.timestamp_context.antichain();
         let mz_now = stage
             .determination
@@ -1005,77 +1003,88 @@ impl Coordinator {
             .map(|t| ResultSpec::value(Datum::MzTimestamp(*t)))
             .unwrap_or_else(ResultSpec::value_all);
 
-        let futures: FuturesOrdered<_> = stage
-            .imports
-            .into_iter()
-            .map(|(gid, mfp)| {
-                let as_of = &as_of;
-                let mz_now = &mz_now;
-                let this = &self;
-                let ctx = &*ctx;
-                async move {
-                    let catalog_entry = this.catalog.get_entry(&gid);
-                    let full_name = this
-                        .catalog
-                        .for_session(&ctx.session)
-                        .resolve_full_name(&catalog_entry.name);
-                    let name = format!("{}", full_name);
-                    let relation_desc = catalog_entry
-                        .item
-                        .desc_opt()
-                        .expect("source should have a proper desc");
-                    let snapshot_stats: SnapshotPartsStats = this
-                        .controller
-                        .storage
-                        .snapshot_parts_stats(gid, as_of.clone())
-                        .await?;
+        let mut futures = FuturesOrdered::new();
+        for (gid, mfp) in stage.imports {
+            let catalog_entry = self.catalog.get_entry(&gid);
+            let full_name = self
+                .catalog
+                .for_session(&ctx.session)
+                .resolve_full_name(&catalog_entry.name);
+            let name = format!("{}", full_name);
+            let relation_desc = catalog_entry
+                .item
+                .desc_opt()
+                .expect("source should have a proper desc")
+                .into_owned();
+            let stats_future = self
+                .controller
+                .storage
+                .snapshot_parts_stats(gid, as_of.clone())
+                .await;
 
-                    let mut total_bytes = 0;
-                    let mut total_parts = 0;
-                    let mut selected_bytes = 0;
-                    let mut selected_parts = 0;
-                    for SnapshotPartStats {
-                        encoded_size_bytes: bytes,
-                        stats,
-                    } in &snapshot_stats.parts
-                    {
-                        let bytes = u64::cast_from(*bytes);
-                        total_bytes += bytes;
-                        total_parts += 1u64;
-                        let selected = match stats {
-                            None => true,
-                            Some(stats) => {
-                                let stats = stats.decode();
-                                let stats = RelationPartStats::new(
-                                    name.as_str(),
-                                    &snapshot_stats.metrics.pushdown.part_stats,
-                                    &relation_desc,
-                                    &stats,
-                                );
-                                stats.may_match_mfp(mz_now.clone(), &mfp)
-                            }
-                        };
-
-                        if selected {
-                            selected_bytes += bytes;
-                            selected_parts += 1u64;
+            let mz_now = mz_now.clone();
+            // These futures may block if the source is not yet readable at the as-of;
+            // stash them in `futures` and only block on them in a separate task.
+            futures.push_back(async move {
+                let snapshot_stats = match stats_future.await {
+                    Ok(stats) => stats,
+                    Err(e) => return Err(e),
+                };
+                let mut total_bytes = 0;
+                let mut total_parts = 0;
+                let mut selected_bytes = 0;
+                let mut selected_parts = 0;
+                for SnapshotPartStats {
+                    encoded_size_bytes: bytes,
+                    stats,
+                } in &snapshot_stats.parts
+                {
+                    let bytes = u64::cast_from(*bytes);
+                    total_bytes += bytes;
+                    total_parts += 1u64;
+                    let selected = match stats {
+                        None => true,
+                        Some(stats) => {
+                            let stats = stats.decode();
+                            let stats = RelationPartStats::new(
+                                name.as_str(),
+                                &snapshot_stats.metrics.pushdown.part_stats,
+                                &relation_desc,
+                                &stats,
+                            );
+                            stats.may_match_mfp(mz_now.clone(), &mfp)
                         }
+                    };
+
+                    if selected {
+                        selected_bytes += bytes;
+                        selected_parts += 1u64;
                     }
-                    Ok::<_, AdapterError>(Row::pack_slice(&[
-                        name.as_str().into(),
-                        total_bytes.into(),
-                        selected_bytes.into(),
-                        total_parts.into(),
-                        selected_parts.into(),
-                    ]))
                 }
-            })
-            .collect();
+                Ok(Row::pack_slice(&[
+                    name.as_str().into(),
+                    total_bytes.into(),
+                    selected_bytes.into(),
+                    total_parts.into(),
+                    selected_parts.into(),
+                ]))
+            });
+        }
 
-        let rows: Vec<Row> = futures.try_collect().await?;
-        let rows = Box::new(rows.into_row_iter());
+        task::spawn(|| "explain filter pushdown", async move {
+            use futures::TryStreamExt;
+            let res = match tokio::time::timeout(explain_timeout, futures.try_collect::<Vec<_>>())
+                .await
+            {
+                Ok(Ok(rows)) => Ok(ExecuteResponse::SendingRowsImmediate {
+                    rows: Box::new(rows.into_row_iter()),
+                }),
+                Ok(Err(err)) => Err(err.into()),
+                Err(_) => Err(AdapterError::StatementTimeout),
+            };
 
-        Ok(ExecuteResponse::SendingRowsImmediate { rows })
+            ctx.retire(res);
+        });
     }
 
     /// Determines the query timestamp and acquires read holds on dependent sources

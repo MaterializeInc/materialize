@@ -38,4 +38,4 @@ class DynamicMapValueReturnTypeSpec(DynamicReturnTypeSpec):
         )
 
         assert isinstance(input_arg_return_type_spec, MapReturnTypeSpec)
-        return input_arg_return_type_spec.get_map_value_type()
+        return input_arg_return_type_spec.get_entry_value_type()

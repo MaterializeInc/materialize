@@ -40,7 +40,7 @@ statement ok
 CREATE INDEX idx_a ON view_a (a)
 
 statement ok
-CREATE INDEX idx_b ON view_b (b) WITH (RETAIN HISTORY FOR '1ms')
+CREATE INDEX idx_b ON view_b (b) WITH (RETAIN HISTORY FOR '1001ms')
 
 statement ok
 ALTER INDEX idx_a SET (RETAIN HISTORY FOR '5m')
@@ -193,3 +193,16 @@ idx_c  FOR  1000
 organizations  FOR  1000
 tab_a  FOR  1000
 users  FOR  1000
+
+# Check retain history lower bounds.
+statement error db error: ERROR: RETAIN HISTORY cannot be set lower than 1000ms
+ALTER SOURCE counter SET (RETAIN HISTORY FOR '1ms')
+
+statement error db error: ERROR: RETAIN HISTORY cannot be disabled or set to 0
+ALTER SOURCE counter SET (RETAIN HISTORY FOR '0')
+
+statement error db error: ERROR: RETAIN HISTORY cannot be set lower than 1000ms
+CREATE SOURCE low_rh FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '1ms')
+
+statement error db error: ERROR: RETAIN HISTORY cannot be disabled or set to 0
+CREATE SOURCE low_rh FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '0')

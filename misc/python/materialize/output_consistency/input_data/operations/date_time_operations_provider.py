@@ -84,15 +84,16 @@ DATE_TIME_OPERATION_TYPES.append(
         "date_trunc",
         [DATE_TIME_COMPONENT_PARAM, DateTimeOperationParam()],
         DateTimeReturnTypeSpec(TIMESTAMP_TYPE_IDENTIFIER),
+        comment="for date types other than interval",
     )
 )
 
-# separate definition for interval
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "date_trunc",
         [DATE_TIME_COMPONENT_PARAM, TimeIntervalOperationParam()],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
+        comment="for interval type",
     )
 )
 
@@ -101,15 +102,16 @@ DATE_TIME_OPERATION_TYPES.append(
         "EXTRACT($ FROM $)",
         [DATE_TIME_COMPONENT_PARAM, DateTimeOperationParam()],
         NumericReturnTypeSpec(),
+        comment="for date types other than interval",
     )
 )
 
-# separate definition for interval
 DATE_TIME_OPERATION_TYPES.append(
     DbOperation(
         "EXTRACT($ FROM $)",
         [DATE_TIME_COMPONENT_PARAM, TimeIntervalOperationParam()],
         NumericReturnTypeSpec(),
+        comment="for interval type",
     )
 )
 
@@ -118,15 +120,16 @@ DATE_TIME_OPERATION_TYPES.append(
         "date_part",
         [DATE_TIME_COMPONENT_PARAM, DateTimeOperationParam()],
         NumericReturnTypeSpec(),
+        comment="for date types other than interval",
     )
 )
 
-# separate definition for interval
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "date_part",
         [DATE_TIME_COMPONENT_PARAM, TimeIntervalOperationParam()],
         NumericReturnTypeSpec(),
+        comment="for interval type",
     )
 )
 
@@ -183,15 +186,16 @@ DATE_TIME_OPERATION_TYPES.append(
             )
         ],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
+        comment="for time type",
     )
 )
 
-# separate definition for interval
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "justify_days",
         [TimeIntervalOperationParam()],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
+        comment="for interval type",
     )
 )
 
@@ -207,15 +211,16 @@ DATE_TIME_OPERATION_TYPES.append(
             )
         ],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
+        comment="for time type",
     )
 )
 
-# separate definition for interval
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "justify_hours",
         [TimeIntervalOperationParam()],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
+        comment="for interval type",
     )
 )
 
@@ -231,42 +236,43 @@ DATE_TIME_OPERATION_TYPES.append(
             )
         ],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
+        comment="for time type",
     )
 )
 
-# separate definition for interval
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "justify_interval",
         [TimeIntervalOperationParam()],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
+        comment="for interval type",
     )
 )
 
-# change precision for TIMESTAMP
 DATE_TIME_OPERATION_TYPES.append(
     DbOperation(
         "$::TIMESTAMP($)",
         [DateTimeOperationParam(), PRECISION_PARAM],
         DateTimeReturnTypeSpec(TIMESTAMP_TYPE_IDENTIFIER),
+        comment="for TIMESTAMP type",
     )
 )
 
-# change precision for TIMESTAMPTZ
 DATE_TIME_OPERATION_TYPES.append(
     DbOperation(
         "$::TIMESTAMPTZ($)",
         [DateTimeOperationParam(), PRECISION_PARAM],
         DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
+        comment="for TIMESTAMPTZ type",
     )
 )
 
-# with time interval as second operator
 DATE_TIME_OPERATION_TYPES.append(
     DbOperation(
         "$ + $",
         [DateTimeOperationParam(), TimeIntervalOperationParam()],
         DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
+        comment="with interval type as second operator",
     )
 )
 DATE_TIME_OPERATION_TYPES.append(
@@ -274,15 +280,16 @@ DATE_TIME_OPERATION_TYPES.append(
         "$ - $",
         [DateTimeOperationParam(), TimeIntervalOperationParam()],
         DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
+        comment="with interval type as second operator",
     )
 )
 
-# with date-time type as second operator
 DATE_TIME_OPERATION_TYPES.append(
     DbOperation(
         "$ + $",
         [DateTimeOperationParam(), DateTimeOperationParam()],
         DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
+        comment="with date-time type as second operator",
     )
 )
 DATE_TIME_OPERATION_TYPES.append(
@@ -290,5 +297,6 @@ DATE_TIME_OPERATION_TYPES.append(
         "$ - $",
         [DateTimeOperationParam(), DateTimeOperationParam()],
         DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
+        comment="with date-time type as second operator",
     )
 )

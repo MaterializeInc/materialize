@@ -125,7 +125,7 @@ for each auction at its `end_time`.
     called.
 
 1. You can query the view directly, but this shouldn't be very impressive just
-yet! Querying the view re-runs the embedded statament, which comes at some cost
+yet! Querying the view re-runs the embedded statement, which comes at some cost
 on growing amounts of data.
 
     ```sql

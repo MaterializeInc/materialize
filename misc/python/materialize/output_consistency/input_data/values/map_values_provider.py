@@ -30,15 +30,15 @@ for map_data_type in MAP_DATA_TYPES:
             sql_value_by_key=dict(),
         ),
         "EMPTY",
-        {ExpressionCharacteristics.MAP_EMPTY},
+        {ExpressionCharacteristics.COLLECTION_EMPTY},
     )
 
     # key values should be specified in MAP_FIELD_NAME_PARAM in misc/python/materialize/output_consistency/input_data/params/enum_constant_operation_params.py
     MAP_1_CONTENT = dict()
     MAP_1_CONTENT["n"] = "NULL"
-    MAP_1_CONTENT["a"] = map_data_type.map_value_1
-    MAP_1_CONTENT["A"] = map_data_type.map_value_2
-    MAP_1_CONTENT["b"] = map_data_type.map_value_2
+    MAP_1_CONTENT["a"] = map_data_type.entry_value_1
+    MAP_1_CONTENT["A"] = map_data_type.entry_value_2
+    MAP_1_CONTENT["b"] = map_data_type.entry_value_2
 
     values_of_type.add_raw_value(
         as_sql_map_string(
@@ -49,8 +49,8 @@ for map_data_type in MAP_DATA_TYPES:
     )
 
     MAP_W_DUP_KEYS_CONTENT = dict()
-    MAP_W_DUP_KEYS_CONTENT["a"] = map_data_type.map_value_1
-    MAP_W_DUP_KEYS_CONTENT["a"] = map_data_type.map_value_2
+    MAP_W_DUP_KEYS_CONTENT["a"] = map_data_type.entry_value_1
+    MAP_W_DUP_KEYS_CONTENT["a"] = map_data_type.entry_value_2
 
     values_of_type.add_raw_value(
         as_sql_map_string(

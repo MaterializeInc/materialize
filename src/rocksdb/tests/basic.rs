@@ -77,9 +77,9 @@ async fn basic() -> Result<(), anyhow::Error> {
 
     instance
         .multi_update(vec![
-            ("one".to_string(), KeyUpdate::Put("onev".to_string())),
+            ("one".to_string(), KeyUpdate::Put("onev".to_string()), None),
             // Deleting a non-existent key shouldn't do anything
-            ("two".to_string(), KeyUpdate::Delete),
+            ("two".to_string(), KeyUpdate::Delete, None),
         ])
         .await?;
 
@@ -102,8 +102,8 @@ async fn basic() -> Result<(), anyhow::Error> {
     instance
         .multi_update(vec![
             // Double-writing a key should keep the last one.
-            ("two".to_string(), KeyUpdate::Put("twov1".to_string())),
-            ("two".to_string(), KeyUpdate::Put("twov2".to_string())),
+            ("two".to_string(), KeyUpdate::Put("twov1".to_string()), None),
+            ("two".to_string(), KeyUpdate::Put("twov2".to_string()), None),
         ])
         .await?;
 
@@ -136,13 +136,13 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
 
     // A simple merge operator that adds all merge values to the existing key
     // value, if any.
-    fn merge(_key: &[u8], operands: ValueIterator<bincode::DefaultOptions, u32>) -> Option<u32> {
+    fn merge(_key: &[u8], operands: ValueIterator<bincode::DefaultOptions, u32>) -> u32 {
         let mut val = 0;
 
         for op in operands {
             val += op;
         }
-        Some(val)
+        val
     }
 
     let static_options = InstanceOptions::new(
@@ -174,7 +174,7 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
             .multi_update(
                 merges
                     .into_iter()
-                    .map(|v| (key.clone(), KeyUpdate::Merge(v))),
+                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(1))),
             )
             .await?;
     }
@@ -201,14 +201,14 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
             .multi_update(
                 merges
                     .into_iter()
-                    .map(|v| (key.clone(), KeyUpdate::Merge(v))),
+                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(1))),
             )
             .await?;
 
         if i % 7 == 0 {
             rolling_sum += 3;
             instance
-                .multi_update(vec![(key.clone(), KeyUpdate::Put(rolling_sum))])
+                .multi_update(vec![(key.clone(), KeyUpdate::Put(rolling_sum), None)])
                 .await?;
         }
     }
@@ -234,7 +234,7 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
             .multi_update(
                 merges
                     .into_iter()
-                    .map(|v| (key.clone(), KeyUpdate::Merge(v))),
+                    .map(|v| (key.clone(), KeyUpdate::Merge(v), Some(1))),
             )
             .await?;
 
@@ -251,6 +251,56 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
             .map(|v| v.map(|v| v.value))
             .collect::<Vec<_>>(),
         vec![Some(rolling_sum)]
+    );
+
+    instance.close().await?;
+
+    Ok(())
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
+async fn update_operation_stats_test() -> Result<(), anyhow::Error> {
+    // If the test aborts, this may not be cleaned up.
+    let t = tempfile::tempdir()?;
+
+    let mut instance = RocksDBInstance::<String, String>::new(
+        t.path().join("5").as_path(),
+        InstanceOptions::<bincode::DefaultOptions, String, StubMergeOperator<String>>::new(
+            rocksdb::Env::new()?,
+            2,
+            None,
+            bincode::DefaultOptions::new(),
+        ),
+        RocksDBConfig::new(Default::default(), None),
+        shared_metrics_for_tests()?,
+        instance_metrics_for_tests()?,
+    )
+    .await?;
+
+    let stats = instance
+        .multi_update(vec![
+            (
+                "two".to_string(),
+                KeyUpdate::Put("twov1".to_string()),
+                Some(1),
+            ),
+            (
+                "two".to_string(),
+                KeyUpdate::Put("twov1".to_string()),
+                Some(-1),
+            ),
+            (
+                "two".to_string(),
+                KeyUpdate::Put("twov2".to_string()),
+                Some(1),
+            ),
+        ])
+        .await?;
+    assert_eq!(stats.processed_updates, 3);
+    assert_eq!(
+        i64::try_from(stats.size_written).unwrap(),
+        3 * stats.size_diff.unwrap()
     );
 
     instance.close().await?;

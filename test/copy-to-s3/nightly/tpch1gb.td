@@ -16,97 +16,97 @@ $ set-max-tries max-tries=1
 > COPY tpch1gb.customer TO 's3://copytos3/test/tpch1gb/csv/customer'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "100MB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'csv'
   );
 > COPY tpch1gb.lineitem TO 's3://copytos3/test/tpch1gb/csv/lineitem'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "100MB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'csv'
   );
 > COPY tpch1gb.nation TO 's3://copytos3/test/tpch1gb/csv/nation'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "100MB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'csv'
   );
 > COPY tpch1gb.orders TO 's3://copytos3/test/tpch1gb/csv/orders'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "100MB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'csv'
   );
 > COPY tpch1gb.part TO 's3://copytos3/test/tpch1gb/csv/part'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "100MB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'csv'
   );
 > COPY tpch1gb.partsupp TO 's3://copytos3/test/tpch1gb/csv/partsupp'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "100MB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'csv'
   );
 > COPY tpch1gb.region TO 's3://copytos3/test/tpch1gb/csv/region'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "100MB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'csv'
   );
 > COPY tpch1gb.supplier TO 's3://copytos3/test/tpch1gb/csv/supplier'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "100MB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'csv'
   );
 
 > COPY (SELECT c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal::text, c_mktsegment, c_comment FROM tpch1gb.customer) TO 's3://copytos3/test/tpch1gb/parquet/customer'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "100MB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'parquet'
   );
 > COPY (SELECT l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity::text, l_extendedprice::text, l_discount::text, l_tax::text, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment FROM tpch1gb.lineitem) TO 's3://copytos3/test/tpch1gb/parquet/lineitem'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "1GB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'parquet'
   );
 > COPY tpch1gb.nation TO 's3://copytos3/test/tpch1gb/parquet/nation'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "1GB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'parquet'
   );
 > COPY (SELECT o_orderkey, o_custkey, o_orderstatus, o_totalprice::text, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment FROM tpch1gb.orders) TO 's3://copytos3/test/tpch1gb/parquet/orders'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "1GB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'parquet'
   );
 > COPY (SELECT p_partkey, p_name, p_mfgr, p_brand, p_type, p_size, p_container, p_retailprice::text, p_comment FROM tpch1gb.part) TO 's3://copytos3/test/tpch1gb/parquet/part'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "1GB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'parquet'
   );
 > COPY (SELECT ps_partkey, ps_suppkey, ps_availqty, ps_supplycost::text, ps_comment FROM tpch1gb.partsupp) TO 's3://copytos3/test/tpch1gb/parquet/partsupp'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "1GB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'parquet'
   );
 > COPY tpch1gb.region TO 's3://copytos3/test/tpch1gb/parquet/region'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "1GB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'parquet'
   );
 > COPY (SELECT s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal::text, s_comment FROM tpch1gb.supplier) TO 's3://copytos3/test/tpch1gb/parquet/supplier'
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "1GB",
+    MAX FILE SIZE = "50MB",
     FORMAT = 'parquet'
   );

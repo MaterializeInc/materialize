@@ -80,7 +80,6 @@ NUMERIC_OPERATION_TYPES.append(
         relevance=OperationRelevance.HIGH,
     )
 )
-# Bitwise AND
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ & $",
@@ -91,10 +90,10 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         relevance=OperationRelevance.LOW,
+        comment="bitwise AND",
         tags={TAG_BITWISE_OP},
     )
 )
-# Bitwise OR
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ | $",
@@ -105,10 +104,10 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         relevance=OperationRelevance.LOW,
+        comment="bitwise OR",
         tags={TAG_BITWISE_OP},
     )
 )
-# Bitwise XOR
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ # $",
@@ -119,10 +118,10 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         relevance=OperationRelevance.LOW,
+        comment="bitwise XOR",
         tags={TAG_BITWISE_OP},
     )
 )
-# Bitwise NOT
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "~$",
@@ -131,10 +130,10 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         NumericReturnTypeSpec(),
         relevance=OperationRelevance.LOW,
+        comment="bitwise NOT",
         tags={TAG_BITWISE_OP},
     )
 )
-# Bitwise left shift
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ << $",
@@ -145,10 +144,10 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         relevance=OperationRelevance.LOW,
+        comment="bitwise left shift",
         tags={TAG_BITWISE_OP},
     )
 )
-# Bitwise right shift
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ >> $",
@@ -159,6 +158,7 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
         {Uint8MixedWithTypedArgsValidator()},
         relevance=OperationRelevance.LOW,
+        comment="bitwise right shift",
         tags={TAG_BITWISE_OP},
     )
 )
@@ -169,29 +169,29 @@ NUMERIC_OPERATION_TYPES.append(
 
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "ABS",
+        "abs",
         [NumericOperationParam()],
         NumericReturnTypeSpec(),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "CBRT",
+        "cbrt",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
     )
 )
-# CEIL == CEILING
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "CEIL",
+        "ceil",
         [NumericOperationParam()],
         NumericReturnTypeSpec(only_integer=True),
+        comment="equivalent to ceiling",
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "EXP",
+        "exp",
         [NumericOperationParam()],
         NumericReturnTypeSpec(always_floating_type=True),
         {SingleParamValueGrowsArgsValidator()},
@@ -199,14 +199,14 @@ NUMERIC_OPERATION_TYPES.append(
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "FLOOR",
+        "floor",
         [NumericOperationParam()],
         NumericReturnTypeSpec(only_integer=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "LN",
+        "ln",
         [
             NumericOperationParam(
                 incompatibilities={
@@ -220,7 +220,7 @@ NUMERIC_OPERATION_TYPES.append(
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "LOG10",
+        "log10",
         [
             NumericOperationParam(
                 incompatibilities={
@@ -234,7 +234,7 @@ NUMERIC_OPERATION_TYPES.append(
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "LOG",
+        "log",
         [
             # first param is the base
             NumericOperationParam(
@@ -262,7 +262,7 @@ NUMERIC_OPERATION_TYPES.append(
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "MOD",
+        "mod",
         [
             NumericOperationParam(),
             NumericOperationParam(incompatibilities={ExpressionCharacteristics.ZERO}),
@@ -270,10 +270,9 @@ NUMERIC_OPERATION_TYPES.append(
         NumericReturnTypeSpec(),
     )
 )
-# POW == POWER
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "POW",
+        "pow",
         [
             NumericOperationParam(),
             NumericOperationParam(
@@ -281,11 +280,12 @@ NUMERIC_OPERATION_TYPES.append(
             ),
         ],
         NumericReturnTypeSpec(),
+        comment="equivalent to power",
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "ROUND",
+        "round",
         [
             NumericOperationParam(),
             # negative values are allowed
@@ -303,14 +303,14 @@ NUMERIC_OPERATION_TYPES.append(
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "SQRT",
+        "sqrt",
         [NumericOperationParam(incompatibilities={ExpressionCharacteristics.NEGATIVE})],
         NumericReturnTypeSpec(always_floating_type=True),
     )
 )
 NUMERIC_OPERATION_TYPES.append(
     DbFunction(
-        "TRUNC",
+        "trunc",
         [NumericOperationParam()],
         # Unlike one might expect, this is not guaranteed to return an integer. Postgres allows specifying the precision.
         NumericReturnTypeSpec(),

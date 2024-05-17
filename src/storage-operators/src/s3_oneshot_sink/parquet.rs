@@ -9,8 +9,6 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
-use arrow::record_batch::RecordBatch;
 use aws_types::sdk_config::SdkConfig;
 use mz_arrow_util::builder::ArrowBuilder;
 use mz_aws_util::s3_uploader::{
@@ -25,6 +23,7 @@ use parquet::{
     basic::Compression,
     file::properties::{WriterProperties, WriterVersion},
 };
+use tracing::{debug, info};
 
 use super::{CopyToParameters, CopyToS3Uploader, S3KeyManager};
 
@@ -44,11 +43,14 @@ const DEFAULT_ARRAY_BUILDER_DATA_CAPACITY: usize = 1024;
 ///
 /// There are several layers of buffering in this uploader:
 ///
+/// - The uploader will hold a [`ParquetFile`] object after the first row is added. This
+///   [`ParquetFile`] holds an [`ArrowBuilder`] and an [`ArrowWriter`].
+///
 /// - The [`ArrowBuilder`] builds a structure of in-memory [`ColBuilder`]s from incoming
 ///   [`mz_repr::Row`]s. Each [`ColBuilder`] holds a specific [`arrow::array::builder`] type
 ///   for constructing a column of the given type. The entire [`ArrowBuilder`] is flushed to
-///   the active [`ParquetFile`] by converting it into a [`RecordBatch`] once we've given it
-///   more than the configured max arrow builder size.
+///   the [`ParquetFile`]'s [`ArrowWriter`] by converting it into a [`RecordBatch`] once we've
+///   given it more than the configured arrow_builder_buffer_bytes.
 ///
 /// - The [`ParquetFile`] holds a [`ArrowWriter`] that buffers until it has enough data to write
 ///   a parquet 'row group'. The 'row group' size is usually based on the number of rows (in the
@@ -59,40 +61,41 @@ const DEFAULT_ARRAY_BUILDER_DATA_CAPACITY: usize = 1024;
 ///   If this upload buffer exceeds the configured part size limit, the [`S3MultiPartUploader`]
 ///   will upload parts to S3 until the upload buffer is below the limit.
 ///
-/// - When the [`ParquetUploader`] is finished, it will flush the active [`ArrowBuilder`] and any
-///   active [`ParquetFile`] which will in turn flush any open row groups to the
-///   [`S3MultiPartUploader`] and upload the remaining parts to S3.
-///      ┌───────────────┐
-///      │ mz_repr::Rows │
-///      └───────┬───────┘
-///              │
-/// ┌────────────▼────────────┐  ┌────────────────────────────┐
-/// │       ArrowBuilder      │  │         ParquetFile        │
-/// │                         │  │ ┌──────────────────┐       │
-/// │     Vec<ArrowColumn>    │  │ │    ArrowWriter   │       │
-/// │ ┌─────────┐ ┌─────────┐ │  │ │                  │       │
-/// │ │         │ │         │ │  │ │   ┌──────────┐   │       │
-/// │ │ColBuildr│ │ColBuildr│ ├──┼─┼──►│  buffer  │   │       │
-/// │ │         │ │         │ │  │ │   └─────┬────┘   │       │
-/// │ └─────────┘ └─────────┘ │  │ │         │        │       │
-/// │                         │  │ │   ┌─────▼────┐   │       │
-/// └─────────────────────────┘  │ │   │ row group│   │       │
-///                              │ │   └─┬────────┘   │       │
-///                              │ │     │            │       │
-///                              │ └─────┼────────────┘       │
-///                              │  ┌────┼──────────────────┐ │
-///                              │  │    │       S3MultiPart│ │
-///                              │  │ ┌──▼───────┐ Uploader │ │
-///                              │  │ │  buffer  │          │ │
-///      ┌─────────┐             │  │ └───┬─────┬┘          │ │
-///      │ S3 API  │◄────────────┼──┤     │     │           │ │
-///      └─────────┘             │  │ ┌───▼──┐ ┌▼─────┐     │ │
-///                              │  │ │ part │ │ part │     │ │
-///                              │  │ └──────┘ └──────┘     │ │
-///                              │  │                       │ │
-///                              │  └───────────────────────┘ │
-///                              │                            │
-///                              └────────────────────────────┘
+/// - When the [`ParquetUploader`] is finished, it will flush the active [`ParquetFile`] which will
+///   flush its [`ArrowBuilder`] and any open row groups to the [`S3MultiPartUploader`] and upload
+///   the remaining parts to S3.
+///       ┌───────────────┐
+///       │ mz_repr::Rows │
+///       └───────┬───────┘
+/// ┌─────────────│───────────────────────────────────────────┐
+/// │             │         ParquetFile                       │
+/// │ ┌───────────▼─────────────┐                             │
+/// │ │       ArrowBuilder      │                             │
+/// │ │                         │    ┌──────────────────┐     │
+/// │ │     Vec<ArrowColumn>    │    │    ArrowWriter   │     │
+/// │ │ ┌─────────┐ ┌─────────┐ │    │                  │     │
+/// │ │ │         │ │         │ │    │   ┌──────────┐   │     │
+/// │ │ │ColBuildr│ │ColBuildr│ ├────┼──►│  buffer  │   │     │
+/// │ │ │         │ │         │ │    │   └─────┬────┘   │     │
+/// │ │ └─────────┘ └─────────┘ │    │         │        │     │
+/// │ │                         │    │   ┌─────▼────┐   │     │
+/// │ └─────────────────────────┘    │   │ row group│   │     │
+/// │                                │   └─┬────────┘   │     │
+/// │                                │     │            │     │
+/// │                                └─────┼────────────┘     │
+/// │                               ┌──────┼────────────────┐ │
+/// │                               │      │     S3MultiPart│ │
+/// │                               │ ┌────▼─────┐ Uploader │ │
+/// │                               │ │  buffer  │          │ │
+/// │    ┌─────────┐                │ └───┬─────┬┘          │ │
+/// │    │ S3 API  │◄───────────────┤     │     │           │ │
+/// │    └─────────┘                │ ┌───▼──┐ ┌▼─────┐     │ │
+/// │                               │ │ part │ │ part │     │ │
+/// │                               │ └──────┘ └──────┘     │ │
+/// │                               │                       │ │
+/// │                               └───────────────────────┘ │
+/// │                                                         │
+/// └─────────────────────────────────────────────────────────┘
 ///
 /// ## File Size & Buffer Sizes
 ///
@@ -122,7 +125,7 @@ const DEFAULT_ARRAY_BUILDER_DATA_CAPACITY: usize = 1024;
 /// issues if the user sets the max file size to be very large.
 pub(super) struct ParquetUploader {
     /// The output description.
-    desc: RelationDesc,
+    desc: Arc<RelationDesc>,
     /// The index of the next file to upload within the batch.
     next_file_index: usize,
     /// Provides the appropriate bucket and object keys to use for uploads.
@@ -134,10 +137,6 @@ pub(super) struct ParquetUploader {
     max_file_size: u64,
     /// The aws sdk config.
     sdk_config: Arc<SdkConfig>,
-    /// The active arrow builder.
-    /// TODO: This would be better as part of the active `ParquetFile` since its lifecycle
-    /// is tied to the file being written.
-    builder: ArrowBuilder,
     row_group_size_bytes: u64,
     arrow_builder_buffer_bytes: u64,
     /// The active parquet file being written to, stored in an option
@@ -169,41 +168,40 @@ impl CopyToS3Uploader for ParquetUploader {
             row_group_size_bytes * u64::cast_from(params.arrow_builder_buffer_ratio) / 100;
 
         match connection_details.format {
-            S3SinkFormat::Parquet => {
-                let builder = ArrowBuilder::new(
-                    &connection_details.desc,
-                    DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
-                    DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
-                )?;
-                Ok(ParquetUploader {
-                    desc: connection_details.desc,
-                    sdk_config: Arc::new(sdk_config),
-                    key_manager: S3KeyManager::new(sink_id, &connection_details.uri),
-                    batch,
-                    max_file_size: connection_details.max_file_size,
-                    next_file_index: 0,
-                    builder,
-                    row_group_size_bytes,
-                    arrow_builder_buffer_bytes,
-                    active_file: None,
-                    params,
-                })
-            }
+            S3SinkFormat::Parquet => Ok(ParquetUploader {
+                desc: Arc::new(connection_details.desc),
+                sdk_config: Arc::new(sdk_config),
+                key_manager: S3KeyManager::new(sink_id, &connection_details.uri),
+                batch,
+                max_file_size: connection_details.max_file_size,
+                next_file_index: 0,
+                row_group_size_bytes,
+                arrow_builder_buffer_bytes,
+                active_file: None,
+                params,
+            }),
             _ => anyhow::bail!("Expected Parquet format"),
         }
     }
 
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
-        self.builder.add_row(row)?;
+        let active_file = match self.active_file {
+            Some(ref mut file) => file,
+            None => self.start_new_file().await?,
+        };
 
-        if u64::cast_from(self.builder.row_size_bytes()) > self.arrow_builder_buffer_bytes {
-            self.flush_builder().await?;
+        active_file.add_row(row)?;
+
+        // If this file has gone over the max size, start a new one
+        if active_file.size_estimate() >= self.max_file_size {
+            debug!("file size limit exceeded, starting new file");
+            self.start_new_file().await?;
         }
+
         Ok(())
     }
 
     async fn finish(&mut self) -> Result<(), anyhow::Error> {
-        self.flush_builder().await?;
         if let Some(active_file) = self.active_file.take() {
             active_file
                 .finish()
@@ -216,7 +214,7 @@ impl CopyToS3Uploader for ParquetUploader {
 
 impl ParquetUploader {
     /// Start a new parquet file for upload. Will finish the current file if one is active.
-    async fn start_new_file(&mut self) -> Result<(), anyhow::Error> {
+    async fn start_new_file(&mut self) -> Result<&mut ParquetFile, anyhow::Error> {
         if let Some(active_file) = self.active_file.take() {
             active_file
                 .finish()
@@ -228,14 +226,14 @@ impl ParquetUploader {
             .data_key(self.batch, self.next_file_index, "parquet");
         self.next_file_index += 1;
 
-        let schema = self.builder.schema();
         let bucket = self.key_manager.bucket.clone();
-        let sdk_config = Arc::clone(&self.sdk_config);
+        info!("starting upload: bucket {}, key {}", bucket, object_key);
         let new_file = ParquetFile::new(
-            schema,
             bucket,
             object_key,
-            sdk_config,
+            Arc::clone(&self.desc),
+            Arc::clone(&self.sdk_config),
+            self.arrow_builder_buffer_bytes,
             self.row_group_size_bytes,
             u64::cast_from(self.params.s3_multipart_part_size_bytes),
         )
@@ -243,64 +241,40 @@ impl ParquetUploader {
         .await?;
 
         self.active_file = Some(new_file);
-        Ok(())
-    }
-
-    /// Flush the current arrow builder to the active file. Starts a new file if the
-    /// no file is currently active or if writing the current builder record batch to the
-    /// active file would exceed the file size limit.
-    async fn flush_builder(&mut self) -> Result<(), anyhow::Error> {
-        let builder = std::mem::replace(
-            &mut self.builder,
-            ArrowBuilder::new(
-                &self.desc,
-                DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
-                DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
-            )?,
-        );
-        let arrow_batch = builder.to_record_batch()?;
-
-        if arrow_batch.num_rows() == 0 {
-            return Ok(());
-        }
-
-        if self.active_file.is_none() {
-            self.start_new_file().await?;
-        }
-
-        if let Some(mut active_file) = self.active_file.take() {
-            active_file.write_arrow_batch(&arrow_batch)?;
-            // If this file has gone over the max size, start a new one
-            if active_file.size_estimate() >= self.max_file_size {
-                self.start_new_file().await?;
-            } else {
-                // put the current file back
-                self.active_file = Some(active_file);
-            }
-        }
-        Ok(())
+        Ok(self.active_file.as_mut().unwrap())
     }
 }
 
-/// Helper to tie the lifecycle of the `ArrowWriter` and `S3MultiPartUploader` together
-/// for a single parquet file.
+/// Helper to tie the lifecycle of the `ArrowBuilder`, `ArrowWriter`, and `S3MultiPartUploader`
+/// together for a single parquet file.
 struct ParquetFile {
+    /// The active arrow builder.
+    builder: ArrowBuilder,
     writer: ArrowWriter<Vec<u8>>,
     // TODO: Consider implementing `tokio::io::AsyncWrite` on `S3MultiPartUploader` which would
     // allow us to write directly to the uploader instead of buffering the data in a vec first.
     uploader: S3MultiPartUploader,
+    arrow_builder_buffer_bytes: u64,
     row_group_size: u64,
+    desc: Arc<RelationDesc>,
 }
 
 impl ParquetFile {
     async fn new(
-        schema: Schema,
         bucket: String,
         key: String,
+        desc: Arc<RelationDesc>,
         sdk_config: Arc<SdkConfig>,
+        arrow_builder_buffer_bytes: u64,
         row_group_size: u64,
         part_size_limit: u64,
     ) -> Result<Self, anyhow::Error> {
+        let builder = ArrowBuilder::new(
+            &desc,
+            DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
+            DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
+        )?;
+
         let props = WriterProperties::builder()
             // This refers to the number of rows per row-group, which we don't want the writer
             // to enforce since we will flush based on the byte-size of the active row group
@@ -310,7 +284,8 @@ impl ParquetFile {
             .set_compression(Compression::SNAPPY)
             .build();
 
-        let writer = ArrowWriter::try_new(Vec::new(), schema.into(), Some(props))?;
+        // TODO: Consider using an lgalloc buffer here instead of a vec
+        let writer = ArrowWriter::try_new(Vec::new(), builder.schema().into(), Some(props))?;
         let uploader = S3MultiPartUploader::try_new(
             sdk_config.as_ref(),
             bucket,
@@ -327,24 +302,59 @@ impl ParquetFile {
             },
         )
         .await?;
+
         Ok(Self {
             writer,
             uploader,
+            arrow_builder_buffer_bytes,
             row_group_size,
+            desc,
+            builder,
         })
     }
 
-    async fn finish(mut self) -> Result<CompletedUpload, anyhow::Error> {
-        let buffer = self.writer.into_inner()?;
-        self.uploader.buffer_chunk(buffer.as_slice())?;
-        Ok(self.uploader.finish().await?)
+    fn add_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
+        self.builder.add_row(row)?;
+
+        if u64::cast_from(self.builder.row_size_bytes()) > self.arrow_builder_buffer_bytes {
+            self.flush_builder()?;
+        }
+
+        Ok(())
     }
 
-    /// Writes an arrow Record Batch to the parquet writer, then flushes the writer's buffer to
+    /// Flush the current arrow builder, the parquet writer, and the uploader.
+    async fn finish(mut self) -> Result<CompletedUpload, anyhow::Error> {
+        self.flush_builder()?;
+        let buffer = self.writer.into_inner()?;
+        self.uploader.buffer_chunk(buffer.as_slice())?;
+        let res = self.uploader.finish().await?;
+        info!(
+            "finished upload: bucket {}, key {}, bytes_uploaded {}, parts_uploaded {}",
+            res.bucket, res.key, res.total_bytes_uploaded, res.part_count
+        );
+        Ok(res)
+    }
+
+    /// Flush the current arrow builder to the parquet writer then flushes the writer's buffer to
     /// the uploader which may trigger an upload.
-    fn write_arrow_batch(&mut self, record_batch: &RecordBatch) -> Result<(), anyhow::Error> {
+    fn flush_builder(&mut self) -> Result<(), anyhow::Error> {
+        let builder = std::mem::replace(
+            &mut self.builder,
+            ArrowBuilder::new(
+                &self.desc,
+                DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
+                DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
+            )?,
+        );
+        let arrow_batch = builder.to_record_batch()?;
+
+        if arrow_batch.num_rows() == 0 {
+            return Ok(());
+        }
+
         let before_groups = self.writer.flushed_row_groups().len();
-        self.writer.write(record_batch)?;
+        self.writer.write(&arrow_batch)?;
 
         // The writer will flush its buffer to a new parquet row group based on the row count,
         // not the actual size of the data. We flush manually to allow uploading the data in

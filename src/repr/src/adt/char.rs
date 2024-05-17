@@ -14,7 +14,8 @@ use anyhow::bail;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
-use proptest_derive::Arbitrary;
+use proptest::arbitrary::Arbitrary;
+use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.char.rs"));
@@ -35,18 +36,7 @@ pub struct Char<S: AsRef<str>>(pub S);
 ///
 /// [`ScalarType::Char`]: crate::ScalarType::Char
 #[derive(
-    Arbitrary,
-    Debug,
-    Clone,
-    Copy,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize,
-    MzReflect,
+    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
 )]
 pub struct CharLength(pub(crate) u32);
 
@@ -68,6 +58,20 @@ impl TryFrom<i64> for CharLength {
             Ok(length) if length > 0 && length < MAX_LENGTH => Ok(CharLength(length)),
             _ => Err(InvalidCharLengthError),
         }
+    }
+}
+
+impl Arbitrary for CharLength {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<CharLength>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        proptest::arbitrary::any::<u32>()
+            // We cap the maximum CharLength to prevent generating massive
+            // strings which can greatly slow down tests and are relatively
+            // uninteresting.
+            .prop_map(|len| CharLength(len % 300))
+            .boxed()
     }
 }
 

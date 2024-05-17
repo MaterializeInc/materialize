@@ -125,12 +125,12 @@ SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv)
 CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "quickstart" WITH (REFRESH = ON COMMIT) AS SELECT 1
 
 statement ok
-CREATE TABLE t (a INT) WITH (RETAIN HISTORY FOR 0)
+CREATE TABLE t (a INT) WITH (RETAIN HISTORY FOR '1000 hours')
 
 query T
 SELECT create_sql FROM (SHOW CREATE TABLE t)
 ----
-CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4") WITH (RETAIN HISTORY = FOR 0)
+CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4") WITH (RETAIN HISTORY = FOR '1000 hours')
 
 statement ok
 CREATE INDEX i ON t(a)
@@ -176,12 +176,12 @@ SELECT create_sql FROM (SHOW CREATE INDEX i)
 CREATE INDEX "i" IN CLUSTER "quickstart" ON "materialize"."public"."t" ("a") WITH (RETAIN HISTORY = FOR '1m')
 
 statement ok
-ALTER INDEX i SET (RETAIN HISTORY = FOR 0)
+ALTER INDEX i SET (RETAIN HISTORY = FOR '1000 hours')
 
 query T
 SELECT create_sql FROM (SHOW CREATE INDEX i)
 ----
-CREATE INDEX "i" IN CLUSTER "quickstart" ON "materialize"."public"."t" ("a") WITH (RETAIN HISTORY = FOR 0)
+CREATE INDEX "i" IN CLUSTER "quickstart" ON "materialize"."public"."t" ("a") WITH (RETAIN HISTORY = FOR '1000 hours')
 
 statement ok
 ALTER INDEX i RESET (RETAIN HISTORY)

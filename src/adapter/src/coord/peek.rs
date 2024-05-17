@@ -61,6 +61,8 @@ pub(crate) struct PendingPeek {
     /// needed by the coordinator for retiring it.
     pub(crate) ctx_extra: ExecuteContextExtra,
     pub(crate) is_fast_path: bool,
+    pub(crate) limit: Option<usize>,
+    pub(crate) offset: usize,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -480,12 +482,11 @@ impl crate::coord::Coordinator {
                 }
             }
             let row_collection = RowCollection::new(&results);
-            let row_count = row_collection.count();
 
             let (ret, reason) =
                 match finishing.finish(row_collection, max_result_size, max_returned_query_size) {
                     Ok(rows) => {
-                        let rows_returned = u64::cast_from(row_count);
+                        let rows_returned = u64::cast_from(rows.count());
                         (
                             Ok(Self::send_immediate_rows(rows)),
                             StatementEndedExecutionReason::Success {
@@ -612,6 +613,8 @@ impl crate::coord::Coordinator {
                 depends_on: source_ids,
                 ctx_extra: std::mem::take(ctx_extra),
                 is_fast_path,
+                limit: finishing.limit.map(|x| usize::cast_from(u64::from(x))),
+                offset: finishing.offset,
             },
         );
         self.client_pending_peeks
@@ -711,17 +714,22 @@ impl crate::coord::Coordinator {
             depends_on: _,
             ctx_extra,
             is_fast_path,
+            limit,
+            offset,
         }) = self.remove_pending_peek(&uuid)
         {
             let reason = match &response {
-                PeekResponse::Rows(r) => StatementEndedExecutionReason::Success {
-                    rows_returned: Some(u64::cast_from(r.count())),
-                    execution_strategy: Some(if is_fast_path {
-                        StatementExecutionStrategy::FastPath
-                    } else {
-                        StatementExecutionStrategy::Standard
-                    }),
-                },
+                PeekResponse::Rows(r) => {
+                    let rows_returned = r.count(offset, limit);
+                    StatementEndedExecutionReason::Success {
+                        rows_returned: Some(u64::cast_from(rows_returned)),
+                        execution_strategy: Some(if is_fast_path {
+                            StatementExecutionStrategy::FastPath
+                        } else {
+                            StatementExecutionStrategy::Standard
+                        }),
+                    }
+                }
                 PeekResponse::Error(e) => {
                     StatementEndedExecutionReason::Errored { error: e.clone() }
                 }

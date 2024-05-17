@@ -66,7 +66,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperation,
     DbOperationOrFunction,
 )
-from materialize.output_consistency.query.query_result import QueryFailure
+from materialize.output_consistency.query.query_result import QueryFailure, QueryResult
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.validation.validation_message import ValidationError
 
@@ -283,11 +283,13 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         pg_outcome = outcome_by_strategy_id[EvaluationStrategyKey.POSTGRES]
 
         if isinstance(pg_outcome, QueryFailure):
+            assert isinstance(mz_outcome, QueryResult)
             return self._shall_ignore_pg_failure_where_mz_succeeds(
-                pg_outcome, query_template
+                pg_outcome, mz_outcome, query_template
             )
 
         if isinstance(mz_outcome, QueryFailure):
+            assert isinstance(pg_outcome, QueryResult)
             return self._shall_ignore_mz_failure_where_pg_succeeds(
                 query_template, mz_outcome
             )
@@ -297,7 +299,10 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         )
 
     def _shall_ignore_pg_failure_where_mz_succeeds(
-        self, pg_outcome: QueryFailure, query_template: QueryTemplate
+        self,
+        pg_outcome: QueryFailure,
+        mz_outcome: QueryResult,
+        query_template: QueryTemplate,
     ) -> IgnoreVerdict:
         pg_error_msg = pg_outcome.error_message
 
@@ -350,6 +355,27 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore(
                 "#27078: different error handling when extracting from timestamp"
             )
+
+        if (
+            "invalid input syntax for type uuid" in pg_error_msg
+            and mz_outcome.row_count() == 0
+        ):
+            return YesIgnore(
+                "mz does not evaluate a failing, constant expression when the result contains zero rows"
+            )
+
+        if query_template.matches_any_expression(
+            partial(matches_fun_by_name, function_name_in_lower_case="COALESCE"), True
+        ):
+            return YesIgnore(
+                "Postgres resolves all arguments, possibly resulting in an evaluation error"
+            )
+
+        if query_template.matches_any_expression(
+            partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
+            True,
+        ):
+            return YesIgnore("mz shortcuts the evaluation, avoiding evaluation errors")
 
         return NoIgnore()
 
@@ -435,6 +461,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
+        details_by_strategy_key = error.get_details_by_strategy_key()
+        mz_error_details = details_by_strategy_key[
+            EvaluationStrategyKey.MZ_DATAFLOW_RENDERING
+        ]
+        pg_error_details = details_by_strategy_key[EvaluationStrategyKey.POSTGRES]
+
         def matches_math_aggregation_fun(expression: Expression) -> bool:
             return matches_fun_by_any_name(
                 expression,
@@ -586,6 +618,25 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             True,
         ):
             return YesIgnore("#26846: eszett in upper")
+
+        if (
+            query_template.matches_any_expression(
+                partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
+                True,
+            )
+            and str(mz_error_details.value) == "time"
+            and str(pg_error_details.value) == "time without time zone"
+        ):
+            return YesIgnore("Different type name for time")
+
+        if query_template.matches_any_expression(
+            partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
+            True,
+        ) and query_template.matches_any_expression(
+            partial(matches_fun_by_name, function_name_in_lower_case="array_agg"),
+            True,
+        ):
+            return YesIgnore("#27150: array_agg(pg_typeof(...)) in pg flattens result")
 
         return NoIgnore()
 
