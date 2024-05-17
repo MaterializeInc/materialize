@@ -31,10 +31,10 @@ use semver::Version;
 use timely::progress::Timestamp;
 use tracing::{debug_span, Instrument};
 
-use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter, LeasedBatchPart};
+use crate::fetch::{Cursor, EncodedPart, FetchBatchFilter};
 use crate::internal::metrics::{BatchPartReadMetrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::WriterKey;
-use crate::internal::state::{BatchPart, HollowBatchPart};
+use crate::internal::state::BatchPart;
 use crate::metrics::Metrics;
 use crate::ShardId;
 
@@ -58,20 +58,14 @@ fn clone_tuple<T, D>((k, v, t, d): TupleRef<T, D>) -> Tuple<T, D> {
 /// to send between threads.
 #[derive(Debug)]
 pub(crate) enum FetchData<T> {
-    Unleased {
+    Unfetched {
         shard_id: ShardId,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: Arc<ShardMetrics>,
         part_desc: Description<T>,
-        part: HollowBatchPart<T>,
-    },
-    Leased {
-        blob: Arc<dyn Blob>,
-        read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
-        shard_metrics: Arc<ShardMetrics>,
-        part: LeasedBatchPart<T>,
+        part: BatchPart<T>,
     },
     AlreadyFetched,
 }
@@ -80,13 +74,9 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     fn maybe_unconsolidated(&self) -> bool {
         let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
         match self {
-            FetchData::Unleased { part, .. } => part.key.split().0 >= min_version,
-            FetchData::Leased { part, .. } => match &part.part {
-                BatchPart::Hollow(x) => x.key.split().0 >= min_version,
-                // Inline parts are only written directly by the user and so may
-                // be unconsolidated.
-                BatchPart::Inline { .. } => true,
-            },
+            FetchData::Unfetched { part, .. } => {
+                part.writer_key().map_or(false, |k| k >= min_version)
+            }
             FetchData::AlreadyFetched => false,
         }
     }
@@ -97,15 +87,14 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
 
     fn key_lower(&self) -> &[u8] {
         match self {
-            FetchData::Unleased { part, .. } => part.key_lower.as_slice(),
-            FetchData::Leased { part, .. } => part.part.key_lower(),
+            FetchData::Unfetched { part, .. } => part.key_lower(),
             FetchData::AlreadyFetched => &[],
         }
     }
 
     async fn fetch(self) -> anyhow::Result<EncodedPart<T>> {
         match self {
-            FetchData::Unleased {
+            FetchData::Unfetched {
                 shard_id,
                 blob,
                 metrics,
@@ -114,7 +103,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                 part_desc,
                 part,
                 ..
-            } => fetch_batch_part(
+            } => EncodedPart::fetch(
                 &shard_id,
                 &*blob,
                 &metrics,
@@ -125,27 +114,6 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
             )
             .await
             .map_err(|blob_key| anyhow!("missing unleased key {blob_key}")),
-            FetchData::Leased {
-                blob,
-                read_metrics,
-                shard_metrics,
-                part,
-            } => {
-                // We do not use fetch_leased_part, since that requires more type info
-                // than we have available here.
-                let fetched = EncodedPart::fetch(
-                    &part.shard_id,
-                    &*blob,
-                    &part.metrics,
-                    &*shard_metrics,
-                    read_metrics(&part.metrics.read),
-                    &part.desc,
-                    &part.part,
-                )
-                .await
-                .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"));
-                fetched
-            }
             FetchData::AlreadyFetched => Err(anyhow!("attempt to fetch an already-fetched part")),
         }
     }
@@ -311,7 +279,7 @@ where
     /// to ensure this is to enqueue every run before any calls to next.
     // TODO(bkirwi): enforce this invariant, either by forcing all runs to be pre-registered or with an assert.
     // TODO(bkirwi): try moving some of these params into the constructor when the dust settles.
-    pub fn enqueue_run<'a>(
+    pub fn enqueue_run(
         &mut self,
         shard_id: ShardId,
         blob: &Arc<dyn Blob>,
@@ -319,66 +287,39 @@ where
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: &Arc<ShardMetrics>,
         desc: &Description<T>,
-        parts: impl IntoIterator<Item = &'a BatchPart<T>>,
+        parts: impl IntoIterator<Item = BatchPart<T>>,
     ) {
         let run = parts
             .into_iter()
-            .map(|part: &BatchPart<T>| match part {
-                BatchPart::Hollow(part) => {
-                    let c_part = ConsolidationPart::Queued {
-                        data: FetchData::Unleased {
+            .map(|part| {
+                let bytes = part.encoded_size_bytes();
+                let c_part = match part {
+                    BatchPart::Inline {
+                        updates,
+                        ts_rewrite,
+                    } => {
+                        let part = EncodedPart::from_inline(
+                            metrics,
+                            read_metrics(&metrics.read).clone(),
+                            desc.clone(),
+                            &updates,
+                            ts_rewrite.as_ref(),
+                        );
+                        ConsolidationPart::from_encoded(part, &self.filter, true)
+                    }
+                    part => ConsolidationPart::Queued {
+                        data: FetchData::Unfetched {
                             shard_id,
                             blob: Arc::clone(blob),
                             metrics: Arc::clone(metrics),
                             read_metrics,
                             shard_metrics: Arc::clone(shard_metrics),
                             part_desc: desc.clone(),
-                            part: part.clone(),
+                            part,
                         },
-                    };
-                    (c_part, part.encoded_size_bytes)
-                }
-                BatchPart::Inline {
-                    updates,
-                    ts_rewrite,
-                } => {
-                    let read_metrics = read_metrics(&metrics.read).clone();
-                    let part = EncodedPart::from_inline(
-                        metrics,
-                        read_metrics,
-                        desc.clone(),
-                        updates,
-                        ts_rewrite.as_ref(),
-                    );
-                    let c_part = ConsolidationPart::from_encoded(part, &self.filter, true);
-                    (c_part, updates.encoded_size_bytes())
-                }
-            })
-            .collect();
-        self.push_run(run);
-    }
-
-    /// Add a leased run of data to be consolidated.
-    pub fn enqueue_leased_run(
-        &mut self,
-        blob: &Arc<dyn Blob>,
-        read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
-        shard_metrics: &Arc<ShardMetrics>,
-        parts: impl IntoIterator<Item = LeasedBatchPart<T>>,
-    ) {
-        let run = parts
-            .into_iter()
-            .map(|part: LeasedBatchPart<T>| {
-                let size = part.part.encoded_size_bytes();
-                let queued = ConsolidationPart::Queued {
-                    data: FetchData::Leased {
-                        blob: Arc::clone(blob),
-                        read_metrics,
-                        shard_metrics: Arc::clone(shard_metrics),
-                        part,
                     },
                 };
-                (queued, size)
+                (c_part, bytes)
             })
             .collect();
         self.push_run(run);
@@ -1091,7 +1032,7 @@ mod tests {
                     |m| &m.batch_fetcher,
                     &shard_metrics,
                     &desc,
-                    &parts,
+                    parts,
                 )
             }
 

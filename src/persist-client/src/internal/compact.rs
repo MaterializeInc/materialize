@@ -727,7 +727,7 @@ where
                 |m| &m.compaction,
                 &shard_metrics,
                 desc,
-                parts,
+                parts.iter().cloned(),
             );
         }
 
