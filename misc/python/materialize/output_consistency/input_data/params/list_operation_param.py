@@ -8,9 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
@@ -19,9 +17,6 @@ from materialize.output_consistency.input_data.params.collection_operation_param
     CollectionOfOtherElementOperationParam,
     CollectionOperationParam,
 )
-from materialize.output_consistency.input_data.types.list_type_provider import (
-    ListDataType,
-)
 
 
 class ListOperationParam(CollectionOperationParam):
@@ -29,25 +24,21 @@ class ListOperationParam(CollectionOperationParam):
         self,
         optional: bool = False,
         incompatibilities: set[ExpressionCharacteristics] | None = None,
+        value_type_category: DataTypeCategory | None = None,
     ):
         super().__init__(
             DataTypeCategory.LIST,
             optional,
             incompatibilities,
-            incompatibility_combinations=None,
+            value_type_category=value_type_category,
         )
-
-    def supports_type(
-        self, data_type: DataType, previous_args: list[Expression]
-    ) -> bool:
-        return isinstance(data_type, ListDataType)
 
 
 class ListLikeOtherListOperationParam(CollectionLikeOtherCollectionOperationParam):
-    def matches_collection_type(self, data_type: DataType) -> bool:
-        return data_type.category == DataTypeCategory.LIST
+    def get_collection_type_category(self) -> DataTypeCategory:
+        return DataTypeCategory.LIST
 
 
 class ListOfOtherElementOperationParam(CollectionOfOtherElementOperationParam):
-    def matches_collection_type(self, data_type: DataType) -> bool:
-        return data_type.category == DataTypeCategory.LIST
+    def get_collection_type_category(self) -> DataTypeCategory:
+        return DataTypeCategory.LIST
