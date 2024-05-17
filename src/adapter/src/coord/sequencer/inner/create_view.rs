@@ -62,6 +62,10 @@ impl Staged for CreateViewStage {
             stage: self,
         }
     }
+
+    fn cancel_enabled(&self) -> bool {
+        true
+    }
 }
 
 impl Coordinator {

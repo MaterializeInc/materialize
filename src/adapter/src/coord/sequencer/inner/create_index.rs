@@ -66,6 +66,10 @@ impl Staged for CreateIndexStage {
             stage: self,
         }
     }
+
+    fn cancel_enabled(&self) -> bool {
+        true
+    }
 }
 
 impl Coordinator {

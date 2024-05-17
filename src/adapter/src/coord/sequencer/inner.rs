@@ -94,7 +94,7 @@ use mz_storage_types::AlterCompatible;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::EmptyStatisticsOracle;
 use timely::progress::Antichain;
-use tokio::sync::{oneshot, OwnedMutexGuard};
+use tokio::sync::{oneshot, watch, OwnedMutexGuard};
 use tracing::{warn, Instrument, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
@@ -165,6 +165,25 @@ impl Coordinator {
         parent_span: Span,
         mut stage: S,
     ) {
+        let cancel_enabled = stage.cancel_enabled();
+        if cancel_enabled {
+            // Channel to await cancellation. Insert a new channel, but check if the previous one
+            // was already canceled.
+            if let Some((_prev_tx, prev_rx)) = self
+                .staged_cancellation
+                .insert(ctx.session.conn_id().clone(), watch::channel(false))
+            {
+                let was_canceled = *prev_rx.borrow();
+                if was_canceled {
+                    ctx.retire(Err(AdapterError::Canceled));
+                    return;
+                }
+            }
+        } else {
+            // If no cancel allowed, remove it so handle_spawn doesn't observe any previous value
+            // when cancel_enabled may have been true on an earlier stage.
+            self.staged_cancellation.remove(ctx.session.conn_id());
+        }
         return_if_err!(stage.validity().check(self.catalog()), ctx);
         let next = stage
             .stage(self, &mut ctx)
@@ -174,12 +193,12 @@ impl Coordinator {
         match res {
             StageResult::Handle(handle) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                self.handle_spawn(ctx, handle, move |ctx, next| {
+                self.handle_spawn(ctx, handle, cancel_enabled, move |ctx, next| {
                     let _ = internal_cmd_tx.send(next.message(ctx, parent_span));
                 });
             }
             StageResult::HandleRetire(handle) => {
-                self.handle_spawn(ctx, handle, move |ctx, resp| {
+                self.handle_spawn(ctx, handle, cancel_enabled, move |ctx, resp| {
                     ctx.retire(Ok(resp));
                 });
             }
@@ -193,23 +212,42 @@ impl Coordinator {
         &mut self,
         ctx: ExecuteContext,
         handle: JoinHandle<Result<T, AdapterError>>,
+        cancel_enabled: bool,
         f: F,
     ) where
         T: Send + 'static,
         F: FnOnce(ExecuteContext, T) + Send + 'static,
     {
-        spawn(|| "sequence_staged", async move {
-            let next = match handle.await {
-                Ok(next) => return_if_err!(next, ctx),
-                Err(err) => {
-                    tracing::error!("sequence_staged join error {err}");
-                    ctx.retire(Err(AdapterError::Internal(
-                        "sequence_staged join error".into(),
-                    )));
-                    return;
-                }
+        let rx: BoxFuture<()> =
+            if let Some((_tx, rx)) = self.staged_cancellation.get(ctx.session().conn_id()) {
+                let mut rx = rx.clone();
+                Box::pin(async move {
+                    // Wait for true or dropped sender.
+                    let _ = rx.wait_for(|v| *v).await;
+                    ()
+                })
+            } else {
+                Box::pin(future::pending())
             };
-            f(ctx, next);
+        spawn(|| "sequence_staged", async move {
+            tokio::select! {
+                res = handle => {
+                    let next = match res {
+                        Ok(next) => return_if_err!(next, ctx),
+                        Err(err) => {
+                            tracing::error!("sequence_staged join error {err}");
+                            ctx.retire(Err(AdapterError::Internal(
+                                "sequence_staged join error".into(),
+                            )));
+                            return;
+                        }
+                    };
+                    f(ctx, next);
+                }
+                _ = rx, if cancel_enabled => {
+                    ctx.retire(Err(AdapterError::Canceled));
+                }
+            }
         });
     }
 

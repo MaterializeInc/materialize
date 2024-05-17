@@ -67,6 +67,12 @@ impl Staged for SecretStage {
             stage: self,
         }
     }
+
+    fn cancel_enabled(&self) -> bool {
+        // Because secrets operations call out to external services and transact the catalog
+        // separately, disable cancellation.
+        false
+    }
 }
 
 impl Coordinator {

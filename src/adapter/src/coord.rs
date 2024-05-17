@@ -143,7 +143,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
+use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -919,6 +919,9 @@ pub(crate) trait Staged: Send {
 
     /// Prepares a message for the Coordinator.
     fn message(self, ctx: ExecuteContext, span: Span) -> Message;
+
+    /// Whether it is safe to SQL cancel this stage.
+    fn cancel_enabled(&self) -> bool;
 }
 
 /// Configures a coordinator.
@@ -1587,6 +1590,9 @@ pub struct Coordinator {
     active_compute_sinks: BTreeMap<GlobalId, ActiveComputeSink>,
     /// A map from active webhooks to their invalidation handle.
     active_webhooks: BTreeMap<GlobalId, WebhookAppenderInvalidator>,
+    /// A map from connection ids to a watch channel that is set to `true` if the connection
+    /// received a cancel request.
+    staged_cancellation: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
 
     /// Serializes accesses to write critical sections.
     write_lock: Arc<tokio::sync::Mutex<()>>,
@@ -3433,6 +3439,7 @@ pub fn serve(
                     pending_linearize_read_txns: BTreeMap::new(),
                     active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
+                    staged_cancellation: BTreeMap::new(),
                     write_lock: Arc::new(tokio::sync::Mutex::new(())),
                     write_lock_wait_group: VecDeque::new(),
                     pending_writes: Vec::new(),
