@@ -27,7 +27,7 @@ pub enum StackWrapper<T: Columnation> {
     Chunked(ChunkedStack<T>),
 }
 
-/// Runtime switch to select the stack implementation. `true` to use [`ChunkedStac`],
+/// Runtime switch to select the stack implementation. `true` to use [`ChunkedStack`],
 /// `false` to select [`TimelyStack`].
 pub fn use_chunked_stack(enable: bool) {
     ENABLE_CHUNKED_STACK.store(enable, std::sync::atomic::Ordering::Relaxed);
