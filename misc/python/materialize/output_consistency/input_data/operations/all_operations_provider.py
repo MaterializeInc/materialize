@@ -42,6 +42,9 @@ from materialize.output_consistency.input_data.operations.number_operations_prov
 from materialize.output_consistency.input_data.operations.set_operations_provider import (
     SET_OPERATION_TYPES,
 )
+from materialize.output_consistency.input_data.operations.special_operations_provider import (
+    SPECIAL_OPERATION_TYPES,
+)
 from materialize.output_consistency.input_data.operations.text_operations_provider import (
     TEXT_OPERATION_TYPES,
 )
@@ -69,5 +72,6 @@ ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
         JSONB_OPERATION_TYPES,
         MAP_OPERATION_TYPES,
         UUID_OPERATION_TYPES,
+        SPECIAL_OPERATION_TYPES,
     )
 )
