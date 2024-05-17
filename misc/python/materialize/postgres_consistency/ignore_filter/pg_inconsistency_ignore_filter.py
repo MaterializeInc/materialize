@@ -371,6 +371,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 "Postgres resolves all arguments, possibly resulting in an evaluation error"
             )
 
+        if query_template.matches_any_expression(
+            partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
+            True,
+        ):
+            return YesIgnore("mz shortcuts the evaluation, avoiding evaluation errors")
+
         return NoIgnore()
 
     def _shall_ignore_mz_failure_where_pg_succeeds(
@@ -622,6 +628,15 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             and str(pg_error_details.value) == "time without time zone"
         ):
             return YesIgnore("Different type name for time")
+
+        if query_template.matches_any_expression(
+            partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
+            True,
+        ) and query_template.matches_any_expression(
+            partial(matches_fun_by_name, function_name_in_lower_case="array_agg"),
+            True,
+        ):
+            return YesIgnore("#27150: array_agg(pg_typeof(...)) in pg flattens result")
 
         return NoIgnore()
 
