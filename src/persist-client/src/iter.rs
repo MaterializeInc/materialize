@@ -190,8 +190,15 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
     where
         D: Semigroup,
     {
-        let mut data: Vec<_> = data.into_iter().map(clone_tuple).collect();
+        let mut data: Vec<_> = data
+            .into_iter()
+            .map(|(k, v, t, d)| ((k, v), t, d))
+            .collect();
         consolidate_updates(&mut data);
+        let data = data
+            .into_iter()
+            .map(|((k, v), t, d)| clone_tuple((k, v, t, d)))
+            .collect();
         Self::Sorted { data, index: 0 }
     }
 
