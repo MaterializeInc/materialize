@@ -39,7 +39,7 @@ use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
-use crate::internal::state::{BatchPart, ProtoRollup, ProtoStateDiff, State};
+use crate::internal::state::{BatchPart, ProtoRollup, ProtoStateDiff, RunPart, State};
 use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
 use crate::{Metrics, PersistClient, PersistConfig, ShardId};
@@ -390,7 +390,8 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
 
     let mut updates = Vec::new();
     for batch in state.collections.trace.batches() {
-        for part in batch.parts.iter() {
+        // FIXME: recursively fetch runs
+        for RunPart::Single(part) in batch.parts.iter() {
             tracing::info!("fetching {}", part.printable_name());
             let encoded_part = EncodedPart::fetch(
                 &shard_id,
@@ -594,8 +595,8 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
         for batch in v.collections.trace.batches() {
             for batch_part in &batch.parts {
                 match batch_part {
-                    BatchPart::Hollow(x) => known_parts.insert(x.key.clone()),
-                    BatchPart::Inline { .. } => continue,
+                    RunPart::Single(BatchPart::Hollow(x)) => known_parts.insert(x.key.clone()),
+                    RunPart::Single(BatchPart::Inline { .. }) => continue,
                 };
             }
         }

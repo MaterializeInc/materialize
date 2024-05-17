@@ -43,7 +43,7 @@ use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, Leas
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::{ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{BatchPart, HollowBatch};
+use crate::internal::state::{BatchPart, HollowBatch, RunPart};
 use crate::internal::watch::StateWatch;
 use crate::iter::{CodecSort, Consolidator, StructuredSort};
 use crate::schema::SchemaCache;
@@ -733,10 +733,9 @@ where
         batch: HollowBatch<T>,
         filter: FetchBatchFilter<T>,
     ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
-        batch
-            .parts
-            .into_iter()
-            .map(move |part| self.lease_batch_part(batch.desc.clone(), part, filter.clone()))
+        batch.parts.into_iter().map(move |RunPart::Single(part)| {
+            self.lease_batch_part(batch.desc.clone(), part, filter.clone())
+        })
     }
 
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being

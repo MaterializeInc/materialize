@@ -1423,7 +1423,7 @@ pub mod datadriven {
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
-    use crate::internal::state::BatchPart;
+    use crate::internal::state::{BatchPart, RunPart};
     use crate::internal::state_versions::EncodedRollup;
     use crate::read::{Listen, ListenEvent, READER_LEASE_DURATION};
     use crate::rpc::NoopPubSubSender;
@@ -1806,9 +1806,10 @@ pub mod datadriven {
         if let Some(size) = parts_size_override {
             let mut batch = batch.clone();
             for part in batch.parts.iter_mut() {
-                match part {
-                    BatchPart::Hollow(part) => part.encoded_size_bytes = size,
-                    BatchPart::Inline { .. } => unreachable!("flushed out above"),
+                if let RunPart::Single(BatchPart::Hollow(part)) = part {
+                    part.encoded_size_bytes = size
+                } else {
+                    unreachable!("flushed out above")
                 }
             }
             datadriven.batches.insert(output.to_owned(), batch);
@@ -1828,6 +1829,9 @@ pub mod datadriven {
 
         let mut s = String::new();
         for (idx, part) in batch.parts.iter().enumerate() {
+            let part = match part {
+                RunPart::Single(part) => part,
+            };
             write!(s, "<part {idx}>\n");
             let key_lower = match part {
                 BatchPart::Hollow(x) => x.key_lower.clone(),
@@ -1924,8 +1928,8 @@ pub mod datadriven {
         let batch = datadriven.batches.get_mut(input).expect("unknown batch");
         for part in batch.parts.iter_mut() {
             match part {
-                BatchPart::Hollow(x) => x.encoded_size_bytes = size,
-                BatchPart::Inline { .. } => {
+                RunPart::Single(BatchPart::Hollow(x)) => x.encoded_size_bytes = size,
+                _ => {
                     panic!("set_batch_parts_size only supports hollow parts")
                 }
             }
@@ -2103,6 +2107,10 @@ pub mod datadriven {
                 writeln!(result, "<run {run}>");
                 for (part_id, part) in parts.into_iter().enumerate() {
                     writeln!(result, "<part {part_id}>");
+                    let part = match part {
+                        RunPart::Single(part) => part,
+                    };
+
                     let part = EncodedPart::fetch(
                         &datadriven.shard_id,
                         datadriven.client.blob.as_ref(),

@@ -39,7 +39,7 @@ use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId
 #[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
 use crate::internal::state::{
-    BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState,
+    BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, RunPart, State, TypedState,
 };
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
@@ -352,7 +352,7 @@ impl StateVersions {
                     .batches()
                     .flat_map(|x| x.parts.iter())
                     .flat_map(|x| match x {
-                        BatchPart::Hollow(x) => {
+                        RunPart::Single(BatchPart::Hollow(x)) => {
                             // Carefully avoid any String allocs by splitting.
                             let writer_key =
                                 x.key.0.split_once('/').map(|(writer_key, _)| writer_key);
@@ -364,7 +364,7 @@ impl StateVersions {
                         }
                         // TODO: Would be nice to include these too, but we lose the
                         // info atm.
-                        BatchPart::Inline { .. } => None,
+                        _ => None,
                     });
                 shard_metrics.set_batch_part_versions(batch_parts_by_version);
 
@@ -1176,19 +1176,19 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         assert_eq!(inc_lower, full_lower);
         assert_eq!(inc_upper, full_upper);
 
-        fn part_unique<T: Hash>(x: &BatchPart<T>) -> String {
+        fn part_unique<T: Hash>(x: &RunPart<T>) -> String {
             match x {
-                BatchPart::Hollow(x) => x.key.to_string(),
-                BatchPart::Inline {
+                RunPart::Single(BatchPart::Inline {
                     updates,
                     ts_rewrite,
                     ..
-                } => {
+                }) => {
                     let mut h = DefaultHasher::new();
                     updates.hash(&mut h);
                     ts_rewrite.as_ref().map(|x| x.elements()).hash(&mut h);
                     h.finish().to_string()
                 }
+                other => other.printable_name().to_string(),
             }
         }
 

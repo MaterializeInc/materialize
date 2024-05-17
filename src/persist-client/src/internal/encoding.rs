@@ -48,7 +48,7 @@ use crate::internal::state::{
     ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge,
     ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff,
     ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunMeta, RunOrder, State,
+    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunMeta, RunOrder, RunPart, State,
     StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
@@ -1304,11 +1304,11 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     }
 
     fn from_proto(proto: ProtoHollowBatch) -> Result<Self, TryFromProtoError> {
-        let mut parts: Vec<BatchPart<T>> = proto.parts.into_rust()?;
+        let mut parts: Vec<RunPart<T>> = proto.parts.into_rust()?;
         // MIGRATION: We used to just have the keys instead of a more structured
         // part.
         parts.extend(proto.deprecated_keys.into_iter().map(|key| {
-            BatchPart::Hollow(HollowBatchPart {
+            RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey(key),
                 encoded_size_bytes: 0,
                 key_lower: vec![],
@@ -1318,7 +1318,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 diffs_sum: None,
                 format: None,
                 schema_id: None,
-            })
+            }))
         }));
         // We discard default metadatas from the proto above; re-add them here.
         let run_splits: Vec<usize> = proto.runs.into_rust()?;
@@ -1364,6 +1364,19 @@ impl RustType<ProtoRunMeta> for RunMeta {
             order,
             schema: proto.schema_id.into_rust()?,
         })
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for RunPart<T> {
+    fn into_proto(&self) -> ProtoHollowBatchPart {
+        match self {
+            RunPart::Single(part) => part.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        let part = proto.into_rust()?;
+        Ok(RunPart::Single(part))
     }
 }
 
@@ -1741,7 +1754,7 @@ mod tests {
                 Antichain::from_elem(2u64),
                 Antichain::from_elem(3u64),
             ),
-            vec![BatchPart::Hollow(HollowBatchPart {
+            vec![RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey("a".into()),
                 encoded_size_bytes: 5,
                 key_lower: vec![],
@@ -1751,7 +1764,7 @@ mod tests {
                 diffs_sum: None,
                 format: None,
                 schema_id: None,
-            })],
+            }))],
             4,
         );
         let mut old = x.into_proto();
@@ -1765,17 +1778,19 @@ mod tests {
         // will violate bounded memory usage compaction during the transition
         // (short-term issue), but that's better than creating unnecessary runs
         // (longer-term issue).
-        expected.parts.push(BatchPart::Hollow(HollowBatchPart {
-            key: PartialBatchKey("b".into()),
-            encoded_size_bytes: 0,
-            key_lower: vec![],
-            structured_key_lower: None,
-            stats: None,
-            ts_rewrite: None,
-            diffs_sum: None,
-            format: None,
-            schema_id: None,
-        }));
+        expected
+            .parts
+            .push(RunPart::Single(BatchPart::Hollow(HollowBatchPart {
+                key: PartialBatchKey("b".into()),
+                encoded_size_bytes: 0,
+                key_lower: vec![],
+                structured_key_lower: None,
+                stats: None,
+                ts_rewrite: None,
+                diffs_sum: None,
+                format: None,
+                schema_id: None,
+            })));
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }
 
