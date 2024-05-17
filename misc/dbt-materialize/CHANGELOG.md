@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-Migrate to dbt v1.8.0.
+* Update base adapter references as part of
+  [decoupling migration from dbt-core](https://github.com/dbt-labs/dbt-adapters/discussions/87)
+  * Migrate to dbt-common and dbt-adapters packages.
+  * Add tests for `--empty` flag as part of [dbt-labs/dbt-core#8971](https://github.com/dbt-labs/dbt-core/pull/8971)
+  * Add functional tests for unit testing.
 
 ## 1.7.8 - 2024-05-06
 
