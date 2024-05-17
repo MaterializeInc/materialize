@@ -15,7 +15,7 @@ use std::time::Instant;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 
 use crate::cli::args::StateArgs;
-use crate::internal::state::BatchPart;
+use crate::internal::state::{BatchPart, RunPart};
 
 /// Commands for read-only inspection of persist state
 #[derive(Debug, clap::Args)]
@@ -76,8 +76,8 @@ async fn bench_s3(args: &S3FetchArgs) -> Result<(), anyhow::Error> {
         let mut fetches = Vec::new();
         for part in snap.iter().flat_map(|x| x.parts.iter()) {
             let key = match part {
-                BatchPart::Hollow(x) => x.key.complete(&shard_id),
-                BatchPart::Inline { .. } => continue,
+                RunPart::Single(BatchPart::Hollow(x)) => x.key.complete(&shard_id),
+                _ => continue,
             };
             let blob = Arc::clone(&state_versions.blob);
             let metrics = Arc::clone(&state_versions.metrics);

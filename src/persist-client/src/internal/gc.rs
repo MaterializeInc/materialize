@@ -36,7 +36,7 @@ use crate::internal::machine::{retry_external, Machine};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{GcStepTimings, RetryMetrics};
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
-use crate::internal::state::{BatchPart, HollowBlobRef};
+use crate::internal::state::{BatchPart, HollowBlobRef, RunPart};
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
 use crate::ShardId;
 
@@ -468,10 +468,11 @@ where
                 HollowBlobRef::Batch(batch) => {
                     for live_part in &batch.parts {
                         match live_part {
-                            BatchPart::Hollow(x) => {
+                            RunPart::Single(BatchPart::Hollow(x)) => {
                                 assert_eq!(batch_parts_to_delete.get(&x.key), None)
                             }
-                            BatchPart::Inline { .. } => {}
+                            RunPart::Single(BatchPart::Inline { .. }) => {}
+                            RunPart::Many(_) => todo!("runs: contains method in part deletes!"),
                         }
                     }
                 }
