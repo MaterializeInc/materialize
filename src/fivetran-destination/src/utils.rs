@@ -152,7 +152,7 @@ impl<R> AsyncCsvReaderTableAdapter<R>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
-    /// Creates a new [`AsyncCsvReaderTableAdapter`] from an [`AsyncRead`]-er and a [`Table`].
+    /// Creates a new [`AsyncCsvReaderTableAdapter`] from an [`AsyncRead`]-er and a `Table`.
     pub async fn new(reader: R, table: &Table) -> Result<Self, OpError> {
         let mut csv_reader = csv_async::AsyncReaderBuilder::new().create_reader(reader);
         let csv_headers = csv_reader.headers().await?;

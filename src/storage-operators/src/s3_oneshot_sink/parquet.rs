@@ -46,10 +46,10 @@ const DEFAULT_ARRAY_BUILDER_DATA_CAPACITY: usize = 1024;
 /// - The uploader will hold a [`ParquetFile`] object after the first row is added. This
 ///   [`ParquetFile`] holds an [`ArrowBuilder`] and an [`ArrowWriter`].
 ///
-/// - The [`ArrowBuilder`] builds a structure of in-memory [`ColBuilder`]s from incoming
-///   [`mz_repr::Row`]s. Each [`ColBuilder`] holds a specific [`arrow::array::builder`] type
+/// - The [`ArrowBuilder`] builds a structure of in-memory `mz_arrow_util::builder::ColBuilder`s from incoming
+///   [`mz_repr::Row`]s. Each `mz_arrow_util::builder::ColBuilder` holds a specific [`arrow::array::builder`] type
 ///   for constructing a column of the given type. The entire [`ArrowBuilder`] is flushed to
-///   the [`ParquetFile`]'s [`ArrowWriter`] by converting it into a [`RecordBatch`] once we've
+///   the [`ParquetFile`]'s [`ArrowWriter`] by converting it into a [`arrow::record_batch::RecordBatch`] once we've
 ///   given it more than the configured arrow_builder_buffer_bytes.
 ///
 /// - The [`ParquetFile`] holds a [`ArrowWriter`] that buffers until it has enough data to write
@@ -64,6 +64,7 @@ const DEFAULT_ARRAY_BUILDER_DATA_CAPACITY: usize = 1024;
 /// - When the [`ParquetUploader`] is finished, it will flush the active [`ParquetFile`] which will
 ///   flush its [`ArrowBuilder`] and any open row groups to the [`S3MultiPartUploader`] and upload
 ///   the remaining parts to S3.
+/// ```text
 ///       ┌───────────────┐
 ///       │ mz_repr::Rows │
 ///       └───────┬───────┘
@@ -96,6 +97,7 @@ const DEFAULT_ARRAY_BUILDER_DATA_CAPACITY: usize = 1024;
 /// │                               └───────────────────────┘ │
 /// │                                                         │
 /// └─────────────────────────────────────────────────────────┘
+/// ```
 ///
 /// ## File Size & Buffer Sizes
 ///
