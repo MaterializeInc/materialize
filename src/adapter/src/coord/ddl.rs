@@ -176,7 +176,7 @@ impl Coordinator {
 
     /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
     /// called after this function successfully returns on any built
-    /// [`DataflowDesc`].
+    /// [`DataflowDesc`](mz_compute_types::dataflows::DataflowDesc).
     #[instrument(name = "coord::catalog_transact_inner")]
     pub(crate) async fn catalog_transact_inner<'a>(
         &mut self,

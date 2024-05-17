@@ -137,7 +137,7 @@ impl ArrowBuilder {
 
 /// Return the appropriate Arrow DataType for the given ScalarType, plus a string
 /// that should be used as part of the Arrow 'Extension Type' name for fields using
-/// this type: https://arrow.apache.org/docs/format/Columnar.html#extension-types
+/// this type: <https://arrow.apache.org/docs/format/Columnar.html#extension-types>
 fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, String), anyhow::Error> {
     let (data_type, extension_name) = match scalar_type {
         ScalarType::Bool => (DataType::Boolean, "boolean"),

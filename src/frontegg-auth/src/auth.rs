@@ -653,7 +653,7 @@ pub struct Claims {
 }
 
 /// [`Claims`] that have been validated by
-/// [`Authentication::validate_access_token`].
+/// [`Authenticator::validate_access_token`].
 #[derive(Clone, Debug)]
 pub struct ValidatedClaims {
     /// The time at which the claims expire, represented in seconds since the
@@ -667,7 +667,7 @@ pub struct ValidatedClaims {
     pub tenant_id: Uuid,
     /// Whether the authenticated user is an administrator.
     pub is_admin: bool,
-    // Prevent construction outside of `Authentication::validate_access_token`.
+    // Prevent construction outside of `Authenticator::validate_access_token`.
     _private: (),
 }
 

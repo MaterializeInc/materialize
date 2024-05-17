@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A timestamp oracle that relies on the [`Catalog`] for persistence/durability
+//! A timestamp oracle that relies on the [`crate::catalog::Catalog`] for persistence/durability
 //! and reserves ranges of timestamps.
 
 use std::fmt::Debug;
