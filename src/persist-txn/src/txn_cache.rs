@@ -221,20 +221,14 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         self.assert_only_data_id(&data_id);
         assert!(self.progress_exclusive > as_of);
         // `empty_to` will often be used as the input to `data_listen_next`.
-        // `data_listen_next` needs a timestamp that is greater than the
-        // initial since because there may be applied and tidied writes before
-        // the initial since that the cache is unaware of.
-        //
-        // We know for a fact that there are no unapplied writes, registers, or
-        // forgets before the initial since because the since is always held
-        // back to earlier unapplied event. There may be some untidied events
-        // with a lower timestamp than the initial since, but they are
-        // guaranteed to be applied.
+        // `data_listen_next` needs a timestamp that is greater than or equal
+        // to the init_ts. See the comment above the assert in
+        // `data_listen_next` for more details.
         //
         // TODO: Once the txn shard itself always tracks the most recent write
         // for every shard, we can remove this and always use
         // `as_of.step_forward()`.
-        let empty_to = max(as_of.step_forward(), self.init_ts.step_forward());
+        let empty_to = max(as_of.step_forward(), self.init_ts.clone());
         let Some(all) = self.datas.get(&data_id) else {
             // Not registered currently, so we know there are no unapplied
             // writes.
@@ -297,6 +291,22 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             ts,
             self.progress_exclusive
         );
+        // There may be applied and tidied writes before the init_ts that the
+        // cache is unaware of. So if this method is called with a timestamp
+        // less the initial since, it may mistakenly tell the caller to
+        // `EmitLogicalProgress(self.progress_exclusive)` instead of the
+        // correct answer of `ReadTo(tidied_write_ts)`.
+        //
+        // We know for a fact that there are no unapplied writes, registers, or
+        // forgets before the init_ts because the since of the txn shard is
+        // always held back to the earliest unapplied event. There may be some
+        // untidied events with a lower timestamp than the init_ts, but they
+        // are guaranteed to be applied.
+        //
+        // TODO: Once the txn shard itself always tracks the most recent write
+        // for every shard, we can remove this assert. It will always be
+        // correct to return ReadTo(latest_write_ts) if there are any writes,
+        // and then `EmitLogicalProgress(self.progress_exclusive)`.
         assert!(
             ts >= &self.init_ts,
             "ts {:?} is not past initial since {:?}",
