@@ -455,6 +455,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
+        details_by_strategy_key = error.get_details_by_strategy_key()
+        mz_error_details = details_by_strategy_key[
+            EvaluationStrategyKey.MZ_DATAFLOW_RENDERING
+        ]
+        pg_error_details = details_by_strategy_key[EvaluationStrategyKey.POSTGRES]
+
         def matches_math_aggregation_fun(expression: Expression) -> bool:
             return matches_fun_by_any_name(
                 expression,
@@ -606,6 +612,16 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             True,
         ):
             return YesIgnore("#26846: eszett in upper")
+
+        if (
+            query_template.matches_any_expression(
+                partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
+                True,
+            )
+            and str(mz_error_details.value) == "time"
+            and str(pg_error_details.value) == "time without time zone"
+        ):
+            return YesIgnore("Different type name for time")
 
         return NoIgnore()
 
