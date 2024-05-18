@@ -1064,3 +1064,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16953  mz_materialized_view_refreshes
 16954  mz_source_statistics_with_history
 16955  mz_source_statistics_with_history_ind
+16956  pg_user

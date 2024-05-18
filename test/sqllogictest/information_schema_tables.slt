@@ -1009,6 +1009,10 @@ pg_type
 VIEW
 materialize
 pg_catalog
+pg_user
+VIEW
+materialize
+pg_catalog
 pg_views
 VIEW
 materialize

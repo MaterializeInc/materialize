@@ -144,12 +144,12 @@ name                nullable    type
  rolsuper           true        boolean
  rolinherit         false       boolean
  rolcreaterole      true        boolean
- rolcreatedb        false        boolean
- rolcanlogin        true        boolean
+ rolcreatedb        false       boolean
+ rolcanlogin        false       boolean
  rolreplication     false       boolean
  rolbypassrls       false       boolean
  rolconnlimit       false       integer
- rolpassword        true        text
+ rolpassword        false       text
  rolvaliduntil      true        "timestamp with time zone"
 
 > SHOW COLUMNS FROM pg_auth_members

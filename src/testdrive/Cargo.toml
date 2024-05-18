@@ -56,6 +56,7 @@ mz-storage-types = { path = "../storage-types" }
 mz-tls-util = { path = "../tls-util" }
 parquet = { version = "51.0.0", default-features = false, features = ["arrow"] }
 postgres_array = { version = "0.11.0" }
+postgres-protocol = { version = "0.6.5" }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.11.4", features = ["serde"] }
 prost-types = { version = "0.11.9" }

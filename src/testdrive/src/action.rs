@@ -427,7 +427,10 @@ impl State {
             if db_name.starts_with("testdrive_no_reset_") {
                 continue;
             }
-            let query = format!("DROP DATABASE {}", db_name);
+            let query = format!(
+                "DROP DATABASE {}",
+                postgres_protocol::escape::escape_identifier(&db_name)
+            );
             sql::print_query(&query, None);
             inner_client.batch_execute(&query).await.context(format!(
                 "resetting materialize state: DROP DATABASE {}",
@@ -478,7 +481,10 @@ impl State {
             if cluster_name.starts_with("testdrive_no_reset_") {
                 continue;
             }
-            let query = format!("DROP CLUSTER {}", cluster_name);
+            let query = format!(
+                "DROP CLUSTER {}",
+                postgres_protocol::escape::escape_identifier(&cluster_name)
+            );
             sql::print_query(&query, None);
             inner_client.batch_execute(&query).await.context(format!(
                 "resetting materialize state: DROP CLUSTER {}",
@@ -500,7 +506,10 @@ impl State {
                 if role_name == self.materialize.user || role_name.starts_with("mz_") {
                     continue;
                 }
-                let query = format!("DROP ROLE {}", role_name);
+                let query = format!(
+                    "DROP ROLE {}",
+                    postgres_protocol::escape::escape_identifier(&role_name)
+                );
                 sql::print_query(&query, None);
                 inner_client.batch_execute(&query).await.context(format!(
                     "resetting materialize state: DROP ROLE {}",
