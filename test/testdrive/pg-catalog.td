@@ -25,6 +25,7 @@ reloftype           false       oid
 relowner            false       oid
 relam               false       oid
 reltablespace       false       oid
+reltuples           false       real
 reltoastrelid       false       oid
 relhasindex         false       boolean
 relpersistence      false       char
