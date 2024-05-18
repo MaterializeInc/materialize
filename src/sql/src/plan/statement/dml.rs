@@ -999,11 +999,21 @@ fn plan_copy_to_expr(
     }
 
     let format = match format {
-        CopyFormat::Csv => S3SinkFormat::PgCopy(CopyFormatParams::Csv(
-            // TODO(mouli): Get these from sql options
-            CopyCsvFormatParams::try_new(None, None, None, None, None)
+        CopyFormat::Csv => {
+            let quote = extract_byte_param_value(options.quote, "quote")?;
+            let escape = extract_byte_param_value(options.escape, "escape")?;
+            let delimiter = extract_byte_param_value(options.delimiter, "delimiter")?;
+            S3SinkFormat::PgCopy(CopyFormatParams::Csv(
+                CopyCsvFormatParams::try_new(
+                    delimiter,
+                    quote,
+                    escape,
+                    options.header,
+                    options.null,
+                )
                 .map_err(|e| sql_err!("{}", e))?,
-        )),
+            ))
+        }
         CopyFormat::Parquet => {
             // Validate that the output desc can be formatted as parquet
             ArrowBuilder::validate_desc(&desc).map_err(|e| sql_err!("{}", e))?;
@@ -1068,17 +1078,6 @@ fn plan_copy_from(
         }
     }
 
-    fn extract_byte_param_value(
-        v: Option<String>,
-        param_name: &str,
-    ) -> Result<Option<u8>, PlanError> {
-        match v {
-            Some(v) if v.len() == 1 => Ok(Some(v.as_bytes()[0])),
-            Some(..) => sql_bail!("COPY {} must be a single one-byte character", param_name),
-            None => Ok(None),
-        }
-    }
-
     let params = match format {
         CopyFormat::Text => {
             only_available_with_csv(options.quote, "quote")?;
@@ -1117,6 +1116,14 @@ fn plan_copy_from(
         columns,
         params,
     }))
+}
+
+fn extract_byte_param_value(v: Option<String>, param_name: &str) -> Result<Option<u8>, PlanError> {
+    match v {
+        Some(v) if v.len() == 1 => Ok(Some(v.as_bytes()[0])),
+        Some(..) => sql_bail!("COPY {} must be a single one-byte character", param_name),
+        None => Ok(None),
+    }
 }
 
 generate_extracted_config!(
