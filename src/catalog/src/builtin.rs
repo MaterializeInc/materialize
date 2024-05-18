@@ -3682,6 +3682,9 @@ pub static PG_CLASS: Lazy<BuiltinView> = Lazy::new(|| {
     0::pg_catalog.oid AS relam,
     -- MZ doesn't have tablespaces so reltablespace is filled in with 0 implying the default tablespace
     0::pg_catalog.oid AS reltablespace,
+    -- MZ doesn't support (estimated) row counts currently.
+    -- Postgres defines a value of -1 as unknown.
+    -1::float4 as reltuples,
     -- MZ doesn't use TOAST tables so reltoastrelid is filled with 0
     0::pg_catalog.oid AS reltoastrelid,
     EXISTS (SELECT id, oid, name, on_id, cluster_id FROM mz_catalog.mz_indexes where mz_indexes.on_id = class_objects.id) AS relhasindex,
@@ -5164,6 +5167,7 @@ SELECT
     o.name AS table_name,
     c.name AS column_name,
     c.position::int8 AS ordinal_position,
+    c.default AS column_default,
     CASE WHEN c.nullable THEN 'YES' ELSE 'NO' END AS is_nullable,
     c.type AS data_type,
     NULL::pg_catalog.int4 AS character_maximum_length,
