@@ -1,0 +1,32 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps",)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test",)
+
+rust_library(
+	name = "mz_dyncfgs",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		"//src/adapter-types:mz_adapter_types",
+		"//src/compute-types:mz_compute_types",
+		"//src/dyncfg:mz_dyncfg",
+		"//src/persist-client:mz_persist_client",
+		"//src/persist-txn:mz_persist_txn",
+		"//src/storage-types:mz_storage_types",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)
+
+

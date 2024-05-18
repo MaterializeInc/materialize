@@ -1,0 +1,10 @@
+# This file is included in the BUILD for the cxx crate, to export its header
+# file for C++ code to depend on.
+cc_library(
+    name = "cxx_cc",
+    visibility = ["//visibility:public"],
+    hdrs = ["include/cxx.h"],
+    srcs = ["src/cxx.cc"],
+    includes = ["include"],
+)
+

@@ -1,0 +1,55 @@
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps", "crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+
+filegroup(
+    name = "all_protos",
+    srcs = [] + glob(["src/**/*.proto"]),
+)
+
+cargo_build_script(
+    name = "mz-proto_build_script",
+    srcs = ["build.rs"],
+    deps = all_crate_deps(build = True) + [
+        "//src/build-tools:mz_build_tools",
+    ],
+    proc_macro_deps = all_crate_deps(build_proc_macro = True),
+    data = [
+        ":all_protos",
+    ],
+)
+
+rust_library(
+    name = "mz_proto",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(
+        normal = True, 
+        proc_macro = True,
+    ),
+    deps = all_crate_deps(normal = True) + [
+        ":mz-proto_build_script",
+        "//src/ore:mz_ore",
+    ],
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    crate_features = [
+        "chrono",
+        "tokio-postgres",
+    ],
+)
+
+rust_test(
+    name = "mz_proto_lib_test",
+    crate = ":mz_proto",
+    aliases = aliases(
+        normal = True,
+        normal_dev = True,
+        proc_macro_dev = True,
+    ),
+    deps = [] + all_crate_deps(normal_dev = True),
+    proc_macro_deps = [
+        "//src/test-macro:mz_test_macro",
+    ] + all_crate_deps(proc_macro_dev = True),
+    size = "small",
+)

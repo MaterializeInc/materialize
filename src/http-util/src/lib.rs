@@ -69,7 +69,7 @@ macro_rules! make_handle_static {
                 match fs::read(dev_path).or_else(|_| fs::read(prod_path)) {
                     Ok(contents) => Some(contents),
                     Err(e) => {
-                        ::tracing::debug!("dev-web failed to load static file: {}: {}", path, e);
+                        // ::tracing::debug!("dev-web failed to load static file: {}: {}", path, e);
                         None
                     }
                 }

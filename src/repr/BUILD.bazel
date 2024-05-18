@@ -1,0 +1,57 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps",)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test",)
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+
+rust_library(
+	name = "mz_repr",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+		"tracing_",
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = all_crate_deps(normal = True) + [
+		":mz_repr-build_script",
+		"//src/lowertest:mz_lowertest",
+		"//src/ore:mz_ore",
+		"//src/persist-types:mz_persist_types",
+		"//src/pgtz:mz_pgtz",
+		"//src/proto:mz_proto",
+		"//src/sql-parser:mz_sql_parser",
+	],
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	compile_data = ["Cargo.toml"],
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)
+
+filegroup(
+    name = "all_protos",
+    srcs = [] + glob(["src/**/*.proto"]),
+)
+
+cargo_build_script(
+    name = "mz_repr-build_script",
+    srcs = ["build.rs"],
+    deps = all_crate_deps(build = True) + [
+		"//src/build-tools:mz_build_tools",
+	],
+    proc_macro_deps = all_crate_deps(build_proc_macro = True),
+    crate_features = ["protobuf-src"],
+    build_script_env = {
+        "PROTOC_INCLUDE": "../../external/protobuf/src/",
+    },
+    data = [
+        "@protobuf//:well_known_type_protos",
+		"//src/proto:all_protos",
+        ":all_protos",
+    ],
+)

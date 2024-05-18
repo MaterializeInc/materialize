@@ -1,0 +1,37 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps",)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test",)
+
+rust_library(
+	name = "mz_pgwire",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		"//src/adapter:mz_adapter",
+		"//src/adapter-types:mz_adapter_types",
+		"//src/expr:mz_expr",
+		"//src/frontegg-auth:mz_frontegg_auth",
+		"//src/ore:mz_ore",
+		"//src/pgcopy:mz_pgcopy",
+		"//src/pgrepr:mz_pgrepr",
+		"//src/pgwire-common:mz_pgwire_common",
+		"//src/repr:mz_repr",
+		"//src/server-core:mz_server_core",
+		"//src/sql:mz_sql",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)
+
+

@@ -1,0 +1,56 @@
+# Code generate by cargo-gazelle DO NOT EDIT
+
+package(default_visibility = ["//visibility:public"])
+
+load("@crate_index//:defs.bzl", "aliases", "all_crate_deps",)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test",)
+
+rust_library(
+	name = "mz_sql",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		"//src/adapter-types:mz_adapter_types",
+		"//src/arrow-util:mz_arrow_util",
+		"//src/audit-log:mz_audit_log",
+		"//src/build-info:mz_build_info",
+		"//src/ccsr:mz_ccsr",
+		"//src/cloud-resources:mz_cloud_resources",
+		"//src/controller-types:mz_controller_types",
+		"//src/dyncfg:mz_dyncfg",
+		"//src/dyncfgs:mz_dyncfgs",
+		"//src/expr:mz_expr",
+		"//src/interchange:mz_interchange",
+		"//src/kafka-util:mz_kafka_util",
+		"//src/mysql-util:mz_mysql_util",
+		"//src/orchestrator:mz_orchestrator",
+		"//src/ore:mz_ore",
+		"//src/persist-client:mz_persist_client",
+		"//src/persist-txn:mz_persist_txn",
+		"//src/pgcopy:mz_pgcopy",
+		"//src/pgrepr:mz_pgrepr",
+		"//src/pgwire-common:mz_pgwire_common",
+		"//src/postgres-util:mz_postgres_util",
+		"//src/proto:mz_proto",
+		"//src/repr:mz_repr",
+		"//src/rocksdb-types:mz_rocksdb_types",
+		"//src/secrets:mz_secrets",
+		"//src/sql-lexer:mz_sql_lexer",
+		"//src/sql-parser:mz_sql_parser",
+		"//src/ssh-util:mz_ssh_util",
+		"//src/storage-types:mz_storage_types",
+		"//src/tracing:mz_tracing",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [
+	] + all_crate_deps(proc_macro = True),
+	rustc_env = {
+		"TARGET_TRIPLE": "aarch64-apple-darwin",
+	},
+)
+
+

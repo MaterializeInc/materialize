@@ -1,0 +1,69 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@//misc/bazel/rules:rust_cxx_bridge.bzl", "rust_cxx_bridge")
+
+rust_cxx_bridge(
+    name = "compiler-bridge",
+    src = "src/compiler.rs",
+    deps = [":protobuf-native-include"],
+)
+
+cc_library(
+    name = "compiler-sys",
+    srcs = ["src/compiler.cc"],
+    copts = ["-std=c++17"],
+    linkstatic = True,
+    deps = [
+        ":protobuf-native-include",
+        ":compiler-bridge/include",
+    ],
+)
+
+rust_cxx_bridge(
+    name = "io-bridge",
+    src = "src/io.rs",
+    deps = [":protobuf-native-include"],
+)
+
+cc_library(
+    name = "io-sys",
+    srcs = ["src/io.cc"],
+    copts = ["-std=c++17"],
+    linkstatic = True,
+    deps = [
+        ":protobuf-native-include",
+        ":io-bridge/include",
+    ],
+)
+
+rust_cxx_bridge(
+    name = "lib-bridge",
+    src = "src/lib.rs",
+    deps = [":protobuf-native-include"],
+)
+
+cc_library(
+    name = "lib-sys",
+    srcs = ["src/lib.cc"],
+    copts = ["-std=c++17"],
+    linkstatic = True,
+    deps = [
+        ":protobuf-native-include",
+        ":lib-bridge/include",
+    ],
+)
+
+rust_cxx_bridge(
+    name = "internal-bridge",
+    src = "src/internal.rs",
+    deps = [":protobuf-native-include"],
+)
+
+cc_library(
+    name = "protobuf-native-include",
+    hdrs = glob(["src/**/*.h"]),
+    copts = ["-std=c++14"],
+    deps = [
+        "@crate_index//:cxx_cc",
+        "@protobuf//:protobuf_headers",
+    ],
+)

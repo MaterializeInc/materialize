@@ -14,7 +14,6 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::collections::BTreeMap;
-use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
