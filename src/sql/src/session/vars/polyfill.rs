@@ -14,10 +14,12 @@ use super::Value;
 
 /// Trait that helps us convert a `fn() -> &'static impl Value` to a `fn() -> &'static dyn Value`.
 ///
-/// For creating a type that implements [`LazyValueFn`] see the [`lazy_fn`] macro.
+/// For creating a type that implements [`LazyValueFn`] see the [`lazy_value`] macro.
 ///
 /// Note: Ideally we could use const generics to pass a function pointer directly to
 /// [`VarDefinition::new`], but Rust doesn't currently support this.
+///
+/// [`VarDefinition::new`]: crate::session::vars::VarDefinition::new
 pub trait LazyValueFn<V: Value>: Copy {
     const LAZY_VALUE_FN: fn() -> &'static dyn Value = || {
         let dyn_val: &'static dyn Value = Self::generate_value();
@@ -53,7 +55,7 @@ pub(crate) use lazy_value;
 /// Note: [`VarDefinition::new`] requires a `&'static V`, where `V: Value`. Ideally we would be
 /// able to pass the value as a const generic parameter, but Rust doesn't yet support this.
 ///
-/// [`VarDefinition::new`]: crate::session::vars2::VarDefinition::new
+/// [`VarDefinition::new`]: crate::session::vars::VarDefinition::new
 macro_rules! value {
     ($t: ty; $l: expr) => {{
         static MY_STATIC: $t = $l;

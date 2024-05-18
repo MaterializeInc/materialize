@@ -33,12 +33,12 @@ EQUALITY_OPERATION_TYPES.append(
     )
 )
 
-# This is assumed to be the same as "$ != $".
 EQUALITY_OPERATION_TYPES.append(
     DbOperation(
         "$ <> $",
         [AnyOperationParam(), AnyLikeOtherOperationParam(0)],
         BooleanReturnTypeSpec(),
+        comment="equal to $ != $",
         tags={TAG_EQUALITY},
     )
 )

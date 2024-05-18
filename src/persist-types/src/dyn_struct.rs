@@ -13,10 +13,9 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow2::array::{Array, NullArray, StructArray};
-use arrow2::bitmap::{Bitmap, MutableBitmap};
-use arrow2::datatypes::{DataType as ArrowLogicalType, Field};
-use arrow2::io::parquet::write::Encoding;
+use arrow::array::{Array, BooleanBufferBuilder, NullArray, StructArray};
+use arrow::buffer::NullBuffer;
+use arrow::datatypes::{Field, Fields};
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::{ColumnGet, ColumnPush, Data, DataType};
@@ -76,7 +75,7 @@ impl Default for DynStructRef<'_> {
 pub struct DynStructCol {
     pub(crate) len: usize,
     pub(crate) cfg: DynStructCfg,
-    pub(crate) validity: Option<<bool as Data>::Col>,
+    pub(crate) validity: Option<NullBuffer>,
     pub(crate) cols: Vec<DynColumnRef>,
 }
 
@@ -84,17 +83,20 @@ impl ColumnRef<DynStructCfg> for DynStructCol {
     fn cfg(&self) -> &DynStructCfg {
         &self.cfg
     }
+
     fn len(&self) -> usize {
         self.len
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        let array: Box<dyn Array> = match self.to_arrow_struct() {
-            Some((array, _col_encodings)) => Box::new(array),
-            None => Box::new(NullArray::new_empty(ArrowLogicalType::Null)),
+
+    fn to_arrow(&self) -> Arc<dyn Array> {
+        let array: Arc<dyn Array> = match self.to_arrow_struct() {
+            Some(array) => Arc::new(array),
+            None => Arc::new(NullArray::new(self.len)),
         };
-        (Encoding::Plain, array)
+        array
     }
-    fn from_arrow(cfg: &DynStructCfg, array: &Box<dyn Array>) -> Result<Self, String> {
+
+    fn from_arrow(cfg: &DynStructCfg, array: &dyn Array) -> Result<Self, String> {
         Self::from_arrow(cfg.clone(), array)
     }
 }
@@ -119,7 +121,7 @@ impl ColumnGet<Option<DynStruct>> for DynStructCol {
         // columnar struct into components via ColumnsRef, so this is unused. We
         // keep it for completeness and also so that any future changes to the
         // code consider it.
-        if self.validity.as_ref().map_or(true, |x| x.get_bit(idx)) {
+        if self.validity.as_ref().map_or(true, |x| x.is_valid(idx)) {
             Some(DynStructRef::Idx {
                 idx,
                 cols: &self.cols,
@@ -202,7 +204,7 @@ impl DynStructCol {
             };
             cols.insert(n.to_owned(), stats);
         }
-        let none = self.validity.as_ref().map_or(0, |x| x.unset_bits());
+        let none = self.validity.as_ref().map_or(0, |x| x.null_count());
         Ok(OptionStats {
             none,
             some: StructStats {
@@ -212,32 +214,31 @@ impl DynStructCol {
         })
     }
 
-    pub(crate) fn to_arrow_struct(&self) -> Option<(StructArray, Vec<Encoding>)> {
-        let (mut fields, mut encodings, mut arrays) = (Vec::new(), Vec::new(), Vec::new());
+    pub(crate) fn to_arrow_struct(&self) -> Option<StructArray> {
+        let (mut fields, mut arrays) = (Vec::new(), Vec::new());
         for (name, _stats_fn, col) in self.cols() {
-            let (encoding, array, is_nullable) = col.to_arrow();
+            let (array, is_nullable) = col.to_arrow();
             fields.push(Field::new(name, array.data_type().clone(), is_nullable));
-            encodings.push(encoding);
             arrays.push(array);
         }
         if fields.is_empty() {
             return None;
         }
-        let array = StructArray::new(ArrowLogicalType::Struct(fields), arrays, None);
-        Some((array, encodings))
+        // TODO(parkmycar): We need to pass the validity bitmap here.
+        Some(StructArray::new(Fields::from(fields), arrays, None))
     }
 
-    #[allow(clippy::borrowed_box)]
-    pub(crate) fn from_arrow(cfg: DynStructCfg, array: &Box<dyn Array>) -> Result<Self, String> {
+    pub(crate) fn from_arrow(cfg: DynStructCfg, array: &dyn Array) -> Result<Self, String> {
         let array = array
             .as_any()
             .downcast_ref::<StructArray>()
             .ok_or_else(|| format!("expected StructArray but was {:?}", array.data_type()))?;
         let len = array.len();
-        let validity = array.validity().cloned();
+        let validity = array.logical_nulls();
         let mut cols = Vec::new();
-        assert_eq!(cfg.cols.len(), array.values().len());
-        for ((_name, typ, _stats_fn), array) in cfg.cols.iter().zip(array.values()) {
+        assert_eq!(cfg.cols.len(), array.num_columns());
+
+        for ((_name, typ, _stats_fn), array) in cfg.cols.iter().zip(array.columns()) {
             let col = DynColumnRef::from_arrow(typ, array)?;
             cols.push(col);
         }
@@ -313,6 +314,10 @@ impl ColumnPush<DynStruct> for DynStructMut {
         assert!(self.validity.is_none());
         self.push_cols(val);
     }
+
+    fn finish(self) -> <DynStruct as Data>::Col {
+        DynStructCol::from(self)
+    }
 }
 
 impl ColumnPush<Option<DynStruct>> for DynStructMut {
@@ -322,7 +327,10 @@ impl ColumnPush<Option<DynStruct>> for DynStructMut {
         // keep it for completeness and also so that any future changes to the
         // code consider it.
         let len = self.len;
-        let validity = self.validity.get_or_insert_with(MutableBitmap::default);
+        let validity = self
+            .validity
+            // `BooleanBuilder` uses 1024 for its default capacity.
+            .get_or_insert_with(|| BooleanBufferBuilder::new(1024));
         debug_assert_eq!(len, validity.len());
 
         if let Some(val) = val {
@@ -332,6 +340,10 @@ impl ColumnPush<Option<DynStruct>> for DynStructMut {
             validity.push(false);
             self.push_cols(DynStructRef::Default);
         }
+    }
+
+    fn finish(self) -> <Option<DynStruct> as Data>::Col {
+        DynStructCol::from(self)
     }
 }
 
@@ -343,7 +355,7 @@ impl DynStructMut {
     pub fn from_parts(
         cfg: DynStructCfg,
         len: usize,
-        validity: Option<MutableBitmap>,
+        validity: Option<BooleanBufferBuilder>,
         cols: Vec<DynColumnMut>,
     ) -> Self {
         DynStructMut {
@@ -432,12 +444,13 @@ impl DynStructMut {
 impl From<DynStructMut> for DynStructCol {
     fn from(value: DynStructMut) -> Self {
         let cfg = value.cfg;
-        let validity = value.validity.map(<bool as Data>::Col::from);
+        let validity = value.validity.map(|b| NullBuffer::from(b.finish()));
         let cols = value
             .cols
             .into_iter()
             .map(DynColumnRef::from)
             .collect::<Vec<_>>();
+
         DynStructCol {
             len: value.len,
             cfg,
@@ -453,9 +466,9 @@ impl From<DynStructMut> for DynStructCol {
 /// elided if every value is true. This is the common case for the `Ok` struct
 /// of our `SourceData`, so seems worth opting in to ourselves.
 ///
-/// Note: [`Bitmap`] is internally reference counted so cloning is cheap.
+/// Note: [`NullBuffer`] is internally reference counted so cloning is cheap.
 #[derive(Debug, Clone)]
-pub struct ValidityRef(pub(crate) Option<Bitmap>);
+pub struct ValidityRef(pub(crate) Option<NullBuffer>);
 
 impl ValidityRef {
     /// Returns a validity that indicates true for all values.
@@ -467,13 +480,13 @@ impl ValidityRef {
     /// If this is false, the contents of the struct's component fields at `idx`
     /// will be undefined.
     pub fn get(&self, idx: usize) -> bool {
-        self.0.as_ref().map_or(true, |x| x.get_bit(idx))
+        self.0.as_ref().map_or(true, |nulls| nulls.is_valid(idx))
     }
 
     /// Returns whether the set of all indexes that return `true` in `self` is a
     /// superset of the set of all indexes that return `true` in `other`.
     #[allow(clippy::bool_comparison)]
-    pub fn is_superset(&self, other: Option<&<bool as Data>::Col>) -> bool {
+    pub fn is_superset(&self, other: Option<&NullBuffer>) -> bool {
         match (self.0.as_ref(), other) {
             (None, _) => {
                 // None means all-true, which is trivially a superset.
@@ -482,12 +495,12 @@ impl ValidityRef {
             (Some(s), None) => {
                 // None means all-true, so s is only a superset if it's entirely
                 // true.
-                s.unset_bits() == 0
+                s.null_count() == 0
             }
             (Some(s), Some(o)) => {
                 assert_eq!(s.len(), o.len());
                 for idx in 0..s.len() {
-                    if s.get_bit(idx) == false && o.get_bit(idx) == true {
+                    if s.is_valid(idx) == false && o.is_valid(idx) == true {
                         return false;
                     }
                 }
@@ -497,15 +510,15 @@ impl ValidityRef {
     }
 }
 
-/// A new-type wrapper for a mutable `arrow2` validity column.
+/// A new-type wrapper for a mutable [`arrow`] validity column.
 ///
-/// The `arrow2` crate has an optimization where the validity column can be
+/// The [`arrow`] crate has an optimization where the validity column can be
 /// elided if every value is true. This is the common case for the `Ok` struct
 /// of our `SourceData`, so seems worth opting in to ourselves.
 #[derive(Debug)]
 pub struct ValidityMut {
     len: usize,
-    validity: Option<MutableBitmap>,
+    validity: Option<BooleanBufferBuilder>,
 }
 
 impl ValidityMut {
@@ -519,8 +532,8 @@ impl ValidityMut {
             }
         } else {
             let validity = self.validity.get_or_insert_with(|| {
-                let mut ret = MutableBitmap::new();
-                ret.extend_constant(self.len, true);
+                let mut ret = BooleanBufferBuilder::new(self.len);
+                ret.append_n(self.len, true);
                 ret
             });
             validity.push(valid);
@@ -529,7 +542,7 @@ impl ValidityMut {
     }
 
     /// Consumes `self` returning the inner parts.
-    pub fn into_parts(self) -> (usize, Option<MutableBitmap>) {
+    pub fn into_parts(self) -> (usize, Option<BooleanBufferBuilder>) {
         (self.len, self.validity)
     }
 }

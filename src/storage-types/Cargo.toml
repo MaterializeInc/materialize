@@ -72,6 +72,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 [dev-dependencies]
 base64 = "0.13.1"
 criterion = { version = "0.4.0" }
+insta = { version = "1.32", features = ["json"] }
 mz-persist = { path = "../persist" }
 rand = "0.8.5"
 

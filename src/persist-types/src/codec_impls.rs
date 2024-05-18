@@ -13,19 +13,19 @@ use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow2::array::{
-    Array, BinaryArray, BooleanArray, MutableArray, MutableBinaryArray, MutableBooleanArray,
-    MutablePrimitiveArray, MutableUtf8Array, PrimitiveArray, Utf8Array,
+use arrow::array::{
+    Array, BinaryArray, BinaryBuilder, BooleanArray, BooleanBufferBuilder, BooleanBuilder,
+    PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder,
 };
-use arrow2::bitmap::{Bitmap, MutableBitmap};
-use arrow2::buffer::Buffer;
-use arrow2::datatypes::DataType as ArrowLogicalType;
-use arrow2::io::parquet::write::Encoding;
-use arrow2::types::NativeType;
+use arrow::buffer::BooleanBuffer;
+use arrow::datatypes::{
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
+};
 use bytes::BufMut;
 use timely::order::Product;
 
-use crate::columnar::sealed::ColumnRef;
+use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::{
     ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, OpaqueData, PartDecoder,
     PartEncoder, Schema,
@@ -393,8 +393,8 @@ impl Opaque for i64 {
 impl Data for bool {
     type Cfg = ();
     type Ref<'a> = bool;
-    type Col = Bitmap;
-    type Mut = MutableBitmap;
+    type Col = BooleanBuffer;
+    type Mut = BooleanBufferBuilder;
     type Stats = PrimitiveStats<bool>;
 }
 
@@ -411,7 +411,7 @@ impl Data for Option<bool> {
     type Cfg = ();
     type Ref<'a> = Option<bool>;
     type Col = BooleanArray;
-    type Mut = MutableBooleanArray;
+    type Mut = BooleanBuilder;
     type Stats = OptionStats<PrimitiveStats<bool>>;
 }
 
@@ -425,12 +425,12 @@ impl ColumnCfg<Option<bool>> for () {
 }
 
 macro_rules! data_primitive {
-    ($data:ident, $format:expr) => {
+    ($data:ident, $arrow_type:ident, $format:expr) => {
         impl Data for $data {
             type Cfg = ();
             type Ref<'a> = $data;
-            type Col = Buffer<$data>;
-            type Mut = Vec<$data>;
+            type Col = PrimitiveArray<$arrow_type>;
+            type Mut = PrimitiveBuilder<$arrow_type>;
             type Stats = PrimitiveStats<$data>;
         }
 
@@ -446,8 +446,8 @@ macro_rules! data_primitive {
         impl Data for Option<$data> {
             type Cfg = ();
             type Ref<'a> = Option<$data>;
-            type Col = PrimitiveArray<$data>;
-            type Mut = MutablePrimitiveArray<$data>;
+            type Col = PrimitiveArray<$arrow_type>;
+            type Mut = PrimitiveBuilder<$arrow_type>;
             type Stats = OptionStats<PrimitiveStats<$data>>;
         }
 
@@ -462,23 +462,23 @@ macro_rules! data_primitive {
     };
 }
 
-data_primitive!(u8, ColumnFormat::U8);
-data_primitive!(u16, ColumnFormat::U16);
-data_primitive!(u32, ColumnFormat::U32);
-data_primitive!(u64, ColumnFormat::U64);
-data_primitive!(i8, ColumnFormat::I8);
-data_primitive!(i16, ColumnFormat::I16);
-data_primitive!(i32, ColumnFormat::I32);
-data_primitive!(i64, ColumnFormat::I64);
-data_primitive!(f32, ColumnFormat::F32);
-data_primitive!(f64, ColumnFormat::F64);
+data_primitive!(u8, UInt8Type, ColumnFormat::U8);
+data_primitive!(u16, UInt16Type, ColumnFormat::U16);
+data_primitive!(u32, UInt32Type, ColumnFormat::U32);
+data_primitive!(u64, UInt64Type, ColumnFormat::U64);
+data_primitive!(i8, Int8Type, ColumnFormat::I8);
+data_primitive!(i16, Int16Type, ColumnFormat::I16);
+data_primitive!(i32, Int32Type, ColumnFormat::I32);
+data_primitive!(i64, Int64Type, ColumnFormat::I64);
+data_primitive!(f32, Float32Type, ColumnFormat::F32);
+data_primitive!(f64, Float64Type, ColumnFormat::F64);
 
 impl Data for Vec<u8> {
     type Cfg = ();
     type Ref<'a> = &'a [u8];
     // TODO: Something that more obviously isn't optional.
-    type Col = BinaryArray<i32>;
-    type Mut = MutableBinaryArray<i32>;
+    type Col = BinaryArray;
+    type Mut = BinaryBuilder;
     type Stats = BytesStats;
 }
 
@@ -494,8 +494,8 @@ impl ColumnCfg<Vec<u8>> for () {
 impl Data for Option<Vec<u8>> {
     type Cfg = ();
     type Ref<'a> = Option<&'a [u8]>;
-    type Col = BinaryArray<i32>;
-    type Mut = MutableBinaryArray<i32>;
+    type Col = BinaryArray;
+    type Mut = BinaryBuilder;
     type Stats = OptionStats<BytesStats>;
 }
 
@@ -512,8 +512,8 @@ impl Data for String {
     type Cfg = ();
     type Ref<'a> = &'a str;
     // TODO: Something that more obviously isn't optional.
-    type Col = Utf8Array<i32>;
-    type Mut = MutableUtf8Array<i32>;
+    type Col = StringArray;
+    type Mut = StringBuilder;
     type Stats = PrimitiveStats<String>;
 }
 
@@ -529,8 +529,8 @@ impl ColumnCfg<String> for () {
 impl Data for Option<String> {
     type Cfg = ();
     type Ref<'a> = Option<&'a str>;
-    type Col = Utf8Array<i32>;
-    type Mut = MutableUtf8Array<i32>;
+    type Col = StringArray;
+    type Mut = StringBuilder;
     type Stats = OptionStats<PrimitiveStats<String>>;
 }
 
@@ -580,8 +580,8 @@ impl ColumnCfg<Option<DynStruct>> for DynStructCfg {
 impl Data for OpaqueData {
     type Cfg = ();
     type Ref<'a> = &'a [u8];
-    type Col = BinaryArray<i32>;
-    type Mut = MutableBinaryArray<i32>;
+    type Col = BinaryArray;
+    type Mut = BinaryBuilder;
     type Stats = NoneStats;
 }
 
@@ -597,8 +597,8 @@ impl ColumnCfg<OpaqueData> for () {
 impl Data for Option<OpaqueData> {
     type Cfg = ();
     type Ref<'a> = Option<&'a [u8]>;
-    type Col = BinaryArray<i32>;
-    type Mut = MutableBinaryArray<i32>;
+    type Col = BinaryArray;
+    type Mut = BinaryBuilder;
     type Stats = OptionStats<NoneStats>;
 }
 
@@ -611,38 +611,56 @@ impl ColumnCfg<Option<OpaqueData>> for () {
     }
 }
 
-impl ColumnRef<()> for Bitmap {
+impl ColumnRef<()> for BooleanBuffer {
     fn cfg(&self) -> &() {
         &()
     }
+
     fn len(&self) -> usize {
         self.len()
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        let array = BooleanArray::new(ArrowLogicalType::Boolean, self.clone(), None);
-        (Encoding::Plain, Box::new(array))
+
+    fn to_arrow(&self) -> Arc<dyn Array> {
+        Arc::new(BooleanArray::new(self.clone(), None))
     }
-    fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
+
+    fn from_arrow(_cfg: &(), array: &dyn Array) -> Result<Self, String> {
         let array = array
             .as_any()
             .downcast_ref::<BooleanArray>()
             .ok_or_else(|| format!("expected BooleanArray but was {:?}", array.data_type()))?;
-        if array.validity().is_some() {
+        if array.logical_nulls().is_some() {
             return Err("unexpected validity for non-optional bool".to_owned());
         }
+
         Ok(array.values().clone())
     }
 }
 
-impl ColumnGet<bool> for Bitmap {
+impl ColumnGet<bool> for BooleanBuffer {
     fn get<'a>(&'a self, idx: usize) -> bool {
-        self.get_bit(idx)
+        self.value(idx)
     }
 }
 
-impl ColumnPush<bool> for MutableBitmap {
+impl ColumnPush<bool> for BooleanBufferBuilder {
     fn push<'a>(&mut self, val: bool) {
-        <MutableBitmap>::push(self, val)
+        <BooleanBufferBuilder>::append(self, val)
+    }
+
+    fn finish(mut self) -> <bool as Data>::Col {
+        <BooleanBufferBuilder>::finish(&mut self)
+    }
+}
+
+impl ColumnMut<()> for BooleanBufferBuilder {
+    fn new(_cfg: &()) -> Self {
+        // `BooleanBuilder` uses 1024 for its default capacity.
+        BooleanBufferBuilder::new(1024)
+    }
+
+    fn cfg(&self) -> &() {
+        &()
     }
 }
 
@@ -650,13 +668,16 @@ impl ColumnRef<()> for BooleanArray {
     fn cfg(&self) -> &() {
         &()
     }
+
     fn len(&self) -> usize {
         self.len()
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        (Encoding::Plain, Box::new(self.clone()))
+
+    fn to_arrow(&self) -> Arc<dyn Array> {
+        Arc::new(self.clone())
     }
-    fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
+
+    fn from_arrow(_cfg: &(), array: &dyn Array) -> Result<Self, String> {
         let array = array
             .as_any()
             .downcast_ref::<BooleanArray>()
@@ -667,7 +688,10 @@ impl ColumnRef<()> for BooleanArray {
 
 impl ColumnGet<Option<bool>> for BooleanArray {
     fn get<'a>(&'a self, idx: usize) -> Option<bool> {
-        if self.validity().map_or(true, |x| x.get_bit(idx)) {
+        if self
+            .logical_nulls()
+            .map_or(true, |nulls| nulls.is_valid(idx))
+        {
             Some(self.value(idx))
         } else {
             None
@@ -675,86 +699,79 @@ impl ColumnGet<Option<bool>> for BooleanArray {
     }
 }
 
-impl ColumnPush<Option<bool>> for MutableBooleanArray {
+impl ColumnMut<()> for BooleanBuilder {
+    fn new(_cfg: &()) -> Self {
+        BooleanBuilder::default()
+    }
+
+    fn cfg(&self) -> &() {
+        &()
+    }
+}
+
+impl ColumnPush<Option<bool>> for BooleanBuilder {
     fn push<'a>(&mut self, val: Option<bool>) {
-        <MutableBooleanArray>::push(self, val)
+        <BooleanBuilder>::append_option(self, val)
+    }
+
+    fn finish(mut self) -> <Option<bool> as Data>::Col {
+        <BooleanBuilder>::finish(&mut self)
     }
 }
 
 macro_rules! arrowable_primitive {
-    ($data:ident, $encoding:expr) => {
-        impl ColumnRef<()> for Buffer<$data> {
-            fn cfg(&self) -> &() {
-                &()
-            }
-            fn len(&self) -> usize {
-                self.len()
-            }
-            fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-                let array = PrimitiveArray::new($data::PRIMITIVE.into(), self.clone(), None);
-                ($encoding, Box::new(array.clone()))
-            }
-            fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<$data>>()
-                    .ok_or_else(|| {
-                        format!(
-                            "expected {} but was {:?}",
-                            std::any::type_name::<PrimitiveArray<$data>>(),
-                            array.data_type()
-                        )
-                    })?;
-                if array.validity().is_some() {
-                    return Err(format!(
-                        "unexpected validity for non-optional {}",
-                        std::any::type_name::<$data>()
-                    ));
-                }
-                Ok(array.values().clone())
-            }
-        }
-
-        impl ColumnGet<$data> for Buffer<$data> {
+    ($data:ident, $arrow_type:ident) => {
+        impl ColumnGet<$data> for PrimitiveArray<$arrow_type> {
             fn get<'a>(&'a self, idx: usize) -> $data {
-                self[idx]
+                self.value(idx)
             }
         }
 
-        impl ColumnPush<$data> for Vec<$data> {
+        impl ColumnPush<$data> for PrimitiveBuilder<$arrow_type> {
             fn push<'a>(&mut self, val: $data) {
-                <Vec<$data>>::push(self, val)
+                <PrimitiveBuilder<$arrow_type>>::append_value(self, val)
+            }
+
+            fn finish(mut self) -> <$data as Data>::Col {
+                <PrimitiveBuilder<$arrow_type>>::finish(&mut self)
             }
         }
 
-        impl ColumnRef<()> for PrimitiveArray<$data> {
+        impl ColumnRef<()> for PrimitiveArray<$arrow_type> {
             fn cfg(&self) -> &() {
                 &()
             }
+
             fn len(&self) -> usize {
                 self.len()
             }
-            fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-                ($encoding, Box::new(self.clone()))
+
+            fn to_arrow(&self) -> Arc<dyn Array> {
+                Arc::new(self.clone())
             }
-            fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
+
+            fn from_arrow(_cfg: &(), array: &dyn Array) -> Result<Self, String> {
                 let array = array
                     .as_any()
-                    .downcast_ref::<PrimitiveArray<$data>>()
+                    .downcast_ref::<PrimitiveArray<$arrow_type>>()
                     .ok_or_else(|| {
                         format!(
                             "expected {} but was {:?}",
-                            std::any::type_name::<PrimitiveArray<$data>>(),
+                            std::any::type_name::<PrimitiveArray<$arrow_type>>(),
                             array.data_type()
                         )
                     })?;
+
                 Ok(array.clone())
             }
         }
 
-        impl ColumnGet<Option<$data>> for PrimitiveArray<$data> {
+        impl ColumnGet<Option<$data>> for PrimitiveArray<$arrow_type> {
             fn get<'a>(&'a self, idx: usize) -> Option<$data> {
-                if self.validity().map_or(true, |x| x.get_bit(idx)) {
+                if self
+                    .logical_nulls()
+                    .map_or(true, |nulls| nulls.is_valid(idx))
+                {
                     Some(self.value(idx))
                 } else {
                     None
@@ -762,54 +779,74 @@ macro_rules! arrowable_primitive {
             }
         }
 
-        impl ColumnPush<Option<$data>> for MutablePrimitiveArray<$data> {
+        impl ColumnMut<()> for PrimitiveBuilder<$arrow_type> {
+            fn new(_cfg: &()) -> Self {
+                PrimitiveBuilder::<$arrow_type>::default()
+            }
+
+            fn cfg(&self) -> &() {
+                &()
+            }
+        }
+
+        impl ColumnPush<Option<$data>> for PrimitiveBuilder<$arrow_type> {
             fn push<'a>(&mut self, val: Option<$data>) {
-                <MutablePrimitiveArray<$data>>::push(self, val)
+                <PrimitiveBuilder<$arrow_type>>::append_option(self, val)
+            }
+
+            fn finish(mut self) -> <Option<$data> as Data>::Col {
+                <PrimitiveBuilder<$arrow_type>>::finish(&mut self)
             }
         }
     };
 }
 
-arrowable_primitive!(u8, Encoding::Plain);
-arrowable_primitive!(u16, Encoding::Plain);
-arrowable_primitive!(u32, Encoding::Plain);
-arrowable_primitive!(u64, Encoding::Plain);
-arrowable_primitive!(i8, Encoding::Plain);
-arrowable_primitive!(i16, Encoding::Plain);
-arrowable_primitive!(i32, Encoding::Plain);
-arrowable_primitive!(i64, Encoding::Plain);
-arrowable_primitive!(f32, Encoding::Plain);
-arrowable_primitive!(f64, Encoding::Plain);
+arrowable_primitive!(u8, UInt8Type);
+arrowable_primitive!(u16, UInt16Type);
+arrowable_primitive!(u32, UInt32Type);
+arrowable_primitive!(u64, UInt64Type);
+arrowable_primitive!(i8, Int8Type);
+arrowable_primitive!(i16, Int16Type);
+arrowable_primitive!(i32, Int32Type);
+arrowable_primitive!(i64, Int64Type);
+arrowable_primitive!(f32, Float32Type);
+arrowable_primitive!(f64, Float64Type);
 
-impl ColumnRef<()> for BinaryArray<i32> {
+impl ColumnRef<()> for BinaryArray {
     fn cfg(&self) -> &() {
         &()
     }
+
     fn len(&self) -> usize {
-        self.len()
+        <BinaryArray as Array>::len(self)
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        (Encoding::Plain, Box::new(self.clone()))
+
+    fn to_arrow(&self) -> Arc<dyn Array> {
+        Arc::new(self.clone())
     }
-    fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
+
+    fn from_arrow(_cfg: &(), array: &dyn Array) -> Result<Self, String> {
         let array = array
             .as_any()
-            .downcast_ref::<BinaryArray<i32>>()
-            .ok_or_else(|| format!("expected BinaryArray<i32> but was {:?}", array.data_type()))?;
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| format!("expected BinaryArray but was {:?}", array.data_type()))?;
         Ok(array.clone())
     }
 }
 
-impl ColumnGet<Vec<u8>> for BinaryArray<i32> {
+impl ColumnGet<Vec<u8>> for BinaryArray {
     fn get<'a>(&'a self, idx: usize) -> &'a [u8] {
-        assert!(self.validity().is_none());
+        assert!(self.logical_nulls().is_none());
         self.value(idx)
     }
 }
 
-impl ColumnGet<Option<Vec<u8>>> for BinaryArray<i32> {
+impl ColumnGet<Option<Vec<u8>>> for BinaryArray {
     fn get<'a>(&'a self, idx: usize) -> Option<&'a [u8]> {
-        if self.validity().map_or(true, |x| x.get_bit(idx)) {
+        if self
+            .logical_nulls()
+            .map_or(true, |nulls| nulls.is_valid(idx))
+        {
             Some(self.value(idx))
         } else {
             None
@@ -817,48 +854,72 @@ impl ColumnGet<Option<Vec<u8>>> for BinaryArray<i32> {
     }
 }
 
-impl ColumnPush<Vec<u8>> for MutableBinaryArray<i32> {
-    fn push<'a>(&mut self, val: &'a [u8]) {
-        assert!(self.validity().is_none());
-        <MutableBinaryArray<i32>>::push(self, Some(val))
+impl ColumnMut<()> for BinaryBuilder {
+    fn new(_cfg: &()) -> Self {
+        BinaryBuilder::default()
     }
-}
 
-impl ColumnPush<Option<Vec<u8>>> for MutableBinaryArray<i32> {
-    fn push<'a>(&mut self, val: Option<&'a [u8]>) {
-        <MutableBinaryArray<i32>>::push(self, val)
-    }
-}
-
-impl ColumnRef<()> for Utf8Array<i32> {
     fn cfg(&self) -> &() {
         &()
     }
+}
+
+impl ColumnPush<Vec<u8>> for BinaryBuilder {
+    fn push<'a>(&mut self, val: &'a [u8]) {
+        assert!(self.validity_slice().is_none());
+        <BinaryBuilder>::append_value(self, val)
+    }
+
+    fn finish(mut self) -> <Vec<u8> as Data>::Col {
+        <BinaryBuilder>::finish(&mut self)
+    }
+}
+
+impl ColumnPush<Option<Vec<u8>>> for BinaryBuilder {
+    fn push<'a>(&mut self, val: Option<&'a [u8]>) {
+        <BinaryBuilder>::append_option(self, val)
+    }
+
+    fn finish(mut self) -> <Vec<u8> as Data>::Col {
+        <BinaryBuilder>::finish(&mut self)
+    }
+}
+
+impl ColumnRef<()> for StringArray {
+    fn cfg(&self) -> &() {
+        &()
+    }
+
     fn len(&self) -> usize {
-        self.len()
+        <StringArray as Array>::len(self)
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        (Encoding::Plain, Box::new(self.clone()))
+
+    fn to_arrow(&self) -> Arc<dyn Array> {
+        Arc::new(self.clone())
     }
-    fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
+
+    fn from_arrow(_cfg: &(), array: &dyn Array) -> Result<Self, String> {
         let array = array
             .as_any()
-            .downcast_ref::<Utf8Array<i32>>()
-            .ok_or_else(|| format!("expected Utf8Array<i32> but was {:?}", array.data_type()))?;
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| format!("expected StringArray but was {:?}", array.data_type()))?;
         Ok(array.clone())
     }
 }
 
-impl ColumnGet<String> for Utf8Array<i32> {
+impl ColumnGet<String> for StringArray {
     fn get<'a>(&'a self, idx: usize) -> &'a str {
-        assert!(self.validity().is_none());
+        assert!(self.logical_nulls().is_none());
         self.value(idx)
     }
 }
 
-impl ColumnGet<Option<String>> for Utf8Array<i32> {
+impl ColumnGet<Option<String>> for StringArray {
     fn get<'a>(&'a self, idx: usize) -> Option<&'a str> {
-        if self.validity().map_or(true, |x| x.get_bit(idx)) {
+        if self
+            .logical_nulls()
+            .map_or(true, |nulls| nulls.is_valid(idx))
+        {
             Some(self.value(idx))
         } else {
             None
@@ -866,29 +927,50 @@ impl ColumnGet<Option<String>> for Utf8Array<i32> {
     }
 }
 
-impl ColumnPush<String> for MutableUtf8Array<i32> {
+impl ColumnMut<()> for StringBuilder {
+    fn new(_cfg: &()) -> Self {
+        StringBuilder::default()
+    }
+
+    fn cfg(&self) -> &() {
+        &()
+    }
+}
+
+impl ColumnPush<String> for StringBuilder {
     fn push<'a>(&mut self, val: &'a str) {
-        assert!(self.validity().is_none());
-        <MutableUtf8Array<i32>>::push(self, Some(val))
+        assert!(self.validity_slice().is_none());
+        <StringBuilder>::append_value(self, val)
+    }
+
+    fn finish(mut self) -> <String as Data>::Col {
+        <StringBuilder>::finish(&mut self)
     }
 }
 
-impl ColumnPush<Option<String>> for MutableUtf8Array<i32> {
+impl ColumnPush<Option<String>> for StringBuilder {
     fn push<'a>(&mut self, val: Option<&'a str>) {
-        <MutableUtf8Array<i32>>::push(self, val)
+        <StringBuilder>::append_option(self, val)
+    }
+
+    fn finish(mut self) -> <Option<String> as Data>::Col {
+        <StringBuilder>::finish(&mut self)
     }
 }
 
-impl ColumnGet<OpaqueData> for BinaryArray<i32> {
+impl ColumnGet<OpaqueData> for BinaryArray {
     fn get<'a>(&'a self, idx: usize) -> <OpaqueData as Data>::Ref<'a> {
-        assert!(self.validity().is_none());
+        assert!(self.logical_nulls().is_none());
         self.value(idx)
     }
 }
 
-impl ColumnGet<Option<OpaqueData>> for BinaryArray<i32> {
+impl ColumnGet<Option<OpaqueData>> for BinaryArray {
     fn get<'a>(&'a self, idx: usize) -> <Option<OpaqueData> as Data>::Ref<'a> {
-        if self.validity().map_or(true, |x| x.get_bit(idx)) {
+        if self
+            .logical_nulls()
+            .map_or(true, |nulls| nulls.is_valid(idx))
+        {
             Some(self.value(idx))
         } else {
             None
@@ -896,16 +978,24 @@ impl ColumnGet<Option<OpaqueData>> for BinaryArray<i32> {
     }
 }
 
-impl ColumnPush<OpaqueData> for MutableBinaryArray<i32> {
+impl ColumnPush<OpaqueData> for BinaryBuilder {
     fn push<'a>(&mut self, val: <OpaqueData as Data>::Ref<'a>) {
-        assert!(self.validity().is_none());
-        <MutableBinaryArray<i32>>::push(self, Some(val))
+        assert!(self.validity_slice().is_none());
+        <BinaryBuilder>::append_value(self, val)
+    }
+
+    fn finish(mut self) -> <OpaqueData as Data>::Col {
+        <BinaryBuilder>::finish(&mut self)
     }
 }
 
-impl ColumnPush<Option<OpaqueData>> for MutableBinaryArray<i32> {
+impl ColumnPush<Option<OpaqueData>> for BinaryBuilder {
     fn push<'a>(&mut self, val: <Option<OpaqueData> as Data>::Ref<'a>) {
-        <MutableBinaryArray<i32>>::push(self, val)
+        <BinaryBuilder>::append_option(self, val)
+    }
+
+    fn finish(mut self) -> <Option<OpaqueData> as Data>::Col {
+        <BinaryBuilder>::finish(&mut self)
     }
 }
 

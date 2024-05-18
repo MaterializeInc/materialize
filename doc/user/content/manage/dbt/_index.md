@@ -305,6 +305,33 @@ database.schema.table_b
 ```
 
 {{< /tab >}}
+{{< tab "Webhooks">}}
+Create a [webhook source](/sql/create-source/webhook/).
+
+**Filename:** sources/webhook.sql
+```sql
+{{ config(materialized='source') }}
+
+FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK (
+      WITH (
+        HEADERS,
+        BODY AS request_body,
+        -- Make sure to fully qualify the secret if it isn't in the same
+        -- namespace as the source!
+        SECRET basic_hook_auth
+      )
+      constant_time_eq(headers->'authorization', basic_hook_auth)
+    );
+```
+
+The source above would be compiled to:
+
+```
+database.schema.webhook
+```
+{{< /tab >}}
 {{< /tabs >}}
 
 ### Views and materialized views

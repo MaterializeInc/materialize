@@ -62,7 +62,8 @@ pub use crate::row::{
     Row, RowArena, RowPacker, RowRef, SharedRow,
 };
 pub use crate::scalar::{
-    arb_datum, arb_range_type, ArrayRustType, AsColumnType, Datum, DatumType, PropArray, PropDatum,
-    PropDict, PropList, ProtoScalarType, ScalarBaseType, ScalarType,
+    arb_datum, arb_datum_for_column, arb_datum_for_scalar, arb_range_type, ArrayRustType,
+    AsColumnType, Datum, DatumType, PropArray, PropDatum, PropDict, PropList, ProtoScalarType,
+    ScalarBaseType, ScalarType,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};

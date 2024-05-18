@@ -44,7 +44,7 @@ use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::debug;
 
 use crate::txn_cache::TxnsCache;
-use crate::txn_read::DataListenNext;
+use crate::txn_read::{DataListenNext, DataRemapEntry};
 use crate::TxnsCodecDefault;
 
 /// An operator for translating physical data shard frontiers into logical ones.
@@ -136,14 +136,6 @@ where
     (passthrough, vec![source_button, frontiers_button])
 }
 
-/// A mapping between the physical upper of a data shard and the largest upper
-/// which is known to logically have the same contents.
-///
-/// Said another way, `[physical_upper,logical_upper)` is known to be empty (in
-/// the "definite" sense).
-///
-/// Invariant: physical_upper <= logical_upper
-///
 /// TODO: I'd much prefer the communication protocol between the two operators
 /// to be exactly remap as defined in the [reclocking design doc]. However, we
 /// can't quite recover exactly the information necessary to construct that at
@@ -157,12 +149,6 @@ where
 ///
 /// [reclocking design doc]:
 ///     https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct DataRemapEntry<T> {
-    physical_upper: T,
-    logical_upper: T,
-}
-
 fn txns_progress_source<K, V, T, D, P, C, G>(
     scope: G,
     name: &str,
@@ -200,7 +186,7 @@ where
         let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
 
         txns_cache.update_gt(&as_of).await;
-        let snap = txns_cache.data_snapshot(data_id, as_of.clone());
+        let subscribe = txns_cache.data_subscribe::<K, V, D>(data_id, as_of.clone());
         let data_write = client
             .open_writer::<K, V, T, D>(
                 data_id,
@@ -210,33 +196,21 @@ where
             )
             .await
             .expect("schema shouldn't change");
-        let empty_to = snap.unblock_read(data_write).await;
-        debug!(
-            "{} starting as_of={:?} empty_to={:?}",
-            name,
-            as_of,
-            empty_to.elements()
-        );
-
-        let mut remap = match empty_to.into_option() {
-            Some(empty_to) => DataRemapEntry {
-                physical_upper: empty_to.clone(),
-                logical_upper: empty_to,
-            },
-            None => return,
+        let Some(mut subscribe) = subscribe.unblock_subscribe(data_write).await else {
+            return;
         };
-        debug!("{} emitting {:?}", name, remap);
-        remap_output.give(&cap, remap.clone()).await;
+
+        debug!("{} emitting {:?}", name, subscribe.remap);
+        remap_output.give(&cap, subscribe.remap.clone()).await;
 
         loop {
-            txns_cache.update_ge(&remap.logical_upper).await;
-            txns_cache.compact_to(&remap.logical_upper);
-            cap.downgrade(&remap.logical_upper);
+            txns_cache.update_ge(&subscribe.remap.logical_upper).await;
+            cap.downgrade(&subscribe.remap.logical_upper);
             let data_listen_next =
-                txns_cache.data_listen_next(&data_id, remap.logical_upper.clone());
+                txns_cache.data_listen_next(&subscribe.data_id, &subscribe.remap.logical_upper);
             debug!(
                 "{} data_listen_next at {:?}: {:?}",
-                name, remap, data_listen_next,
+                name, subscribe.remap.logical_upper, data_listen_next,
             );
             match data_listen_next {
                 // We've caught up to the txns upper and we have to wait for it
@@ -246,40 +220,30 @@ where
                 // the cache is past remap.logical_upper (as it will be after
                 // this update_gt call), we're guaranteed to get an answer.
                 DataListenNext::WaitForTxnsProgress => {
-                    txns_cache.update_gt(&remap.logical_upper).await;
-                    continue;
+                    txns_cache.update_gt(&subscribe.remap.logical_upper).await;
                 }
                 // The data shard got a write!
                 DataListenNext::ReadDataTo(new_upper) => {
                     // A write means both the physical and logical upper advance.
-                    remap = DataRemapEntry {
+                    subscribe.remap = DataRemapEntry {
                         physical_upper: new_upper.clone(),
                         logical_upper: new_upper,
                     };
-                    debug!("{} emitting {:?}", name, remap);
-                    remap_output.give(&cap, remap.clone()).await;
-
-                    continue;
+                    debug!("{} emitting {:?}", name, subscribe.remap);
+                    remap_output.give(&cap, subscribe.remap.clone()).await;
                 }
                 // We know there are no writes in `[logical_upper,
                 // new_progress)`, so advance our output frontier.
                 DataListenNext::EmitLogicalProgress(new_progress) => {
-                    assert!(remap.physical_upper < new_progress);
-                    assert!(remap.logical_upper < new_progress);
+                    assert!(subscribe.remap.physical_upper < new_progress);
+                    assert!(subscribe.remap.logical_upper < new_progress);
 
-                    remap.logical_upper = new_progress;
+                    subscribe.remap.logical_upper = new_progress;
                     // As mentioned in the docs on `DataRemapEntry`, we only
                     // emit updates when the physical upper changes (which
                     // happens to makes the protocol a tiny bit more
                     // remap-like).
-                    debug!("{} not emitting {:?}", name, remap);
-                    continue;
-                }
-                DataListenNext::CompactedTo(since_ts) => {
-                    unreachable!(
-                        "internal logic error: {} unexpectedly compacted past {:?} to {:?}",
-                        data_id, remap.logical_upper, since_ts
-                    )
+                    debug!("{} not emitting {:?}", name, subscribe.remap);
                 }
             }
         }
@@ -441,7 +405,12 @@ where
             debug!("{} got remap {:?}", name, x);
             // Don't assume anything about the ordering.
             if remap.logical_upper < x.logical_upper {
-                assert!(remap.physical_upper <= x.physical_upper);
+                assert!(
+                    remap.physical_upper <= x.physical_upper,
+                    "previous remap physical upper {:?} is ahead of new remap physical upper {:?}",
+                    remap.physical_upper,
+                    x.physical_upper,
+                );
                 // TODO: If the physical upper has advanced, that's a very
                 // strong hint that the data shard is about to be written to.
                 // Because the data shard's upper advances sparsely (on write,

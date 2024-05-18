@@ -886,6 +886,7 @@ mz_sink_status_history
 mz_sink_statuses
 mz_source_statistics
 mz_source_statistics_raw
+mz_source_statistics_with_history
 mz_source_status_history
 mz_source_statuses
 mz_sql_text

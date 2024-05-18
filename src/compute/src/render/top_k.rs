@@ -356,7 +356,7 @@ where
     /// The output of this function is _not consolidated_.
     ///
     /// The dataflow fragment has the following shape:
-    /// ```ignore
+    /// ```text
     ///     | input
     ///     |
     ///   arrange

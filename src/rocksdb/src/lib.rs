@@ -61,6 +61,10 @@ pub enum Error {
     /// A tokio thread used by the implementation panicked.
     #[error("failed to cleanup in time")]
     CleanupTimeout(#[from] tokio::time::error::Elapsed),
+
+    /// An error occured with a provided value.
+    #[error("error with value: {0}")]
+    ValueError(String),
 }
 
 /// An iterator over operand values to merge for a key in RocksDB.
@@ -93,7 +97,7 @@ where
 /// Helper type stub to satisfy generic bounds when initializing a `InstanceOptions` without a
 /// defined merge operator.
 pub type StubMergeOperator<V> =
-    fn(key: &[u8], operands: ValueIterator<bincode::DefaultOptions, V>) -> Option<V>;
+    fn(key: &[u8], operands: ValueIterator<bincode::DefaultOptions, V>) -> V;
 
 /// Fixed options to configure a [`RocksDBInstance`]. These are not tuning parameters,
 /// see the `config` modules for tuning. These are generally fixed within the binary.
@@ -128,7 +132,7 @@ impl<O, V, F> InstanceOptions<O, V, F>
 where
     O: bincode::Options + Copy + Send + Sync + 'static,
     V: DeserializeOwned + Serialize + Send + Sync + 'static,
-    F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> Option<V> + Copy + Send + Sync + 'static,
+    F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> V + Copy + Send + Sync + 'static,
 {
     /// A new `Options` object with reasonable defaults.
     pub fn new(
@@ -172,7 +176,10 @@ where
                     bincode: &bincode,
                     v: std::marker::PhantomData::<V>,
                 };
-                merge_fn(key, operands).map(|result| bincode.serialize(&result).unwrap())
+                let result = merge_fn(key, operands);
+                // NOTE: While the API specifies the return type as Option<Vec<u8>>, returning a None
+                // will cause rocksdb to throw a corruption error and SIGABRT the process.
+                Some(bincode.serialize(&result).unwrap())
             });
         }
 
@@ -239,11 +246,15 @@ pub struct GetResult<V> {
 /// The result type for `multi_update`.
 #[derive(Default, Debug)]
 pub struct MultiUpdateResult {
-    /// The number of keys we put, merged, or deleted.
+    /// The number of puts, merges, and deletes.
     pub processed_updates: u64,
     /// The total size of values we wrote to the database.
     /// Does not contain any information about deletes.
     pub size_written: u64,
+    /// The 'diff' size of the values we wrote to the database,
+    /// returned when the `MultiUpdate` command included a multiplier 'diff'
+    /// for at least one update value.
+    pub size_diff: Option<i64>,
 }
 
 /// The type of update to perform on a key.
@@ -277,10 +288,14 @@ enum Command<K, V> {
         >,
     },
     MultiUpdate {
-        batch: Vec<(K, KeyUpdate<V>)>,
+        // The batch of updates to perform. The 3rd item in each tuple is an optional diff
+        // multiplier that when present, will be multiplied by the size of the encoded
+        // value written to the database and summed into the `MultiUpdateResult::size_diff` field.
+        batch: Vec<(K, KeyUpdate<V>, Option<i64>)>,
         // Scratch vector to return results in.
-        response_sender:
-            oneshot::Sender<Result<(MultiUpdateResult, Vec<(K, KeyUpdate<V>)>), Error>>,
+        response_sender: oneshot::Sender<
+            Result<(MultiUpdateResult, Vec<(K, KeyUpdate<V>, Option<i64>)>), Error>,
+        >,
     },
     Shutdown {
         done_sender: oneshot::Sender<()>,
@@ -304,10 +319,14 @@ pub struct RocksDBInstance<K, V> {
 
     // Scratch vector to send updates to the RocksDB thread
     // during `MultiUpdate`.
-    multi_update_scratch: Vec<(K, KeyUpdate<V>)>,
+    multi_update_scratch: Vec<(K, KeyUpdate<V>, Option<i64>)>,
 
     // Configuration that can change dynamically.
     dynamic_config: config::RocksDBDynamicConfig,
+
+    /// Whether this instance supports merge operations (whether a
+    /// merge operator was set at creation time)
+    pub supports_merges: bool,
 }
 
 impl<K, V> RocksDBInstance<K, V>
@@ -333,13 +352,10 @@ where
         O: bincode::Options + Copy + Send + Sync + 'static,
         M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
         IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
-        F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> Option<V>
-            + Copy
-            + Send
-            + Sync
-            + 'static,
+        F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> V + Copy + Send + Sync + 'static,
     {
         let dynamic_config = tuning_config.dynamic.clone();
+        let supports_merges = options.merge_operator.is_some();
         if options.cleanup_on_new && instance_path.exists() {
             let instance_path_owned = instance_path.to_owned();
 
@@ -411,6 +427,7 @@ where
             multi_get_results_scratch: Vec::new(),
             multi_update_scratch: Vec::new(),
             dynamic_config,
+            supports_merges,
         })
     }
 
@@ -504,9 +521,12 @@ where
     /// For each key in puts, store the given value, or delete it if
     /// the value is `None`. If the same `key` appears multiple times,
     /// the last value for the key wins.
+    /// The third item in each tuple is an optional diff multiplier that when present,
+    /// will be multiplied by the size of the encoded value written to the database and
+    /// summed into the `MultiUpdateResult::size_diff` field.
     pub async fn multi_update<P>(&mut self, puts: P) -> Result<MultiUpdateResult, Error>
     where
-        P: IntoIterator<Item = (K, KeyUpdate<V>)>,
+        P: IntoIterator<Item = (K, KeyUpdate<V>, Option<i64>)>,
     {
         let batch_size = self.dynamic_config.batch_size();
         let mut stats = MultiUpdateResult::default();
@@ -519,6 +539,9 @@ where
                 let ret = self.multi_update_inner(puts).await?;
                 stats.processed_updates += ret.processed_updates;
                 stats.size_written += ret.size_written;
+                if let Some(diff) = ret.size_diff {
+                    stats.size_diff = Some(stats.size_diff.unwrap_or(0) + diff);
+                }
             }
         }
 
@@ -527,7 +550,7 @@ where
 
     async fn multi_update_inner<P>(&mut self, updates: P) -> Result<MultiUpdateResult, Error>
     where
-        P: IntoIterator<Item = (K, KeyUpdate<V>)>,
+        P: IntoIterator<Item = (K, KeyUpdate<V>, Option<i64>)>,
     {
         let mut multi_put_vec = std::mem::take(&mut self.multi_update_scratch);
         multi_put_vec.clear();
@@ -538,6 +561,7 @@ where
             return Ok(MultiUpdateResult {
                 processed_updates: 0,
                 size_written: 0,
+                size_diff: None,
             });
         }
 
@@ -602,7 +626,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBSharedMetrics> + Send + 'static,
     O: bincode::Options + Copy + Send + Sync + 'static,
-    F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> Option<V> + Send + Sync + Copy + 'static,
+    F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> V + Send + Sync + Copy + 'static,
     IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
 {
     let retry_max_duration = tuning_config.retry_max_duration;
@@ -750,6 +774,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                 let mut ret = MultiUpdateResult {
                     processed_updates: 0,
                     size_written: 0,
+                    size_diff: None,
                 };
 
                 // initialize and push values into the buffer to match the batch size
@@ -773,7 +798,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                 assert!(encoded_batch_buffers.len() >= batch_size);
 
                 // TODO(guswynn): sort by key before writing.
-                for ((key, value), encode_buf) in
+                for ((key, value, diff), encode_buf) in
                     batch.drain(..).zip(encoded_batch_buffers.iter_mut())
                 {
                     ret.processed_updates += 1;
@@ -787,7 +812,16 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                                 .bincode
                                 .serialize_into::<&mut Vec<u8>, _>(&mut encode_buf, update)
                             {
-                                Ok(()) => ret.size_written += u64::cast_from(encode_buf.len()),
+                                Ok(()) => {
+                                    ret.size_written += u64::cast_from(encode_buf.len());
+                                    // calculate the diff size if the diff multiplier is present
+                                    if let Some(diff) = diff {
+                                        let encoded_len = i64::try_from(encode_buf.len())
+                                            .expect("less than i64 size");
+                                        ret.size_diff =
+                                            Some(ret.size_diff.unwrap_or(0) + (diff * encoded_len));
+                                    }
+                                }
                                 Err(e) => {
                                     let _ = response_sender.send(Err(Error::DecodeError(e)));
                                     return;

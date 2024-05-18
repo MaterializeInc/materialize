@@ -76,8 +76,6 @@ GENERIC_OPERATION_TYPES.append(
             AnyLikeOtherOperationParam(0, optional=True),
         ],
         DynamicReturnTypeSpec(param_index_to_take_type=0),
-        # pg evaluates all arguments, possibly resulting in an evaluation error
-        is_pg_compatible=False,
     )
 )
 GENERIC_OPERATION_TYPES.append(

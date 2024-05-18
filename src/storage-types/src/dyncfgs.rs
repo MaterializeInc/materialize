@@ -139,6 +139,13 @@ pub const STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING: Config<bool> = Config::new(
     "Prevent snapshot buffering in upsert.",
 );
 
+/// Whether to enable the merge operator in upsert for the RocksDB backend.
+pub const STORAGE_ROCKSDB_USE_MERGE_OPERATOR: Config<bool> = Config::new(
+    "storage_rocksdb_use_merge_operator",
+    false,
+    "Use the native rocksdb merge operator where possible.",
+);
+
 /// If `storage_upsert_prevent_snapshot_buffering` is true, this prevents the upsert
 /// operator from buffering too many events from the upstream snapshot. In the absence
 /// of hydration flow control, this could prevent certain workloads from causing egregiously
@@ -172,6 +179,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PG_OFFSET_KNOWN_INTERVAL)
         .add(&ENFORCE_EXTERNAL_ADDRESSES)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
+        .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
 }

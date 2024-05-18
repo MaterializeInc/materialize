@@ -19,6 +19,7 @@ import pg8000
 import requests
 from pg8000 import Connection, Cursor
 from pg8000.exceptions import InterfaceError
+from requests.exceptions import ReadTimeout
 
 from materialize.cloudtest.util.jwt_key import fetch_jwt
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -66,7 +67,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             failures = []
 
+            count_chunk = 0
             while time.time() - start_time < args.runtime:
+                count_chunk = count_chunk + 1
                 try:
                     c.testdrive(
                         dedent(
@@ -91,9 +94,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
                     i = 0
                     while time.time() - start_time < args.runtime:
-                        print(f"Running iteration {i}")
+                        print(f"Running iteration {i} of chunk {count_chunk}")
                         c.override_current_testcase_name(
-                            f"iteration {i} of workflow_default"
+                            f"iteration {i} of chunk {count_chunk} in workflow_default"
                         )
                         perform_test(
                             c,
@@ -111,24 +114,29 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )
                     close_connection_and_cursor(conn2, cursor_on_mv, "subscribe_mv")
 
-                except InterfaceError as e:
-                    if "network error" in str(e):
+                except (InterfaceError, ReadTimeout) as e:
+                    error_msg_str = str(e)
+                    if "network error" in error_msg_str:
                         print(
                             "Network error received, probably a cloud downtime, retrying in 1 min"
                         )
                         time.sleep(60)
+                    elif "Read timed out" in error_msg_str:
+                        print("Read timed out, retrying")
                     else:
                         raise
                 except FailedTestExecutionError as e:
                     assert len(e.errors) > 0, "Exception contains not errors"
                     for error in e.errors:
                         print(
-                            f"Test failure occurred ('{error.message}'), collecting it, and continuing."
+                            f"Test failure occurred ({error.message}), collecting it, and continuing."
                         )
                     # collect, continue, and rethrow at the end
                     failures.extend(e.errors)
 
             if len(failures) > 0:
+                # reset test case name to remove current iteration and chunk, which does not apply to collected errors
+                c.override_current_testcase_name("workflow_default")
                 raise FailedTestExecutionError(
                     error_summary="SQL failures occurred",
                     errors=failures,

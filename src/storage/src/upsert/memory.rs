@@ -20,7 +20,8 @@ use std::collections::HashMap;
 use itertools::Itertools;
 
 use super::types::{
-    GetStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize, ValueMetadata,
+    GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue, UpsertStateBackend,
+    UpsertValueAndSize, ValueMetadata,
 };
 use super::UpsertKey;
 
@@ -59,6 +60,10 @@ impl<O> UpsertStateBackend<O> for InMemoryHashMap<O>
 where
     O: Clone + 'static,
 {
+    fn supports_merge(&self) -> bool {
+        false
+    }
+
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
@@ -80,6 +85,13 @@ where
         }
         self.total_size += stats.size_diff;
         Ok(stats)
+    }
+
+    async fn multi_merge<M>(&mut self, _merges: M) -> Result<MergeStats, anyhow::Error>
+    where
+        M: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<O>>)>,
+    {
+        anyhow::bail!("InMemoryHashMap does not support merging");
     }
 
     async fn multi_get<'r, G, R>(

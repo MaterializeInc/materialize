@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use arrow::array::Array;
 use mz_persist_types::columnar::{ColumnGet, Data};
 use mz_persist_types::dyn_struct::ValidityRef;
 use mz_persist_types::stats::{JsonMapElementStats, JsonStats, PrimitiveStats};

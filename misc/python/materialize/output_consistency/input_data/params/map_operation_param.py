@@ -14,13 +14,16 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.input_data.params.collection_operation_param import (
+    CollectionLikeOtherCollectionOperationParam,
+    CollectionOperationParam,
+)
 from materialize.output_consistency.input_data.types.map_type_provider import (
     MapDataType,
 )
-from materialize.output_consistency.operation.operation_param import OperationParam
 
 
-class MapOperationParam(OperationParam):
+class MapOperationParam(CollectionOperationParam):
     def __init__(
         self,
         optional: bool = False,
@@ -37,3 +40,8 @@ class MapOperationParam(OperationParam):
         self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
         return isinstance(data_type, MapDataType)
+
+
+class MapLikeOtherMapOperationParam(CollectionLikeOtherCollectionOperationParam):
+    def matches_collection_type(self, data_type: DataType) -> bool:
+        return data_type.category == DataTypeCategory.MAP

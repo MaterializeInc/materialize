@@ -14,7 +14,8 @@ use anyhow::bail;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
-use proptest_derive::Arbitrary;
+use proptest::arbitrary::Arbitrary;
+use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.varchar.rs"));
@@ -35,18 +36,7 @@ pub struct VarChar<S: AsRef<str>>(pub S);
 ///
 /// [`ScalarType::VarChar`]: crate::ScalarType::VarChar
 #[derive(
-    Arbitrary,
-    Debug,
-    Clone,
-    Copy,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize,
-    MzReflect,
+    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
 )]
 pub struct VarCharMaxLength(pub(crate) u32);
 
@@ -77,6 +67,20 @@ impl RustType<ProtoVarCharMaxLength> for VarCharMaxLength {
 
     fn from_proto(proto: ProtoVarCharMaxLength) -> Result<Self, TryFromProtoError> {
         Ok(VarCharMaxLength(proto.value))
+    }
+}
+
+impl Arbitrary for VarCharMaxLength {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<VarCharMaxLength>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        proptest::arbitrary::any::<u32>()
+            // We cap the maximum VarCharMaxLength to prevent generating
+            // massive strings which can greatly slow down tests and are
+            // relatively uninteresting.
+            .prop_map(|len| VarCharMaxLength(len % 300))
+            .boxed()
     }
 }
 

@@ -56,8 +56,8 @@ class AlterIndex(Check):
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "B${kafka-ingest.iteration}"}
 
-                >[version>=8700] ALTER INDEX alter_index_table_primary_idx SET (RETAIN HISTORY = FOR '1ms');
-                >[version>=8700] ALTER INDEX alter_index_source_primary_idx SET (RETAIN HISTORY = FOR '1ms');
+                >[version>=8700] ALTER INDEX alter_index_table_primary_idx SET (RETAIN HISTORY = FOR '1s');
+                >[version>=8700] ALTER INDEX alter_index_source_primary_idx SET (RETAIN HISTORY = FOR '1s');
 
                 > INSERT INTO alter_index_table SELECT 'C' || generate_series FROM generate_series(1,10000);
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000

@@ -31,7 +31,7 @@ SERVICES = [
     ),
     Materialized(
         additional_system_parameter_defaults={
-            "log_filter": "mz_storage_operators::s3_oneshot_sink=trace,info,warn,mz_environmentd::http=info,debug,warn"
+            "log_filter": "mz_storage_operators::s3_oneshot_sink=trace,debug,info,warn"
         },
     ),
     Testdrive(),
@@ -77,6 +77,9 @@ def workflow_nightly(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     materialized = Materialized(
         default_size=args.default_size,
+        additional_system_parameter_defaults={
+            "log_filter": "mz_storage_operators::s3_oneshot_sink=trace,debug,info,warn"
+        },
     )
 
     with c.override(testdrive, materialized):

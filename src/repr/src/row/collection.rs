@@ -64,7 +64,7 @@ impl RowCollection {
 
     /// Merge another [`RowCollection`] into `self`.
     pub fn merge(&mut self, other: &RowCollection) {
-        if other.count() == 0 {
+        if other.count(0, None) == 0 {
             return;
         }
 
@@ -82,9 +82,20 @@ impl RowCollection {
         self.encoded = Bytes::from(new_bytes);
     }
 
-    /// Total count of [`Row`]s represented by this collection.
-    pub fn count(&self) -> usize {
-        self.metadata.iter().map(|meta| meta.diff.get()).sum()
+    /// Total count of [`Row`]s represented by this collection, considering a
+    /// possible `OFFSET` and `LIMIT`.
+    pub fn count(&self, offset: usize, limit: Option<usize>) -> usize {
+        let mut total: usize = self.metadata.iter().map(|meta| meta.diff.get()).sum();
+
+        // Consider a possible OFFSET.
+        total = total.saturating_sub(offset);
+
+        // Consider a possible LIMIT.
+        if let Some(limit) = limit {
+            total = std::cmp::min(limit, total);
+        }
+
+        total
     }
 
     /// Total count of ([`Row`], `EncodedRowMetadata`) pairs in this collection.
@@ -243,6 +254,11 @@ pub struct SortedRowCollectionIter {
 
     /// Maximum number of rows this iterator will yield.
     limit: Option<usize>,
+    /// Number of rows we're offset by.
+    ///
+    /// Note: We eagerly apply an offset, but we track it here so we can
+    /// accurately report [`RowIterator::count`].
+    offset: usize,
 
     /// Columns to underlying rows to include.
     projection: Option<Vec<usize>>,
@@ -264,6 +280,10 @@ impl SortedRowCollectionIter {
             &mut self.diff_idx,
             offset,
         );
+
+        // Keep track of how many rows we've offset by.
+        self.offset = self.offset.saturating_add(offset);
+
         self
     }
 
@@ -381,7 +401,7 @@ impl RowIterator for SortedRowCollectionIter {
     }
 
     fn count(&self) -> usize {
-        self.collection.collection.count()
+        self.collection.collection.count(self.offset, self.limit)
     }
 }
 
@@ -394,6 +414,7 @@ impl IntoRowIterator for SortedRowCollection {
             row_idx: 0,
             diff_idx: 0,
             limit: None,
+            offset: 0,
             projection: None,
             // Note: Neither of these types allocate until elements are pushed in.
             projection_buf: (DatumVec::new(), Row::default()),
@@ -435,7 +456,7 @@ mod tests {
 
         a_col.merge(&b_col);
 
-        assert_eq!(a_col.count(), 2);
+        assert_eq!(a_col.count(0, None), 2);
         assert_eq!(a_col.get(0).map(|(r, _)| r), Some(a.borrow()));
         assert_eq!(a_col.get(1).map(|(r, _)| r), Some(b.borrow()));
     }
@@ -641,6 +662,51 @@ mod tests {
         assert_eq!(iter.next(), Some(projected_a.as_ref()));
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None);
+    }
+
+    #[mz_ore::test]
+    fn test_count_respects_limit_and_offset() {
+        let a = Row::pack_slice(&[Datum::String("hello world")]);
+        let b = Row::pack_slice(&[Datum::UInt32(42)]);
+        let col = RowCollection::new(&[
+            (a.clone(), NonZeroUsize::new(3).unwrap()),
+            (b.clone(), NonZeroUsize::new(2).unwrap()),
+        ]);
+        let col = col.sorted_view(|a, b| a.cmp(b));
+
+        // How many total rows there are.
+        let iter = col.into_row_iter();
+        assert_eq!(iter.count(), 5);
+
+        let col = iter.into_inner();
+
+        // With a LIMIT.
+        let iter = col.into_row_iter().with_limit(1);
+        assert_eq!(iter.count(), 1);
+
+        let col = iter.into_inner();
+
+        // With a LIMIT larger than the total number of rows.
+        let iter = col.into_row_iter().with_limit(100);
+        assert_eq!(iter.count(), 5);
+
+        let col = iter.into_inner();
+
+        // With an OFFSET.
+        let iter = col.into_row_iter().apply_offset(3);
+        assert_eq!(iter.count(), 2);
+
+        let col = iter.into_inner();
+
+        // With an OFFSET greater than the total number of rows.
+        let iter = col.into_row_iter().apply_offset(100);
+        assert_eq!(iter.count(), 0);
+
+        let col = iter.into_inner();
+
+        // With a LIMIT and an OFFSET.
+        let iter = col.into_row_iter().with_limit(2).apply_offset(4);
+        assert_eq!(iter.count(), 1);
     }
 
     #[mz_ore::test]

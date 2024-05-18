@@ -331,6 +331,7 @@ mz_show_types_ind                                           mz_types            
 mz_show_views_ind                                           mz_views                                     mz_introspection    {schema_id}
 mz_sink_statistics_ind                                      mz_sink_statistics                           mz_introspection    {id}
 mz_sink_status_history_ind                                  mz_sink_status_history                       mz_introspection    {sink_id}
+mz_source_statistics_with_history_ind                       mz_source_statistics_with_history            mz_introspection    {id}
 mz_sink_statuses_ind                                        mz_sink_statuses                             mz_introspection    {id}
 mz_sinks_ind                                                mz_sinks                                     mz_introspection    {id}
 mz_source_statistics_ind                                    mz_source_statistics                         mz_introspection    {id}

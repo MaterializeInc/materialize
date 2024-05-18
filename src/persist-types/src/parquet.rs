@@ -13,15 +13,17 @@
 //! [validate_roundtrip].
 
 use std::fmt::Debug;
-use std::io::{Read, Seek, Write};
+use std::io::Write;
+use std::sync::Arc;
 
 use anyhow::anyhow;
-use arrow2::datatypes::Schema as ArrowSchema;
-use arrow2::io::parquet::read::{infer_schema, read_metadata, FileReader};
-use arrow2::io::parquet::write::{
-    row_group_iter, to_parquet_schema, CompressionOptions, Version, WriteOptions,
-};
-use parquet2::write::{DynIter, FileWriter, WriteOptions as ParquetWriteOptions};
+use arrow::array::RecordBatch;
+use arrow::datatypes::Schema as ArrowSchema;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::ArrowWriter;
+use parquet::basic::{Compression, Encoding};
+use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use parquet::file::reader::ChunkReader;
 
 use crate::codec_impls::UnitSchema;
 use crate::columnar::{PartDecoder, Schema};
@@ -31,61 +33,48 @@ use crate::part::{Part, PartBuilder};
 ///
 /// It doesn't particularly get any anything to use more than one "chunk" per
 /// blob, and it's simpler to only have one, so do that.
-pub fn encode_part<W: Write>(w: &mut W, part: &Part) -> Result<(), anyhow::Error> {
-    let metadata = Vec::new();
-    let (fields, encodings, chunk) = part.to_arrow();
+pub fn encode_part<W: Write + Send>(w: &mut W, part: &Part) -> Result<(), anyhow::Error> {
+    let (fields, arrays) = part.to_arrow();
 
-    let schema = ArrowSchema::from(fields);
-    // Construct a FileWriter manually so we can omit the created_by string and
-    // (redundant) arrow schema.
-    let parquet_schema = to_parquet_schema(&schema)?;
-    let options = WriteOptions {
-        write_statistics: false,
-        compression: CompressionOptions::Uncompressed,
-        version: Version::V2,
-        data_pagesize_limit: None, // use default limit
-    };
-    let created_by = None;
-    let mut writer = FileWriter::new(
-        w,
-        parquet_schema.clone(),
-        ParquetWriteOptions {
-            version: options.version,
-            write_statistics: options.write_statistics,
-        },
-        created_by,
-    );
+    let schema = Arc::new(ArrowSchema::new(fields));
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::PLAIN)
+        .set_statistics_enabled(EnabledStatistics::None)
+        .set_compression(Compression::UNCOMPRESSED)
+        .set_writer_version(WriterVersion::PARQUET_2_0)
+        .set_data_page_size_limit(1024 * 1024)
+        .set_max_row_group_size(usize::MAX)
+        .build();
+    let mut writer = ArrowWriter::try_new(w, Arc::clone(&schema), Some(props))?;
 
-    let row_group = DynIter::new(row_group_iter(
-        chunk,
-        encodings,
-        parquet_schema.fields().to_vec(),
-        options,
-    ));
-    writer.write(row_group)?;
-    writer.end(Some(metadata))?;
+    let record_batch = RecordBatch::try_new(schema, arrays)?;
+
+    writer.write(&record_batch)?;
+    writer.flush()?;
+    writer.close()?;
+
     Ok(())
 }
 
 /// Decodes a part with the given schema from our parquet-based serialization
 /// format.
-pub fn decode_part<R: Read + Seek, K, KS: Schema<K>, V, VS: Schema<V>>(
-    r: &mut R,
+pub fn decode_part<R: ChunkReader + 'static, K, KS: Schema<K>, V, VS: Schema<V>>(
+    r: R,
     key_schema: &KS,
     val_schema: &VS,
 ) -> Result<Part, anyhow::Error> {
-    let metadata = read_metadata(r)?;
-    let schema = infer_schema(&metadata)?;
-    let mut reader = FileReader::new(r, metadata.row_groups, schema, None, None, None);
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new(r)?.build()?;
 
     // encode_part documents that there is exactly one chunk in every blob.
     // Verify that here by ensuring the first call to `next` is Some and the
     // second call to it is None.
-    let chunk = reader
+    let record_batch = reader
         .next()
         .ok_or_else(|| anyhow!("not enough chunks in part"))?
         .map_err(anyhow::Error::new)?;
-    let part = Part::from_arrow(key_schema, val_schema, chunk).map_err(anyhow::Error::msg)?;
+    let part = Part::from_arrow(key_schema, val_schema, record_batch.columns())
+        .map_err(anyhow::Error::msg)?;
 
     if let Some(_) = reader.next() {
         return Err(anyhow!("too many chunks in part"));
@@ -109,8 +98,9 @@ pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
 
     let mut encoded = Vec::new();
     let () = encode_part(&mut encoded, &part).map_err(|err| err.to_string())?;
-    let part = decode_part(&mut std::io::Cursor::new(&encoded), schema, &UnitSchema)
-        .map_err(|err| err.to_string())?;
+
+    let encoded = bytes::Bytes::from(encoded);
+    let part = decode_part(encoded, schema, &UnitSchema).map_err(|err| err.to_string())?;
 
     let mut actual = T::default();
     assert_eq!(part.len(), 1);

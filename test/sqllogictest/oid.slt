@@ -1062,3 +1062,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16951  mz_webhook_sources_ind
 16952  mz_history_retention_strategies
 16953  mz_materialized_view_refreshes
+16954  mz_source_statistics_with_history
+16955  mz_source_statistics_with_history_ind
