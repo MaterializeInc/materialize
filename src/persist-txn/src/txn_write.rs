@@ -136,7 +136,7 @@ where
                 .expect("txns shard should not be closed");
 
             loop {
-                let () = handle.txns_cache.update_ge(&txns_upper).await;
+                txns_upper = handle.txns_cache.update_ge(&txns_upper).await.clone();
 
                 // txns_upper is the (inclusive) minimum timestamp at which we
                 // could possibly write. If our requested commit timestamp is before
@@ -152,7 +152,9 @@ where
                 // Validate that the involved data shards are all registered.
                 for (data_id, _) in self.writes.iter() {
                     assert!(
-                        handle.txns_cache.registered(data_id),
+                        handle
+                            .txns_cache
+                            .registered_at_progress(data_id, &txns_upper),
                         "{} should be registered to commit at {:?}",
                         data_id,
                         handle.txns_cache.progress_exclusive,
@@ -308,7 +310,7 @@ where
                             self.writes.insert(data_write.shard_id(), txn_write);
                             handle.datas.put_write(data_write);
                         }
-                        let () = handle.txns_cache.update_ge(&txns_upper).await;
+                        let _ = handle.txns_cache.update_ge(&txns_upper).await;
                         continue;
                     }
                 }

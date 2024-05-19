@@ -185,9 +185,17 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     ///
     /// Specifically, a data shard is registered if the most recent register
     /// timestamp is set but the most recent forget timestamp is not set.
-    pub fn registered(&self, data_id: &ShardId) -> bool {
+    ///
+    /// This function accepts a timestamp as input, but that timestamp must be
+    /// equal to the progress exclusive, or else the function panics. It mainly
+    /// acts as a way for the caller to think about the logical time at which
+    /// this function executes. Times in the past may have been compacted away,
+    /// and we can't always return an accurate answer. If this function isn't
+    /// sufficient, you can usually find what you're looking for by inspecting
+    /// the times in the most recent registration.
+    pub fn registered_at_progress(&self, data_id: &ShardId, ts: &T) -> bool {
         self.assert_only_data_id(data_id);
-        assert!(self.progress_exclusive <= *ts);
+        assert_eq!(self.progress_exclusive, *ts);
         let Some(data_times) = self.datas.get(data_id) else {
             return false;
         };
@@ -195,27 +203,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     }
 
     /// Returns the set of all data shards registered to the txns set as of the
-    /// current progress. See [Self::registered].
-    pub(crate) fn all_registered(&self) -> Vec<ShardId> {
+    /// current progress. See [Self::registered_at_progress].
+    pub(crate) fn all_registered_at_progress(&self, ts: &T) -> Vec<ShardId> {
         assert_eq!(self.only_data_id, None);
+        assert_eq!(self.progress_exclusive, *ts);
         self.datas
             .iter()
             .filter(|(_, data_times)| data_times.last_reg().forget_ts.is_none())
-            .map(|(data_id, _)| *data_id)
-            .collect()
-    }
-
-    /// Returns the set of all data shards registered to the txns set at the
-    /// given timestamp.
-    ///
-    /// Specifically, a data shard is registered at a timestamp `ts` if it has a
-    /// `register_ts <= ts` but no `register_ts < forget_ts < ts`.
-    pub(crate) fn all_registered_at(&self, ts: &T) -> Vec<ShardId> {
-        assert_eq!(self.only_data_id, None);
-        assert!(self.progress_exclusive <= *ts);
-        self.datas
-            .iter()
-            .filter(|(_, data_times)| data_times.registered.iter().any(|x| x.contains(ts)))
             .map(|(data_id, _)| *data_id)
             .collect()
     }
@@ -355,7 +349,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             // Emitting logical progress at the wrong time is a correctness bug,
             // so be extra defensive about the necessary conditions: the most
             // recent registration is still active, and we're in it.
-            assert!(last_reg.contains(&ts));
+            assert!(last_reg.contains(ts));
             EmitLogicalProgress(self.progress_exclusive.clone())
         } else {
             // The most recent forget is set, which means it's not registered as of
@@ -842,8 +836,10 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 
     /// Invariant: afterward, self.progress_exclusive will be > ts
+    ///
+    /// Returns the `progress_exclusive` of the cache after updating.
     #[instrument(level = "debug", fields(ts = ?ts))]
-    pub async fn update_gt(&mut self, ts: &T) {
+    pub async fn update_gt(&mut self, ts: &T) -> &T {
         let only_data_id = self.only_data_id.clone();
         Self::update(
             &mut self.state,
@@ -855,11 +851,14 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         .await;
         debug_assert!(&self.progress_exclusive > ts);
         debug_assert_eq!(self.validate(), Ok(()));
+        &self.progress_exclusive
     }
 
     /// Invariant: afterward, self.progress_exclusive will be >= ts
+    ///
+    /// Returns the `progress_exclusive` of the cache after updating.
     #[instrument(level = "debug", fields(ts = ?ts))]
-    pub async fn update_ge(&mut self, ts: &T) {
+    pub async fn update_ge(&mut self, ts: &T) -> &T {
         let only_data_id = self.only_data_id.clone();
         Self::update(
             &mut self.state,
@@ -871,8 +870,10 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         .await;
         debug_assert!(&self.progress_exclusive >= ts);
         debug_assert_eq!(self.validate(), Ok(()));
+        &self.progress_exclusive
     }
 
+    /// Listen to the txns shard for events until `done` returns true.
     async fn update<F: Fn(&T) -> bool>(
         state: &mut TxnsCacheState<T>,
         txns_subscribe: &mut Subscribe<C::Key, C::Val, T, i64>,
