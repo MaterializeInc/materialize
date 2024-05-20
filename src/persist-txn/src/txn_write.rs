@@ -157,7 +157,7 @@ where
                             .registered_at_progress(data_id, &txns_upper),
                         "{} should be registered to commit at {:?}",
                         data_id,
-                        handle.txns_cache.progress_exclusive,
+                        txns_upper,
                     );
                 }
                 debug!(

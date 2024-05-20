@@ -245,8 +245,7 @@ where
                 .expect("txns should not be closed");
             loop {
                 txns_upper = self.txns_cache.update_ge(&txns_upper).await.clone();
-
-                // Figure out which are still unregistered. Below
+                // Figure out which are still unregistered as of `txns_upper`. Below
                 // we write conditionally on the upper being what we expect so than
                 // we can re-run this if anything changes from underneath us.
                 let updates = updates
