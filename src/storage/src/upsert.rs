@@ -938,10 +938,10 @@ where
                         )
                         .await;
 
-                        // Emit the _consolidated_ changes to the output.
                         output_handle
                             .give_container(&output_cap, &mut output_updates)
                             .await;
+
                         if let Some(ts) = upper.as_option() {
                             output_cap.downgrade(ts);
                         }
@@ -975,6 +975,10 @@ where
                     &mut state,
                 )
                 .await;
+
+                output_handle
+                    .give_container(&output_cap, &mut output_updates)
+                    .await;
             }
         }
     });
