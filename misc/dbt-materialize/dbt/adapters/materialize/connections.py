@@ -26,7 +26,7 @@ from dbt.events import AdapterLogger
 from dbt.semver import versions_compatible
 
 # If you bump this version, bump it in README.md too.
-SUPPORTED_MATERIALIZE_VERSIONS = ">=0.68.0"
+SUPPORTED_MATERIALIZE_VERSIONS = ">=0.100.0"
 
 logger = AdapterLogger("Materialize")
 

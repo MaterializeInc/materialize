@@ -32,8 +32,10 @@ from dbt.tests.adapter.constraints.test_constraints import (
 from dbt.tests.util import run_dbt, run_sql_with_adapter
 from fixtures import (
     contract_invalid_cluster_schema_yml,
+    contract_pseudo_types_yml,
     nullability_assertions_schema_yml,
     test_materialized_view,
+    test_pseudo_types,
     test_view,
 )
 
@@ -162,3 +164,18 @@ class TestContractInvalidCluster:
         run_dbt(["run", "--models", "contract_invalid_cluster"], expect_pass=True)
 
         project.run_sql("CREATE CLUSTER quickstart SIZE = '1'")
+
+
+class TestContractMaterializeTypes:
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "contract_pseudo_types.yml": contract_pseudo_types_yml,
+            "contract_pseudo_types.sql": test_pseudo_types,
+        }
+
+    # Pseudotypes in Materialize cannot be cast using the cast() function, so we
+    # special-handle their NULL casting for contract validation.
+    # See #17870: https://github.com/MaterializeInc/materialize/issues/17870
+    def test_test_pseudo_types(self, project):
+        run_dbt(["run", "--models", "contract_pseudo_types"], expect_pass=True)

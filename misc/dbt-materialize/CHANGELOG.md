@@ -1,5 +1,11 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Support enforcing model contracts for the [`map`](https://materialize.com/docs/sql/types/map/),
+  [`list`](https://materialize.com/docs/sql/types/list/),
+  and [`record`](https://materialize.com/docs/sql/types/record/) pseudo-types.
+
 ## 1.7.8 - 2024-05-06
 
 * Fix permission management in blue/green automation macros for non-admin users

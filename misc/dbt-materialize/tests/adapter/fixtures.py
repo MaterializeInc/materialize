@@ -299,3 +299,25 @@ models:
       - name: c
         data_type: string
 """
+
+contract_pseudo_types_yml = """
+version: 2
+models:
+  - name: test_pseudo_types
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: a
+        data_type: map
+      - name: b
+        data_type: record
+      - name: c
+        data_type: list
+"""
+
+test_pseudo_types = """
+{{ config(materialized='view') }}
+
+    SELECT MAP['a' => 1, 'b' => 2] AS a, ROW(1, 2) AS b, LIST[[1,2],[3]] AS c
+"""
