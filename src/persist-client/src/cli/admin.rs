@@ -26,21 +26,24 @@ use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64};
 use prometheus::proto::{MetricFamily, MetricType};
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use tracing::info;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cfg::all_dyncfgs;
 use crate::cli::args::{make_blob, make_consensus, StateArgs, StoreArgs};
+use crate::cli::inspect::FAKE_OPAQUE_CODEC;
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
 use crate::internal::trace::FueledMergeRes;
-use crate::rpc::NoopPubSubSender;
-use crate::write::WriterId;
-use crate::{Diagnostics, Metrics, PersistConfig, ShardId, StateVersions, BUILD_INFO};
+use crate::rpc::{NoopPubSubSender, PubSubSender};
+use crate::write::{WriteHandle, WriterId};
+use crate::{
+    Diagnostics, Metrics, PersistClient, PersistConfig, ShardId, StateVersions, BUILD_INFO,
+};
 
 /// Commands for read-write administration of persist state
 #[derive(Debug, clap::Args)]
@@ -61,7 +64,7 @@ pub(crate) enum Command {
     /// Manually kick off a GC run for a shard.
     ForceGc(ForceGcArgs),
     /// Manually finalize an unfinalized shard.
-    Finalize(StateArgs),
+    Finalize(FinalizeArgs),
     /// Attempt to ensure that all the files referenced by consensus are available
     /// in Blob.
     RestoreBlob(RestoreBlobArgs),
@@ -83,6 +86,21 @@ pub(crate) struct ForceCompactionArgs {
 pub(crate) struct ForceGcArgs {
     #[clap(flatten)]
     state: StateArgs,
+}
+
+/// Manually finalizes a shard.
+#[derive(Debug, clap::Parser)]
+pub(crate) struct FinalizeArgs {
+    #[clap(flatten)]
+    state: StateArgs,
+
+    /// Force downgrade the `since` of the shard to the empty antichain.
+    #[clap(long, default_value_t = false)]
+    force_downgrade_since: bool,
+
+    /// Force downgrade the `upper` of the shard to the empty antichain.
+    #[clap(long, default_value_t = false)]
+    force_downgrade_upper: bool,
 }
 
 /// Attempt to restore all the blobs that are referenced by the current state of consensus.
@@ -142,10 +160,15 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             info_log_non_zero_metrics(&metrics_registry.gather());
         }
         Command::Finalize(args) => {
-            let StateArgs {
-                shard_id,
-                consensus_uri,
-                blob_uri,
+            let FinalizeArgs {
+                state:
+                    StateArgs {
+                        shard_id,
+                        consensus_uri,
+                        blob_uri,
+                    },
+                force_downgrade_since,
+                force_downgrade_upper,
             } = args;
             let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
             let commit = command.commit;
@@ -158,8 +181,102 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             let consensus =
                 make_consensus(&cfg, &consensus_uri, commit, Arc::clone(&metrics)).await?;
             let blob = make_blob(&cfg, &blob_uri, commit, Arc::clone(&metrics)).await?;
-            let mut machine =
-                make_machine(&cfg, consensus, blob, metrics, shard_id, commit).await?;
+
+            // Open a machine so we can read the state of the Opaque, and set
+            // our fake codecs.
+            let mut machine = make_machine(
+                &cfg,
+                Arc::clone(&consensus),
+                Arc::clone(&blob),
+                Arc::clone(&metrics),
+                shard_id,
+                commit,
+            )
+            .await?;
+
+            if force_downgrade_upper {
+                let isolated_runtime = Arc::new(IsolatedRuntime::default());
+                let pubsub_sender: Arc<dyn PubSubSender> = Arc::new(NoopPubSubSender);
+                let shared_states = Arc::new(StateCache::new(
+                    &cfg,
+                    Arc::clone(&metrics),
+                    Arc::clone(&pubsub_sender),
+                ));
+
+                // We need a PersistClient to open a write handle so we can append an empty batch.
+                let persist_client = PersistClient::new(
+                    cfg,
+                    blob,
+                    consensus,
+                    metrics,
+                    isolated_runtime,
+                    shared_states,
+                    pubsub_sender,
+                )?;
+                let diagnostics = Diagnostics {
+                    shard_name: shard_id.to_string(),
+                    handle_purpose: "persist-cli finalize shard".to_string(),
+                };
+
+                let mut write_handle: WriteHandle<
+                    crate::cli::inspect::K,
+                    crate::cli::inspect::V,
+                    u64,
+                    i64,
+                > = persist_client
+                    .open_writer(
+                        shard_id,
+                        Arc::new(TodoSchema::<crate::cli::inspect::K>::default()),
+                        Arc::new(TodoSchema::<crate::cli::inspect::V>::default()),
+                        diagnostics,
+                    )
+                    .await?;
+
+                if !write_handle.upper().is_empty() {
+                    let empty_batch: Vec<(
+                        (crate::cli::inspect::K, crate::cli::inspect::V),
+                        u64,
+                        i64,
+                    )> = vec![];
+                    let lower = write_handle.upper().clone();
+                    let upper = Antichain::new();
+
+                    let result = write_handle.append(empty_batch, lower, upper).await?;
+                    if let Err(err) = result {
+                        anyhow::bail!("failed to force downgrade upper, {err:?}");
+                    }
+                }
+            }
+
+            if force_downgrade_since {
+                let (state, _maintenance) = machine
+                    .register_critical_reader::<crate::cli::inspect::O>(
+                        &crate::PersistClient::CONTROLLER_CRITICAL_SINCE,
+                        "persist-cli finalize with force downgrade",
+                    )
+                    .await;
+
+                // HACK: Internally we have a check that the Opaque is using
+                // the correct codec. For the purposes of this command we want
+                // to side step that check so we set our reported codec to
+                // whatever the current state of the Shard is.
+                let expected_opaque = crate::cli::inspect::O::decode(state.opaque.0);
+                *FAKE_OPAQUE_CODEC.lock().expect("lockable") = state.opaque_codec.clone();
+
+                let (result, _maintenance) = machine
+                    .compare_and_downgrade_since(
+                        &crate::PersistClient::CONTROLLER_CRITICAL_SINCE,
+                        &expected_opaque,
+                        (&expected_opaque, &Antichain::new()),
+                    )
+                    .await;
+                if let Err((actual_opaque, _since)) = result {
+                    bail!(
+                        "opaque changed, expected: {expected_opaque:?}, actual: {actual_opaque:?}"
+                    )
+                }
+            }
+
             let maintenance = machine.become_tombstone().await?;
             if !maintenance.is_empty() {
                 info!("ignoring non-empty requested maintenance: {maintenance:?}")
