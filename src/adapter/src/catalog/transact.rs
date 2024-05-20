@@ -987,7 +987,7 @@ impl Catalog {
                 }
                 Op::DropObjects(ids) => {
                     // Generate all of the objects that need to get dropped.
-                    let delta = DropObjectsDelta::generate(ids, state, session)?;
+                    let delta = ObjectsToDrop::generate(ids, state, session)?;
 
                     // Drop any associated comments.
                     let deleted = tx.drop_comments(&delta.comments)?;
@@ -2387,7 +2387,7 @@ impl Catalog {
 /// Catalog. This resulted in an unacceptable `O(m * n)` performance for a
 /// `DROP ... CASCADE` statement.
 #[derive(Debug, Default)]
-pub(crate) struct DropObjectsDelta {
+pub(crate) struct ObjectsToDrop {
     pub comments: BTreeSet<CommentObjectId>,
     pub databases: BTreeSet<DatabaseId>,
     pub schemas: BTreeMap<SchemaSpecifier, ResolvedDatabaseSpecifier>,
@@ -2397,13 +2397,13 @@ pub(crate) struct DropObjectsDelta {
     pub items: Vec<GlobalId>,
 }
 
-impl DropObjectsDelta {
+impl ObjectsToDrop {
     pub fn generate(
         objects: impl IntoIterator<Item = ObjectId>,
         state: &CatalogState,
         session: Option<&ConnMeta>,
     ) -> Result<Self, AdapterError> {
-        let mut delta = DropObjectsDelta::default();
+        let mut delta = ObjectsToDrop::default();
 
         for object in objects {
             delta.add_item(object, state, session)?;
