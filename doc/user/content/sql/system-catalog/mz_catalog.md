@@ -381,14 +381,14 @@ Field     | Type       | Meaning
 ### `mz_role_parameters`
 
 The `mz_role_parameters` table contains a row for each configuration parameter
-whose default value has been altered for a given role. See [ALTER ROLE ... SET](/sql/alter-role/#alter_role_set)
+whose default value has been altered for a given role. See [`ALTER ROLE ... SET`](/sql/alter-role/#alter_role_set)
 on setting default configuration parameter values per role.
 
 <!-- RELATION_SPEC mz_catalog.mz_role_parameters -->
 Field     | Type       | Meaning
 ----------|------------|--------
 `role_id` | [`text`]   | The ID of the role whose configuration parameter default is set. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
-`parameter_name`  | [`text`]   | The configuration paramater name. One of the supported [configuration parameters](/sql/set/#key-configuration-parameters).
+`parameter_name`  | [`text`]   | The configuration parameter name. One of the supported [configuration parameters](/sql/set/#key-configuration-parameters).
 `parameter_value` | [`text`]   | The default value of the parameter for the given role. Can be either a single value, or a comma-separated list of values for configuration parameters that accept a list.
 
 ### `mz_schemas`

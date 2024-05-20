@@ -310,6 +310,7 @@ Only the following relations are available:
 "mz_catalog.mz_operators"
 "mz_catalog.mz_pseudo_types"
 "mz_catalog.mz_role_members"
+"mz_catalog.mz_role_parameters"
 "mz_catalog.mz_roles"
 "mz_catalog.mz_schemas"
 "mz_catalog.mz_secrets"
