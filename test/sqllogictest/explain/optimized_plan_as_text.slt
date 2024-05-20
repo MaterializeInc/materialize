@@ -568,7 +568,7 @@ Used Indexes:
 Target cluster: quickstart
 
 Notices:
-  - Notice: The current index is identical to materialize.public.iv_b_idx, which is also defined on iv(b).
+  - Notice: Index materialize.public.iv_b_idx_2 is identical to materialize.public.iv_b_idx, which is also defined on iv(b).
     Hint: Please drop all indexes except the first index created on iv(b) and recreate all dependent objects.
 
 EOF

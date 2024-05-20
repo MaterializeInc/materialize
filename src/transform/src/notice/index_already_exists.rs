@@ -29,6 +29,8 @@ pub struct IndexAlreadyExists {
     pub index_key: Vec<MirScalarExpr>,
     /// The id of the object that the index is on.
     pub index_on_id: GlobalId,
+    /// The id the index that duplicates existing indexes.
+    pub exported_index_id: GlobalId,
 }
 
 impl OptimizerNoticeApi for IndexAlreadyExists {
@@ -42,6 +44,9 @@ impl OptimizerNoticeApi for IndexAlreadyExists {
         humanizer: &dyn ExprHumanizer,
         redacted: bool,
     ) -> fmt::Result {
+        let exported_index_name = humanizer
+            .humanize_id(self.exported_index_id)
+            .unwrap_or_else(|| self.exported_index_id.to_string());
         let index_name = humanizer
             .humanize_id(self.index_id)
             .unwrap_or_else(|| self.index_id.to_string());
@@ -56,7 +61,7 @@ impl OptimizerNoticeApi for IndexAlreadyExists {
 
         write!(
             f,
-            "The current index is identical to {index_name}, which \
+            "Index {exported_index_name} is identical to {index_name}, which \
              is also defined on {index_on_id_name}({index_key})."
         )
     }
