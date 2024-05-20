@@ -180,31 +180,36 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         self.txns_id
     }
 
-    /// Returns whether the data shard was registered to the txns set at the
-    /// given timestamp.
+    /// Returns whether the data shard was registered to the txns set as of the
+    /// current progress.
     ///
-    /// Specifically, a data shard is registered at a timestamp `ts` if it has a
-    /// `register_ts <= ts` but no `register_ts < forget_ts < ts`.
-    // TODO(jkosh44) This method allows timestamps in the future which
-    // allows the answer to change over time. See
-    // https://github.com/MaterializeInc/materialize/issues/26903.
-    pub fn registered_at(&self, data_id: &ShardId, ts: &T) -> bool {
+    /// Specifically, a data shard is registered if the most recent register
+    /// timestamp is set but the most recent forget timestamp is not set.
+    ///
+    /// This function accepts a timestamp as input, but that timestamp must be
+    /// equal to the progress exclusive, or else the function panics. It mainly
+    /// acts as a way for the caller to think about the logical time at which
+    /// this function executes. Times in the past may have been compacted away,
+    /// and we can't always return an accurate answer. If this function isn't
+    /// sufficient, you can usually find what you're looking for by inspecting
+    /// the times in the most recent registration.
+    pub fn registered_at_progress(&self, data_id: &ShardId, ts: &T) -> bool {
         self.assert_only_data_id(data_id);
-        assert!(self.progress_exclusive <= *ts);
+        assert_eq!(self.progress_exclusive, *ts);
         let Some(data_times) = self.datas.get(data_id) else {
             return false;
         };
-        data_times.registered.iter().any(|x| x.contains(ts))
+        data_times.last_reg().forget_ts.is_none()
     }
 
-    /// Returns the set of all data shards registered to the txns set at the
-    /// given timestamp. See [Self::registered_at].
-    pub(crate) fn all_registered_at(&self, ts: &T) -> Vec<ShardId> {
+    /// Returns the set of all data shards registered to the txns set as of the
+    /// current progress. See [Self::registered_at_progress].
+    pub(crate) fn all_registered_at_progress(&self, ts: &T) -> Vec<ShardId> {
         assert_eq!(self.only_data_id, None);
-        assert!(self.progress_exclusive <= *ts);
+        assert_eq!(self.progress_exclusive, *ts);
         self.datas
             .iter()
-            .filter(|(_, data_times)| data_times.registered.iter().any(|x| x.contains(ts)))
+            .filter(|(_, data_times)| data_times.last_reg().forget_ts.is_none())
             .map(|(data_id, _)| *data_id)
             .collect()
     }
@@ -345,7 +350,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             // so be extra defensive about the necessary conditions: the most
             // recent registration is still active, and we're in it.
             assert!(last_reg.contains(ts));
-            // The shard is registered so
             EmitLogicalProgress(self.progress_exclusive.clone())
         } else {
             // The most recent forget is set, which means it's not registered as of
@@ -788,7 +792,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     ) -> Self {
         let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
         let mut ret = Self::from_read(txns_read, None).await;
-        ret.update_gt(&init_ts).await;
+        let _ = ret.update_gt(&init_ts).await;
         ret
     }
 
@@ -832,8 +836,11 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 
     /// Invariant: afterward, self.progress_exclusive will be > ts
+    ///
+    /// Returns the `progress_exclusive` of the cache after updating.
+    #[must_use]
     #[instrument(level = "debug", fields(ts = ?ts))]
-    pub async fn update_gt(&mut self, ts: &T) {
+    pub async fn update_gt(&mut self, ts: &T) -> &T {
         let only_data_id = self.only_data_id.clone();
         Self::update(
             &mut self.state,
@@ -845,11 +852,15 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         .await;
         debug_assert!(&self.progress_exclusive > ts);
         debug_assert_eq!(self.validate(), Ok(()));
+        &self.progress_exclusive
     }
 
     /// Invariant: afterward, self.progress_exclusive will be >= ts
+    ///
+    /// Returns the `progress_exclusive` of the cache after updating.
+    #[must_use]
     #[instrument(level = "debug", fields(ts = ?ts))]
-    pub async fn update_ge(&mut self, ts: &T) {
+    pub async fn update_ge(&mut self, ts: &T) -> &T {
         let only_data_id = self.only_data_id.clone();
         Self::update(
             &mut self.state,
@@ -861,8 +872,10 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         .await;
         debug_assert!(&self.progress_exclusive >= ts);
         debug_assert_eq!(self.validate(), Ok(()));
+        &self.progress_exclusive
     }
 
+    /// Listen to the txns shard for events until `done` returns true.
     async fn update<F: Fn(&T) -> bool>(
         state: &mut TxnsCacheState<T>,
         txns_subscribe: &mut Subscribe<C::Key, C::Val, T, i64>,
@@ -1113,7 +1126,7 @@ mod tests {
             txns: &TxnsHandle<String, (), u64, i64>,
         ) -> Self {
             let mut ret = TxnsCache::open(&txns.datas.client, txns.txns_id(), None).await;
-            ret.update_gt(&init_ts).await;
+            let _ = ret.update_gt(&init_ts).await;
             ret
         }
 
@@ -1124,7 +1137,7 @@ mod tests {
             as_of: u64,
         ) -> Vec<String> {
             let mut data_read = reader(client, data_id).await;
-            self.update_gt(&as_of).await;
+            let _ = self.update_gt(&as_of).await;
             let mut snapshot = self
                 .data_snapshot(data_read.shard_id(), as_of)
                 .snapshot_and_fetch(&mut data_read)
@@ -1340,7 +1353,7 @@ mod tests {
             txn.write(&d0, "3".into(), (), 1).await;
             let _apply = txn.commit_at(&mut txns, ts).await.unwrap();
         }
-        txns.txns_cache.update_gt(&5).await;
+        let _ = txns.txns_cache.update_gt(&5).await;
         txns.apply_le(&4).await;
         let snap = txns.txns_cache.data_snapshot(d0, 4);
         let mut data_read = reader(&client, d0).await;
@@ -1411,7 +1424,7 @@ mod tests {
         let tidy_5 = txns.expect_commit_at(5, d0, &["5"], &log).await;
         let _ = txns.expect_commit_at(15, d0, &["15"], &log).await;
         txns.tidy_at(20, tidy_5).await.unwrap();
-        txns.txns_cache.update_gt(&20).await;
+        let _ = txns.txns_cache.update_gt(&20).await;
         assert_eq!(txns.txns_cache.min_unapplied_ts(), &15);
         txns.compact_to(10).await;
 
@@ -1427,7 +1440,7 @@ mod tests {
             .expect("txns schema shouldn't change");
         txns_read.downgrade_since(&Antichain::from_elem(10)).await;
         let mut cache = TxnsCache::<_, TxnsCodecDefault>::from_read(txns_read, None).await;
-        cache.update_gt(&15).await;
+        let _ = cache.update_gt(&15).await;
         let snap = cache.data_snapshot(d0, 12);
         assert_eq!(snap.latest_write, Some(5));
     }

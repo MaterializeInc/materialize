@@ -244,14 +244,15 @@ where
                 .into_option()
                 .expect("txns should not be closed");
             loop {
-                self.txns_cache.update_ge(&txns_upper).await;
+                txns_upper = self.txns_cache.update_ge(&txns_upper).await.clone();
                 // Figure out which are still unregistered as of `txns_upper`. Below
                 // we write conditionally on the upper being what we expect so than
                 // we can re-run this if anything changes from underneath us.
                 let updates = updates
                     .iter()
                     .flat_map(|(data_id, (key, val))| {
-                        let registered = self.txns_cache.registered_at(data_id, &txns_upper);
+                        let registered =
+                            self.txns_cache.registered_at_progress(data_id, &txns_upper);
                         (!registered).then_some(((key, val), &register_ts, 1))
                     })
                     .collect::<Vec<_>>();
@@ -336,7 +337,7 @@ where
                 .into_option()
                 .expect("txns should not be closed");
             loop {
-                self.txns_cache.update_ge(&txns_upper).await;
+                txns_upper = self.txns_cache.update_ge(&txns_upper).await.clone();
 
                 let data_ids_debug = || {
                     data_ids
@@ -350,7 +351,7 @@ where
                     // Never registered or already forgotten. This could change in
                     // `[txns_upper, forget_ts]` (due to races) so close off that
                     // interval before returning, just don't write any updates.
-                    .filter(|data_id| self.txns_cache.registered_at(data_id, &txns_upper))
+                    .filter(|data_id| self.txns_cache.registered_at_progress(data_id, &txns_upper))
                     .map(|data_id| C::encode(TxnsEntry::Register(*data_id, T::encode(&forget_ts))))
                     .collect::<Vec<_>>();
                 let updates = updates
@@ -438,9 +439,9 @@ where
                 .into_option()
                 .expect("txns should not be closed");
             let registered = loop {
-                self.txns_cache.update_ge(&txns_upper).await;
+                txns_upper = self.txns_cache.update_ge(&txns_upper).await.clone();
 
-                let registered = self.txns_cache.all_registered_at(&txns_upper);
+                let registered = self.txns_cache.all_registered_at_progress(&txns_upper);
                 let data_ids_debug = || {
                     registered
                         .iter()
@@ -539,7 +540,7 @@ where
         let op = &self.metrics.apply_le;
         op.run(async {
             debug!("apply_le {:?}", ts);
-            self.txns_cache.update_gt(ts).await;
+            let _ = self.txns_cache.update_gt(ts).await;
             self.txns_cache.update_gauges(&self.metrics);
 
             let mut unapplied_by_data = BTreeMap::<_, Vec<_>>::new();
@@ -697,7 +698,7 @@ where
         let op = &self.metrics.compact_to;
         op.run(async {
             tracing::debug!("compact_to {:?}", since_ts);
-            self.txns_cache.update_gt(&since_ts).await;
+            let _ = self.txns_cache.update_gt(&since_ts).await;
 
             // NB: A critical invariant for how this all works is that we never
             // allow the since of the txns shard to pass any unapplied writes, so
@@ -1186,7 +1187,7 @@ mod tests {
                 2 => self.forget(data_id).await,
                 3 => {
                     debug!("stress update {:.9} to {}", data_id.to_string(), self.ts);
-                    self.txns.txns_cache.update_ge(&self.ts).await;
+                    let _ = self.txns.txns_cache.update_ge(&self.ts).await;
                 }
                 4 => self.start_read(data_id),
                 _ => unreachable!(""),
@@ -1199,11 +1200,11 @@ mod tests {
             format!("w{}s{}", self.idx, self.step)
         }
 
-        async fn registered_at_ts(&mut self, data_id: ShardId) -> bool {
-            self.txns.txns_cache.update_ge(&self.ts).await;
-            // Bump our timestamp up to match the progress of the cache.
-            self.ts = self.txns.txns_cache.progress_exclusive;
-            self.txns.txns_cache.registered_at(&data_id, &self.ts)
+        async fn registered_at_progress_ts(&mut self, data_id: ShardId) -> bool {
+            self.ts = *self.txns.txns_cache.update_ge(&self.ts).await;
+            self.txns
+                .txns_cache
+                .registered_at_progress(&data_id, &self.ts)
         }
 
         // Writes to the given data shard, either via txns if it's registered or
@@ -1214,7 +1215,7 @@ mod tests {
             // registered as the loop advances through timestamps.
             self.retry_ts_err(&mut |w: &mut StressWorker| {
                 Box::pin(async move {
-                    if w.registered_at_ts(data_id).await {
+                    if w.registered_at_progress_ts(data_id).await {
                         w.write_via_txns(data_id).await
                     } else {
                         w.write_direct(data_id).await

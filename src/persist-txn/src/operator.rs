@@ -185,7 +185,7 @@ where
         let client = client.await;
         let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
 
-        txns_cache.update_gt(&as_of).await;
+        let _ = txns_cache.update_gt(&as_of).await;
         let subscribe = txns_cache.data_subscribe::<K, V, D>(data_id, as_of.clone());
         let data_write = client
             .open_writer::<K, V, T, D>(
@@ -204,7 +204,7 @@ where
         remap_output.give(&cap, subscribe.remap.clone()).await;
 
         loop {
-            txns_cache.update_ge(&subscribe.remap.logical_upper).await;
+            let _ = txns_cache.update_ge(&subscribe.remap.logical_upper).await;
             cap.downgrade(&subscribe.remap.logical_upper);
             let data_listen_next =
                 txns_cache.data_listen_next(&subscribe.data_id, &subscribe.remap.logical_upper);
@@ -220,7 +220,7 @@ where
                 // the cache is past remap.logical_upper (as it will be after
                 // this update_gt call), we're guaranteed to get an answer.
                 DataListenNext::WaitForTxnsProgress => {
-                    txns_cache.update_gt(&subscribe.remap.logical_upper).await;
+                    let _ = txns_cache.update_gt(&subscribe.remap.logical_upper).await;
                 }
                 // The data shard got a write!
                 DataListenNext::ReadDataTo(new_upper) => {
