@@ -66,7 +66,7 @@ impl StatsCursor {
                     .as_option()
                     .expect("reads as_of empty antichain block forever")
                     .clone();
-                txns_read.update_gt(&as_of).await;
+                let _ = txns_read.update_gt(&as_of).await;
                 let data_snapshot = txns_read.data_snapshot(handle.shard_id(), as_of);
                 let errors: Cursor<SourceData, (), Timestamp, i64> = data_snapshot
                     .snapshot_cursor(handle, should_fetch("errors", |s| s.err_count()))

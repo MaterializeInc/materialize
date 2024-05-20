@@ -541,7 +541,7 @@ where
         let op = &self.metrics.apply_le;
         op.run(async {
             debug!("apply_le {:?}", ts);
-            self.txns_cache.update_gt(ts).await;
+            let _ = self.txns_cache.update_gt(ts).await;
             self.txns_cache.update_gauges(&self.metrics);
 
             let mut unapplied_by_data = BTreeMap::<_, Vec<_>>::new();
@@ -699,7 +699,7 @@ where
         let op = &self.metrics.compact_to;
         op.run(async {
             tracing::debug!("compact_to {:?}", since_ts);
-            self.txns_cache.update_gt(&since_ts).await;
+            let _ = self.txns_cache.update_gt(&since_ts).await;
 
             // NB: A critical invariant for how this all works is that we never
             // allow the since of the txns shard to pass any unapplied writes, so
@@ -1188,7 +1188,7 @@ mod tests {
                 2 => self.forget(data_id).await,
                 3 => {
                     debug!("stress update {:.9} to {}", data_id.to_string(), self.ts);
-                    self.txns.txns_cache.update_ge(&self.ts).await;
+                    let _ = self.txns.txns_cache.update_ge(&self.ts).await;
                 }
                 4 => self.start_read(data_id),
                 _ => unreachable!(""),

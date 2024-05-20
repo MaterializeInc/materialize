@@ -792,7 +792,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     ) -> Self {
         let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
         let mut ret = Self::from_read(txns_read, None).await;
-        ret.update_gt(&init_ts).await;
+        let _ = ret.update_gt(&init_ts).await;
         ret
     }
 
@@ -838,8 +838,9 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     /// Invariant: afterward, self.progress_exclusive will be > ts
     ///
     /// Returns the `progress_exclusive` of the cache after updating.
+    #[must_use]
     #[instrument(level = "debug", fields(ts = ?ts))]
-    pub async fn update_gt(&mut self, ts: &T) -> &T {
+    pub(crate) async fn update_gt(&mut self, ts: &T) -> &T {
         let only_data_id = self.only_data_id.clone();
         Self::update(
             &mut self.state,
@@ -857,8 +858,9 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     /// Invariant: afterward, self.progress_exclusive will be >= ts
     ///
     /// Returns the `progress_exclusive` of the cache after updating.
+    #[must_use]
     #[instrument(level = "debug", fields(ts = ?ts))]
-    pub async fn update_ge(&mut self, ts: &T) -> &T {
+    pub(crate) async fn update_ge(&mut self, ts: &T) -> &T {
         let only_data_id = self.only_data_id.clone();
         Self::update(
             &mut self.state,
@@ -1124,7 +1126,7 @@ mod tests {
             txns: &TxnsHandle<String, (), u64, i64>,
         ) -> Self {
             let mut ret = TxnsCache::open(&txns.datas.client, txns.txns_id(), None).await;
-            ret.update_gt(&init_ts).await;
+            let _ = ret.update_gt(&init_ts).await;
             ret
         }
 
@@ -1135,7 +1137,7 @@ mod tests {
             as_of: u64,
         ) -> Vec<String> {
             let mut data_read = reader(client, data_id).await;
-            self.update_gt(&as_of).await;
+            let _ = self.update_gt(&as_of).await;
             let mut snapshot = self
                 .data_snapshot(data_read.shard_id(), as_of)
                 .snapshot_and_fetch(&mut data_read)
@@ -1351,7 +1353,7 @@ mod tests {
             txn.write(&d0, "3".into(), (), 1).await;
             let _apply = txn.commit_at(&mut txns, ts).await.unwrap();
         }
-        txns.txns_cache.update_gt(&5).await;
+        let _ = txns.txns_cache.update_gt(&5).await;
         txns.apply_le(&4).await;
         let snap = txns.txns_cache.data_snapshot(d0, 4);
         let mut data_read = reader(&client, d0).await;
@@ -1422,7 +1424,7 @@ mod tests {
         let tidy_5 = txns.expect_commit_at(5, d0, &["5"], &log).await;
         let _ = txns.expect_commit_at(15, d0, &["15"], &log).await;
         txns.tidy_at(20, tidy_5).await.unwrap();
-        txns.txns_cache.update_gt(&20).await;
+        let _ = txns.txns_cache.update_gt(&20).await;
         assert_eq!(txns.txns_cache.min_unapplied_ts(), &15);
         txns.compact_to(10).await;
 
@@ -1438,7 +1440,7 @@ mod tests {
             .expect("txns schema shouldn't change");
         txns_read.downgrade_since(&Antichain::from_elem(10)).await;
         let mut cache = TxnsCache::<_, TxnsCodecDefault>::from_read(txns_read, None).await;
-        cache.update_gt(&15).await;
+        let _ = cache.update_gt(&15).await;
         let snap = cache.data_snapshot(d0, 12);
         assert_eq!(snap.latest_write, Some(5));
     }

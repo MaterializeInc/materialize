@@ -455,7 +455,7 @@ mod tests {
         let apply_2 = txn.commit_at(&mut txns, 2).await.unwrap();
         log.record_txn(2, &txn);
         assert_eq!(apply_2.is_empty(), false);
-        cache.update_gt(&2).await;
+        let _ = cache.update_gt(&2).await;
         cache.mark_register_applied(&2);
         assert_eq!(cache.min_unapplied_ts(), &2);
         assert_eq!(cache.unapplied().count(), 1);
@@ -467,14 +467,14 @@ mod tests {
 
         // Running the tidy advances the min unapplied ts.
         txns.tidy_at(3, tidy_2).await.unwrap();
-        cache.update_gt(&3).await;
+        let _ = cache.update_gt(&3).await;
         assert_eq!(cache.min_unapplied_ts(), &4);
         assert_eq!(cache.unapplied().count(), 0);
 
         // We can also sneak the tidy into a normal txn. Tidies copy across txn
         // merges.
         let tidy_4 = txns.expect_commit_at(4, d0, &["4"], &log).await;
-        cache.update_gt(&4).await;
+        let _ = cache.update_gt(&4).await;
         assert_eq!(cache.min_unapplied_ts(), &4);
         let mut txn0 = txns.begin_test();
         txn0.write(&d0, "5".into(), (), 1).await;
@@ -483,20 +483,20 @@ mod tests {
         txn1.merge(txn0);
         let apply_5 = txn1.commit_at(&mut txns, 5).await.unwrap();
         log.record_txn(5, &txn1);
-        cache.update_gt(&5).await;
+        let _ = cache.update_gt(&5).await;
         assert_eq!(cache.min_unapplied_ts(), &5);
         let tidy_5 = apply_5.apply(&mut txns).await;
 
         // It's fine to drop a tidy, someone else will do it eventually.
         let tidy_6 = txns.expect_commit_at(6, d0, &["6"], &log).await;
         txns.tidy_at(7, tidy_6).await.unwrap();
-        cache.update_gt(&7).await;
+        let _ = cache.update_gt(&7).await;
         assert_eq!(cache.min_unapplied_ts(), &8);
 
         // Also fine if we don't drop it, but instead do it late (no-op but
         // consumes a ts).
         txns.tidy_at(8, tidy_5).await.unwrap();
-        cache.update_gt(&8).await;
+        let _ = cache.update_gt(&8).await;
         assert_eq!(cache.min_unapplied_ts(), &9);
 
         // Tidies can be merged and also can be stolen back out of a txn.
@@ -507,7 +507,7 @@ mod tests {
         let mut tidy_9 = txn.take_tidy();
         tidy_9.merge(tidy_10);
         txns.tidy_at(11, tidy_9).await.unwrap();
-        cache.update_gt(&11).await;
+        let _ = cache.update_gt(&11).await;
         assert_eq!(cache.min_unapplied_ts(), &12);
 
         // Can't tidy at an already committed ts.
@@ -635,7 +635,7 @@ mod tests {
         // Replay a cache from the beginning and make sure we don't see a
         // double retraction.
         let mut cache = TxnsCache::expect_open(0, &txns0).await;
-        cache.update_gt(&6).await;
+        let _ = cache.update_gt(&6).await;
         assert_eq!(cache.validate(), Ok(()));
 
         log.assert_snapshot(d0, 6).await;
