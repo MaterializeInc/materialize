@@ -25,7 +25,7 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
-tests:
+data_tests:
   {project_name}:
     +store_failures: true
     +schema: 'etl_failure'

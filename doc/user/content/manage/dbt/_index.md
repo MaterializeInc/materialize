@@ -555,11 +555,11 @@ non-stop, and monitor failures as soon as they happen. This is useful for unit
 testing during the development of your dbt models, and later in production to
 trigger **real-time alerts** downstream.
 
-1. To configure your project for continuous testing, add a `tests` property to
+1. To configure your project for continuous testing, add a `data_tests` property to
    `dbt_project.yml` with the `store_failures` configuration:
 
     ```yaml
-    tests:
+    data_tests:
       dbt_project.name:
         models:
           +store_failures: true
@@ -574,7 +574,7 @@ trigger **real-time alerts** downstream.
     **Note:** As an alternative, you can specify the `--store-failures` flag
       when running `dbt test`.
 
-1. Add tests to your models using the `tests` property in the model
+1. Add tests to your models using the `data_tests` property in the model
    configuration `.yml` files:
 
     ```yaml
@@ -584,7 +584,7 @@ trigger **real-time alerts** downstream.
         columns:
           - name: col_a
             description: 'column a description'
-            tests:
+            data_tests:
               - not_null
               - unique
     ```
