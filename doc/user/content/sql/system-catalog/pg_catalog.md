@@ -14,6 +14,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_am`](https://www.postgresql.org/docs/current/catalog-pg-am.html)
   * [`pg_attribute`](https://www.postgresql.org/docs/current/catalog-pg-attribute.html)
   * [`pg_auth_members`](https://www.postgresql.org/docs/current/catalog-pg-auth-members.html)
+  * [`pg_authid`](https://www.postgresql.org/docs/current/catalog-pg-authid.html)
   * [`pg_class`](https://www.postgresql.org/docs/current/catalog-pg-class.html)
   * [`pg_collation`](https://www.postgresql.org/docs/current/catalog-pg-collation.html)
   * [`pg_constraint`](https://www.postgresql.org/docs/current/catalog-pg-constraint.html)
@@ -43,8 +44,8 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_timezone_names`](https://www.postgresql.org/docs/current/view-pg-timezone-names.html)
   * [`pg_trigger`](https://www.postgresql.org/docs/current/catalog-pg-trigger.html)
   * [`pg_type`](https://www.postgresql.org/docs/current/catalog-pg-type.html)
+  * [`pg_user`](https://www.postgresql.org/docs/current/view-pg-user.html)
   * [`pg_views`](https://www.postgresql.org/docs/current/view-pg-views.html)
-  * [`pg_authid`](https://www.postgresql.org/docs/current/catalog-pg-authid.html)
 
 These compatibility shims are largely incomplete. Most are lacking some columns
 that are present in PostgreSQL, or if they do include the column the result set

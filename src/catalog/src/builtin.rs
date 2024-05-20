@@ -5083,21 +5083,51 @@ pub static PG_ROLES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     oid: oid::VIEW_PG_ROLES_OID,
     column_defs: None,
     sql: "SELECT
-    r.rolname,
-    r.rolsuper,
-    r.rolinherit,
-    r.rolcreaterole,
-    r.rolcreatedb,
-    r.rolcanlogin,
-    r.rolreplication,
-    r.rolconnlimit,
-    '********'::pg_catalog.text AS rolpassword,
-    r.rolvaliduntil,
-    r.rolbypassrls,
-    --Note: this is NULL because Materialize doesn't support Role-specific config values.
-    NULL::pg_catalog.text[] as rolconfig,
-    r.oid AS oid
-FROM pg_catalog.pg_authid r",
+    rolname,
+    rolsuper,
+    rolinherit,
+    rolcreaterole,
+    rolcreatedb,
+    rolcanlogin,
+    rolreplication,
+    rolconnlimit,
+    rolpassword,
+    rolvaliduntil,
+    rolbypassrls,
+    (
+        SELECT array_agg(parameter_name || '=' || parameter_value)
+        FROM mz_catalog.mz_role_parameters rp
+        JOIN mz_catalog.mz_roles r ON r.id = rp.role_id
+        WHERE ai.oid = r.oid
+    ) AS rolconfig,
+    oid
+FROM pg_catalog.pg_authid ai",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static PG_USER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "pg_user",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_USER_OID,
+    column_defs: None,
+    sql: "
+SELECT
+    rolname as usename,
+    ai.oid as usesysid,
+    rolcreatedb AS usecreatedb,
+    rolsuper AS usesuper,
+    rolreplication AS userepl,
+    rolbypassrls AS usebypassrls,
+    rolpassword as passwd,
+    rolvaliduntil as valuntil,
+    (
+        SELECT array_agg(parameter_name || '=' || parameter_value)
+        FROM mz_catalog.mz_role_parameters rp
+        JOIN mz_catalog.mz_roles r ON r.id = rp.role_id
+        WHERE ai.oid = r.oid
+    ) AS useconfig
+FROM pg_catalog.pg_authid ai
+WHERE rolcanlogin",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -5533,7 +5563,7 @@ pub static PG_AUTHID: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_AUTHID_OID,
     column_defs: None,
-    sql: "
+    sql: r#"
 SELECT
     r.oid AS oid,
     r.name AS rolname,
@@ -5547,20 +5577,39 @@ SELECT
     inherit AS rolinherit,
     mz_catalog.has_system_privilege(r.oid, 'CREATEROLE') AS rolcreaterole,
     mz_catalog.has_system_privilege(r.oid, 'CREATEDB') AS rolcreatedb,
-    -- We determine login status each time a role logs in, so there's no way to accurately depict
-    -- this in the catalog. Instead we just hardcode NULL.
-    NULL::pg_catalog.bool AS rolcanlogin,
+    -- We determine login status each time a role logs in, so there's no clean
+    -- way to accurately determine this in the catalog. Instead we do something
+    -- a little gross. For system roles, we hardcode the known roles that can
+    -- log in. For user roles, we determine `rolcanlogin` based on whether the
+    -- role name looks like an email address.
+    --
+    -- This works for the vast majority of cases in production. Roles that users
+    -- log in to come from Frontegg and therefore *must* be valid email
+    -- addresses, while roles that are created via `CREATE ROLE` (e.g.,
+    -- `admin`, `prod_app`) almost certainly are not named to look like email
+    -- addresses.
+    --
+    -- For the moment, we're comfortable with the edge cases here. If we discover
+    -- that folks are regularly creating non-login roles with names that look
+    -- like an email address (e.g., `admins@sysops.foocorp`), we can change
+    -- course.
+    (
+        r.name IN ('mz_support', 'mz_system')
+        -- This entire scheme is sloppy, so we intentionally use a simple
+        -- regex to match email addresses, rather than one that perfectly
+        -- matches the RFC on what constitutes a valid email address.
+        OR r.name ~ '^[^@]+@[^@]+\.[^@]+$'
+    ) AS rolcanlogin,
     -- MZ doesn't support replication in the same way Postgres does
     false AS rolreplication,
     -- MZ doesn't how row level security
     false AS rolbypassrls,
     -- MZ doesn't have a connection limit
     -1 AS rolconnlimit,
-    -- MZ doesn't have role passwords
-    NULL::pg_catalog.text AS rolpassword,
+    '********'::pg_catalog.text AS rolpassword,
     -- MZ doesn't have role passwords
     NULL::pg_catalog.timestamptz AS rolvaliduntil
-FROM mz_catalog.mz_roles r",
+FROM mz_catalog.mz_roles r"#,
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6058,14 +6107,14 @@ pub static MZ_SHOW_DEFAULT_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
         WHEN 'p' THEN 'PUBLIC'
         ELSE object_owner.name
     END AS object_owner,
-	databases.name AS database,
-	schemas.name AS schema,
-	object_type,
-	CASE defaults.grantee
-	    WHEN 'p' THEN 'PUBLIC'
+    databases.name AS database,
+    schemas.name AS schema,
+    object_type,
+    CASE defaults.grantee
+        WHEN 'p' THEN 'PUBLIC'
         ELSE grantee.name
     END AS grantee,
-	unnest(mz_internal.mz_format_privileges(defaults.privileges)) AS privilege_type
+    unnest(mz_internal.mz_format_privileges(defaults.privileges)) AS privilege_type
 FROM mz_catalog.mz_default_privileges defaults
 LEFT JOIN mz_catalog.mz_roles AS object_owner ON defaults.role_id = object_owner.id
 LEFT JOIN mz_catalog.mz_roles AS grantee ON defaults.grantee = grantee.id
@@ -7131,6 +7180,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_LOCKS),
         Builtin::View(&PG_AUTHID),
         Builtin::View(&PG_ROLES),
+        Builtin::View(&PG_USER),
         Builtin::View(&PG_VIEWS),
         Builtin::View(&PG_MATVIEWS),
         Builtin::View(&PG_COLLATION),

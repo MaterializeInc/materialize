@@ -6505,6 +6505,7 @@ dependencies = [
  "mz-tls-util",
  "once_cell",
  "parquet",
+ "postgres-protocol",
  "postgres_array",
  "prost",
  "prost-build",
