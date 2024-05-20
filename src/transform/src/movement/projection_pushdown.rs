@@ -451,6 +451,7 @@ impl ProjectionPushdown {
                     id: inner_id,
                     typ,
                     access_strategy: _,
+                    ignore_errors: _,
                 } = &mut **input
                 {
                     if let Some((new_projection, new_type)) = applied_projections.get(inner_id) {

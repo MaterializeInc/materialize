@@ -190,7 +190,12 @@ impl Context {
                 // The plan, not arranged in any way.
                 (plan, AvailableCollections::new_raw())
             }
-            MirRelationExpr::Get { id, typ: _, .. } => {
+            MirRelationExpr::Get {
+                id,
+                typ: _,
+                ignore_errors,
+                ..
+            } => {
                 // This stage can absorb arbitrary MFP operators.
                 let mut mfp = mfp.take();
                 // If `mfp` is the identity, we can surface all imported arrangements.
@@ -261,6 +266,7 @@ impl Context {
                         keys: in_keys,
                         plan,
                         lir_id: self.allocate_lir_id(),
+                        ignore_errors: *ignore_errors,
                     },
                     out_keys,
                 )

@@ -7034,6 +7034,13 @@ impl<'a> Parser<'a> {
         } else if self.parse_keywords(&[ROWS, FROM]) {
             Ok(self.parse_rows_from()?)
         } else {
+            let errors = if self.parse_keywords(&[IGNORE, ERRORS]) {
+                Some(IgnoreErrors::IgnoreErrors)
+            } else if self.parse_keywords(&[ONLY, ERRORS]) {
+                Some(IgnoreErrors::OnlyErrors)
+            } else {
+                None
+            };
             let name = self.parse_raw_name()?;
             if self.consume_token(&Token::LParen) {
                 let args = self.parse_optional_args(false)?;
@@ -7054,6 +7061,7 @@ impl<'a> Parser<'a> {
                 Ok(TableFactor::Table {
                     name,
                     alias: self.parse_optional_table_alias()?,
+                    errors,
                 })
             }
         }

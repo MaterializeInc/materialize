@@ -109,6 +109,8 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
         keys: AvailableCollections,
         /// The actions to take when introducing the collection.
         plan: GetPlan,
+        /// Whether to ignore errors.
+        ignore_errors: bool,
     },
     /// Binds `values` to `ids`, evaluates them potentially recursively, and returns `body`.
     ///
@@ -327,6 +329,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     keys,
                     plan,
                     lir_id,
+                    ignore_errors,
                 } => {
                     // If this `Get` references another node directly, remove it. If it contains an
                     // MFP, leave an `Mfp` node in its place.
@@ -357,7 +360,12 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                         }
                     }
 
-                    let node = Get { id, keys, plan };
+                    let node = Get {
+                        id,
+                        keys,
+                        plan,
+                        ignore_errors,
+                    };
                     insert_node(lir_id, node);
                 }
                 Plan::Let {
@@ -868,10 +876,16 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
             Self::Constant { rows } => Kind::Constant(ProtoConstant {
                 rows: Some(rows.into_proto()),
             }),
-            Self::Get { id, keys, plan } => Kind::Get(ProtoGet {
+            Self::Get {
+                id,
+                keys,
+                plan,
+                ignore_errors,
+            } => Kind::Get(ProtoGet {
                 id: Some(id.into_proto()),
                 keys: Some(keys.into_proto()),
                 plan: Some(plan.into_proto()),
+                ignore_errors: *ignore_errors,
             }),
             Self::LetRec {
                 ids,
@@ -1017,6 +1031,7 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
                 id: proto.id.into_rust_if_some("ProtoGet::id")?,
                 keys: proto.keys.into_rust_if_some("ProtoGet::keys")?,
                 plan: proto.plan.into_rust_if_some("ProtoGet::plan")?,
+                ignore_errors: proto.ignore_errors,
             },
             Kind::LetRec(proto) => {
                 let mut limits = Vec::with_capacity(proto.limits.len());

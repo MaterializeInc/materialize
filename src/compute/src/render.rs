@@ -823,13 +823,18 @@ where
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
             }
-            Get { id, keys, plan } => {
+            Get {
+                id,
+                keys,
+                plan,
+                ignore_errors,
+            } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
                 // If `mfp` happens to be trivial, we can just return the collection.
                 let mut collection = self
                     .lookup_id(id)
                     .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
-                match plan {
+                let mut collection = match plan {
                     mz_compute_types::plan::GetPlan::PassArrangements => {
                         // Assert that each of `keys` are present in `collection`.
                         assert!(keys
@@ -856,7 +861,9 @@ where
                             collection.as_collection_core(mfp, None, self.until.clone());
                         CollectionBundle::from_collections(oks, errs)
                     }
-                }
+                };
+                collection.ignore_errors(ignore_errors);
+                collection
             }
             LetRec { .. } => {
                 unreachable!("LetRec should have been extracted and rendered");

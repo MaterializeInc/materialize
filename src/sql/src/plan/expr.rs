@@ -99,6 +99,7 @@ pub enum HirRelationExpr {
     Get {
         id: mz_expr::Id,
         typ: RelationType,
+        ignore_errors: bool,
     },
     /// Mutually recursive CTE
     LetRec {
@@ -2059,7 +2060,12 @@ impl VisitChildren<Self> for HirRelationExpr {
 
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ }
+            | Get {
+                id: _,
+                typ: _,
+                ignore_errors: _,
+            } => (),
             Let {
                 name: _,
                 id: _,
@@ -2146,7 +2152,12 @@ impl VisitChildren<Self> for HirRelationExpr {
 
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ }
+            | Get {
+                id: _,
+                typ: _,
+                ignore_errors: _,
+            } => (),
             Let {
                 name: _,
                 id: _,
@@ -2233,7 +2244,12 @@ impl VisitChildren<Self> for HirRelationExpr {
 
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ }
+            | Get {
+                id: _,
+                typ: _,
+                ignore_errors: _,
+            } => (),
             Let {
                 name: _,
                 id: _,
@@ -2321,7 +2337,12 @@ impl VisitChildren<Self> for HirRelationExpr {
 
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ }
+            | Get {
+                id: _,
+                typ: _,
+                ignore_errors: _,
+            } => (),
             Let {
                 name: _,
                 id: _,
@@ -2401,7 +2422,11 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         use HirRelationExpr::*;
         match self {
             Constant { rows: _, typ: _ }
-            | Get { id: _, typ: _ }
+            | Get {
+                id: _,
+                typ: _,
+                ignore_errors: _,
+            }
             | Let {
                 name: _,
                 id: _,
@@ -2477,7 +2502,11 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         use HirRelationExpr::*;
         match self {
             Constant { rows: _, typ: _ }
-            | Get { id: _, typ: _ }
+            | Get {
+                id: _,
+                typ: _,
+                ignore_errors: _,
+            }
             | Let {
                 name: _,
                 id: _,
@@ -2550,7 +2579,11 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         use HirRelationExpr::*;
         match self {
             Constant { rows: _, typ: _ }
-            | Get { id: _, typ: _ }
+            | Get {
+                id: _,
+                typ: _,
+                ignore_errors: _,
+            }
             | Let {
                 name: _,
                 id: _,
@@ -2624,7 +2657,11 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         use HirRelationExpr::*;
         match self {
             Constant { rows: _, typ: _ }
-            | Get { id: _, typ: _ }
+            | Get {
+                id: _,
+                typ: _,
+                ignore_errors: _,
+            }
             | Let {
                 name: _,
                 id: _,

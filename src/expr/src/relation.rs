@@ -115,6 +115,8 @@ pub enum MirRelationExpr {
         /// lowering to LIR, but is used only by EXPLAIN.
         #[mzreflect(ignore)]
         access_strategy: AccessStrategy,
+        /// Whether to ignore errors produced by this collection.
+        ignore_errors: bool,
     },
     /// Introduce a temporary dataflow.
     ///
@@ -1117,15 +1119,17 @@ impl MirRelationExpr {
             id: Id::Local(id),
             typ,
             access_strategy: AccessStrategy::UnknownOrLocal,
+            ignore_errors: false,
         }
     }
 
     /// Constructs the expression for getting a global collection
-    pub fn global_get(id: GlobalId, typ: RelationType) -> Self {
+    pub fn global_get(id: GlobalId, typ: RelationType, ignore_errors: bool) -> Self {
         MirRelationExpr::Get {
             id: Id::Global(id),
             typ,
             access_strategy: AccessStrategy::UnknownOrLocal,
+            ignore_errors,
         }
     }
 
@@ -1525,6 +1529,7 @@ impl MirRelationExpr {
                 id: Id::Local(id),
                 typ: self.typ(),
                 access_strategy: AccessStrategy::UnknownOrLocal,
+                ignore_errors: false,
             };
             let body = (body)(id_gen, get);
             MirRelationExpr::Let {
@@ -1553,6 +1558,7 @@ impl MirRelationExpr {
                 id: Id::Local(id),
                 typ: self.typ(),
                 access_strategy: AccessStrategy::UnknownOrLocal,
+                ignore_errors: false,
             };
             let body = (body)(id_gen, get)?;
             Ok(MirRelationExpr::Let {

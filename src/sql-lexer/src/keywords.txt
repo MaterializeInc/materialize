@@ -140,6 +140,7 @@ Endpoint
 Enforced
 Envelope
 Error
+Errors
 Escape
 Estimate
 Every

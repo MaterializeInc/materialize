@@ -667,6 +667,15 @@ where
                 .collect(),
         }
     }
+
+    pub fn ignore_errors(&mut self, ignore_errors: bool) {
+        if !ignore_errors {
+            return;
+        }
+        self.collection.as_mut().map(|inner| {
+            inner.1 = Collection::empty(&inner.1.scope());
+        });
+    }
 }
 
 impl<'a, S: Scope, T> CollectionBundle<Child<'a, S, S::Timestamp>, T>

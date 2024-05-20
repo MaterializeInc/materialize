@@ -59,6 +59,7 @@ message ProtoFlatPlanNode {
         mz_expr.id.ProtoId id = 1;
         ProtoAvailableCollections keys = 2;
         ProtoGetPlan plan = 3;
+        bool ignore_errors = 4;
     }
 
     message ProtoLetRec {

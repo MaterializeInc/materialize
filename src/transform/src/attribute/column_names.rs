@@ -54,6 +54,7 @@ impl<'c> ColumnNames<'c> {
                 id: Id::Global(id),
                 typ,
                 access_strategy: _,
+                ignore_errors: _,
             } => {
                 if let Some(column_names) = self.humanizer.column_names_for_id(*id) {
                     column_names
@@ -66,6 +67,7 @@ impl<'c> ColumnNames<'c> {
                 id: Id::Local(id),
                 typ,
                 access_strategy: _,
+                ignore_errors: _,
             } => {
                 if let Some(column_names) = self.env.get(id) {
                     column_names.clone()

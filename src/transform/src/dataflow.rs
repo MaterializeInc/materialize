@@ -626,6 +626,7 @@ id: {}, key: {:?}",
                         id: Id::Global(global_id),
                         typ: _,
                         access_strategy: persist_or_index,
+                        ignore_errors: _,
                     } => {
                         if let Some(new_idx_id) = full_scan_changes.get(global_id) {
                             match persist_or_index {
@@ -713,6 +714,7 @@ id: {}, key: {:?}",
                     id: Id::Global(global_id),
                     typ: _,
                     access_strategy,
+                    ignore_errors: _,
                 } => match access_strategy {
                     AccessStrategy::Persist => {
                         if objects_to_build_ids.contains(global_id) {
@@ -735,6 +737,7 @@ id: {}, key: {:?}",
                     id: Id::Global(_),
                     typ: _,
                     access_strategy: AccessStrategy::Index(accesses),
+                    ignore_errors: _,
                 } => {
                     for (idx_id, _) in accesses {
                         soft_assert_or_log!(

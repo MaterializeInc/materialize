@@ -368,6 +368,7 @@ mod support {
                     id: Id::Local(id),
                     typ,
                     access_strategy: _,
+                    ignore_errors: _,
                 } => {
                     if let Some(new_type) = types.get(id) {
                         // Assert that the column length has not changed.

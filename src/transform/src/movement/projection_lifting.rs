@@ -72,12 +72,14 @@ impl ProjectionLifting {
                     id,
                     typ: _,
                     access_strategy: _,
+                    ignore_errors,
                 } => {
                     if let Some((typ, columns)) = gets.get(id) {
                         *relation = MirRelationExpr::Get {
                             id: *id,
                             typ: typ.clone(),
                             access_strategy: AccessStrategy::UnknownOrLocal, // (we are not copying it over)
+                            ignore_errors: *ignore_errors,
                         }
                         .project(columns.clone());
                     }
