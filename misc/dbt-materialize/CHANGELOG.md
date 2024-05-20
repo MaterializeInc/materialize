@@ -7,6 +7,9 @@
   * Migrate to dbt-common and dbt-adapters packages.
   * Add tests for `--empty` flag as part of [dbt-labs/dbt-core#8971](https://github.com/dbt-labs/dbt-core/pull/8971)
   * Add functional tests for unit testing.
+* Support enforcing model contracts for the [`map`](https://materialize.com/docs/sql/types/map/),
+  [`list`](https://materialize.com/docs/sql/types/list/),
+  and [`record`](https://materialize.com/docs/sql/types/record/) pseudo-types.
 
 ## 1.7.8 - 2024-05-06
 
