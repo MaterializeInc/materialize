@@ -840,7 +840,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     /// Returns the `progress_exclusive` of the cache after updating.
     #[must_use]
     #[instrument(level = "debug", fields(ts = ?ts))]
-    pub(crate) async fn update_gt(&mut self, ts: &T) -> &T {
+    pub async fn update_gt(&mut self, ts: &T) -> &T {
         let only_data_id = self.only_data_id.clone();
         Self::update(
             &mut self.state,
@@ -860,7 +860,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     /// Returns the `progress_exclusive` of the cache after updating.
     #[must_use]
     #[instrument(level = "debug", fields(ts = ?ts))]
-    pub(crate) async fn update_ge(&mut self, ts: &T) -> &T {
+    pub async fn update_ge(&mut self, ts: &T) -> &T {
         let only_data_id = self.only_data_id.clone();
         Self::update(
             &mut self.state,
