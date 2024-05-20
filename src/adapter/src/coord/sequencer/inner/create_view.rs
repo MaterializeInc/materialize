@@ -375,11 +375,9 @@ impl Coordinator {
             ..
         }: CreateViewFinish,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
-        let ops = itertools::chain(
-            drop_ids
-                .iter()
-                .map(|id| catalog::Op::DropObject(ObjectId::Item(*id))),
-            std::iter::once(catalog::Op::CreateItem {
+        let ops = vec![
+            catalog::Op::DropObjects(drop_ids.iter().map(|id| ObjectId::Item(*id)).collect()),
+            catalog::Op::CreateItem {
                 id,
                 name: name.clone(),
                 item: CatalogItem::View(View {
@@ -395,9 +393,8 @@ impl Coordinator {
                     resolved_ids: resolved_ids.clone(),
                 }),
                 owner_id: *session.current_role_id(),
-            }),
-        )
-        .collect::<Vec<_>>();
+            },
+        ];
 
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(StageResult::Response(ExecuteResponse::CreatedView)),

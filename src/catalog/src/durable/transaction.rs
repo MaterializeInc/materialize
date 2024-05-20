@@ -28,7 +28,7 @@ use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
     RoleVars,
 };
-use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
+use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::{PersistTxnTablesImpl, StorageError};
@@ -766,6 +766,22 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    pub fn remove_databases(&mut self, ids: &BTreeSet<DatabaseId>) -> Result<(), CatalogError> {
+        let to_remove = ids
+            .iter()
+            .map(|id| (DatabaseKey { id: *id }, None))
+            .collect();
+        let prev = self.databases.set_many(to_remove, self.op_id)?;
+
+        for (database_key, prev) in prev {
+            if prev.is_none() {
+                return Err(SqlCatalogError::UnknownDatabase(database_key.id.to_string()).into());
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn remove_schema(
         &mut self,
         database_id: &Option<DatabaseId>,
@@ -785,6 +801,31 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    pub fn remove_schemas(
+        &mut self,
+        ids: &BTreeMap<SchemaId, ResolvedDatabaseSpecifier>,
+    ) -> Result<(), CatalogError> {
+        let to_remove = ids
+            .iter()
+            .map(|(schema_id, _)| (SchemaKey { id: *schema_id }, None))
+            .collect();
+        let prev = self.schemas.set_many(to_remove, self.op_id)?;
+
+        for (schema_key, prev) in prev {
+            if prev.is_none() {
+                let database_spec = ids.get(&schema_key.id).expect("should exist");
+                let database_name = match database_spec {
+                    ResolvedDatabaseSpecifier::Id(id) => format!("{id}."),
+                    ResolvedDatabaseSpecifier::Ambient => "".to_string(),
+                };
+                let err = format!("{}.{}", database_name, schema_key.id);
+                return Err(SqlCatalogError::UnknownSchema(err).into());
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn remove_role(&mut self, name: &str) -> Result<(), CatalogError> {
         let roles = self.roles.delete(|_k, v| v.name == name, self.op_id);
         assert!(
@@ -798,6 +839,26 @@ impl<'a> Transaction<'a> {
         } else {
             Err(SqlCatalogError::UnknownRole(name.to_owned()).into())
         }
+    }
+
+    pub fn remove_roles(&mut self, roles: &BTreeSet<RoleId>) -> Result<(), CatalogError> {
+        let to_remove = roles
+            .iter()
+            .map(|role_id| (RoleKey { id: *role_id }, None))
+            .collect();
+        let deleted_roles = self.roles.set_many(to_remove, self.op_id)?;
+        assert!(
+            deleted_roles.iter().all(|(k, _)| k.id.is_user()),
+            "cannot delete non-user roles"
+        );
+
+        for (role_key, prev_val) in deleted_roles {
+            if prev_val.is_none() {
+                return Err(SqlCatalogError::UnknownRole(role_key.id.to_string()).into());
+            }
+        }
+
+        Ok(())
     }
 
     pub fn remove_cluster(&mut self, id: ClusterId) -> Result<(), CatalogError> {
@@ -819,6 +880,32 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    pub fn remove_clusters(&mut self, clusters: &BTreeSet<ClusterId>) -> Result<(), CatalogError> {
+        let to_remove = clusters
+            .iter()
+            .map(|cluster_id| (ClusterKey { id: *cluster_id }, None))
+            .collect();
+        let deleted_clusters = self.clusters.set_many(to_remove, self.op_id)?;
+
+        for (cluster_key, prev_val) in &deleted_clusters {
+            if prev_val.is_none() {
+                return Err(SqlCatalogError::UnknownCluster(cluster_key.id.to_string()).into());
+            }
+        }
+
+        // Cascade delete introspection sources and cluster replicas.
+        //
+        // TODO(benesch): this doesn't seem right. Cascade deletions should
+        // be entirely the domain of the higher catalog layer, not the
+        // storage layer.
+        self.cluster_replicas
+            .delete(|_k, v| clusters.contains(&v.cluster_id), self.op_id);
+        self.introspection_sources
+            .delete(|k, _v| clusters.contains(&k.cluster_id), self.op_id);
+
+        Ok(())
+    }
+
     pub fn remove_cluster_replica(&mut self, id: ReplicaId) -> Result<(), CatalogError> {
         let deleted = self.cluster_replicas.delete(|k, _v| k.id == id, self.op_id);
         if deleted.len() == 1 {
@@ -827,6 +914,27 @@ impl<'a> Transaction<'a> {
             assert!(deleted.is_empty());
             Err(SqlCatalogError::UnknownClusterReplica(id.to_string()).into())
         }
+    }
+
+    pub fn remove_cluster_replicas(
+        &mut self,
+        replicas: &BTreeSet<ReplicaId>,
+    ) -> Result<(), CatalogError> {
+        let to_remove = replicas
+            .iter()
+            .map(|replica_id| (ClusterReplicaKey { id: *replica_id }, None))
+            .collect();
+        let prev = self.cluster_replicas.set_many(to_remove, self.op_id)?;
+
+        for (replica_key, prev_val) in prev {
+            if prev_val.is_none() {
+                return Err(
+                    SqlCatalogError::UnknownClusterReplica(replica_key.id.to_string()).into(),
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Removes all storage usage events in `events` from the transaction.
@@ -858,7 +966,7 @@ impl<'a> Transaction<'a> {
     ///
     /// NOTE: On error, there still may be some items removed from the transaction. It is
     /// up to the caller to either abort the transaction or commit.
-    pub fn remove_items(&mut self, ids: BTreeSet<GlobalId>) -> Result<(), CatalogError> {
+    pub fn remove_items(&mut self, ids: &BTreeSet<GlobalId>) -> Result<(), CatalogError> {
         let n = self
             .items
             .delete(|k, _v| ids.contains(&k.gid), self.op_id)
@@ -1419,11 +1527,11 @@ impl<'a> Transaction<'a> {
 
     pub fn drop_comments(
         &mut self,
-        object_id: CommentObjectId,
+        object_ids: &BTreeSet<CommentObjectId>,
     ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, CatalogError> {
         let deleted = self
             .comments
-            .delete(|k, _v| k.object_id == object_id, self.op_id);
+            .delete(|k, _v| object_ids.contains(&k.object_id), self.op_id);
         let deleted = deleted
             .into_iter()
             .map(|(k, v)| (k.object_id, k.sub_component, v.comment))
