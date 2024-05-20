@@ -123,6 +123,8 @@ pub enum UnauthorizedError {
     #[error("permission denied for {object_description}")]
     Privilege {
         object_description: ErrorMessageObjectDescription,
+        role_name: String,
+        privileges: String,
     },
     // TODO(jkosh44) When we implement parameter privileges, this can be replaced with a regular
     //  privilege error.
@@ -143,6 +145,13 @@ impl UnauthorizedError {
             UnauthorizedError::Superuser { action } => {
                 Some(format!("You must be a superuser to {}", action))
             }
+            UnauthorizedError::Privilege {
+                object_description,
+                role_name,
+                privileges,
+            } => Some(format!(
+                "The '{role_name}' role needs {privileges} privileges on {object_description}"
+            )),
             UnauthorizedError::MzSystem { .. } => {
                 Some(format!("You must be the '{}' role", SYSTEM_USER.name))
             }
@@ -153,9 +162,7 @@ impl UnauthorizedError {
             UnauthorizedError::ConcurrentRoleDrop(_) => {
                 Some("Please disconnect and re-connect with a valid role.".into())
             }
-            UnauthorizedError::Ownership { .. }
-            | UnauthorizedError::RoleMembership { .. }
-            | UnauthorizedError::Privilege { .. } => None,
+            UnauthorizedError::Ownership { .. } | UnauthorizedError::RoleMembership { .. } => None,
         }
     }
 }
@@ -1604,8 +1611,12 @@ fn check_object_privileges(
             .map(|mz_acl_item| mz_acl_item.acl_mode)
             .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode));
         if !role_privileges.contains(acl_mode) {
+            let role_name = catalog.get_role(&role_id).name().to_string();
+            let privileges = acl_mode.to_error_string();
             return Err(UnauthorizedError::Privilege {
                 object_description: ErrorMessageObjectDescription::from_sys_id(&object_id, catalog),
+                role_name,
+                privileges,
             });
         }
     }
