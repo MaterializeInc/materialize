@@ -67,7 +67,7 @@ operations on macOS.)
 On Linux, we recommend using Docker:
 
 ```shell
-docker run --name=cockroach -d -p 26257:26257 -p 26258:8080 cockroachdb/cockroach:v22.2.0 start-single-node --insecure
+docker run --name=cockroach -d -p 26257:26257 -p 26258:8080 cockroachdb/cockroach:v23.1.11 start-single-node --insecure
 ```
 
 If you can successfully connect to CockroachDB with either
