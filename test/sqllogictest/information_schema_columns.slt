@@ -18,9 +18,14 @@ CREATE VIEW other.public.v AS SELECT 1 AS num, 'a' AS char
 statement ok
 CREATE VIEW v AS SELECT 1 AS num, 'a' AS char
 
-query TTTTTTTTTT colnames,rowsort
-SELECT * FROM information_schema.columns WHERE table_name = 'v'
+statement ok
+CREATE TABLE t (c1 int DEFAULT 1234, c2 int DEFAULT 1 + 2)
+
+query TTTTTTTTTTT colnames,rowsort
+SELECT * FROM information_schema.columns WHERE table_name = 'v' OR table_name = 't'
 ----
-table_catalog  table_schema  table_name  column_name  ordinal_position  is_nullable data_type  character_maximum_length  numeric_precision  numeric_scale
-materialize    public        v           num          1                 NO          integer    NULL                      NULL               NULL
-materialize    public        v           char         2                 NO          text       NULL                      NULL               NULL
+table_catalog table_schema table_name column_name ordinal_position column_default is_nullable data_type character_maximum_length numeric_precision numeric_scale
+materialize  public  t  c1  1  1234  YES  integer  NULL  NULL  NULL
+materialize  public  t  c2  2  1␠+␠2  YES  integer  NULL  NULL  NULL
+materialize  public  v  char  2  NULL  NO  text  NULL  NULL  NULL
+materialize  public  v  num  1  NULL  NO  integer  NULL  NULL  NULL
