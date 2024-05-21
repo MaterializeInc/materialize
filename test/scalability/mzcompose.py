@@ -52,8 +52,10 @@ from materialize.scalability.workload import (
     Workload,
 )
 from materialize.scalability.workload_markers import WorkloadMarker
-from materialize.scalability.workloads import *  # noqa: F401 F403
-from materialize.scalability.workloads_test import *  # noqa: F401 F403
+from materialize.scalability.workloads.connection_workloads import *  # noqa: F401 F403
+from materialize.scalability.workloads.ddl_workloads import *  # noqa: F401 F403
+from materialize.scalability.workloads.dml_dql_workloads import *  # noqa: F401 F403
+from materialize.scalability.workloads.self_test_workloads import *  # noqa: F401 F403
 from materialize.util import YesNoOnce, all_subclasses
 from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS,
