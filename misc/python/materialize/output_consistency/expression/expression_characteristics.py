@@ -44,3 +44,4 @@ class ExpressionCharacteristics(Enum):
 
     COLLECTION_EMPTY = 160
     MAP_WITH_DUP_KEYS = 161
+    LIST_WITH_DUP_ENTRIES = 162
