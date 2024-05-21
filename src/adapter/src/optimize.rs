@@ -295,7 +295,7 @@ impl OptimizerError {
     pub fn hint(&self) -> Option<String> {
         match self {
             Self::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
-                Some("Try using `mz_now()` here instead.".into())
+                Some("In temporal filters `mz_now()` may work instead.".into())
             }
             _ => None,
         }
