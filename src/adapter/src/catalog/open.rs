@@ -961,7 +961,7 @@ impl Catalog {
         txn: &mut Transaction<'_>,
         migration_metadata: &mut BuiltinMigrationMetadata,
     ) -> Result<(), Error> {
-        txn.remove_items(migration_metadata.user_drop_ops.drain(..).collect())?;
+        txn.remove_items(&migration_metadata.user_drop_ops.drain(..).collect())?;
         for (id, schema_id, oid, name) in migration_metadata.user_create_ops.drain(..) {
             let entry = state.get_entry(&id);
             let item = entry.item();

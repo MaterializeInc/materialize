@@ -1535,7 +1535,7 @@ impl Coordinator {
                     variant: UpdatePrivilegeVariant::Revoke,
                 },
             ))
-            .chain(ids.into_iter().map(catalog::Op::DropObject))
+            .chain(std::iter::once(catalog::Op::DropObjects(ids)))
             .collect();
 
         Ok(DropOps {

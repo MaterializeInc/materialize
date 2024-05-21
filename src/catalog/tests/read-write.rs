@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{
     CreateClusterReplicaV1, EventDetails, EventType, EventV1, IdNameV1, StorageUsageV1,
@@ -23,7 +24,7 @@ use mz_persist_client::PersistClient;
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::names::SchemaId;
+use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -287,5 +288,54 @@ async fn test_items(openable_state: Box<dyn OpenableDurableCatalogState>) {
     for item in &items {
         assert!(snapshot_items.contains(item));
     }
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_schemas() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    test_schemas(openable_state).await;
+}
+
+async fn test_schemas(openable_state: Box<dyn OpenableDurableCatalogState>) {
+    let mut state = openable_state
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+        .await
+        .unwrap();
+    let mut txn = state.transaction().await.unwrap();
+
+    let (schema_id, _oid) = txn
+        .insert_user_schema(DatabaseId::User(1), "foo", RoleId::User(1), vec![])
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    // Test removing schemas where one doesn't exist.
+    let mut txn = state.transaction().await.unwrap();
+
+    let schemas = [
+        (
+            schema_id,
+            ResolvedDatabaseSpecifier::Id(DatabaseId::User(1)),
+        ),
+        (SchemaId::User(100), ResolvedDatabaseSpecifier::Ambient),
+    ]
+    .into_iter()
+    .collect();
+    let result = txn.remove_schemas(&schemas);
+
+    assert_debug_snapshot!(result, @r###"
+    Err(
+        Catalog(
+            UnknownSchema(
+                ".u100",
+            ),
+        ),
+    )
+    "###);
+
     Box::new(state).expire().await;
 }

@@ -106,7 +106,7 @@ pub enum Op {
         sub_component: Option<usize>,
         comment: Option<String>,
     },
-    DropObject(ObjectId),
+    DropObjects(Vec<ObjectId>),
     GrantRole {
         role_id: RoleId,
         member_id: RoleId,
@@ -199,19 +199,6 @@ pub struct TransactionResult {
 }
 
 impl Catalog {
-    pub fn drop_temp_item_ops(&mut self, conn_id: &ConnectionId) -> Vec<Op> {
-        let temp_ids = self.state.temporary_schemas[conn_id]
-            .items
-            .values()
-            .cloned()
-            .map(ObjectId::Item)
-            .collect();
-        self.object_dependents(&temp_ids, conn_id)
-            .into_iter()
-            .map(Op::DropObject)
-            .collect()
-    }
-
     fn should_audit_log_item(item: &CatalogItem) -> bool {
         !item.is_temporary()
     }
@@ -268,12 +255,19 @@ impl Catalog {
             )))
         });
 
-        let drop_ids: BTreeSet<_> = ops
+        let drop_ids: BTreeSet<GlobalId> = ops
             .iter()
             .filter_map(|op| match op {
-                Op::DropObject(ObjectId::Item(id)) => Some(*id),
+                Op::DropObjects(ids) => {
+                    let item_ids = ids.iter().filter_map(|id| match id {
+                        ObjectId::Item(id) => Some(*id),
+                        _ => None,
+                    });
+                    Some(item_ids)
+                }
                 _ => None,
             })
+            .flatten()
             .collect();
         let temporary_drops = drop_ids
             .iter()
@@ -979,11 +973,13 @@ impl Catalog {
                         ));
                     }
                 }
-                Op::DropObject(id) => {
+                Op::DropObjects(ids) => {
+                    // Generate all of the objects that need to get dropped.
+                    let delta = ObjectsToDrop::generate(ids, state, session)?;
+
                     // Drop any associated comments.
-                    let comment_id = state.get_comment_id(id.clone());
-                    let deleted = tx.drop_comments(comment_id)?;
-                    let dropped = state.comments.drop_comments(comment_id);
+                    let deleted = tx.drop_comments(&delta.comments)?;
+                    let dropped = state.comments.drop_comments(&delta.comments);
                     mz_ore::soft_assert_eq_or_log!(
                         deleted,
                         dropped,
@@ -995,17 +991,24 @@ impl Catalog {
                     });
                     builtin_table_updates.extend(updates);
 
-                    // Drop the object.
-                    match id {
-                        ObjectId::Database(id) => {
-                            let database = &state.database_by_id[&id];
-                            if id.is_system() {
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlyDatabase(database.name().to_string()),
-                                )));
-                            }
-                            tx.remove_database(&id)?;
-                            builtin_table_updates.push(state.pack_database_update(&id, -1));
+                    // Drop any items.
+                    let items_to_drop = delta
+                        .items
+                        .iter()
+                        .filter(|id| !state.get_entry(id).item().is_temporary())
+                        .copied()
+                        .collect();
+                    tx.remove_items(&items_to_drop)?;
+
+                    for item_id in delta.items {
+                        let entry = state.get_entry(&item_id);
+
+                        if entry.item().is_storage_collection() {
+                            storage_collections_to_drop.insert(item_id);
+                        }
+
+                        builtin_table_updates.extend(state.pack_item_update(item_id, -1));
+                        if Self::should_audit_log_item(entry.item()) {
                             state.add_to_audit_log(
                                 oracle_write_ts,
                                 session,
@@ -1013,225 +1016,218 @@ impl Catalog {
                                 builtin_table_updates,
                                 audit_events,
                                 EventType::Drop,
-                                ObjectType::Database,
-                                EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                                    id: id.to_string(),
-                                    name: database.name.clone(),
+                                catalog_type_to_audit_object_type(entry.item().typ()),
+                                EventDetails::IdFullNameV1(IdFullNameV1 {
+                                    id: item_id.to_string(),
+                                    name: Self::full_name_detail(&state.resolve_full_name(
+                                        entry.name(),
+                                        session.map(|session| session.conn_id()),
+                                    )),
                                 }),
                             )?;
-                            let db = state.database_by_id.get(&id).expect("catalog out of sync");
-                            state.database_by_name.remove(db.name());
-                            state.database_by_id.remove(&id);
                         }
-                        ObjectId::Schema((database_spec, schema_spec)) => {
-                            let schema = state.get_schema(
-                                &database_spec,
-                                &schema_spec,
-                                session
-                                    .map(|session| session.conn_id())
-                                    .unwrap_or(&SYSTEM_CONN_ID),
-                            );
-                            let database_id = match database_spec {
-                                ResolvedDatabaseSpecifier::Ambient => None,
-                                ResolvedDatabaseSpecifier::Id(database_id) => Some(database_id),
-                            };
-                            let schema_id: SchemaId = schema_spec.into();
-                            if schema_id.is_system() {
-                                let name = schema.name();
-                                let full_name = state.resolve_full_schema_name(name);
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlySystemSchema(full_name.to_string()),
-                                )));
-                            }
-                            tx.remove_schema(&database_id, &schema_id)?;
-                            builtin_table_updates.push(state.pack_schema_update(
-                                &database_spec,
-                                &schema_id,
-                                -1,
-                            ));
-                            state.add_to_audit_log(
-                                oracle_write_ts,
-                                session,
-                                tx,
-                                builtin_table_updates,
-                                audit_events,
-                                EventType::Drop,
-                                ObjectType::Schema,
-                                EventDetails::SchemaV2(mz_audit_log::SchemaV2 {
-                                    id: schema_id.to_string(),
-                                    name: schema.name.schema.to_string(),
-                                    database_name: database_id.map(|database_id| {
-                                        state.database_by_id[&database_id].name.clone()
-                                    }),
+                        state.drop_item(item_id);
+                    }
+
+                    // Drop any schemas.
+                    let schemas = delta
+                        .schemas
+                        .iter()
+                        .map(|(schema_spec, database_spec)| {
+                            (SchemaId::from(schema_spec), *database_spec)
+                        })
+                        .collect();
+                    tx.remove_schemas(&schemas)?;
+
+                    for (schema_spec, database_spec) in delta.schemas {
+                        let schema = state.get_schema(
+                            &database_spec,
+                            &schema_spec,
+                            session
+                                .map(|session| session.conn_id())
+                                .unwrap_or(&SYSTEM_CONN_ID),
+                        );
+
+                        let schema_id = SchemaId::from(schema_spec);
+                        let database_id = match database_spec {
+                            ResolvedDatabaseSpecifier::Ambient => None,
+                            ResolvedDatabaseSpecifier::Id(database_id) => Some(database_id),
+                        };
+
+                        builtin_table_updates.push(state.pack_schema_update(
+                            &database_spec,
+                            &schema_id,
+                            -1,
+                        ));
+                        state.add_to_audit_log(
+                            oracle_write_ts,
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Drop,
+                            ObjectType::Schema,
+                            EventDetails::SchemaV2(mz_audit_log::SchemaV2 {
+                                id: schema_id.to_string(),
+                                name: schema.name.schema.to_string(),
+                                database_name: database_id.map(|database_id| {
+                                    state.database_by_id[&database_id].name.clone()
                                 }),
-                            )?;
-                            if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
-                                let db = state
-                                    .database_by_id
-                                    .get_mut(&database_id)
-                                    .expect("catalog out of sync");
-                                let schema = &db.schemas_by_id[&schema_id];
-                                db.schemas_by_name.remove(&schema.name.schema);
-                                db.schemas_by_id.remove(&schema_id);
-                            }
+                            }),
+                        )?;
+
+                        if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
+                            let db = state
+                                .database_by_id
+                                .get_mut(&database_id)
+                                .expect("catalog out of sync");
+                            let schema = &db.schemas_by_id[&schema_id];
+                            db.schemas_by_name.remove(&schema.name.schema);
+                            db.schemas_by_id.remove(&schema_id);
                         }
-                        ObjectId::Role(id) => {
-                            let name = state.get_role(&id).name().to_string();
-                            if id.is_system() || id.is_predefined() {
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReservedRoleName(name.clone()),
-                                )));
-                            }
-                            state.ensure_not_reserved_role(&id)?;
-                            tx.remove_role(&name)?;
-                            builtin_table_updates.extend(state.pack_role_update(id, -1));
+                    }
 
-                            let role = state.roles_by_id.remove(&id).expect("catalog out of sync");
-                            state.roles_by_name.remove(role.name());
-                            state.add_to_audit_log(
-                                oracle_write_ts,
-                                session,
-                                tx,
-                                builtin_table_updates,
-                                audit_events,
-                                EventType::Drop,
-                                ObjectType::Role,
-                                EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                                    id: role.id.to_string(),
-                                    name: name.clone(),
-                                }),
-                            )?;
-                            info!("drop role {}", role.name());
-                        }
-                        ObjectId::Cluster(id) => {
-                            let cluster = state.get_cluster(id);
-                            let name = &cluster.name;
-                            if id.is_system() {
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlyCluster(name.clone()),
-                                )));
-                            }
-                            tx.remove_cluster(id)?;
-                            builtin_table_updates.extend(state.pack_cluster_update(name, -1));
-                            for id in cluster.log_indexes.values() {
-                                builtin_table_updates.extend(state.pack_item_update(*id, -1));
-                            }
-                            state.add_to_audit_log(
-                                oracle_write_ts,
-                                session,
-                                tx,
-                                builtin_table_updates,
-                                audit_events,
-                                EventType::Drop,
-                                ObjectType::Cluster,
-                                EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                                    id: cluster.id.to_string(),
-                                    name: name.clone(),
-                                }),
-                            )?;
-                            let cluster = state
-                                .clusters_by_id
-                                .remove(&id)
-                                .expect("can only drop known clusters");
-                            state.clusters_by_name.remove(&cluster.name);
+                    // Drop any databases.
+                    tx.remove_databases(&delta.databases)?;
 
-                            for id in cluster.log_indexes.values() {
-                                state.drop_item(*id);
-                            }
+                    for database_id in delta.databases {
+                        let database = state.get_database(&database_id).clone();
 
-                            assert!(
-                                cluster.bound_objects.is_empty()
-                                    && cluster.replicas().next().is_none(),
-                                "not all items dropped before cluster"
-                            );
-                        }
-                        ObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                            let cluster = state.get_cluster(cluster_id);
-                            let replica = cluster.replica(replica_id).expect("Must exist");
-                            tx.remove_cluster_replica(replica_id)?;
+                        builtin_table_updates.push(state.pack_database_update(&database_id, -1));
+                        state.add_to_audit_log(
+                            oracle_write_ts,
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Drop,
+                            ObjectType::Database,
+                            EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                                id: database_id.to_string(),
+                                name: database.name.clone(),
+                            }),
+                        )?;
 
-                            for process_id in replica.process_status.keys() {
-                                let update = state.pack_cluster_replica_status_update(
-                                    cluster_id,
-                                    replica_id,
-                                    *process_id,
-                                    -1,
-                                );
-                                builtin_table_updates.push(update);
-                            }
+                        state.database_by_name.remove(database.name());
+                        state.database_by_id.remove(&database_id);
+                    }
 
-                            builtin_table_updates.extend(state.pack_cluster_replica_update(
+                    // Drop any roles.
+                    tx.remove_roles(&delta.roles)?;
+
+                    for role_id in delta.roles {
+                        builtin_table_updates.extend(state.pack_role_update(role_id, -1));
+
+                        let role = state
+                            .roles_by_id
+                            .remove(&role_id)
+                            .expect("catalog out of sync");
+                        state.roles_by_name.remove(role.name());
+
+                        state.add_to_audit_log(
+                            oracle_write_ts,
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Drop,
+                            ObjectType::Role,
+                            EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                                id: role.id.to_string(),
+                                name: role.name.clone(),
+                            }),
+                        )?;
+                        info!("drop role {}", role.name());
+                    }
+
+                    // Drop any replicas.
+                    let replicas = delta.replicas.keys().copied().collect();
+                    tx.remove_cluster_replicas(&replicas)?;
+
+                    for (replica_id, cluster_id) in delta.replicas {
+                        let cluster = state.get_cluster(cluster_id);
+                        let replica = cluster.replica(replica_id).expect("Must exist");
+
+                        for process_id in replica.process_status.keys() {
+                            let update = state.pack_cluster_replica_status_update(
                                 cluster_id,
-                                &replica.name,
+                                replica_id,
+                                *process_id,
                                 -1,
-                            ));
-
-                            let details = EventDetails::DropClusterReplicaV1(
-                                mz_audit_log::DropClusterReplicaV1 {
-                                    cluster_id: cluster_id.to_string(),
-                                    cluster_name: cluster.name.clone(),
-                                    replica_id: Some(replica_id.to_string()),
-                                    replica_name: replica.name.clone(),
-                                },
                             );
-                            state.add_to_audit_log(
-                                oracle_write_ts,
-                                session,
-                                tx,
-                                builtin_table_updates,
-                                audit_events,
-                                EventType::Drop,
-                                ObjectType::ClusterReplica,
-                                details,
-                            )?;
-
-                            let cluster = state
-                                .clusters_by_id
-                                .get_mut(&cluster_id)
-                                .expect("can only drop replicas from known instances");
-                            cluster.remove_replica(replica_id);
+                            builtin_table_updates.push(update);
                         }
-                        ObjectId::Item(id) => {
-                            let entry = state.get_entry(&id);
-                            if id.is_system() {
-                                let name = entry.name();
-                                let full_name = state.resolve_full_name(
-                                    name,
-                                    session.map(|session| session.conn_id()),
-                                );
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlyItem(full_name.to_string()),
-                                )));
-                            }
-                            if !entry.item().is_temporary() {
-                                tx.remove_item(id)?;
-                            }
 
-                            if entry.item().is_storage_collection() {
-                                storage_collections_to_drop.insert(id);
-                            }
+                        builtin_table_updates.extend(state.pack_cluster_replica_update(
+                            cluster_id,
+                            &replica.name,
+                            -1,
+                        ));
 
-                            builtin_table_updates.extend(state.pack_item_update(id, -1));
-                            if Self::should_audit_log_item(entry.item()) {
-                                state.add_to_audit_log(
-                                    oracle_write_ts,
-                                    session,
-                                    tx,
-                                    builtin_table_updates,
-                                    audit_events,
-                                    EventType::Drop,
-                                    catalog_type_to_audit_object_type(entry.item().typ()),
-                                    EventDetails::IdFullNameV1(IdFullNameV1 {
-                                        id: id.to_string(),
-                                        name: Self::full_name_detail(&state.resolve_full_name(
-                                            entry.name(),
-                                            session.map(|session| session.conn_id()),
-                                        )),
-                                    }),
-                                )?;
-                            }
-                            state.drop_item(id);
+                        let details = EventDetails::DropClusterReplicaV1(
+                            mz_audit_log::DropClusterReplicaV1 {
+                                cluster_id: cluster_id.to_string(),
+                                cluster_name: cluster.name.clone(),
+                                replica_id: Some(replica_id.to_string()),
+                                replica_name: replica.name.clone(),
+                            },
+                        );
+                        state.add_to_audit_log(
+                            oracle_write_ts,
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Drop,
+                            ObjectType::ClusterReplica,
+                            details,
+                        )?;
+
+                        let cluster = state
+                            .clusters_by_id
+                            .get_mut(&cluster_id)
+                            .expect("can only drop replicas from known instances");
+                        cluster.remove_replica(replica_id);
+                    }
+
+                    // Drop any clusters.
+                    tx.remove_clusters(&delta.clusters)?;
+
+                    for cluster_id in delta.clusters {
+                        let cluster = state.get_cluster(cluster_id);
+
+                        builtin_table_updates.extend(state.pack_cluster_update(&cluster.name, -1));
+                        for id in cluster.log_indexes.values() {
+                            builtin_table_updates.extend(state.pack_item_update(*id, -1));
                         }
+
+                        state.add_to_audit_log(
+                            oracle_write_ts,
+                            session,
+                            tx,
+                            builtin_table_updates,
+                            audit_events,
+                            EventType::Drop,
+                            ObjectType::Cluster,
+                            EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                                id: cluster.id.to_string(),
+                                name: cluster.name.clone(),
+                            }),
+                        )?;
+                        let cluster = state
+                            .clusters_by_id
+                            .remove(&cluster_id)
+                            .expect("can only drop known clusters");
+                        state.clusters_by_name.remove(&cluster.name);
+
+                        for id in cluster.log_indexes.values() {
+                            state.drop_item(*id);
+                        }
+
+                        assert!(
+                            cluster.bound_objects.is_empty() && cluster.replicas().next().is_none(),
+                            "not all items dropped before cluster"
+                        );
                     }
                 }
                 Op::GrantRole {
@@ -2368,6 +2364,125 @@ impl Catalog {
         }
 
         *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
+    }
+}
+
+/// All of the objects that need to be removed in response to an [`Op::DropObjects`].
+///
+/// Note: Previously we used to omit a single `Op::DropObject` for every object
+/// we needed to drop. But removing a batch of objects from a durable Catalog
+/// Transaction is O(n) where `n` is the number of objects that exist in the
+/// Catalog. This resulted in an unacceptable `O(m * n)` performance for a
+/// `DROP ... CASCADE` statement.
+#[derive(Debug, Default)]
+pub(crate) struct ObjectsToDrop {
+    pub comments: BTreeSet<CommentObjectId>,
+    pub databases: BTreeSet<DatabaseId>,
+    pub schemas: BTreeMap<SchemaSpecifier, ResolvedDatabaseSpecifier>,
+    pub clusters: BTreeSet<ClusterId>,
+    pub replicas: BTreeMap<ReplicaId, ClusterId>,
+    pub roles: BTreeSet<RoleId>,
+    pub items: Vec<GlobalId>,
+}
+
+impl ObjectsToDrop {
+    pub fn generate(
+        objects: impl IntoIterator<Item = ObjectId>,
+        state: &CatalogState,
+        session: Option<&ConnMeta>,
+    ) -> Result<Self, AdapterError> {
+        let mut delta = ObjectsToDrop::default();
+
+        for object in objects {
+            delta.add_item(object, state, session)?;
+        }
+
+        Ok(delta)
+    }
+
+    fn add_item(
+        &mut self,
+        object_id: ObjectId,
+        state: &CatalogState,
+        session: Option<&ConnMeta>,
+    ) -> Result<(), AdapterError> {
+        self.comments
+            .insert(state.get_comment_id(object_id.clone()));
+
+        match object_id {
+            ObjectId::Database(database_id) => {
+                let database = &state.database_by_id[&database_id];
+                if database_id.is_system() {
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReadOnlyDatabase(database.name().to_string()),
+                    )));
+                }
+
+                self.databases.insert(database_id);
+            }
+            ObjectId::Schema((database_spec, schema_spec)) => {
+                let schema = state.get_schema(
+                    &database_spec,
+                    &schema_spec,
+                    session
+                        .map(|session| session.conn_id())
+                        .unwrap_or(&SYSTEM_CONN_ID),
+                );
+                let schema_id: SchemaId = schema_spec.into();
+                if schema_id.is_system() {
+                    let name = schema.name();
+                    let full_name = state.resolve_full_schema_name(name);
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReadOnlySystemSchema(full_name.to_string()),
+                    )));
+                }
+
+                self.schemas.insert(schema_spec, database_spec);
+            }
+            ObjectId::Role(role_id) => {
+                let name = state.get_role(&role_id).name().to_string();
+                if role_id.is_system() || role_id.is_predefined() {
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReservedRoleName(name.clone()),
+                    )));
+                }
+                state.ensure_not_reserved_role(&role_id)?;
+
+                self.roles.insert(role_id);
+            }
+            ObjectId::Cluster(cluster_id) => {
+                let cluster = state.get_cluster(cluster_id);
+                let name = &cluster.name;
+                if cluster_id.is_system() {
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReadOnlyCluster(name.clone()),
+                    )));
+                }
+
+                self.clusters.insert(cluster_id);
+            }
+            ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                let cluster = state.get_cluster(cluster_id);
+                let replica = cluster.replica(replica_id).expect("Must exist");
+
+                self.replicas.insert(replica.replica_id, cluster.id);
+            }
+            ObjectId::Item(item_id) => {
+                let entry = state.get_entry(&item_id);
+                if item_id.is_system() {
+                    let name = entry.name();
+                    let full_name =
+                        state.resolve_full_name(name, session.map(|session| session.conn_id()));
+                    return Err(AdapterError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                        full_name.to_string(),
+                    ))));
+                }
+
+                self.items.push(item_id);
+            }
+        }
+
+        Ok(())
     }
 }
 

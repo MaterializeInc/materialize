@@ -28,7 +28,7 @@ use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
     RoleVars,
 };
-use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
+use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::{PersistTxnTablesImpl, StorageError};
@@ -755,6 +755,12 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Removes the database `id` from the transaction.
+    ///
+    /// Returns an error if `id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of databases in the catalog.
+    /// DO NOT call this function in a loop, use [`Self::remove_databases`] instead.
     pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), CatalogError> {
         let prev = self
             .databases
@@ -766,6 +772,37 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Removes all databases in `databases` from the transaction.
+    ///
+    /// Returns an error if any id in `databases` is not found.
+    ///
+    /// NOTE: On error, there still may be some databases removed from the transaction. It
+    /// is up to the caller to either abort the transaction or commit.
+    pub fn remove_databases(
+        &mut self,
+        databases: &BTreeSet<DatabaseId>,
+    ) -> Result<(), CatalogError> {
+        let to_remove = databases
+            .iter()
+            .map(|id| (DatabaseKey { id: *id }, None))
+            .collect();
+        let mut prev = self.databases.set_many(to_remove, self.op_id)?;
+        prev.retain(|_k, val| val.is_none());
+
+        if !prev.is_empty() {
+            let err = prev.keys().map(|k| k.id.to_string()).join(", ");
+            return Err(SqlCatalogError::UnknownDatabase(err).into());
+        }
+
+        Ok(())
+    }
+
+    /// Removes the schema identified by `database_id` and `schema_id` from the transaction.
+    ///
+    /// Returns an error if `(database_id, schema_id)` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of schemas in the catalog.
+    /// DO NOT call this function in a loop, use [`Self::remove_schemas`] instead.
     pub fn remove_schema(
         &mut self,
         database_id: &Option<DatabaseId>,
@@ -785,6 +822,48 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Removes all schemas in `schemas` from the transaction.
+    ///
+    /// Returns an error if any id in `schemas` is not found.
+    ///
+    /// NOTE: On error, there still may be some schemas removed from the transaction. It
+    /// is up to the caller to either abort the transaction or commit.
+    pub fn remove_schemas(
+        &mut self,
+        schemas: &BTreeMap<SchemaId, ResolvedDatabaseSpecifier>,
+    ) -> Result<(), CatalogError> {
+        let to_remove = schemas
+            .iter()
+            .map(|(schema_id, _)| (SchemaKey { id: *schema_id }, None))
+            .collect();
+        let mut prev = self.schemas.set_many(to_remove, self.op_id)?;
+        prev.retain(|_k, v| v.is_none());
+
+        if !prev.is_empty() {
+            let err = prev
+                .keys()
+                .map(|k| {
+                    let db_spec = schemas.get(&k.id).expect("should_exist");
+                    let db_name = match db_spec {
+                        ResolvedDatabaseSpecifier::Id(id) => format!("{id}."),
+                        ResolvedDatabaseSpecifier::Ambient => "".to_string(),
+                    };
+                    format!("{}.{}", db_name, k.id)
+                })
+                .join(", ");
+
+            return Err(SqlCatalogError::UnknownSchema(err).into());
+        }
+
+        Ok(())
+    }
+
+    /// Removes the role `name` from the transaction.
+    ///
+    /// Returns an error if `name` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of roles in the catalog.
+    /// DO NOT call this function in a loop, use [`Self::remove_roles`] instead.
     pub fn remove_role(&mut self, name: &str) -> Result<(), CatalogError> {
         let roles = self.roles.delete(|_k, v| v.name == name, self.op_id);
         assert!(
@@ -800,6 +879,38 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Removes all roles in `roles` from the transaction.
+    ///
+    /// Returns an error if any id in `roles` is not found.
+    ///
+    /// NOTE: On error, there still may be some roles removed from the transaction. It
+    /// is up to the caller to either abort the transaction or commit.
+    pub fn remove_roles(&mut self, roles: &BTreeSet<RoleId>) -> Result<(), CatalogError> {
+        let to_remove = roles
+            .iter()
+            .map(|role_id| (RoleKey { id: *role_id }, None))
+            .collect();
+        let mut prev = self.roles.set_many(to_remove, self.op_id)?;
+        assert!(
+            prev.iter().all(|(k, _)| k.id.is_user()),
+            "cannot delete non-user roles"
+        );
+
+        prev.retain(|_k, v| v.is_none());
+        if !prev.is_empty() {
+            let err = prev.keys().map(|k| k.id.to_string()).join(", ");
+            return Err(SqlCatalogError::UnknownRole(err).into());
+        }
+
+        Ok(())
+    }
+
+    /// Removes the cluster `id` from the transaction.
+    ///
+    /// Returns an error if `id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of clusters in the catalog.
+    /// DO NOT call this function in a loop, use [`Self::remove_clusters`] instead.
     pub fn remove_cluster(&mut self, id: ClusterId) -> Result<(), CatalogError> {
         let deleted = self.clusters.delete(|k, _v| k.id == id, self.op_id);
         if deleted.is_empty() {
@@ -819,6 +930,44 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Removes all cluster in `clusters` from the transaction.
+    ///
+    /// Returns an error if any id in `clusters` is not found.
+    ///
+    /// NOTE: On error, there still may be some clusters removed from the transaction. It is up to
+    /// the caller to either abort the transaction or commit.
+    pub fn remove_clusters(&mut self, clusters: &BTreeSet<ClusterId>) -> Result<(), CatalogError> {
+        let to_remove = clusters
+            .iter()
+            .map(|cluster_id| (ClusterKey { id: *cluster_id }, None))
+            .collect();
+        let mut prev = self.clusters.set_many(to_remove, self.op_id)?;
+
+        prev.retain(|_k, v| v.is_none());
+        if !prev.is_empty() {
+            let err = prev.keys().map(|k| k.id.to_string()).join(", ");
+            return Err(SqlCatalogError::UnknownCluster(err).into());
+        }
+
+        // Cascade delete introspection sources and cluster replicas.
+        //
+        // TODO(benesch): this doesn't seem right. Cascade deletions should
+        // be entirely the domain of the higher catalog layer, not the
+        // storage layer.
+        self.cluster_replicas
+            .delete(|_k, v| clusters.contains(&v.cluster_id), self.op_id);
+        self.introspection_sources
+            .delete(|k, _v| clusters.contains(&k.cluster_id), self.op_id);
+
+        Ok(())
+    }
+
+    /// Removes the cluster replica `id` from the transaction.
+    ///
+    /// Returns an error if `id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of cluster replicas in the catalog.
+    /// DO NOT call this function in a loop, use [`Self::remove_cluster_replicas`] instead.
     pub fn remove_cluster_replica(&mut self, id: ReplicaId) -> Result<(), CatalogError> {
         let deleted = self.cluster_replicas.delete(|k, _v| k.id == id, self.op_id);
         if deleted.len() == 1 {
@@ -827,6 +976,31 @@ impl<'a> Transaction<'a> {
             assert!(deleted.is_empty());
             Err(SqlCatalogError::UnknownClusterReplica(id.to_string()).into())
         }
+    }
+
+    /// Removes all cluster replicas in `replicas` from the transaction.
+    ///
+    /// Returns an error if any id in `replicas` is not found.
+    ///
+    /// NOTE: On error, there still may be some cluster replicas removed from the transaction. It
+    /// is up to the caller to either abort the transaction or commit.
+    pub fn remove_cluster_replicas(
+        &mut self,
+        replicas: &BTreeSet<ReplicaId>,
+    ) -> Result<(), CatalogError> {
+        let to_remove = replicas
+            .iter()
+            .map(|replica_id| (ClusterReplicaKey { id: *replica_id }, None))
+            .collect();
+        let mut prev = self.cluster_replicas.set_many(to_remove, self.op_id)?;
+
+        prev.retain(|_k, v| v.is_none());
+        if !prev.is_empty() {
+            let err = prev.keys().map(|k| k.id.to_string()).join(", ");
+            return Err(SqlCatalogError::UnknownClusterReplica(err).into());
+        }
+
+        Ok(())
     }
 
     /// Removes all storage usage events in `events` from the transaction.
@@ -858,7 +1032,7 @@ impl<'a> Transaction<'a> {
     ///
     /// NOTE: On error, there still may be some items removed from the transaction. It is
     /// up to the caller to either abort the transaction or commit.
-    pub fn remove_items(&mut self, ids: BTreeSet<GlobalId>) -> Result<(), CatalogError> {
+    pub fn remove_items(&mut self, ids: &BTreeSet<GlobalId>) -> Result<(), CatalogError> {
         let n = self
             .items
             .delete(|k, _v| ids.contains(&k.gid), self.op_id)
@@ -1419,11 +1593,11 @@ impl<'a> Transaction<'a> {
 
     pub fn drop_comments(
         &mut self,
-        object_id: CommentObjectId,
+        object_ids: &BTreeSet<CommentObjectId>,
     ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, CatalogError> {
         let deleted = self
             .comments
-            .delete(|k, _v| k.object_id == object_id, self.op_id);
+            .delete(|k, _v| object_ids.contains(&k.object_id), self.op_id);
         let deleted = deleted
             .into_iter()
             .map(|(k, v)| (k.object_id, k.sub_component, v.comment))

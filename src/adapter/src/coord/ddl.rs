@@ -212,89 +212,102 @@ impl Coordinator {
 
         for op in &ops {
             match op {
-                catalog::Op::DropObject(ObjectId::Item(id)) => {
-                    match self.catalog().get_entry(id).item() {
-                        CatalogItem::Table(_) => {
-                            tables_to_drop.push(*id);
-                        }
-                        CatalogItem::Source(source) => {
-                            sources_to_drop.push(*id);
-                            if let DataSourceDesc::Ingestion { ingestion_desc, .. } =
-                                &source.data_source
-                            {
-                                match &ingestion_desc.desc.connection {
-                                    GenericSourceConnection::Postgres(conn) => {
-                                        let conn = conn
-                                            .clone()
-                                            .into_inline_connection(self.catalog().state());
-                                        let config = conn
-                                            .connection
-                                            .config(
-                                                self.secrets_reader(),
-                                                self.controller.storage.config(),
-                                                InTask::No,
-                                            )
-                                            .await
-                                            .map_err(|e| {
-                                                AdapterError::Storage(StorageError::Generic(
-                                                    anyhow::anyhow!(
-                                                        "error creating Postgres client for \
-                                                        dropping acquired slots: {}",
-                                                        e.display_with_causes()
-                                                    ),
-                                                ))
-                                            })?;
-
-                                        replication_slots_to_drop
-                                            .push((config, conn.publication_details.slot.clone()));
+                catalog::Op::DropObjects(object_ids) => {
+                    for object_id in object_ids {
+                        match &object_id {
+                            ObjectId::Item(id) => {
+                                match self.catalog().get_entry(id).item() {
+                                    CatalogItem::Table(_) => {
+                                        tables_to_drop.push(*id);
                                     }
-                                    _ => {}
+                                    CatalogItem::Source(source) => {
+                                        sources_to_drop.push(*id);
+                                        if let DataSourceDesc::Ingestion {
+                                            ingestion_desc, ..
+                                        } = &source.data_source
+                                        {
+                                            match &ingestion_desc.desc.connection {
+                                                GenericSourceConnection::Postgres(conn) => {
+                                                    let conn = conn.clone().into_inline_connection(
+                                                        self.catalog().state(),
+                                                    );
+                                                    let config = conn
+                                                    .connection
+                                                    .config(
+                                                        self.secrets_reader(),
+                                                        self.controller.storage.config(),
+                                                        InTask::No,
+                                                    )
+                                                    .await
+                                                    .map_err(|e| {
+                                                        AdapterError::Storage(StorageError::Generic(
+                                                            anyhow::anyhow!(
+                                                                "error creating Postgres client for \
+                                                                dropping acquired slots: {}",
+                                                                e.display_with_causes()
+                                                            ),
+                                                        ))
+                                                    })?;
+
+                                                    replication_slots_to_drop.push((
+                                                        config,
+                                                        conn.publication_details.slot.clone(),
+                                                    ));
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                    CatalogItem::Sink(Sink { .. }) => {
+                                        storage_sinks_to_drop.push(*id);
+                                    }
+                                    CatalogItem::Index(Index { cluster_id, .. }) => {
+                                        indexes_to_drop.push((*cluster_id, *id));
+                                    }
+                                    CatalogItem::MaterializedView(MaterializedView {
+                                        cluster_id,
+                                        ..
+                                    }) => {
+                                        materialized_views_to_drop.push((*cluster_id, *id));
+                                    }
+                                    CatalogItem::View(_) => views_to_drop.push(*id),
+                                    CatalogItem::Secret(_) => {
+                                        secrets_to_drop.push(*id);
+                                    }
+                                    CatalogItem::Connection(Connection { connection, .. }) => {
+                                        match connection {
+                                        // SSH connections have an associated secret that should be dropped
+                                        mz_storage_types::connections::Connection::Ssh(_) => {
+                                            secrets_to_drop.push(*id);
+                                        }
+                                        // AWS PrivateLink connections have an associated
+                                        // VpcEndpoint K8S resource that should be dropped
+                                        mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
+                                            vpc_endpoints_to_drop.push(*id);
+                                        }
+                                        _ => (),
+                                    }
+                                    }
+                                    _ => (),
                                 }
                             }
-                        }
-                        CatalogItem::Sink(Sink { .. }) => {
-                            storage_sinks_to_drop.push(*id);
-                        }
-                        CatalogItem::Index(Index { cluster_id, .. }) => {
-                            indexes_to_drop.push((*cluster_id, *id));
-                        }
-                        CatalogItem::MaterializedView(MaterializedView { cluster_id, .. }) => {
-                            materialized_views_to_drop.push((*cluster_id, *id));
-                        }
-                        CatalogItem::View(_) => views_to_drop.push(*id),
-                        CatalogItem::Secret(_) => {
-                            secrets_to_drop.push(*id);
-                        }
-                        CatalogItem::Connection(Connection { connection, .. }) => {
-                            match connection {
-                                // SSH connections have an associated secret that should be dropped
-                                mz_storage_types::connections::Connection::Ssh(_) => {
-                                    secrets_to_drop.push(*id);
-                                }
-                                // AWS PrivateLink connections have an associated
-                                // VpcEndpoint K8S resource that should be dropped
-                                mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
-                                    vpc_endpoints_to_drop.push(*id);
-                                }
-                                _ => (),
+                            ObjectId::Cluster(id) => {
+                                clusters_to_drop.push(*id);
+                                log_indexes_to_drop.extend(
+                                    self.catalog()
+                                        .get_cluster(*id)
+                                        .log_indexes
+                                        .values()
+                                        .cloned(),
+                                );
                             }
+                            ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                                // Drop the cluster replica itself.
+                                cluster_replicas_to_drop.push((*cluster_id, *replica_id));
+                            }
+                            _ => (),
                         }
-                        _ => (),
                     }
-                }
-                catalog::Op::DropObject(ObjectId::Cluster(id)) => {
-                    clusters_to_drop.push(*id);
-                    log_indexes_to_drop.extend(
-                        self.catalog()
-                            .get_cluster(*id)
-                            .log_indexes
-                            .values()
-                            .cloned(),
-                    );
-                }
-                catalog::Op::DropObject(ObjectId::ClusterReplica((cluster_id, replica_id))) => {
-                    // Drop the cluster replica itself.
-                    cluster_replicas_to_drop.push((*cluster_id, *replica_id));
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
@@ -915,11 +928,15 @@ impl Coordinator {
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
     pub(crate) async fn drop_temp_items(&mut self, conn_id: &ConnectionId) {
-        let ops = self.catalog_mut().drop_temp_item_ops(conn_id);
-        if ops.is_empty() {
+        let temp_items = self.catalog().state().get_temp_items(conn_id).collect();
+        let all_items = self.catalog().object_dependents(&temp_items, conn_id);
+
+        if all_items.is_empty() {
             return;
         }
-        self.catalog_transact_conn(Some(conn_id), ops)
+        let op = crate::catalog::Op::DropObjects(all_items);
+
+        self.catalog_transact_conn(Some(conn_id), vec![op])
             .await
             .expect("unable to drop temporary items for conn_id");
     }
@@ -1184,15 +1201,19 @@ impl Coordinator {
                         | CatalogItem::Func(_) => {}
                     }
                 }
-                Op::DropObject(id) => match id {
-                    ObjectId::Cluster(_) => {
-                        new_clusters -= 1;
-                    }
-                    ObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                        *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
-                        let cluster = self.catalog().get_cluster_replica(*cluster_id, *replica_id);
-                        if let ReplicaLocation::Managed(location) = &cluster.config.location {
-                            let replica_allocation = self
+                Op::DropObjects(object_ids) => {
+                    for id in object_ids {
+                        match id {
+                            ObjectId::Cluster(_) => {
+                                new_clusters -= 1;
+                            }
+                            ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                                *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
+                                let cluster =
+                                    self.catalog().get_cluster_replica(*cluster_id, *replica_id);
+                                if let ReplicaLocation::Managed(location) = &cluster.config.location
+                                {
+                                    let replica_allocation = self
                                 .catalog()
                                 .cluster_replica_sizes()
                                 .0
@@ -1200,29 +1221,30 @@ impl Coordinator {
                                 .expect(
                                     "location size is validated against the cluster replica sizes",
                                 );
-                            new_credit_consumption_rate -= replica_allocation.credits_per_hour
-                        }
-                    }
-                    ObjectId::Database(_) => {
-                        new_databases -= 1;
-                    }
-                    ObjectId::Schema((database_spec, _)) => {
-                        if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
-                            *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
-                        }
-                    }
-                    ObjectId::Role(_) => {
-                        new_roles -= 1;
-                    }
-                    ObjectId::Item(id) => {
-                        let entry = self.catalog().get_entry(id);
-                        *new_objects_per_schema
-                            .entry((
-                                entry.name().qualifiers.database_spec.clone(),
-                                entry.name().qualifiers.schema_spec.clone(),
-                            ))
-                            .or_insert(0) -= 1;
-                        match entry.item() {
+                                    new_credit_consumption_rate -=
+                                        replica_allocation.credits_per_hour
+                                }
+                            }
+                            ObjectId::Database(_) => {
+                                new_databases -= 1;
+                            }
+                            ObjectId::Schema((database_spec, _)) => {
+                                if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
+                                    *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
+                                }
+                            }
+                            ObjectId::Role(_) => {
+                                new_roles -= 1;
+                            }
+                            ObjectId::Item(id) => {
+                                let entry = self.catalog().get_entry(id);
+                                *new_objects_per_schema
+                                    .entry((
+                                        entry.name().qualifiers.database_spec.clone(),
+                                        entry.name().qualifiers.schema_spec.clone(),
+                                    ))
+                                    .or_insert(0) -= 1;
+                                match entry.item() {
                             CatalogItem::Connection(connection) => match connection.connection {
                                 mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
                                     new_aws_privatelink_connections -= 1;
@@ -1248,8 +1270,10 @@ impl Coordinator {
                             | CatalogItem::Type(_)
                             | CatalogItem::Func(_) => {}
                         }
+                            }
+                        }
                     }
-                },
+                }
                 Op::UpdateItem {
                     name: _,
                     id,

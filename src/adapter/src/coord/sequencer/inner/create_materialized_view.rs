@@ -599,11 +599,9 @@ impl Coordinator {
             create_sql = stmt.to_ast_string_stable();
         }
 
-        let ops = itertools::chain(
-            drop_ids
-                .into_iter()
-                .map(|id| catalog::Op::DropObject(ObjectId::Item(id))),
-            std::iter::once(catalog::Op::CreateItem {
+        let ops = vec![
+            catalog::Op::DropObjects(drop_ids.into_iter().map(ObjectId::Item).collect()),
+            catalog::Op::CreateItem {
                 id: sink_id,
                 name: name.clone(),
                 item: CatalogItem::MaterializedView(MaterializedView {
@@ -619,9 +617,8 @@ impl Coordinator {
                     initial_as_of: Some(initial_as_of.clone()),
                 }),
                 owner_id: *session.current_role_id(),
-            }),
-        )
-        .collect::<Vec<_>>();
+            },
+        ];
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
