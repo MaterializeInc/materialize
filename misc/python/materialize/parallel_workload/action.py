@@ -377,6 +377,7 @@ class CopyToS3Action(Action):
                 "copy has been terminated because underlying relation",
                 "Relation contains unimplemented arrow types",
                 "Cannot encode the following columns/types",
+                "timeout: error trying to connect",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
