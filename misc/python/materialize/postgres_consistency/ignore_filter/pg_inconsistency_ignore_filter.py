@@ -619,24 +619,23 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#26846: eszett in upper")
 
-        if (
-            query_template.matches_any_expression(
-                partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
-                True,
-            )
-            and str(mz_error_details.value) == "time"
-            and str(pg_error_details.value) == "time without time zone"
-        ):
-            return YesIgnore("Different type name for time")
-
         if query_template.matches_any_expression(
             partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
             True,
-        ) and query_template.matches_any_expression(
-            partial(matches_fun_by_name, function_name_in_lower_case="array_agg"),
-            True,
         ):
-            return YesIgnore("#27150: array_agg(pg_typeof(...)) in pg flattens result")
+            if (
+                str(mz_error_details.value) == "time"
+                and str(pg_error_details.value) == "time without time zone"
+            ):
+                return YesIgnore("Different type name for time")
+
+            if query_template.matches_any_expression(
+                partial(matches_fun_by_name, function_name_in_lower_case="array_agg"),
+                True,
+            ):
+                return YesIgnore(
+                    "#27150: array_agg(pg_typeof(...)) in pg flattens result"
+                )
 
         return NoIgnore()
 
