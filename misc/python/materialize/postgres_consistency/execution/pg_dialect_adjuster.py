@@ -25,6 +25,14 @@ class PgSqlDialectAdjuster(SqlDialectAdjuster):
 
         return type_name
 
+    def adjust_enum_value(self, string_value: str) -> str:
+        if string_value == "DOUBLE":
+            return "DOUBLE PRECISION"
+        if string_value == "DOUBLE[]":
+            return "DOUBLE PRECISION[]"
+
+        return string_value
+
     def adjust_value(
         self, string_value: str, internal_type_identifier: str, type_name: str
     ) -> str:
@@ -36,11 +44,5 @@ class PgSqlDialectAdjuster(SqlDialectAdjuster):
             # wrap negative numbers in parentheses
             # see: https://github.com/MaterializeInc/materialize/issues/21993
             string_value = f"({string_value})"
-
-        return string_value
-
-    def adjust_enum_value(self, string_value: str) -> str:
-        if string_value == "DOUBLE":
-            return "DOUBLE PRECISION"
 
         return string_value
