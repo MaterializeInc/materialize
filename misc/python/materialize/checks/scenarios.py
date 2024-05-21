@@ -337,19 +337,3 @@ class TogglePersistRoundtripSpine(SystemVarChange):
                 )
             ],
         )
-
-
-class TogglePersistUseArrowRsLibrary(SystemVarChange):
-    def __init__(self, checks: list[type[Check]], executor: Executor, seed: str | None):
-        super().__init__(
-            checks,
-            executor,
-            seed,
-            [
-                SystemVarChangeEntry(
-                    name="persist_use_arrow_rs_library",
-                    value_for_manipulate_phase_1="read",
-                    value_for_manipulate_phase_2="read_and_write",
-                )
-            ],
-        )

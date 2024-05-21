@@ -14,7 +14,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 use std::{cmp, fmt};
 
-use arrow2::types::Index;
+use ::arrow::datatypes::ArrowNativeType;
 use bytes::Bytes;
 use mz_ore::bytes::MaybeLgBytes;
 use mz_ore::lgbytes::MetricsRegion;
@@ -186,15 +186,18 @@ impl<'a> ColumnarRecordsRef<'a> {
             ));
         }
         if let Some(first_key_offset) = self.key_offsets.first() {
-            if first_key_offset.to_usize() != 0 {
+            if *first_key_offset != 0 {
                 return Err(format!(
                     "expected first key offset to be 0 got {}",
-                    first_key_offset.to_usize()
+                    first_key_offset
                 ));
             }
         }
         if let Some(last_key_offset) = self.key_offsets.last() {
-            if last_key_offset.to_usize() != self.key_data.len() {
+            let last_key_offset = last_key_offset.to_usize().ok_or_else(|| {
+                format!("last_key_offset is not valid usize, {}", last_key_offset)
+            })?;
+            if last_key_offset != self.key_data.len() {
                 return Err(format!(
                     "expected {} bytes of key data got {}",
                     last_key_offset,
@@ -217,15 +220,18 @@ impl<'a> ColumnarRecordsRef<'a> {
             ));
         }
         if let Some(first_val_offset) = self.val_offsets.first() {
-            if first_val_offset.to_usize() != 0 {
+            if *first_val_offset != 0 {
                 return Err(format!(
                     "expected first val offset to be 0 got {}",
-                    first_val_offset.to_usize()
+                    first_val_offset
                 ));
             }
         }
         if let Some(last_val_offset) = self.val_offsets.last() {
-            if last_val_offset.to_usize() != self.val_data.len() {
+            let last_val_offset = last_val_offset.to_usize().ok_or_else(|| {
+                format!("last_val_offset is not valid usize, {}", last_val_offset)
+            })?;
+            if last_val_offset != self.val_data.len() {
                 return Err(format!(
                     "expected {} bytes of val data got {}",
                     last_val_offset,
@@ -283,11 +289,26 @@ impl<'a> ColumnarRecordsRef<'a> {
         if idx >= self.len {
             return None;
         }
+
+        let key_start = self.key_offsets[idx]
+            .to_usize()
+            .expect("key_start to be valid usize");
+        let key_end = self.key_offsets[idx + 1]
+            .to_usize()
+            .expect("key_end to be valid usize");
+
+        let val_start = self.val_offsets[idx]
+            .to_usize()
+            .expect("val_start to be valid usize");
+        let val_end = self.val_offsets[idx + 1]
+            .to_usize()
+            .expect("val_end to be valid usize");
+
         // There used to be `debug_assert_eq!(self.validate(), Ok(()))`, but it
         // resulted in accidentally O(n^2) behavior in debug mode. Instead, we
         // push that responsibility to the ColumnarRecordsRef constructor.
-        let key_range = self.key_offsets[idx].to_usize()..self.key_offsets[idx + 1].to_usize();
-        let val_range = self.val_offsets[idx].to_usize()..self.val_offsets[idx + 1].to_usize();
+        let key_range = key_start..key_end;
+        let val_range = val_start..val_end;
         let key = &self.key_data[key_range];
         let val = &self.val_data[val_range];
         let ts = i64::to_le_bytes(self.timestamps[idx]);

@@ -60,7 +60,7 @@ impl Part {
         let (mut fields, mut arrays) = (Vec::new(), Vec::<Arc<dyn Array>>::new());
 
         {
-            // arrow2 doesn't allow empty struct arrays. To make a future schema
+            // arrow doesn't allow empty struct arrays. To make a future schema
             // migration for <no columns> <-> <one optional column> easier, we
             // model this as a missing column (rather than something like
             // NullArray). This also matches how we'd do the same for nested
@@ -72,7 +72,7 @@ impl Part {
         }
 
         {
-            // arrow2 doesn't allow empty struct arrays. To make a future schema
+            // arrow doesn't allow empty struct arrays. To make a future schema
             // migration for <no columns> <-> <one optional column> easier, we
             // model this as a missing column (rather than something like
             // NullArray). This also matches how we'd do the same for nested

@@ -92,12 +92,6 @@ impl<'a> From<&'a str> for Error {
     }
 }
 
-impl From<arrow2::error::Error> for Error {
-    fn from(e: arrow2::error::Error) -> Self {
-        Error::String(e.to_string())
-    }
-}
-
 impl From<parquet::errors::ParquetError> for Error {
     fn from(e: parquet::errors::ParquetError) -> Self {
         Error::String(e.to_string())

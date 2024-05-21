@@ -15,29 +15,23 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_ore::bytes::SegmentedBytes;
-use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_parquet};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::Blob;
 use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::RustType;
 use prost::Message;
-use serde::Serialize;
 use serde_json::json;
-use tokio::sync::mpsc;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cli::admin::info_log_non_zero_metrics;
 use crate::cli::args::{make_blob, make_consensus, StateArgs, NO_COMMIT, READ_ALL_BUILD_INFO};
 use crate::error::CodecConcreteType;
 use crate::fetch::{Cursor, EncodedPart};
@@ -86,9 +80,6 @@ pub(crate) enum Command {
 
     /// Prints information about blob usage for a shard
     BlobUsage(StateArgs),
-
-    /// Checks if the shard roundtrips through arrow-rs
-    ArrowRsRoundtrip(BlobArgs),
 
     /// Prints each consensus state change as JSON. Output includes the full consensus state
     /// before and after each state transitions:
@@ -168,10 +159,6 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
         Command::UnreferencedBlobs(args) => {
             let unreferenced_blobs = unreferenced_blobs(&args).await?;
             println!("{}", json!(unreferenced_blobs));
-        }
-        Command::ArrowRsRoundtrip(args) => {
-            let report = arrow_rs_roundtrip(&args.blob_uri).await?;
-            println!("{}", json!(report));
         }
         Command::BlobUsage(args) => {
             let () = blob_usage(&args).await?;
@@ -637,227 +624,6 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
     }
 
     Ok(unreferenced_blobs)
-}
-
-/// Roundtrips all blobs through arrow-rs and ensures they match what is currently in S3.
-pub async fn arrow_rs_roundtrip(blob_uri: &str) -> Result<impl Serialize, anyhow::Error> {
-    let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-
-    let metrics_registry = MetricsRegistry::new();
-    let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
-
-    // Updates the 'persist_use_arrow_rs_library' feature flag.
-    let update_feature_flag = |val: &str| {
-        let mut updates = mz_dyncfg::ConfigUpdates::default();
-        let val = mz_dyncfg::ConfigVal::String(val.to_string());
-        updates.add_dynamic("persist_use_arrow_rs_library", val);
-        updates.apply(&cfg.configs);
-    };
-
-    #[derive(Debug, Default, Serialize)]
-    struct BlobReport {
-        num_shards: usize,
-        num_blobs: usize,
-        missing_blobs: usize,
-        num_rows: usize,
-        num_bytes: usize,
-    }
-
-    /// Helper method that lists all shards in a Blob store.
-    async fn list_shards(
-        blob: Arc<dyn Blob + Send + Sync>,
-    ) -> Result<BTreeMap<ShardId, Vec<PartialBatchKey>>, anyhow::Error> {
-        let mut shards = BTreeMap::new();
-        blob.list_keys_and_metadata(&BlobKeyPrefix::All.to_string(), &mut |metadata| {
-            match BlobKey::parse_ids(metadata.key) {
-                Ok((shard, PartialBlobKey::Batch(writer_key, part_id))) => {
-                    let partial_keys = shards.entry(shard).or_insert_with(Vec::new);
-                    partial_keys.push(PartialBatchKey::new(&writer_key, &part_id));
-                }
-                Err(err) => {
-                    tracing::warn!("error parsing blob: {}", err);
-                }
-                _ => (),
-            }
-        })
-        .await?;
-
-        Ok(shards)
-    }
-
-    // Open a handle to S3.
-    let blob = make_blob(&cfg, blob_uri, NO_COMMIT, Arc::clone(&metrics))
-        .await
-        .context("making blob")?;
-    tracing::info!(?blob_uri, "opened blob");
-
-    // List all shards.
-    let shards = mz_ore::retry::Retry::default()
-        .max_tries(5)
-        .retry_async(|state| {
-            let blob = Arc::clone(&blob);
-            if state.i > 0 {
-                tracing::warn!(attempt = state.i + 1, ?blob_uri, "listing shards");
-            }
-            async move { list_shards(Arc::clone(&blob)).await }
-        })
-        .await?;
-
-    let num_parts: usize = shards.values().map(|parts| parts.len()).sum();
-    tracing::info!(
-        ?blob_uri,
-        num_shards = shards.len(),
-        num_parts,
-        "listed blob"
-    );
-
-    let mut report = BlobReport::default();
-    for (shard_id, partial_keys) in shards {
-        // Using a bounded channel prevents us from fetching too many blobs at once.
-        //
-        // 128MiB max blob size * 12 = 1.5GiB.
-        let (blob_tx, mut blob_rx) = mpsc::channel(12);
-
-        // Spawn an individual task to fetch each blob.
-        for partial_key in &partial_keys {
-            let blob = Arc::clone(&blob);
-            let blob_tx = blob_tx.clone();
-            let key = partial_key.complete(&shard_id);
-
-            mz_ore::task::spawn(|| "persistcli-fetch", async move {
-                // Reserving a permit bounds the number of inflight requests.
-                let permit = blob_tx.reserve().await.expect("shutting down");
-                let blob_result = mz_ore::retry::Retry::default()
-                    .retry_async(move |state| {
-                        let blob = Arc::clone(&blob);
-                        let key = key.clone();
-                        if state.i > 0 {
-                            tracing::warn!(attempt = state.i + 1, ?key, "fetching blob");
-                        }
-                        async move { blob.get(&key).await.map(|b| (b, key)) }
-                    })
-                    .await;
-                permit.send(blob_result);
-            });
-        }
-        // Make sure we drop our sender so the below channel will close when
-        // all of our blob fetches have completed.
-        drop(blob_tx);
-
-        // Validate each blob.
-        while let Some(blob_result) = blob_rx.recv().await {
-            let (maybe_blob, key) = blob_result?;
-            let Some(blob) = maybe_blob else {
-                report.missing_blobs += 1;
-                continue;
-            };
-
-            // Decode with both `arrow2` and `arrow-rs`.
-            let arrow2_records: BlobTraceBatchPart<i64> = {
-                update_feature_flag("off");
-                decode_trace_parquet(blob.clone(), &metrics.columnar)?
-            };
-            let arrow_rs_records: BlobTraceBatchPart<i64> = {
-                update_feature_flag("read_and_write");
-                decode_trace_parquet(blob.clone(), &metrics.columnar)?
-            };
-
-            // Make sure the records match.
-            if arrow2_records != arrow_rs_records {
-                anyhow::bail!(
-                    "arrow2 and arrow-rs return different values, {key:?} @ {blob_uri:?}"
-                );
-            }
-
-            report.num_rows += arrow2_records
-                .updates
-                .iter()
-                .map(|r| r.len())
-                .sum::<usize>();
-            report.num_bytes += arrow2_records
-                .updates
-                .iter()
-                .map(|r| r.goodbytes())
-                .sum::<usize>();
-
-            // Now roundtrip through arrow-rs.
-            let mut buf = Vec::new();
-            {
-                update_feature_flag("read_and_write");
-                encode_trace_parquet(&mut buf, &arrow2_records, &metrics.columnar)?;
-            }
-            let buf = SegmentedBytes::from(buf);
-
-            // Read back the arrow-rs encoded blob and make sure they also match.
-            let arrow2_records_rnd: BlobTraceBatchPart<i64> = {
-                update_feature_flag("off");
-                decode_trace_parquet(buf.clone(), &metrics.columnar)?
-            };
-            let arrow_rs_records_rnd: BlobTraceBatchPart<i64> = {
-                update_feature_flag("read_and_write");
-                decode_trace_parquet(buf.clone(), &metrics.columnar)?
-            };
-
-            if arrow2_records_rnd != arrow_rs_records_rnd {
-                anyhow::bail!("failed to roundtrip through arrow-rs, {blob_uri:?}");
-            }
-        }
-
-        report.num_shards += 1;
-        report.num_blobs += partial_keys.len();
-        tracing::info!(
-            ?blob_uri,
-            ?shard_id,
-            num_parts = partial_keys.len(),
-            "completed one check"
-        );
-    }
-
-    // Make sure our metrics indicated we did the right things.
-    let metrics = metrics_registry.gather();
-    let arrow_metrics = metrics
-        .iter()
-        .find(|family| family.get_name() == "mz_persist_arrow_operations")
-        .expect("failed to get metrics");
-    let get_arrow_metric = |library: &str, op: &str| {
-        arrow_metrics
-            .get_metric()
-            .iter()
-            .find(|metric| {
-                let library = metric
-                    .get_label()
-                    .iter()
-                    .find(|label| label.get_name() == "library" && label.get_value() == library)
-                    .is_some();
-                let op = metric
-                    .get_label()
-                    .iter()
-                    .find(|label| label.get_name() == "op" && label.get_value() == op)
-                    .is_some();
-
-                library && op
-            })
-            .map(|metric| {
-                let val = metric.get_counter().get_value();
-                u64::cast_lossy(val)
-            })
-            .expect("failed to find metric")
-    };
-
-    let arrow2_encode = get_arrow_metric("arrow2", "encode");
-    let arrow2_decode = get_arrow_metric("arrow2", "decode");
-    let arrow_rs_encode = get_arrow_metric("arrow_rs", "encode");
-    let arrow_rs_decode = get_arrow_metric("arrow_rs", "decode");
-
-    assert_eq!(arrow2_decode, arrow_rs_decode);
-    assert_eq!(arrow2_encode, 0);
-    assert!(arrow_rs_encode > 0);
-
-    // Also log any "interesting" metrics.
-    info_log_non_zero_metrics(&metrics);
-    tracing::info!(?blob_uri, "DONE");
-
-    Ok(report)
 }
 
 /// Returns information about blob usage for a shard

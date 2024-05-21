@@ -113,7 +113,7 @@ async = [
   "tokio",
   "tracing",
 ]
-bytes_ = ["bytes", "compact_bytes", "smallvec", "smallvec/const_generics"]
+bytes_ = ["bytes", "compact_bytes", "smallvec", "smallvec/const_generics", "region", "tracing_"]
 network = ["async", "bytes", "hyper", "smallvec", "tonic", "tracing"]
 region = ["lgalloc"]
 tracing_ = [
