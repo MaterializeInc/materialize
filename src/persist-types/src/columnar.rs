@@ -11,18 +11,17 @@
 //!
 //! For efficiency/performance, we directly expose the columnar structure of
 //! persist's internal encoding to users during encoding and decoding. For
-//! ergonomics, we wrap the arrow2 crate we use to read and write parquet data.
+//! ergonomics, we wrap the [`arrow`] crate we use to read and write parquet data.
 //!
 //! Some of the requirements that led to this design:
 //! - Support a separation of data and schema because Row is not
 //!   self-describing: e.g. a Datum::Null can be one of many possible column
 //!   types. A RelationDesc is necessary to describe a Row schema.
-//! - Narrow down arrow2::data_types::DataType (the arrow "logical" types) to a
+//! - Narrow down [`arrow::datatypes::DataType`] (the arrow "logical" types) to a
 //!   set we want to support in persist.
-//! - Associate an arrow2::io::parquet::write::Encoding with each of those
-//!   types.
+//! - Associate a [`parquet::basic::Encoding`] with each of those types.
 //! - Do `dyn Any` downcasting of columns once per part, not once per update.
-//! - Unlike arrow2, be precise about whether each column is optional or not.
+//! - Unlike [`arrow`], be precise about whether each column is optional or not.
 //!
 //! The primary presentation of this abstraction is a sealed trait [Data], which
 //! is implemented for the owned version of each type of data that can be stored
@@ -36,7 +35,7 @@
 //! when downcasting the types back.
 //!
 //! Note: The "Data" strategy is roughly how columnation works and the
-//! "DataType" strategy is roughly how arrow2 works. Doing both of them gets us
+//! "DataType" strategy is roughly how [`arrow`] works. Doing both of them gets us
 //! the benefits of both, while the downside is code duplication and cognitive
 //! overhead.
 //!
@@ -180,7 +179,7 @@ pub struct DataType {
 /// type. Because of this, the variants are named after the rust type.
 ///
 /// NB: This intentionally exists as a subset of [arrow::datatypes::DataType].
-/// It also represents slightly different semantics. The arrow2 DataType always
+/// It also represents slightly different semantics. The [`arrow`] DataType always
 /// indicates an optional field, where as these all indicate non-optional fields
 /// (which may be made optional via [DataType]).
 #[derive(Debug, Clone)]

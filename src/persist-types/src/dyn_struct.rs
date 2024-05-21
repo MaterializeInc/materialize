@@ -460,9 +460,9 @@ impl From<DynStructMut> for DynStructCol {
     }
 }
 
-/// A new-type wrapper for an `arrow2` validity column.
+/// A new-type wrapper for an [`arrow`] validity column.
 ///
-/// The `arrow2` crate has an optimization where the validity column can be
+/// The [`arrow`] crate has an optimization where the validity column can be
 /// elided if every value is true. This is the common case for the `Ok` struct
 /// of our `SourceData`, so seems worth opting in to ourselves.
 ///

@@ -237,9 +237,6 @@ openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 
-# To pick up https://github.com/MaterializeInc/arrow2/commit/61e271a3f70bc993f8b7854b73e8fee099803d1c
-arrow2 = { git = "https://github.com/MaterializeInc/arrow2.git", branch = "parquet_binary_next_iter" }
-
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.
 columnation = { git = "https://github.com/MaterializeInc/columnation.git" }

@@ -78,27 +78,13 @@ impl S3BlobMetrics {
 /// Metrics specific to our usage of Arrow and Parquet.
 #[derive(Debug, Clone)]
 pub struct ArrowMetrics {
-    pub(crate) encode_arrow2: IntCounter,
-    pub(crate) decode_arrow2: IntCounter,
-    pub(crate) encode_arrow_rs: IntCounter,
-    pub(crate) decode_arrow_rs: IntCounter,
+    // TODO(parkmycar): Add some metrics here.
 }
 
 impl ArrowMetrics {
     /// Returns a new [ArrowMetrics] instance connected to the given registry.
-    pub fn new(registry: &MetricsRegistry) -> Self {
-        let operations: IntCounterVec = registry.register(metric!(
-            name: "mz_persist_arrow_operations",
-            help: "number of raw Arrow operations",
-            var_labels: ["op", "library"],
-        ));
-
-        ArrowMetrics {
-            encode_arrow2: operations.with_label_values(&["encode", "arrow2"]),
-            decode_arrow2: operations.with_label_values(&["decode", "arrow2"]),
-            encode_arrow_rs: operations.with_label_values(&["encode", "arrow_rs"]),
-            decode_arrow_rs: operations.with_label_values(&["decode", "arrow_rs"]),
-        }
+    pub fn new(_registry: &MetricsRegistry) -> Self {
+        ArrowMetrics {}
     }
 }
 
@@ -106,6 +92,7 @@ impl ArrowMetrics {
 #[derive(Debug)]
 pub struct ColumnarMetrics {
     pub(crate) lgbytes_arrow: LgBytesOpMetrics,
+    #[allow(dead_code)] // TODO(parkmycar): In a follow up PR I'll be adding metrics.
     pub(crate) arrow_metrics: ArrowMetrics,
     // TODO: Having these two here isn't quite the right thing to do, but it
     // saves a LOT of plumbing.

@@ -9,16 +9,11 @@
 
 //! Apache Arrow encodings and utils for persist data
 
-use std::collections::BTreeMap;
-use std::convert;
 use std::sync::Arc;
 
-use arrow::datatypes::{
-    DataType as ArrowRsDataType, Field as ArrowRsField, Schema as ArrowRsSchema,
-};
-use arrow2::array::{Array, BinaryArray, PrimitiveArray};
-use arrow2::chunk::Chunk;
-use arrow2::datatypes::{DataType, Field, Schema};
+use arrow::array::{Array, AsArray, BinaryArray, PrimitiveArray};
+use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
+use arrow::datatypes::{DataType, Field, Schema};
 use mz_dyncfg::Config;
 use mz_ore::bytes::MaybeLgBytes;
 use mz_ore::lgbytes::{LgBytes, MetricsRegion};
@@ -42,88 +37,18 @@ use crate::metrics::ColumnarMetrics;
 /// time after year 2200). Using a i64 might be a pessimization for a
 /// non-realtime mz source with u64 timestamps in the range `(i64::MAX,
 /// u64::MAX]`, but realtime sources are overwhelmingly the common case.
-pub static SCHEMA_ARROW2_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
-    Arc::new(Schema::from(vec![
-        Field {
-            name: "k".into(),
-            data_type: DataType::Binary,
-            is_nullable: false,
-            metadata: BTreeMap::new(),
-        },
-        Field {
-            name: "v".into(),
-            data_type: DataType::Binary,
-            is_nullable: false,
-            metadata: BTreeMap::new(),
-        },
-        Field {
-            name: "t".into(),
-            data_type: DataType::Int64,
-            is_nullable: false,
-            metadata: BTreeMap::new(),
-        },
-        Field {
-            name: "d".into(),
-            data_type: DataType::Int64,
-            is_nullable: false,
-            metadata: BTreeMap::new(),
-        },
-    ]))
-});
-
-/// Duplicate of [`SCHEMA_ARROW2_KVTD`] but with [`arrow`] types.
-pub static SCHEMA_ARROW_RS_KVTD: Lazy<Arc<ArrowRsSchema>> = Lazy::new(|| {
-    let schema = ArrowRsSchema::new(vec![
-        ArrowRsField::new("k", ArrowRsDataType::Binary, false),
-        ArrowRsField::new("v", ArrowRsDataType::Binary, false),
-        ArrowRsField::new("t", ArrowRsDataType::Int64, false),
-        ArrowRsField::new("d", ArrowRsDataType::Int64, false),
+pub static SCHEMA_ARROW_RS_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Binary, false),
+        Field::new("v", DataType::Binary, false),
+        Field::new("t", DataType::Int64, false),
+        Field::new("d", DataType::Int64, false),
     ]);
     Arc::new(schema)
 });
 
-/// Converts a ColumnarRecords into an arrow [(K, V, T, D)] Chunk.
-pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Box<dyn Array>> {
-    Chunk::try_new(vec![
-        convert::identity::<Box<dyn Array>>(Box::new(BinaryArray::new(
-            DataType::Binary,
-            (*x.key_offsets)
-                .as_ref()
-                .to_vec()
-                .try_into()
-                .expect("valid offsets"),
-            x.key_data.as_ref().to_vec().into(),
-            None,
-        ))),
-        Box::new(BinaryArray::new(
-            DataType::Binary,
-            (*x.val_offsets)
-                .as_ref()
-                .to_vec()
-                .try_into()
-                .expect("valid offsets"),
-            x.val_data.as_ref().to_vec().into(),
-            None,
-        )),
-        Box::new(PrimitiveArray::new(
-            DataType::Int64,
-            (*x.timestamps).as_ref().to_vec().into(),
-            None,
-        )),
-        Box::new(PrimitiveArray::new(
-            DataType::Int64,
-            (*x.diffs).as_ref().to_vec().into(),
-            None,
-        )),
-    ])
-    .expect("schema matches fields")
-}
-
 /// Converts a [`ColumnarRecords`] into `(K, V, T, D)` [`arrow`] columns.
-pub fn encode_arrow_batch_kvtd_arrow_rs(x: &ColumnarRecords) -> Vec<arrow::array::ArrayRef> {
-    use arrow::array::{BinaryArray, PrimitiveArray};
-    use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
-
+pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Vec<arrow::array::ArrayRef> {
     let key = BinaryArray::try_new(
         OffsetBuffer::new(ScalarBuffer::from((*x.key_offsets).as_ref().to_vec())),
         Buffer::from_vec(x.key_data.as_ref().to_vec()),
@@ -162,70 +87,13 @@ pub(crate) const ENABLE_ARROW_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
     "A feature flag to enable copying decoded arrow data into lgalloc on non-cc sized clusters.",
 );
 
-/// Converts an [`arrow2`] [(K, V, T, D)] Chunk into a ColumnarRecords.
-pub fn decode_arrow_batch_kvtd(
-    x: &Chunk<Box<dyn Array>>,
-    metrics: &ColumnarMetrics,
-) -> Result<ColumnarRecords, String> {
-    let columns = x.columns();
-    if columns.len() != 4 {
-        return Err(format!("expected 4 fields got {}", columns.len()));
-    }
-    let key_col = &x.columns()[0];
-    let val_col = &x.columns()[1];
-    let ts_col = &x.columns()[2];
-    let diff_col = &x.columns()[3];
-
-    let key_array = key_col
-        .as_any()
-        .downcast_ref::<BinaryArray<i32>>()
-        .ok_or_else(|| "column 0 doesn't match schema".to_string())?
-        .clone();
-    let key_offsets = to_region(key_array.offsets().as_slice(), metrics);
-    let key_data = to_region(key_array.values().as_slice(), metrics);
-    let val_array = val_col
-        .as_any()
-        .downcast_ref::<BinaryArray<i32>>()
-        .ok_or_else(|| "column 1 doesn't match schema".to_string())?
-        .clone();
-    let val_offsets = to_region(val_array.offsets().as_slice(), metrics);
-    let val_data = to_region(val_array.values().as_slice(), metrics);
-    let timestamps = ts_col
-        .as_any()
-        .downcast_ref::<PrimitiveArray<i64>>()
-        .ok_or_else(|| "column 2 doesn't match schema".to_string())?
-        .values();
-    let timestamps = to_region(timestamps.as_slice(), metrics);
-    let diffs = diff_col
-        .as_any()
-        .downcast_ref::<PrimitiveArray<i64>>()
-        .ok_or_else(|| "column 3 doesn't match schema".to_string())?
-        .values();
-    let diffs = to_region(diffs.as_slice(), metrics);
-
-    let len = x.len();
-    let ret = ColumnarRecords {
-        len,
-        key_data: MaybeLgBytes::LgBytes(LgBytes::from(key_data)),
-        key_offsets,
-        val_data: MaybeLgBytes::LgBytes(LgBytes::from(val_data)),
-        val_offsets,
-        timestamps,
-        diffs,
-    };
-    ret.borrow().validate()?;
-    Ok(ret)
-}
-
 /// Converts an [`arrow`] [(K, V, T, D)] [`RecordBatch`] into a [`ColumnarRecords`].
 ///
 /// [`RecordBatch`]: `arrow::array::RecordBatch`
-pub fn decode_arrow_batch_kvtd_arrow_rs(
+pub fn decode_arrow_batch_kvtd(
     batch: &arrow::array::RecordBatch,
     metrics: &ColumnarMetrics,
 ) -> Result<ColumnarRecords, String> {
-    use arrow::array::{Array as ArrowRsArray, AsArray};
-
     if batch.columns().len() != 4 {
         return Err(format!(
             "got wrong number of columns! {}",
