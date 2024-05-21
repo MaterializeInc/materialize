@@ -113,7 +113,7 @@ async = [
   "tokio",
   "tracing",
 ]
-bytes_ = ["bytes", "compact_bytes", "smallvec", "smallvec/const_generics"]
+bytes_ = ["bytes", "compact_bytes", "smallvec", "smallvec/const_generics", "lgalloc"]
 network = ["async", "bytes", "hyper", "smallvec", "tonic", "tracing"]
 region = ["lgalloc"]
 tracing_ = [
@@ -156,6 +156,11 @@ required-features = ["async"]
 [[bench]]
 name = "id_gen"
 harness = false
+
+[[bench]]
+name = "bytes"
+harness = false
+required-features = ["bytes_", "region", "tracing_", "lgalloc", "derivative"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

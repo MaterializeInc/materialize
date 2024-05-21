@@ -48,10 +48,14 @@ use crate::lgbytes::LgBytes;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SegmentedBytes<const N: usize = 1> {
     /// Collection of non-contiguous segments.
-    segments: SmallVec<[MaybeLgBytes; N]>,
+    segments: SmallVec<[(MaybeLgBytes, Padding); N]>,
     /// Pre-computed length of all the segments.
     len: usize,
 }
+
+/// We add [`Padding`] to segments to prevent needing to re-allocate our
+/// collection when creating a [`SegmentedReader`].
+type Padding = usize;
 
 /// A [Bytes] or an [LgBytes].
 ///
@@ -158,7 +162,7 @@ impl<const N: usize> SegmentedBytes<N> {
     /// Consumes `self` returning an [`Iterator`] over all of the non-contiguous segments
     /// that make up this buffer.
     pub fn into_segments(self) -> impl Iterator<Item = MaybeLgBytes> {
-        self.segments.into_iter()
+        self.segments.into_iter().map(|(bytes, _len)| bytes)
     }
 
     /// Copies all of the bytes from `self` returning one contiguous blob.
@@ -169,7 +173,8 @@ impl<const N: usize> SegmentedBytes<N> {
     /// Extends the buffer by one more segment of [`Bytes`]
     pub fn push(&mut self, b: Bytes) {
         self.len += b.len();
-        self.segments.push(MaybeLgBytes::Bytes(b));
+        self.segments
+            .push((MaybeLgBytes::Bytes(b), Default::default()));
     }
 
     /// Consumes `self` returning a type that implements [`io::Read`] and [`io::Seek`].
@@ -179,8 +184,8 @@ impl<const N: usize> SegmentedBytes<N> {
     ///
     /// [`io::Read`]: std::io::Read
     /// [`io::Seek`]: std::io::Seek
-    pub fn reader(self) -> SegmentedReader {
-        SegmentedReader::new(self.segments)
+    pub fn reader(self) -> SegmentedReader<N> {
+        SegmentedReader::new(self)
     }
 }
 
@@ -193,8 +198,8 @@ impl<const N: usize> Buf for SegmentedBytes<N> {
         // Return the first non-empty segment.
         self.segments
             .iter()
-            .filter(|c| !c.is_empty())
-            .map(Buf::chunk)
+            .filter(|(c, _len)| !c.is_empty())
+            .map(|(c, _len)| Buf::chunk(c))
             .next()
             .unwrap_or_default()
     }
@@ -204,7 +209,7 @@ impl<const N: usize> Buf for SegmentedBytes<N> {
         self.len -= cnt;
 
         while cnt > 0 {
-            if let Some(seg) = self.segments.first_mut() {
+            if let Some((seg, _len)) = self.segments.first_mut() {
                 if seg.remaining() > cnt {
                     seg.advance(cnt);
                     // We advanced `cnt` bytes, so no more need to advance.
@@ -254,7 +259,7 @@ impl From<Bytes> for SegmentedBytes {
     fn from(value: Bytes) -> Self {
         let len = value.len();
         let mut segments = SmallVec::new();
-        segments.push(MaybeLgBytes::Bytes(value));
+        segments.push((MaybeLgBytes::Bytes(value), Default::default()));
 
         SegmentedBytes { segments, len }
     }
@@ -264,7 +269,7 @@ impl From<MaybeLgBytes> for SegmentedBytes {
     fn from(value: MaybeLgBytes) -> Self {
         let len = value.len();
         let mut segments = SmallVec::new();
-        segments.push(value);
+        segments.push((value, Default::default()));
 
         SegmentedBytes { segments, len }
     }
@@ -277,7 +282,7 @@ impl From<Vec<MaybeLgBytes>> for SegmentedBytes {
 
         for segment in value {
             len += segment.len();
-            segments.push(segment);
+            segments.push((segment, Default::default()));
         }
 
         SegmentedBytes { segments, len }
@@ -297,7 +302,7 @@ impl<const N: usize> FromIterator<Bytes> for SegmentedBytes<N> {
 
         for segment in iter {
             len += segment.len();
-            segments.push(MaybeLgBytes::Bytes(segment));
+            segments.push((MaybeLgBytes::Bytes(segment), Default::default()));
         }
 
         SegmentedBytes { segments, len }
@@ -311,36 +316,43 @@ impl<const N: usize> FromIterator<Vec<u8>> for SegmentedBytes<N> {
 }
 
 mod internal {
-    use std::collections::BTreeMap;
     use std::io;
-    use std::ops::Bound;
 
-    use crate::bytes::MaybeLgBytes;
+    use smallvec::SmallVec;
+
+    use crate::bytes::{MaybeLgBytes, SegmentedBytes};
     use crate::cast::CastFrom;
 
     /// Provides efficient reading and seeking across a collection of segmented bytes.
     #[derive(Debug)]
-    pub struct SegmentedReader {
-        segments: BTreeMap<usize, MaybeLgBytes>,
+    pub struct SegmentedReader<const N: usize = 1> {
+        segments: SmallVec<[(MaybeLgBytes, usize); N]>,
+        /// Total length of all segments.
         len: usize,
-        pointer: u64,
+        // Overall byte position we're currently pointing at.
+        overall_ptr: usize,
+        /// Current segement that we'd read from.
+        segment_ptr: usize,
     }
 
-    impl SegmentedReader {
-        pub fn new(segments: impl IntoIterator<Item = MaybeLgBytes>) -> Self {
-            let mut map = BTreeMap::new();
-            let mut total_len = 0;
+    impl<const N: usize> SegmentedReader<N> {
+        pub fn new(mut bytes: SegmentedBytes<N>) -> Self {
+            // Filter out empty segments.
+            let mut accum_length = 0;
+            bytes.segments.retain(|(segment, len)| {
+                // Re-adjust our accumlated lengths.
+                accum_length += segment.len();
+                *len = accum_length;
 
-            let non_empty_segments = segments.into_iter().filter(|s| !s.is_empty());
-            for segment in non_empty_segments {
-                total_len += segment.len();
-                map.insert(total_len, segment);
-            }
+                // Only retain non-empty segments.
+                !segment.is_empty()
+            });
 
             SegmentedReader {
-                segments: map,
-                len: total_len,
-                pointer: 0,
+                segments: bytes.segments,
+                len: bytes.len,
+                overall_ptr: 0,
+                segment_ptr: 0,
             }
         }
 
@@ -353,60 +365,61 @@ mod internal {
         ///
         /// Note: It's possible for the current position to be greater than the length,
         /// as [`std::io::Seek`] allows you to seek past the end of the stream.
-        pub fn position(&self) -> u64 {
-            self.pointer
+        pub fn position(&self) -> usize {
+            self.overall_ptr
         }
     }
 
-    impl io::Read for SegmentedReader {
+    impl<const N: usize> io::Read for SegmentedReader<N> {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            let pointer = usize::cast_from(self.pointer);
-
             // We've seeked past the end, return nothing.
-            if pointer > self.len {
+            if self.overall_ptr >= self.len {
                 return Ok(0);
             }
 
-            if let Some((accum_len, segment)) = self
-                .segments
-                .range((Bound::Excluded(&pointer), Bound::Included(&self.len)))
-                .next()
-            {
-                // How many bytes we have left in this segment.
-                let remaining_len = accum_len - pointer;
-                // Position within the segment to being reading.
-                let segment_pos = segment.len() - remaining_len;
+            let (segment, accum_length) = &self.segments[self.segment_ptr];
 
-                // How many bytes we'll read.
-                let len = core::cmp::min(remaining_len, buf.len());
-                // Copy bytes from the current segment into the buffer.
-                let segment_buf = match segment {
-                    MaybeLgBytes::Bytes(x) => x.as_ref(),
-                    MaybeLgBytes::LgBytes(x) => x.as_ref(),
-                };
-                buf[..len].copy_from_slice(&segment_buf[segment_pos..segment_pos + len]);
-                // Advance our pointer.
-                self.pointer += u64::cast_from(len);
+            // How many bytes we have left in this segment.
+            let remaining_len = accum_length.checked_sub(self.overall_ptr).unwrap();
+            // Position within the segment to being reading.
+            let segment_pos = segment.len().checked_sub(remaining_len).unwrap();
 
-                Ok(len)
-            } else {
-                Ok(0)
+            // How many bytes we'll read.
+            let len = core::cmp::min(remaining_len, buf.len());
+            // Copy bytes from the current segment into the buffer.
+            let segment_buf = match segment {
+                MaybeLgBytes::Bytes(x) => x.as_ref(),
+                MaybeLgBytes::LgBytes(x) => x.as_ref(),
+            };
+            buf[..len].copy_from_slice(&segment_buf[segment_pos..segment_pos + len]);
+
+            // Advance our pointers.
+            self.overall_ptr += len;
+
+            // Advance to the next segment if we've reached the end of the current.
+            if self.overall_ptr == *accum_length {
+                self.segment_ptr += 1;
             }
+
+            Ok(len)
         }
     }
 
-    impl io::Seek for SegmentedReader {
+    impl<const N: usize> io::Seek for SegmentedReader<N> {
         fn seek(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
             use io::SeekFrom;
 
-            // Get a base to seek from, and an offset to seek to.
-            let (base, offset) = match pos {
-                SeekFrom::Start(n) => {
-                    self.pointer = n;
-                    return Ok(n);
+            // Get an offset from the start.
+            let maybe_offset = match pos {
+                SeekFrom::Start(n) => Some(usize::cast_from(n)),
+                SeekFrom::End(n) => {
+                    let n = isize::cast_from(n);
+                    self.len().checked_add_signed(n)
                 }
-                SeekFrom::End(n) => (u64::cast_from(self.len), n),
-                SeekFrom::Current(n) => (self.pointer, n),
+                SeekFrom::Current(n) => {
+                    let n = isize::cast_from(n);
+                    self.overall_ptr.checked_add_signed(n)
+                }
             };
 
             // Check for integer overflow, but we don't check our bounds!
@@ -414,19 +427,33 @@ mod internal {
             // The contract for io::Seek denotes that seeking beyond the end
             // of the stream is allowed. If we're beyond the end of the stream
             // then we won't read back any bytes, but it won't be an error.
-            match base.checked_add_signed(offset) {
-                Some(n) => {
-                    self.pointer = n;
-                    Ok(self.pointer)
-                }
-                None => {
-                    let err = io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "Invalid seek to an overflowing position",
-                    );
-                    Err(err)
-                }
+            let offset = maybe_offset.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Invalid seek to an overflowing position",
+                )
+            })?;
+
+            // Special case we want to be fast, seeking back to the beginning.
+            if offset == 0 {
+                self.overall_ptr = 0;
+                self.segment_ptr = 0;
+
+                return Ok(u64::cast_from(offset));
             }
+
+            // Seek through our segments until we get to the correct offset.
+            let result = self
+                .segments
+                .binary_search_by(|(_s, accum_len)| accum_len.cmp(&offset));
+
+            self.segment_ptr = match result {
+                Ok(segment_ptr) => segment_ptr + 1,
+                Err(segment_ptr) => segment_ptr,
+            };
+            self.overall_ptr = offset;
+
+            Ok(u64::cast_from(offset))
         }
     }
 }
@@ -439,6 +466,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::SegmentedBytes;
+    use crate::cast::CastFrom;
 
     #[crate::test]
     fn test_empty() {
@@ -645,6 +673,7 @@ mod tests {
 
         // Seek back to the beginning.
         reader.seek(SeekFrom::Start(0)).unwrap();
+        eprintln!("{reader:?}");
         // Read everything.
         reader.read_exact(&mut buf[..6]).unwrap();
         assert_eq!(buf, [6, 7, 8, 9, 10, 11, 0, 0]);
@@ -761,10 +790,10 @@ mod tests {
         assert_eq!(buf, [5, 6, 5, 6]);
     }
 
-    proptest! {
-        #[crate::test]
-        #[cfg_attr(miri, ignore)] // slow
-        fn proptest_copy_to_bytes(segments: Vec<Vec<u8>>, num_bytes: usize) {
+    #[crate::test]
+    #[cfg_attr(miri, ignore)] // slow
+    fn proptest_copy_to_bytes() {
+        fn test(segments: Vec<Vec<u8>>, num_bytes: usize) {
             let contiguous: Vec<u8> = segments.clone().into_iter().flatten().collect();
             let mut contiguous = Bytes::from(contiguous);
             let mut segmented: SegmentedBytes = segments.into_iter().map(Bytes::from).collect();
@@ -775,12 +804,18 @@ mod tests {
             let copied_c = contiguous.copy_to_bytes(num_bytes);
             let copied_s = segmented.copy_to_bytes(num_bytes);
 
-            prop_assert_eq!(copied_c, copied_s);
+            assert_eq!(copied_c, copied_s);
         }
 
-        #[crate::test]
-        #[cfg_attr(miri, ignore)] // slow
-        fn proptest_read_to_end(segments: Vec<Vec<u8>>) {
+        proptest!(|(segments in any::<Vec<Vec<u8>>>(), num_bytes in any::<usize>())| {
+            test(segments, num_bytes);
+        })
+    }
+
+    #[crate::test]
+    #[cfg_attr(miri, ignore)] // slow
+    fn proptest_read_to_end() {
+        fn test(segments: Vec<Vec<u8>>) {
             let contiguous: Vec<u8> = segments.clone().into_iter().flatten().collect();
             let contiguous = Bytes::from(contiguous);
             let segmented: SegmentedBytes = segments.into_iter().map(Bytes::from).collect();
@@ -796,5 +831,69 @@ mod tests {
 
             assert_eq!(buf_s, buf_s);
         }
+
+        proptest!(|(segments in any::<Vec<Vec<u8>>>())| {
+            test(segments);
+        })
+    }
+
+    #[crate::test]
+    #[cfg_attr(miri, ignore)] // slow
+    fn proptest_read_and_seek() {
+        fn test(segments: Vec<Vec<u8>>, from_start: u64, from_current: i64, from_end: i64) {
+            let contiguous: Vec<u8> = segments.clone().into_iter().flatten().collect();
+            let total_len = contiguous.len();
+            let contiguous = std::io::Cursor::new(&contiguous[..]);
+            let segmented: SegmentedBytes = segments.into_iter().map(Bytes::from).collect();
+
+            let mut reader_c = contiguous;
+            let mut reader_s = segmented.reader();
+
+            let mut buf_c = Vec::new();
+            let mut buf_s = Vec::new();
+
+            // Seek from the start.
+
+            let from_start = from_start % (u64::cast_from(total_len).max(1));
+            reader_c.seek(SeekFrom::Start(from_start)).unwrap();
+            reader_s.seek(SeekFrom::Start(from_start)).unwrap();
+
+            reader_c.read_to_end(&mut buf_c).unwrap();
+            reader_s.read_to_end(&mut buf_s).unwrap();
+
+            assert_eq!(&buf_c, &buf_s);
+            buf_c.clear();
+            buf_s.clear();
+
+            // Seek from the current position.
+
+            let from_current = from_current % i64::try_from(total_len).unwrap().max(1);
+            reader_c.seek(SeekFrom::Current(from_current)).unwrap();
+            reader_s.seek(SeekFrom::Current(from_current)).unwrap();
+
+            reader_c.read_to_end(&mut buf_c).unwrap();
+            reader_s.read_to_end(&mut buf_s).unwrap();
+
+            assert_eq!(&buf_c, &buf_s);
+            buf_c.clear();
+            buf_s.clear();
+
+            // Seek from the end.
+
+            let from_end = from_end % i64::try_from(total_len).unwrap().max(1);
+            reader_c.seek(SeekFrom::End(from_end)).unwrap();
+            reader_s.seek(SeekFrom::End(from_end)).unwrap();
+
+            reader_c.read_to_end(&mut buf_c).unwrap();
+            reader_s.read_to_end(&mut buf_s).unwrap();
+
+            assert_eq!(&buf_c, &buf_s);
+            buf_c.clear();
+            buf_s.clear();
+        }
+
+        proptest!(|(segments in any::<Vec<Vec<u8>>>(), s in any::<u64>(), c in any::<i64>(), e in any::<i64>())| {
+            test(segments, s, c, e);
+        })
     }
 }

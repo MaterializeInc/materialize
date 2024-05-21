@@ -16,10 +16,14 @@
 
 //! Persist command-line utilities
 
+use std::sync::Arc;
+
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_repr::RelationDesc;
 
 pub mod maelstrom;
 pub mod open_loop;
@@ -42,6 +46,7 @@ enum Command {
     OpenLoop(crate::open_loop::Args),
     Inspect(mz_persist_client::cli::inspect::InspectArgs),
     Admin(mz_persist_client::cli::admin::AdminArgs),
+    Bench(mz_persist_client::cli::bench::BenchArgs),
     Service(crate::service::Args),
 }
 
@@ -78,6 +83,13 @@ fn main() {
             runtime.block_on(mz_persist_client::cli::inspect::run(command))
         }
         Command::Admin(command) => runtime.block_on(mz_persist_client::cli::admin::run(command)),
+        Command::Bench(command) => {
+            let key_schema = Arc::new(RelationDesc::empty());
+            let val_schema = Arc::new(UnitSchema);
+            runtime.block_on(mz_persist_client::cli::bench::run::<mz_repr::Row, ()>(
+                command, key_schema, val_schema,
+            ))
+        }
         Command::Service(args) => runtime.block_on(crate::service::run(args)),
     };
 
