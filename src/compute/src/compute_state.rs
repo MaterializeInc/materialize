@@ -7,7 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
@@ -376,9 +376,15 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             );
         };
 
+        let subscribe_copy_ids: BTreeSet<_> = dataflow
+            .subscribe_ids()
+            .chain(dataflow.copy_to_ids())
+            .collect();
+
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
-            let mut collection = CollectionState::new();
+            let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
+            let mut collection = CollectionState::new(is_subscribe_or_copy);
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
                 let logging = CollectionLogging::new(
@@ -528,7 +534,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             self.compute_state.traces.set(id, trace);
 
             // Initialize compute and logging state for the logging index.
-            let mut collection = CollectionState::new();
+            let mut collection = CollectionState::new(false);
 
             let logging =
                 CollectionLogging::new(id, logger.clone(), dataflow_index, std::iter::empty());
@@ -560,8 +566,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let mut new_frontier = Antichain::new();
 
         for (&id, collection) in self.compute_state.collections.iter_mut() {
-            // Subscribe frontiers are reported in `process_subscribes` instead.
-            if collection.is_subscribe() {
+            // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
+            // collections (#16274).
+            if collection.is_subscribe_or_copy {
                 continue;
             }
 
@@ -627,9 +634,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             // The compute protocol requires us to send a `Frontiers` response with empty frontiers
             // when a collection was dropped, unless:
             //  * The frontier was already reported as empty previously, or
-            //  * The collection is a subscribe.
+            //  * The collection is a subscribe or copy-to.
 
-            if collection.is_subscribe() {
+            if collection.is_subscribe_or_copy {
                 continue;
             }
 
@@ -1386,6 +1393,12 @@ impl ReportedFrontier {
 pub struct CollectionState {
     /// Tracks the frontiers that have been reported to the controller.
     reported_frontiers: ReportedFrontiers,
+    /// Whether this collection is a subscribe or copy-to.
+    ///
+    /// The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
+    /// collections, so we need to be able to recognize them. This is something we would like to
+    /// change in the future (#16274).
+    pub is_subscribe_or_copy: bool,
 
     /// A token that should be dropped when this collection is dropped to clean up associated
     /// sink state.
@@ -1403,18 +1416,15 @@ pub struct CollectionState {
 }
 
 impl CollectionState {
-    fn new() -> Self {
+    fn new(is_subscribe_or_copy: bool) -> Self {
         Self {
             reported_frontiers: ReportedFrontiers::new(),
+            is_subscribe_or_copy,
             sink_token: None,
             sink_write_frontier: None,
             input_probes: Default::default(),
             logging: None,
         }
-    }
-
-    fn is_subscribe(&self) -> bool {
-        self.sink_token.is_some() && self.sink_write_frontier.is_none()
     }
 
     /// Return the frontiers that have been reported to the controller.
