@@ -511,6 +511,8 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
+        # Content mismatch ignore entries should only operate on the expression of the column with the mismatch (and on
+        # expressions in other parts of the query like, for example, the WHERE part)!
         col_index = error.col_index
         assert col_index is not None
 
@@ -548,7 +550,8 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
             return False
 
-        if query_template.matches_any_expression(
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
             partial(
                 matches_fun_by_any_name,
                 function_names_in_lower_case=MATH_AGGREGATION_FUNCTIONS,
@@ -557,7 +560,8 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#22003: aggregation function")
 
-        if query_template.matches_any_expression(
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
             partial(
                 matches_fun_by_any_name,
                 function_names_in_lower_case=MATH_FUNCTIONS_WITH_PROBLEMATIC_FLOATING_BEHAVIOR,
@@ -566,18 +570,25 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Different precision causes issues")
 
-        if query_template.matches_any_expression(matches_float_comparison, True):
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index, matches_float_comparison, True
+        ):
             return YesIgnore("Caused by a different precision")
 
-        if query_template.matches_any_expression(matches_mod_with_decimal, True):
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index, matches_mod_with_decimal, True
+        ):
             return YesIgnore("Caused by a different precision")
 
-        if query_template.matches_any_expression(
-            partial(matches_fun_by_name, function_name_in_lower_case="mod"), True
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            partial(matches_fun_by_name, function_name_in_lower_case="mod"),
+            True,
         ):
             return YesIgnore("#22005: mod")
 
-        if query_template.matches_any_expression(
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
             partial(
                 matches_x_or_y,
                 x=partial(matches_fun_by_name, function_name_in_lower_case="date_part"),
@@ -587,18 +598,22 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#23586")
 
-        if query_template.matches_any_expression(
-            matches_math_op_with_large_or_tiny_val, True
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index, matches_math_op_with_large_or_tiny_val, True
         ):
             return YesIgnore("#22266: arithmetic funs with large value")
 
-        if query_template.matches_any_expression(matches_nullif, True):
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index, matches_nullif, True
+        ):
             return YesIgnore("#22267: nullif")
 
-        if query_template.matches_any_expression(
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
             partial(matches_op_by_pattern, pattern="CAST ($ AS $)"),
             True,
-        ) and query_template.matches_any_expression(
+        ) and query_template.matches_specific_select_or_filter_expression(
+            col_index,
             partial(
                 involves_data_type_category, data_type_category=DataTypeCategory.NUMERIC
             ),
@@ -620,12 +635,14 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                     "#24687: different representation of floating-point type"
                 )
 
-        if query_template.matches_any_expression(
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
             lambda expression: expression.has_any_characteristic(
                 {ExpressionCharacteristics.TEXT_WITH_ESZETT},
             ),
             True,
-        ) and query_template.matches_any_expression(
+        ) and query_template.matches_specific_select_or_filter_expression(
+            col_index,
             partial(
                 matches_fun_by_any_name,
                 function_names_in_lower_case={"upper", "initcap"},
@@ -634,17 +651,21 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#26846: eszett in upper")
 
-        if query_template.matches_any_expression(
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
             partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
             True,
         ):
-            if query_template.matches_any_expression(is_any_date_time_expression, True):
+            if query_template.matches_specific_select_or_filter_expression(
+                col_index, is_any_date_time_expression, True
+            ):
                 # "time without time zone" (mz) vs. "time" (pg)
                 # The condition is rather generic because it must also match when a text operation (e.g., upper)
                 # is applied to the string.
                 return YesIgnore("Different type name for time")
 
-            if query_template.matches_any_expression(
+            if query_template.matches_specific_select_or_filter_expression(
+                col_index,
                 partial(matches_fun_by_name, function_name_in_lower_case="array_agg"),
                 True,
             ):
@@ -670,7 +691,8 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 # e.g., round(1::REAL) returns REAL in mz but DOUBLE PRECISION in pg
                 return YesIgnore("mz does not use double when operating on real value")
 
-            if query_template.matches_any_expression(
+            if query_template.matches_specific_select_or_filter_expression(
+                col_index,
                 partial(
                     matches_x_and_y,
                     x=partial(
