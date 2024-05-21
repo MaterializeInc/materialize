@@ -216,3 +216,17 @@ FROM{space_separator}{db_object_name}
             self.where_expression is not None
             and self.where_expression.matches(predicate, check_recursively)
         )
+
+    def matches_specific_select_or_filter_expression(
+        self,
+        select_column_index: int,
+        predicate: Callable[[Expression], bool],
+        check_recursively: bool,
+    ) -> bool:
+        assert 0 <= select_column_index <= self.column_count()
+        return self.select_expressions[select_column_index].matches(
+            predicate, check_recursively
+        ) or (
+            self.where_expression is not None
+            and self.where_expression.matches(predicate, check_recursively)
+        )
