@@ -74,6 +74,38 @@ NAME_OF_NON_EXISTING_FUNCTION_PATTERN = re.compile(
     r"function (\w)\(.*?\) does not exist"
 )
 
+MATH_FUNCTIONS_WITH_PROBLEMATIC_FLOATING_BEHAVIOR = {
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "asinh",
+    "acosh",
+    "atanh",
+    "cot",
+    "cos",
+    "cosh",
+    "log",
+    "log10",
+    "ln",
+    "pow",
+    "radians",
+    "trunc",
+}
+
+MATH_AGGREGATION_FUNCTIONS = {
+    "sum",
+    "avg",
+    "var_pop",
+    "var_samp",
+    "stddev_pop",
+    "stddev_samp",
+}
+
+MATH_ARITHMETIC_OP_PATTERNS = {"$ + $", "$ - $", "$ / $", "$ % $"}
+
 
 class PgInconsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
     """Allows specifying and excluding expressions with known output inconsistencies"""
@@ -467,61 +499,19 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ]
         pg_error_details = details_by_strategy_key[EvaluationStrategyKey.POSTGRES]
 
-        def matches_math_aggregation_fun(expression: Expression) -> bool:
-            return matches_fun_by_any_name(
-                expression,
-                {
-                    "sum",
-                    "avg",
-                    "var_pop",
-                    "var_samp",
-                    "stddev_pop",
-                    "stddev_samp",
-                },
-            )
-
         def matches_math_op_with_large_or_tiny_val(expression: Expression) -> bool:
             if isinstance(expression, ExpressionWithArgs):
                 if isinstance(expression.operation, DbOperation):
-                    return expression.operation.pattern in {
-                        "$ + $",
-                        "$ - $",
-                        "$ / $",
-                        "$ % $",
-                    } and expression.has_any_characteristic(
-                        {
-                            ExpressionCharacteristics.MAX_VALUE,
-                            ExpressionCharacteristics.TINY_VALUE,
-                        }
+                    return (
+                        expression.operation.pattern in MATH_ARITHMETIC_OP_PATTERNS
+                        and expression.has_any_characteristic(
+                            {
+                                ExpressionCharacteristics.MAX_VALUE,
+                                ExpressionCharacteristics.TINY_VALUE,
+                            }
+                        )
                     )
             return False
-
-        def matches_fun_with_problematic_floating_behavior(
-            expression: Expression,
-        ) -> bool:
-            return matches_fun_by_any_name(
-                expression,
-                {
-                    "sin",
-                    "cos",
-                    "tan",
-                    "asin",
-                    "acos",
-                    "atan",
-                    "asinh",
-                    "acosh",
-                    "atanh",
-                    "cot",
-                    "cos",
-                    "cosh",
-                    "log",
-                    "log10",
-                    "ln",
-                    "pow",
-                    "radians",
-                    "trunc",
-                },
-            )
 
         def matches_mod_with_decimal(expression: Expression) -> bool:
             if isinstance(expression, ExpressionWithArgs) and isinstance(
@@ -543,11 +533,21 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
             return False
 
-        if query_template.matches_any_expression(matches_math_aggregation_fun, True):
+        if query_template.matches_any_expression(
+            partial(
+                matches_fun_by_any_name,
+                function_names_in_lower_case=MATH_AGGREGATION_FUNCTIONS,
+            ),
+            True,
+        ):
             return YesIgnore("#22003: aggregation function")
 
         if query_template.matches_any_expression(
-            matches_fun_with_problematic_floating_behavior, True
+            partial(
+                matches_fun_by_any_name,
+                function_names_in_lower_case=MATH_FUNCTIONS_WITH_PROBLEMATIC_FLOATING_BEHAVIOR,
+            ),
+            True,
         ):
             return YesIgnore("Different precision causes issues")
 
