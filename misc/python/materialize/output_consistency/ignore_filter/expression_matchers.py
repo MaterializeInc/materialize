@@ -11,11 +11,18 @@ from collections.abc import Callable
 from functools import partial
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression import (
+    Expression,
+    LeafExpression,
+)
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
+from materialize.output_consistency.input_data.operations.date_time_operations_provider import (
+    DATE_TIME_OPERATION_TYPES,
+)
 from materialize.output_consistency.operation.operation import (
+    DbFunction,
     DbOperation,
     match_function_by_name,
 )
@@ -113,3 +120,40 @@ def is_operation_tagged(expression: Expression, tag: str) -> bool:
         return expression.operation.is_tagged(tag)
 
     return False
+
+
+def is_any_date_time_expression(expression: Expression) -> bool:
+    all_date_time_function_names = {
+        function.function_name_in_lower_case
+        for function in DATE_TIME_OPERATION_TYPES
+        if isinstance(function, DbFunction)
+    }
+    all_date_time_operation_patterns = {
+        operation.pattern
+        for operation in DATE_TIME_OPERATION_TYPES
+        if isinstance(operation, DbOperation)
+    }
+
+    def is_date_time_leaf_expression(expression: Expression) -> bool:
+        return (
+            isinstance(expression, LeafExpression)
+            and expression.data_type.category == DataTypeCategory.DATE_TIME
+        )
+
+    return (
+        expression.matches(is_date_time_leaf_expression, True)
+        or expression.matches(
+            partial(
+                matches_fun_by_any_name,
+                function_names_in_lower_case=all_date_time_function_names,
+            ),
+            True,
+        )
+        or expression.matches(
+            partial(
+                matches_op_by_any_pattern,
+                patterns=all_date_time_operation_patterns,
+            ),
+            True,
+        )
+    )
