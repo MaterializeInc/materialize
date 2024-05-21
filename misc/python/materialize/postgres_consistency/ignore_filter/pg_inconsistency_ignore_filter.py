@@ -25,9 +25,11 @@ from materialize.output_consistency.expression.expression_with_args import (
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     involves_data_type_category,
     is_known_to_involve_exact_data_types,
+    matches_any_expression_arg,
     matches_fun_by_any_name,
     matches_fun_by_name,
     matches_op_by_pattern,
+    matches_x_and_y,
     matches_x_or_y,
 )
 from materialize.output_consistency.ignore_filter.ignore_verdict import (
@@ -662,6 +664,26 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             ):
                 # e.g., round(1::REAL) returns REAL in mz but DOUBLE PRECISION in pg
                 return YesIgnore("mz does not use double when operating on real value")
+
+            if query_template.matches_any_expression(
+                partial(
+                    matches_x_and_y,
+                    x=partial(
+                        matches_fun_by_name, function_name_in_lower_case="pg_typeof"
+                    ),
+                    y=partial(
+                        matches_any_expression_arg,
+                        arg_matcher=partial(
+                            matches_fun_by_name, function_name_in_lower_case="pg_typeof"
+                        ),
+                    ),
+                ),
+                True,
+            ):
+                # nested invocation of pg_typeof
+                return YesIgnore(
+                    "pg_typeof(pg_typeof(...)) returns regtype in pg but text in mz"
+                )
 
         return NoIgnore()
 
