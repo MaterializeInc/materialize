@@ -492,6 +492,16 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if query_template.limit == 0:
             return YesIgnore("#17189: LIMIT 0 does not swallow errors")
 
+        if (
+            query_template.matches_any_expression(
+                partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
+                True,
+            )
+            and "invalid input syntax for type" in mz_error_msg
+        ):
+            # Postgres returns regtype which can be cast to numbers while mz returns a string
+            return YesIgnore("regtype of postgres can be cast")
+
         return NoIgnore()
 
     def _shall_ignore_content_mismatch(
