@@ -20,6 +20,8 @@ class PgSqlDialectAdjuster(SqlDialectAdjuster):
     def adjust_type(self, type_name: str) -> str:
         if type_name == "DOUBLE":
             return "DOUBLE PRECISION"
+        if type_name == "DOUBLE[]":
+            return "DOUBLE PRECISION[]"
 
         return type_name
 

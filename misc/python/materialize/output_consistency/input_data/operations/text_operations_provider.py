@@ -272,7 +272,7 @@ TEXT_OPERATION_TYPES.append(
     DbFunction(
         "parse_ident",
         [TextOperationParam(), BooleanOperationParam(optional=True)],
-        ArrayReturnTypeSpec(DataTypeCategory.TEXT),
+        ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.TEXT),
         relevance=OperationRelevance.LOW,
         is_enabled=False,
     )
@@ -290,7 +290,7 @@ TEXT_OPERATION_TYPES.append(
     DbFunction(
         "regexp_match",
         [TextOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
-        ArrayReturnTypeSpec(DataTypeCategory.TEXT),
+        ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.TEXT),
         tags={TAG_REGEX},
     )
 )
@@ -307,7 +307,7 @@ TEXT_OPERATION_TYPES.append(
     DbFunction(
         "regexp_split_to_array",
         [TextOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
-        ArrayReturnTypeSpec(DataTypeCategory.ARRAY),
+        ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.ARRAY),
         tags={TAG_REGEX},
     )
 )

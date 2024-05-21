@@ -11,6 +11,9 @@ import itertools
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
+from materialize.output_consistency.input_data.values.array_values_provider import (
+    VALUES_PER_ARRAY_DATA_TYPE,
+)
 from materialize.output_consistency.input_data.values.boolean_values_provider import (
     BOOLEAN_DATA_TYPE_WITH_VALUES,
 )
@@ -49,6 +52,7 @@ ALL_DATA_TYPES_WITH_VALUES: list[DataTypeWithValues] = list(
         [JSONB_DATA_TYPE_WITH_VALUES],
         list(VALUES_PER_MAP_DATA_TYPE.values()),
         list(VALUES_PER_LIST_DATA_TYPE.values()),
+        list(VALUES_PER_ARRAY_DATA_TYPE.values()),
         [UUID_DATA_TYPE_WITH_VALUES],
     )
 )

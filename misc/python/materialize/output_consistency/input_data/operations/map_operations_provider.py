@@ -8,8 +8,12 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mz_version import MzVersion
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.input_data.params.any_operation_param import (
     AnyOperationParam,
+)
+from materialize.output_consistency.input_data.params.array_operation_param import (
+    ArrayOperationParam,
 )
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     MAP_FIELD_NAME_PARAM,
@@ -105,21 +109,28 @@ MAP_OPERATION_TYPES.append(
     )
 )
 
-# TODO: array type required
-# MAP_OPERATION_TYPES.append(
-#     DbOperation(
-#         "$ ?& $",
-#         [MapOperationParam(), <str array>],
-#         BooleanReturnTypeSpec(),
-#     )
-# )
-# MAP_OPERATION_TYPES.append(
-#     DbOperation(
-#         "$ ?| $",
-#         [MapOperationParam(), <str array>],
-#         BooleanReturnTypeSpec(),
-#     )
-# )
+MAP_OPERATION_TYPES.append(
+    DbOperation(
+        "$ ?& $",
+        [
+            MapOperationParam(),
+            ArrayOperationParam(value_type_category=DataTypeCategory.TEXT),
+        ],
+        BooleanReturnTypeSpec(),
+        comment="contains all keys",
+    )
+)
+MAP_OPERATION_TYPES.append(
+    DbOperation(
+        "$ ?| $",
+        [
+            MapOperationParam(),
+            ArrayOperationParam(value_type_category=DataTypeCategory.TEXT),
+        ],
+        BooleanReturnTypeSpec(),
+        comment="contains any key",
+    )
+)
 
 # TODO: map_build operates on records
 

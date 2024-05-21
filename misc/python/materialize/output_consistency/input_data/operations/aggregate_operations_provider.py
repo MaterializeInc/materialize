@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.input_data.params.any_operation_param import (
     AnyOperationParam,
 )
@@ -19,9 +18,6 @@ from materialize.output_consistency.input_data.params.number_operation_param imp
 )
 from materialize.output_consistency.input_data.params.text_operation_param import (
     TextOperationParam,
-)
-from materialize.output_consistency.input_data.return_specs.array_return_spec import (
-    ArrayReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
@@ -44,25 +40,6 @@ from materialize.output_consistency.operation.operation import (
 
 AGGREGATE_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
-AGGREGATE_OPERATION_TYPES.append(
-    DbFunction(
-        "array_agg",
-        [AnyOperationParam()],
-        ArrayReturnTypeSpec(DataTypeCategory.DYNAMIC),
-        is_aggregation=True,
-        comment="without ordering",
-    ),
-)
-AGGREGATE_OPERATION_TYPES.append(
-    DbFunctionWithCustomPattern(
-        "array_agg",
-        {1: "array_agg($ ORDER BY row_index)"},
-        [AnyOperationParam()],
-        DynamicReturnTypeSpec(),
-        is_aggregation=True,
-        comment="with ordering",
-    ),
-)
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "avg",

@@ -19,7 +19,7 @@ from materialize.output_consistency.input_data.params.collection_operation_param
 )
 
 
-class ListOperationParam(CollectionOperationParam):
+class ArrayOperationParam(CollectionOperationParam):
     def __init__(
         self,
         optional: bool = False,
@@ -27,18 +27,18 @@ class ListOperationParam(CollectionOperationParam):
         value_type_category: DataTypeCategory | None = None,
     ):
         super().__init__(
-            DataTypeCategory.LIST,
+            DataTypeCategory.ARRAY,
             optional,
             incompatibilities,
             value_type_category=value_type_category,
         )
 
 
-class ListLikeOtherListOperationParam(CollectionLikeOtherCollectionOperationParam):
+class ArrayLikeOtherArrayOperationParam(CollectionLikeOtherCollectionOperationParam):
     def get_collection_type_category(self) -> DataTypeCategory:
-        return DataTypeCategory.LIST
+        return DataTypeCategory.ARRAY
 
 
-class ListOfOtherElementOperationParam(CollectionOfOtherElementOperationParam):
+class ArrayOfOtherElementOperationParam(CollectionOfOtherElementOperationParam):
     def get_collection_type_category(self) -> DataTypeCategory:
-        return DataTypeCategory.LIST
+        return DataTypeCategory.ARRAY
