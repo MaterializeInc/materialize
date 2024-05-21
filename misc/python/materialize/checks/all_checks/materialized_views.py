@@ -23,6 +23,9 @@ class MaterializedViews(Check):
                 > CREATE TABLE materialized_views_table (f1 STRING);
                 > INSERT INTO materialized_views_table SELECT 'T1A' || generate_series FROM generate_series(1,10000);
                 > INSERT INTO materialized_views_table SELECT 'T1B' || generate_series FROM generate_series(1,10000);
+
+                # Regression test for #27167.
+                > CREATE MATERIALIZED VIEW zero_arity AS SELECT;
             """
             )
         )
