@@ -23,10 +23,13 @@ class MaterializedViews(Check):
                 > CREATE TABLE materialized_views_table (f1 STRING);
                 > INSERT INTO materialized_views_table SELECT 'T1A' || generate_series FROM generate_series(1,10000);
                 > INSERT INTO materialized_views_table SELECT 'T1B' || generate_series FROM generate_series(1,10000);
-
+                """
+                + """
                 # Regression test for #27167.
                 > CREATE MATERIALIZED VIEW zero_arity AS SELECT;
-            """
+                """
+                if self.base_version >= MzVersion.parse_mz("v0.100.0")
+                else ""
             )
         )
 
@@ -68,10 +71,13 @@ class MaterializedViews(Check):
                 T1B 10000
                 T2B 10000
                 T3B 10000
-
+                """
+                + """
                 > SELECT 1, * FROM zero_arity
                 1
-           """
+                """
+                if self.base_version >= MzVersion.parse_mz("v0.100.0")
+                else ""
             )
         )
 
