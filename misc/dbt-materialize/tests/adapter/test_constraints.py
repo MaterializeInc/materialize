@@ -174,8 +174,8 @@ class TestContractPseudoTypes:
             "contract_pseudo_types.sql": test_pseudo_types,
         }
 
-    # Pseudotypes in Materialize cannot be cast using the cast() function, so we
+    # Pseudo-types in Materialize cannot be cast using the cast() function, so we
     # special-handle their NULL casting for contract validation.
     # See #17870: https://github.com/MaterializeInc/materialize/issues/17870
-    def test_test_pseudo_types(self, project):
+    def test_pseudo_types(self, project):
         run_dbt(["run", "--models", "contract_pseudo_types"], expect_pass=True)
