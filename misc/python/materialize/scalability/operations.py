@@ -83,6 +83,65 @@ class CreateMvOnTableX(SqlOperationWithSeed):
         return f"CREATE MATERIALIZED VIEW mv_x_{table_seed} AS SELECT * FROM x_{table_seed};"
 
 
+class CreateViewXOnSeries(SqlOperationWithSeed):
+    def __init__(self, materialized: bool, additional_name_suffix: str = "") -> None:
+        super().__init__("view_seed")
+        self.materialized = materialized
+        self.additional_name_suffix = additional_name_suffix
+
+    def sql_statement(self, view_seed: str) -> str:
+        obj_name_prefix = "mv_x_" if self.materialized else "v_x_"
+        return (
+            f"CREATE {'MATERIALIZED ' if self.materialized else ''}VIEW {obj_name_prefix}{view_seed}{self.additional_name_suffix} AS "
+            f"SELECT generate_series(1, 100) AS id, '{obj_name_prefix}{view_seed}{self.additional_name_suffix}' AS view_name"
+        )
+
+
+class CreateViewXOnViewOnSeries(SqlOperationWithSeed):
+    def __init__(
+        self,
+        materialized: bool,
+        additional_name_suffix: str,
+        suffixes_of_other_views_on_series: list[str],
+    ) -> None:
+        super().__init__("view_seed")
+        self.materialized = materialized
+        self.additional_name_suffix = additional_name_suffix
+        self.suffixes_of_other_views_on_series = suffixes_of_other_views_on_series
+
+    def sql_statement(self, view_seed: str) -> str:
+        obj_name_prefix = "mv_x_" if self.materialized else "v_x_"
+        columns = ", ".join(
+            [
+                f"alias{view_suffix}.id AS id{view_suffix}, alias{view_suffix}.view_name AS name{view_suffix}"
+                for view_suffix in self.suffixes_of_other_views_on_series
+            ]
+        )
+        sources = ", ".join(
+            [
+                f"{obj_name_prefix}{view_seed}{view_suffix} AS alias{view_suffix}"
+                for view_suffix in self.suffixes_of_other_views_on_series
+            ]
+        )
+
+        return (
+            f"CREATE {'MATERIALIZED ' if self.materialized else ''}VIEW {obj_name_prefix}{view_seed}{self.additional_name_suffix} AS "
+            f"SELECT {columns} "
+            f"FROM {sources}"
+        )
+
+
+class DropViewX(SqlOperationWithSeed):
+    def __init__(self, materialized: bool, additional_name_suffix: str = "") -> None:
+        super().__init__("view_seed")
+        self.materialized = materialized
+        self.additional_name_suffix = additional_name_suffix
+
+    def sql_statement(self, view_seed: str) -> str:
+        obj_name_prefix = "mv_x_" if self.materialized else "v_x_"
+        return f"DROP {'MATERIALIZED ' if self.materialized else ''}VIEW {obj_name_prefix}{view_seed}{self.additional_name_suffix}"
+
+
 class PopulateTableX(SqlOperationWithSeed):
     def __init__(self) -> None:
         super().__init__("table_seed")
