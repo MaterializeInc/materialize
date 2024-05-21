@@ -45,14 +45,15 @@ use differential_dataflow::difference::Multiply;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::{AsCollection, Collection, Data};
+use differential_dataflow::Data;
 use mz_repr::Diff;
+use timely::container::{CapacityContainerBuilder, PushContainer, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::{Capability, Operator};
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, StreamCore};
 use timely::progress::timestamp::Timestamp;
 use timely::scheduling::Activator;
 use timely::PartialOrder;
@@ -65,13 +66,13 @@ use crate::render::context::ShutdownToken;
 /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
 /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
 /// every value returned by the iterator.
-pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, YFn>(
+pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, YFn, C>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
     shutdown_token: ShutdownToken,
     mut result: L,
     yield_fn: YFn,
-) -> Collection<G, I::Item, Diff>
+) -> StreamCore<G, C>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -83,6 +84,8 @@ where
     I: IntoIterator,
     I::Item: Data,
     YFn: Fn(Instant, usize) -> bool + 'static,
+    C: PushContainer,
+    (I::Item, G::Timestamp, Diff): PushInto<C>,
 {
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
@@ -529,7 +532,6 @@ where
                 }
             },
         )
-        .as_collection()
 }
 
 /// Deferred join computation.
@@ -582,9 +584,9 @@ where
     }
 
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
-    fn work<L, I, YFn>(
+    fn work<L, I, YFn, C>(
         &mut self,
-        output: &mut OutputHandle<T, (D, T, Diff), Tee<T, Vec<(D, T, Diff)>>>,
+        output: &mut OutputHandleCore<T, CapacityContainerBuilder<C>, Tee<T, C>>,
         mut logic: L,
         yield_fn: YFn,
         work: &mut usize,
@@ -592,6 +594,8 @@ where
         I: IntoIterator<Item = D>,
         L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I,
         YFn: Fn(usize) -> bool,
+        C: PushContainer,
+        (D, T, Diff): PushInto<C>,
     {
         let meet = self.capability.time();
 

@@ -118,19 +118,19 @@ impl LinearJoinSpec {
             (Materialize, Some(work_limit), Some(time_limit)) => {
                 let yield_fn =
                     move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
             }
             (Materialize, Some(work_limit), None) => {
                 let yield_fn = move |_start, work| work >= work_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
             }
             (Materialize, None, Some(time_limit)) => {
                 let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
             }
             (Materialize, None, None) => {
                 let yield_fn = |_start, _work| false;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
             }
         }
     }
