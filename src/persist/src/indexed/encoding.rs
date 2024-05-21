@@ -646,7 +646,7 @@ mod tests {
                 sizes(DataGenerator::new(1_000, record_size_bytes, 1_000)),
                 sizes(DataGenerator::new(1_000, record_size_bytes, 1_000 / 100)),
             ),
-            "1/1=1027 25/1=2778 1000/1=73022 1000/100=113067"
+            "1/1=951 25/1=2702 1000/1=72943 1000/100=72943"
         );
     }
 }
