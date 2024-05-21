@@ -57,6 +57,9 @@ pub struct SegmentedBytes<const N: usize = 1> {
 /// collection when creating a [`SegmentedReader`].
 type Padding = usize;
 
+/// Default value used for [`Padding`].
+const PADDING_DEFAULT: usize = 0;
+
 /// A [Bytes] or an [LgBytes].
 ///
 /// TODO: Once we've validated the persist s3 usage of LgBytes, change the CYA
@@ -174,7 +177,7 @@ impl<const N: usize> SegmentedBytes<N> {
     pub fn push(&mut self, b: Bytes) {
         self.len += b.len();
         self.segments
-            .push((MaybeLgBytes::Bytes(b), Default::default()));
+            .push((MaybeLgBytes::Bytes(b), PADDING_DEFAULT));
     }
 
     /// Consumes `self` returning a type that implements [`io::Read`] and [`io::Seek`].
@@ -259,7 +262,7 @@ impl From<Bytes> for SegmentedBytes {
     fn from(value: Bytes) -> Self {
         let len = value.len();
         let mut segments = SmallVec::new();
-        segments.push((MaybeLgBytes::Bytes(value), Default::default()));
+        segments.push((MaybeLgBytes::Bytes(value), PADDING_DEFAULT));
 
         SegmentedBytes { segments, len }
     }
@@ -269,7 +272,7 @@ impl From<MaybeLgBytes> for SegmentedBytes {
     fn from(value: MaybeLgBytes) -> Self {
         let len = value.len();
         let mut segments = SmallVec::new();
-        segments.push((value, Default::default()));
+        segments.push((value, PADDING_DEFAULT));
 
         SegmentedBytes { segments, len }
     }
@@ -282,7 +285,7 @@ impl From<Vec<MaybeLgBytes>> for SegmentedBytes {
 
         for segment in value {
             len += segment.len();
-            segments.push((segment, Default::default()));
+            segments.push((segment, PADDING_DEFAULT));
         }
 
         SegmentedBytes { segments, len }
@@ -302,7 +305,7 @@ impl<const N: usize> FromIterator<Bytes> for SegmentedBytes<N> {
 
         for segment in iter {
             len += segment.len();
-            segments.push((MaybeLgBytes::Bytes(segment), Default::default()));
+            segments.push((MaybeLgBytes::Bytes(segment), PADDING_DEFAULT));
         }
 
         SegmentedBytes { segments, len }
