@@ -145,10 +145,13 @@ def test_disk_label(mz: MaterializeApplication) -> None:
         assert replica_id is not None
 
         node_selectors = get_node_selector(mz, cluster_id, replica_id)
-        assert (
-            node_selectors
-            == f'\'{{"materialize.cloud/disk":"{value}"}} {{"materialize.cloud/disk":"{value}"}}\''
-        ), node_selectors
+        if value == "true":
+            assert (
+                node_selectors
+                == '\'{"materialize.cloud/disk":"true"} {"materialize.cloud/disk":"true"}\''
+            ), node_selectors
+        else:
+            assert node_selectors == "''"
 
         mz.environmentd.sql(f"DROP CLUSTER disk_{value} CASCADE")
 
