@@ -1977,6 +1977,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "current_database" => Scalar {
             params!() => UnmaterializableFunc::CurrentDatabase => String, 861;
         },
+        "current_catalog" => Scalar {
+            params!() => UnmaterializableFunc::CurrentDatabase => String, oid::FUNC_CURRENT_CATALOG;
+        },
         "current_setting" => Scalar {
             params!(String) => Operation::unary(|_ecx, name| {
                 current_settings(name, HirScalarExpr::literal_false())
@@ -1990,6 +1993,12 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "current_user" => Scalar {
             params!() => UnmaterializableFunc::CurrentUser => String, 745;
+        },
+        "current_role" => Scalar {
+            params!() => UnmaterializableFunc::CurrentUser => String, oid::FUNC_CURRENT_ROLE;
+        },
+        "user" => Scalar {
+            params!() => UnmaterializableFunc::CurrentUser => String, oid::FUNC_USER;
         },
         "session_user" => Scalar {
             params!() => UnmaterializableFunc::SessionUser => String, 746;
