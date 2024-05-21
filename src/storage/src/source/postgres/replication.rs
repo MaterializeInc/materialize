@@ -313,10 +313,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let mut stream = pin!(stream.peekable());
 
             let mut errored = HashSet::new();
+            // Instead of downgrading the capability for every transaction we process we only do it
+            // if we're about to yield, which is checked at the bottom of the loop. This avoids
+            // creating excessive progress tracking traffic when there are multiple small
+            // transactions ready to go.
+            let mut data_upper = *data_cap_set[0].time();
             while let Some(event) = stream.as_mut().next().await {
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
-                let mut new_upper = *data_cap_set[0].time();
                 match event {
                     Ok(XLogData(data)) => match data.data() {
                         Begin(begin) => {
@@ -339,17 +343,17 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                     at {commit_lsn}"
                             );
                             assert!(
-                                new_upper <= commit_lsn,
-                                "new_upper={new_upper} tx_lsn={commit_lsn}",
+                                data_upper <= commit_lsn,
+                                "new_upper={data_upper} tx_lsn={commit_lsn}",
                             );
-                            new_upper = commit_lsn + 1;
+                            data_upper = commit_lsn + 1;
                             // We are about to ingest a transaction which has the possiblity to be
                             // very big and we certainly don't want to hold the data in memory. For
                             // this reason we eagerly downgrade the upper capability in order for
                             // the reclocking machinery to mint a binding that includes
                             // this transaction and therefore be able to pass the data of the
                             // transaction through as we stream it.
-                            upper_cap_set.downgrade([&new_upper]);
+                            upper_cap_set.downgrade([&data_upper]);
                             while let Some((oid, event, diff)) = tx.try_next().await? {
                                 if !table_info.contains_key(&oid) {
                                     continue;
@@ -376,7 +380,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                keepalive lsn={}",
                             keepalive.wal_end()
                         );
-                        new_upper = std::cmp::max(new_upper, keepalive.wal_end().into());
+                        data_upper = std::cmp::max(data_upper, keepalive.wal_end().into());
                     }
                     Ok(_) => return Err(TransientError::UnknownReplicationMessage),
                     Err(err) => return Err(err),
@@ -384,8 +388,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                 let will_yield = stream.as_mut().peek().now_or_never().is_none();
                 if will_yield {
-                    upper_cap_set.downgrade([&new_upper]);
-                    data_cap_set.downgrade([&new_upper]);
+                    upper_cap_set.downgrade([&data_upper]);
+                    data_cap_set.downgrade([&data_upper]);
                     rewinds.retain(|_, (_, req)| data_cap_set[0].time() <= &req.snapshot_lsn);
                 }
             }
