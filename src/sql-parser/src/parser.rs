@@ -5825,7 +5825,9 @@ impl<'a> Parser<'a> {
             // to queries.
             Some(Token::Keyword(OF)) => {
                 self.prev_token();
-                self.prev_token();
+                if after_as {
+                    self.prev_token();
+                }
                 Ok(None)
             }
             // Accept any other identifier after `AS` (though many dialects have restrictions on
@@ -6447,8 +6449,9 @@ impl<'a> Parser<'a> {
 
         let projection = match self.peek_token() {
             // An empty target list is permissible to match PostgreSQL, which
-            // permits these for symmetry with zero column tables.
-            Some(Token::Keyword(kw)) if kw.is_reserved() => vec![],
+            // permits these for symmetry with zero column tables. We need
+            // to sniff out `AS` here specially to support `SELECT AS OF ...`.
+            Some(Token::Keyword(kw)) if kw.is_reserved() || kw == AS => vec![],
             Some(Token::Semicolon) | Some(Token::RParen) | None => vec![],
             _ => {
                 let mut projection = vec![];
