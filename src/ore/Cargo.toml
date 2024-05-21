@@ -157,6 +157,11 @@ required-features = ["async"]
 name = "id_gen"
 harness = false
 
+[[bench]]
+name = "bytes"
+harness = false
+required-features = ["bytes_", "region", "tracing_", "lgalloc", "derivative"]
+
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 development = ["tokio-test"]
