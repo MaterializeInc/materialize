@@ -679,7 +679,7 @@ where
                         .get_mut(ingestion_id)
                         .expect("known to exist");
 
-                    match &mut ingestion_state.data_source {
+                    let instance_id = match &mut ingestion_state.data_source {
                         DataSource::Ingestion(ingestion_desc) => {
                             ingestion_desc.source_exports.insert(
                                 id,
@@ -689,7 +689,13 @@ where
                                     )),
                                     storage_metadata: (),
                                 },
-                            )
+                            );
+
+                            // Record the ingestion's cluster ID for the
+                            // ingestion export. This way we always have a
+                            // record of it, even if the ingestion's collection
+                            // description disappears.
+                            ingestion_desc.instance_id
                         }
                         _ => unreachable!(
                             "SourceExport must only refer to primary sources that already exist"
@@ -706,7 +712,7 @@ where
                         derived_since: dependency_since,
                         write_frontier: Antichain::from_elem(Self::Timestamp::minimum()),
                         hold_policy: ReadPolicy::step_back(),
-                        instance_id: None,
+                        instance_id,
                     };
 
                     collection_state.extra_state = CollectionStateExtra::Ingestion(ingestion_state);
@@ -737,7 +743,7 @@ where
                         derived_since: dependency_since,
                         write_frontier: Antichain::from_elem(Self::Timestamp::minimum()),
                         hold_policy: ReadPolicy::step_back(),
-                        instance_id: Some(ingestion_desc.instance_id.clone()),
+                        instance_id: ingestion_desc.instance_id,
                     };
 
                     collection_state.extra_state = CollectionStateExtra::Ingestion(ingestion_state);
@@ -2159,11 +2165,11 @@ where
                 CollectionStateExtra::None => continue,
             };
 
-            let replica_id = ingestion_state
-                .instance_id
-                .as_ref()
-                .and_then(|c| self.replicas.get(c))
+            let replica_id = self
+                .replicas
+                .get(&ingestion_state.instance_id)
                 .and_then(|r| uppers.remove(object_id).map(|uppers| (r.clone(), uppers)));
+
             if let Some((replica_id, upper)) = replica_id {
                 frontiers.insert((*object_id, replica_id), upper);
             }
@@ -2801,11 +2807,7 @@ where
 
                 let (changes, frontier, _cluster_id) =
                     collections_net.entry(key).or_insert_with(|| {
-                        (
-                            ChangeBatch::new(),
-                            Antichain::new(),
-                            ingestion.instance_id.clone(),
-                        )
+                        (ChangeBatch::new(), Antichain::new(), ingestion.instance_id)
                     });
 
                 changes.extend(update.drain());
@@ -2821,14 +2823,9 @@ where
 
                 // Make sure we also send `AllowCompaction` commands for sinks,
                 // which drives updating the sink's `as_of`, among other things.
-                let (changes, frontier, _cluster_id) =
-                    exports_net.entry(key).or_insert_with(|| {
-                        (
-                            ChangeBatch::new(),
-                            Antichain::new(),
-                            Some(export.cluster_id()),
-                        )
-                    });
+                let (changes, frontier, _cluster_id) = exports_net
+                    .entry(key)
+                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new(), export.cluster_id()));
 
                 changes.extend(update.drain());
                 *frontier = staged_read_hold.frontier().to_owned();
@@ -2894,7 +2891,7 @@ where
                 .push(PendingCompactionCommand {
                     id,
                     read_frontier,
-                    cluster_id,
+                    cluster_id: Some(cluster_id),
                 });
         }
     }
@@ -3590,5 +3587,5 @@ struct IngestionState<T: TimelyTimestamp> {
     pub hold_policy: ReadPolicy<T>,
 
     /// The ID of the instance in which the ingestion is running.
-    pub instance_id: Option<StorageInstanceId>,
+    pub instance_id: StorageInstanceId,
 }
