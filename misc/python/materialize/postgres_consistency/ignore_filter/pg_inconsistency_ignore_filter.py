@@ -24,6 +24,7 @@ from materialize.output_consistency.expression.expression_with_args import (
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     involves_data_type_category,
+    is_known_to_involve_exact_data_types,
     matches_fun_by_any_name,
     matches_fun_by_name,
     matches_op_by_pattern,
@@ -60,6 +61,10 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
 )
 from materialize.output_consistency.input_data.return_specs.text_return_spec import (
     TextReturnTypeSpec,
+)
+from materialize.output_consistency.input_data.types.number_types_provider import (
+    DOUBLE_TYPE_IDENTIFIER,
+    REAL_TYPE_IDENTIFIER,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -493,6 +498,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
+        col_index = error.col_index
+        assert col_index is not None
+
         details_by_strategy_key = error.get_details_by_strategy_key()
         mz_error_details = details_by_strategy_key[
             EvaluationStrategyKey.MZ_DATAFLOW_RENDERING
@@ -636,6 +644,24 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 return YesIgnore(
                     "#27150: array_agg(pg_typeof(...)) in pg flattens result"
                 )
+
+            if query_template.matches_specific_select_or_filter_expression(
+                col_index,
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers={REAL_TYPE_IDENTIFIER},
+                ),
+                True,
+            ) and not query_template.matches_specific_select_or_filter_expression(
+                col_index,
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers={DOUBLE_TYPE_IDENTIFIER},
+                ),
+                True,
+            ):
+                # e.g., round(1::REAL) returns REAL in mz but DOUBLE PRECISION in pg
+                return YesIgnore("mz does not use double when operating on real value")
 
         return NoIgnore()
 
