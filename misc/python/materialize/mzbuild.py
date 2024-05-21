@@ -491,7 +491,7 @@ class Image:
         with open(self.path / "mzbuild.yml") as f:
             data = yaml.safe_load(f)
             self.name: str = data.pop("name")
-            self.publish: bool = data.pop("publish", True)
+            self.publish: bool = data.pop("publish", False)
             self.description: str | None = data.pop("description", None)
             self.mainline: bool = data.pop("mainline", True)
             for pre_image in data.pop("pre-image", []):

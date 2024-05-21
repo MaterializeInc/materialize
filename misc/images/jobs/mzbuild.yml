@@ -12,6 +12,5 @@ pre-image:
   - type: cargo-build
     bin:
       - persistcli
-      - mz-catalog-debug
     strip: false
 publish: true
