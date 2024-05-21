@@ -199,18 +199,6 @@ pub struct TransactionResult {
 }
 
 impl Catalog {
-    pub fn drop_temp_item_ops(&mut self, conn_id: &ConnectionId) -> Vec<Op> {
-        let temp_ids = self.state.temporary_schemas[conn_id]
-            .items
-            .values()
-            .cloned()
-            .map(ObjectId::Item)
-            .collect();
-        let drop_ids = self.object_dependents(&temp_ids, conn_id);
-
-        vec![Op::DropObjects(drop_ids)]
-    }
-
     fn should_audit_log_item(item: &CatalogItem) -> bool {
         !item.is_temporary()
     }

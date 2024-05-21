@@ -928,11 +928,15 @@ impl Coordinator {
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
     pub(crate) async fn drop_temp_items(&mut self, conn_id: &ConnectionId) {
-        let ops = self.catalog_mut().drop_temp_item_ops(conn_id);
-        if ops.is_empty() {
+        let temp_items = self.catalog().state().get_temp_items(conn_id).collect();
+        let all_items = self.catalog().object_dependents(&temp_items, conn_id);
+
+        if all_items.is_empty() {
             return;
         }
-        self.catalog_transact_conn(Some(conn_id), ops)
+        let op = crate::catalog::Op::DropObjects(all_items);
+
+        self.catalog_transact_conn(Some(conn_id), vec![op])
             .await
             .expect("unable to drop temporary items for conn_id");
     }
