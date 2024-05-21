@@ -16,11 +16,11 @@
 {% macro materialize__cast(expression, data_type) -%}
     {#-- Handle types that don't support cast(NULL as type) --#}
     {%- if expression.strip().lower() == "null" and data_type.strip().lower() == "map" -%}
-      NULL::map[text=>text]
+      NULL::map[text => text]
     {%- elif expression.strip().lower() == "null" and data_type.strip().lower() == "list" -%}
-      LIST[NULL]
+       NULL::text list
     {%- elif expression.strip().lower() == "null" and data_type.strip().lower() == "record" -%}
-      ROW(NULL)
+      SELECT row() WHERE false
     {%- else -%}
       cast({{ expression }} as {{ data_type }})
     {%- endif -%}
