@@ -24,6 +24,7 @@ from materialize.output_consistency.expression.expression_with_args import (
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     involves_data_type_category,
+    is_any_date_time_expression,
     is_known_to_involve_exact_data_types,
     matches_any_expression_arg,
     matches_fun_by_any_name,
@@ -513,12 +514,6 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         col_index = error.col_index
         assert col_index is not None
 
-        details_by_strategy_key = error.get_details_by_strategy_key()
-        mz_error_details = details_by_strategy_key[
-            EvaluationStrategyKey.MZ_DATAFLOW_RENDERING
-        ]
-        pg_error_details = details_by_strategy_key[EvaluationStrategyKey.POSTGRES]
-
         def matches_math_op_with_large_or_tiny_val(expression: Expression) -> bool:
             if isinstance(expression, ExpressionWithArgs):
                 if isinstance(expression.operation, DbOperation):
@@ -643,10 +638,10 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
             True,
         ):
-            if (
-                str(mz_error_details.value) == "time"
-                and str(pg_error_details.value) == "time without time zone"
-            ):
+            if query_template.matches_any_expression(is_any_date_time_expression, True):
+                # "time without time zone" (mz) vs. "time" (pg)
+                # The condition is rather generic because it must also match when a text operation (e.g., upper)
+                # is applied to the string.
                 return YesIgnore("Different type name for time")
 
             if query_template.matches_any_expression(
