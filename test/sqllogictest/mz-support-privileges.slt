@@ -23,30 +23,35 @@ simple conn=mz_support,user=mz_support
 SELECT * FROM t
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.t"
+DETAIL: The 'mz_support' role needs SELECT privileges on TABLE "materialize.public.t"
 
 # The mz_support user cannot execute `INSERT ...` commands.
 simple conn=mz_support,user=mz_support
 INSERT INTO t VALUES (42)
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.t"
+DETAIL: The 'mz_support' role needs INSERT privileges on TABLE "materialize.public.t"
 
 # The mz_support user cannot execute `UPDATE ...` commands.
 simple conn=mz_support,user=mz_support
 UPDATE t SET a = 5
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.t"
+DETAIL: The 'mz_support' role needs UPDATE privileges on TABLE "materialize.public.t"
 
 # The mz_support user cannot execute `DELETE ...` commands.
 simple conn=mz_support,user=mz_support
 DELETE FROM t WHERE a IS NOT NULL
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.t"
+DETAIL: The 'mz_support' role needs DELETE privileges on TABLE "materialize.public.t"
 
 # The mz_support user cannot execute create objects.
 simple conn=mz_support,user=mz_support
 CREATE VIEW vv AS SELECT 66
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
+DETAIL: The 'mz_support' role needs CREATE privileges on SCHEMA "materialize.public"
 
 # The mz_support user can SHOW public system vars.
 simple conn=mz_support,user=mz_support
@@ -95,11 +100,13 @@ simple conn=mz_support,user=mz_support
 SELECT count(*) >= 0 FROM mz_internal.mz_statement_execution_history
 ----
 db error: ERROR: permission denied for SOURCE "mz_internal.mz_statement_execution_history"
+DETAIL: The 'mz_support' role needs SELECT privileges on SOURCE "mz_internal.mz_statement_execution_history"
 
 simple conn=mz_support,user=mz_support
 SELECT count(*) >= 0 FROM mz_internal.mz_sql_text
 ----
 db error: ERROR: permission denied for SOURCE "mz_internal.mz_sql_text"
+DETAIL: The 'mz_support' role needs SELECT privileges on SOURCE "mz_internal.mz_sql_text"
 
 # It _can_ query the bowdlerized tables
 simple conn=mz_support,user=mz_support
