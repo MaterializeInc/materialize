@@ -261,7 +261,10 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                 // to side step that check so we set our reported codec to
                 // whatever the current state of the Shard is.
                 let expected_opaque = crate::cli::inspect::O::decode(state.opaque.0);
-                *FAKE_OPAQUE_CODEC.lock().expect("lockable") = state.opaque_codec.clone();
+                FAKE_OPAQUE_CODEC
+                    .lock()
+                    .expect("lockable")
+                    .clone_from(&state.opaque_codec);
 
                 let (result, _maintenance) = machine
                     .compare_and_downgrade_since(

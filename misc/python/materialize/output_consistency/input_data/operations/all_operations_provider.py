@@ -12,6 +12,9 @@ import itertools
 from materialize.output_consistency.input_data.operations.aggregate_operations_provider import (
     AGGREGATE_OPERATION_TYPES,
 )
+from materialize.output_consistency.input_data.operations.array_operations_provider import (
+    ARRAY_OPERATION_TYPES,
+)
 from materialize.output_consistency.input_data.operations.boolean_operations_provider import (
     BOOLEAN_OPERATION_TYPES,
 )
@@ -32,6 +35,9 @@ from materialize.output_consistency.input_data.operations.generic_operations_pro
 )
 from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
     JSONB_OPERATION_TYPES,
+)
+from materialize.output_consistency.input_data.operations.list_operations_provider import (
+    LIST_OPERATION_TYPES,
 )
 from materialize.output_consistency.input_data.operations.map_operations_provider import (
     MAP_OPERATION_TYPES,
@@ -71,6 +77,8 @@ ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
         CRYPTO_OPERATION_TYPES,
         JSONB_OPERATION_TYPES,
         MAP_OPERATION_TYPES,
+        LIST_OPERATION_TYPES,
+        ARRAY_OPERATION_TYPES,
         UUID_OPERATION_TYPES,
         SPECIAL_OPERATION_TYPES,
     )

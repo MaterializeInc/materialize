@@ -168,6 +168,13 @@ SELECT LIMIT 1
 ----
 SELECT LIMIT 1
 
+parse-statement
+SELECT AS OF 0
+----
+SELECT AS OF 0
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(At(Value(Number("0")))) })
+
 parse-statement roundtrip
 SELECT (1, 2)
 ----

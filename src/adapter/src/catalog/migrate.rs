@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use futures::future::BoxFuture;
+use maplit::btreeset;
 use mz_catalog::durable::{Item, Transaction};
 use mz_catalog::memory::objects::{StateUpdate, StateUpdateKind};
 use mz_ore::collections::CollectionExt;
@@ -222,7 +223,7 @@ fn assign_new_user_global_ids(
 
     // Before updating the item by inserting its new state, ensure we remove its
     // old state.
-    tx.remove_items(news_new_id_set.clone())?;
+    tx.remove_items(&news_new_id_set)?;
 
     // Delete the storage metadata alongside removing the item––this will return
     // the metadata for the deleted entries, which we'll re-associate with the
@@ -327,7 +328,7 @@ fn assign_new_user_global_ids(
                 }
             };
 
-            let comments = tx.drop_comments(curr_id)?;
+            let comments = tx.drop_comments(&btreeset! { curr_id })?;
             for (_id, subcomponent, comment) in comments {
                 tx.update_comment(comment_id, subcomponent, Some(comment))?;
             }

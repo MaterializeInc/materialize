@@ -13,14 +13,14 @@ from materialize.output_consistency.input_data.return_specs.collection_return_sp
 )
 
 
-class ArrayReturnTypeSpec(CollectionReturnTypeSpec):
+class ListReturnTypeSpec(CollectionReturnTypeSpec):
     def __init__(
         self,
         param_index_of_map_value_type: int = 0,
-        array_value_type_category: DataTypeCategory = DataTypeCategory.DYNAMIC,
+        list_value_type_category: DataTypeCategory = DataTypeCategory.DYNAMIC,
     ):
         super().__init__(
-            DataTypeCategory.ARRAY,
+            DataTypeCategory.LIST,
             param_index_of_map_value_type,
-            array_value_type_category,
+            list_value_type_category,
         )

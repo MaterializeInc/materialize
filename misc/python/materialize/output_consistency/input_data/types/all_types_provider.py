@@ -9,6 +9,9 @@
 import itertools
 
 from materialize.output_consistency.data_type.data_type import DataType
+from materialize.output_consistency.input_data.types.array_type_provider import (
+    ARRAY_DATA_TYPES,
+)
 from materialize.output_consistency.input_data.types.boolean_type_provider import (
     BOOLEAN_DATA_TYPE,
 )
@@ -20,6 +23,9 @@ from materialize.output_consistency.input_data.types.date_time_types_provider im
 )
 from materialize.output_consistency.input_data.types.jsonb_type_provider import (
     JSONB_DATA_TYPE,
+)
+from materialize.output_consistency.input_data.types.list_type_provider import (
+    LIST_DATA_TYPES,
 )
 from materialize.output_consistency.input_data.types.map_type_provider import (
     MAP_DATA_TYPES,
@@ -43,6 +49,8 @@ DATA_TYPES: list[DataType] = list(
         [BYTEA_DATA_TYPE],
         [JSONB_DATA_TYPE],
         MAP_DATA_TYPES,
+        LIST_DATA_TYPES,
+        ARRAY_DATA_TYPES,
         [UUID_DATA_TYPE],
     )
 )

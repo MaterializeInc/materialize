@@ -1636,15 +1636,20 @@ impl CommentsMap {
     /// relation will also drop all of the comments on any columns.
     pub fn drop_comments(
         &mut self,
-        object_id: CommentObjectId,
+        object_ids: &BTreeSet<CommentObjectId>,
     ) -> Vec<(CommentObjectId, Option<usize>, String)> {
-        match self.map.remove(&object_id) {
-            None => Vec::new(),
-            Some(comments) => comments
-                .into_iter()
-                .map(|(sub_comp, comment)| (object_id, sub_comp, comment))
-                .collect(),
+        let mut removed_comments = Vec::new();
+
+        for object_id in object_ids {
+            if let Some(comments) = self.map.remove(object_id) {
+                let removed = comments
+                    .into_iter()
+                    .map(|(sub_comp, comment)| (object_id.clone(), sub_comp, comment));
+                removed_comments.extend(removed);
+            }
         }
+
+        removed_comments
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (CommentObjectId, Option<usize>, &str)> {

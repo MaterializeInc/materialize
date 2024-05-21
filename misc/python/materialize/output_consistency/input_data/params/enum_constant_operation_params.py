@@ -112,6 +112,14 @@ UUID_VALUE_PARAM = EnumConstantOperationParam(
     add_invalid_value=True,
 )
 
+COLLECTION_INDEX_PARAM = EnumConstantOperationParam(
+    ["0", "1", "2", "8"], add_quotes=False, add_invalid_value=False
+)
+
+COLLECTION_INDEX_PARAM_OPT = EnumConstantOperationParam(
+    ["0", "1", "2", "8"], add_quotes=False, add_invalid_value=False, optional=True
+)
+
 
 def all_data_types_enum_constant_operation_param(
     must_be_pg_compatible: bool,

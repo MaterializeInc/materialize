@@ -756,15 +756,13 @@ impl Coordinator {
             self.ensure_valid_azs(new_availability_zones.iter())?;
 
             // tear down all replicas, create new ones
-            for name in (0..*replication_factor).map(managed_cluster_replica_name) {
-                let replica = cluster.replica_id(&name);
-                if let Some(replica) = replica {
-                    ops.push(catalog::Op::DropObject(ObjectId::ClusterReplica((
-                        cluster.id(),
-                        replica,
-                    ))))
-                }
-            }
+            let replica_ids = (0..*replication_factor)
+                .map(managed_cluster_replica_name)
+                .filter_map(|name| cluster.replica_id(&name))
+                .map(|replica_id| ObjectId::ClusterReplica((cluster.id(), replica_id)))
+                .collect();
+            ops.push(catalog::Op::DropObjects(replica_ids));
+
             for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
                 let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
                 self.create_managed_cluster_replica_op(
@@ -782,17 +780,12 @@ impl Coordinator {
             }
         } else if new_replication_factor < replication_factor {
             // Adjust size down
-            for name in
-                (*new_replication_factor..*replication_factor).map(managed_cluster_replica_name)
-            {
-                let replica = cluster.replica_id(&name);
-                if let Some(replica) = replica {
-                    ops.push(catalog::Op::DropObject(ObjectId::ClusterReplica((
-                        cluster.id(),
-                        replica,
-                    ))))
-                }
-            }
+            let replica_ids = (*new_replication_factor..*replication_factor)
+                .map(managed_cluster_replica_name)
+                .filter_map(|name| cluster.replica_id(&name))
+                .map(|replica_id| ObjectId::ClusterReplica((cluster.id(), replica_id)))
+                .collect();
+            ops.push(catalog::Op::DropObjects(replica_ids));
         } else if new_replication_factor > replication_factor {
             // Adjust size up
             for name in

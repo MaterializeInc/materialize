@@ -598,6 +598,14 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
     }
 
+    pub fn get_temp_items(&self, conn: &ConnectionId) -> impl Iterator<Item = ObjectId> + '_ {
+        let schema = self
+            .temporary_schemas
+            .get(conn)
+            .unwrap_or_else(|| panic!("catalog out of sync, missing temporary schema for {conn}"));
+        schema.items.values().copied().map(ObjectId::Item)
+    }
+
     /// Gets a type named `name` from exactly one of the system schemas.
     ///
     /// # Panics

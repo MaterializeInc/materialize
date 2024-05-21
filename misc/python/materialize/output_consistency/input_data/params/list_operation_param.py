@@ -19,7 +19,7 @@ from materialize.output_consistency.input_data.params.collection_operation_param
 )
 
 
-class MapOperationParam(CollectionOperationParam):
+class ListOperationParam(CollectionOperationParam):
     def __init__(
         self,
         optional: bool = False,
@@ -27,18 +27,18 @@ class MapOperationParam(CollectionOperationParam):
         value_type_category: DataTypeCategory | None = None,
     ):
         super().__init__(
-            DataTypeCategory.MAP,
+            DataTypeCategory.LIST,
             optional,
             incompatibilities,
             value_type_category=value_type_category,
         )
 
 
-class MapLikeOtherMapOperationParam(CollectionLikeOtherCollectionOperationParam):
+class ListLikeOtherListOperationParam(CollectionLikeOtherCollectionOperationParam):
     def get_collection_type_category(self) -> DataTypeCategory:
-        return DataTypeCategory.MAP
+        return DataTypeCategory.LIST
 
 
-class MapOfOtherElementOperationParam(CollectionOfOtherElementOperationParam):
+class ListOfOtherElementOperationParam(CollectionOfOtherElementOperationParam):
     def get_collection_type_category(self) -> DataTypeCategory:
-        return DataTypeCategory.MAP
+        return DataTypeCategory.LIST
