@@ -47,7 +47,7 @@ use crate::lgbytes::LgBytes;
 /// `Bytes` segment, we avoid one layer of indirection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SegmentedBytes<const N: usize = 1> {
-    /// Collection of non-contiguous segments.
+    /// Collection of non-contiguous segments, each segment is guaranteed to be non-empty.
     segments: SmallVec<[(MaybeLgBytes, Padding); N]>,
     /// Pre-computed length of all the segments.
     len: usize,
@@ -86,6 +86,13 @@ impl AsRef<[u8]> for MaybeLgBytes {
             MaybeLgBytes::Bytes(x) => x.as_ref(),
             MaybeLgBytes::LgBytes(x) => x.as_ref(),
         }
+    }
+}
+
+impl From<Bytes> for MaybeLgBytes {
+    #[inline]
+    fn from(value: Bytes) -> Self {
+        MaybeLgBytes::Bytes(value)
     }
 }
 
@@ -152,6 +159,14 @@ impl SegmentedBytes {
 }
 
 impl<const N: usize> SegmentedBytes<N> {
+    /// Creates a new empty [`SegmentedBytes`] with space for `capacity` **segments**.
+    pub fn with_capacity(capacity: usize) -> SegmentedBytes<N> {
+        SegmentedBytes {
+            segments: SmallVec::with_capacity(capacity),
+            len: 0,
+        }
+    }
+
     /// Returns the number of bytes contained in this [`SegmentedBytes`].
     pub fn len(&self) -> usize {
         self.len
@@ -173,11 +188,16 @@ impl<const N: usize> SegmentedBytes<N> {
         self.copy_to_bytes(self.remaining()).into()
     }
 
-    /// Extends the buffer by one more segment of [`Bytes`]
-    pub fn push(&mut self, b: Bytes) {
-        self.len += b.len();
-        self.segments
-            .push((MaybeLgBytes::Bytes(b), PADDING_DEFAULT));
+    /// Extends the buffer by one more segment of [`MaybeLgBytes`].
+    ///
+    /// If the provided [`MaybeLgBytes`] is empty, we skip appending it.
+    #[inline]
+    pub fn push<B: Into<MaybeLgBytes>>(&mut self, b: B) {
+        let b: MaybeLgBytes = b.into();
+        if !b.is_empty() {
+            self.len += b.len();
+            self.segments.push((b, PADDING_DEFAULT));
+        }
     }
 
     /// Consumes `self` returning a type that implements [`io::Read`] and [`io::Seek`].
@@ -260,55 +280,44 @@ impl parquet::file::reader::ChunkReader for SegmentedBytes {
 
 impl From<Bytes> for SegmentedBytes {
     fn from(value: Bytes) -> Self {
-        let len = value.len();
-        let mut segments = SmallVec::new();
-        segments.push((MaybeLgBytes::Bytes(value), PADDING_DEFAULT));
-
-        SegmentedBytes { segments, len }
+        let mut s = SegmentedBytes::default();
+        s.push(value);
+        s
     }
 }
 
 impl From<MaybeLgBytes> for SegmentedBytes {
     fn from(value: MaybeLgBytes) -> Self {
-        let len = value.len();
-        let mut segments = SmallVec::new();
-        segments.push((value, PADDING_DEFAULT));
-
-        SegmentedBytes { segments, len }
-    }
-}
-
-impl From<Vec<MaybeLgBytes>> for SegmentedBytes {
-    fn from(value: Vec<MaybeLgBytes>) -> Self {
-        let mut len = 0;
-        let mut segments = SmallVec::with_capacity(value.len());
-
-        for segment in value {
-            len += segment.len();
-            segments.push((segment, PADDING_DEFAULT));
-        }
-
-        SegmentedBytes { segments, len }
+        let mut s = SegmentedBytes::default();
+        s.push(value);
+        s
     }
 }
 
 impl From<Vec<u8>> for SegmentedBytes {
     fn from(value: Vec<u8>) -> Self {
-        SegmentedBytes::from(MaybeLgBytes::Bytes(Bytes::from(value)))
+        let b = Bytes::from(value);
+        SegmentedBytes::from(b)
+    }
+}
+
+impl From<Vec<MaybeLgBytes>> for SegmentedBytes {
+    fn from(value: Vec<MaybeLgBytes>) -> Self {
+        let mut s = SegmentedBytes::with_capacity(value.len());
+        for segment in value {
+            s.push(segment);
+        }
+        s
     }
 }
 
 impl<const N: usize> FromIterator<Bytes> for SegmentedBytes<N> {
     fn from_iter<T: IntoIterator<Item = Bytes>>(iter: T) -> Self {
-        let mut len = 0;
-        let mut segments = SmallVec::new();
-
+        let mut s = SegmentedBytes::new();
         for segment in iter {
-            len += segment.len();
-            segments.push((MaybeLgBytes::Bytes(segment), PADDING_DEFAULT));
+            s.push(segment);
         }
-
-        SegmentedBytes { segments, len }
+        s
     }
 }
 
@@ -340,16 +349,15 @@ mod internal {
 
     impl<const N: usize> SegmentedReader<N> {
         pub fn new(mut bytes: SegmentedBytes<N>) -> Self {
-            // Filter out empty segments.
+            // Re-adjust our accumlated lengths.
+            //
+            // Note: `SegmentedBytes` could track the accumulated lengths, but
+            // it's complicated by the impl of `Buf::advance`.
             let mut accum_length = 0;
-            bytes.segments.retain(|(segment, len)| {
-                // Re-adjust our accumlated lengths.
+            for (segment, len) in &mut bytes.segments {
                 accum_length += segment.len();
                 *len = accum_length;
-
-                // Only retain non-empty segments.
-                !segment.is_empty()
-            });
+            }
 
             SegmentedReader {
                 segments: bytes.segments,
@@ -384,7 +392,7 @@ mod internal {
 
             // How many bytes we have left in this segment.
             let remaining_len = accum_length.checked_sub(self.overall_ptr).unwrap();
-            // Position within the segment to being reading.
+            // Position within the segment to begin reading.
             let segment_pos = segment.len().checked_sub(remaining_len).unwrap();
 
             // How many bytes we'll read.
@@ -469,6 +477,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::SegmentedBytes;
+    use crate::bytes::MaybeLgBytes;
     use crate::cast::CastFrom;
 
     #[crate::test]
@@ -676,7 +685,6 @@ mod tests {
 
         // Seek back to the beginning.
         reader.seek(SeekFrom::Start(0)).unwrap();
-        eprintln!("{reader:?}");
         // Read everything.
         reader.read_exact(&mut buf[..6]).unwrap();
         assert_eq!(buf, [6, 7, 8, 9, 10, 11, 0, 0]);
@@ -897,6 +905,52 @@ mod tests {
 
         proptest!(|(segments in any::<Vec<Vec<u8>>>(), s in any::<u64>(), c in any::<i64>(), e in any::<i64>())| {
             test(segments, s, c, e);
+        })
+    }
+
+    #[crate::test]
+    #[cfg_attr(miri, ignore)] // slow
+    fn proptest_non_empty_segments() {
+        fn test(segments: Vec<Vec<u8>>) {
+            // Vec
+            let segment = segments.first().unwrap_or(&Vec::default()).clone();
+            let s = SegmentedBytes::from(segment.clone());
+            assert!(s.into_segments().all(|segment| !segment.is_empty()));
+
+            // Bytes
+            let bytes = Bytes::from(segment.clone());
+            let s = SegmentedBytes::from(bytes);
+            assert!(s.into_segments().all(|segment| !segment.is_empty()));
+
+            // MaybeLgBytes
+            let bytes = MaybeLgBytes::Bytes(Bytes::from(segment.clone()));
+            let s = SegmentedBytes::from(bytes);
+            assert!(s.into_segments().all(|segment| !segment.is_empty()));
+
+            // SegmentedBytes::push
+            let mut s = SegmentedBytes::default();
+            s.push(Bytes::from(segment));
+            assert!(s.into_segments().all(|segment| !segment.is_empty()));
+
+            // Vec<Vec<u8>>
+            let s: SegmentedBytes = segments.clone().into_iter().collect();
+            assert!(s.into_segments().all(|segment| !segment.is_empty()));
+
+            // Vec<Bytes>
+            let s: SegmentedBytes = segments.clone().into_iter().map(Bytes::from).collect();
+            assert!(s.into_segments().all(|segment| !segment.is_empty()));
+
+            // Vec<MaybeLgBytes>
+            let segments: Vec<_> = segments
+                .into_iter()
+                .map(|s| MaybeLgBytes::Bytes(Bytes::from(s)))
+                .collect();
+            let s = SegmentedBytes::from(segments);
+            assert!(s.into_segments().all(|segment| !segment.is_empty()));
+        }
+
+        proptest!(|(segments in any::<Vec<Vec<u8>>>())| {
+            test(segments);
         })
     }
 }
