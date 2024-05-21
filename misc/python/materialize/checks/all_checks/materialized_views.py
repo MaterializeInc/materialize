@@ -68,6 +68,9 @@ class MaterializedViews(Check):
                 T1B 10000
                 T2B 10000
                 T3B 10000
+
+                > SELECT 1, * FROM zero_arity
+                1
            """
             )
         )
