@@ -927,7 +927,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             "karpenter.sh/do-not-disrupt".to_owned() => "true".to_string(),
         };
 
-        let default_node_selector = [("materialize.cloud/disk".to_string(), disk.to_string())];
+        let default_node_selector = if disk {
+            vec![("materialize.cloud/disk".to_string(), disk.to_string())]
+        } else {
+            // if the cluster doesn't require disk, we can omit the selector
+            // allowing it to be scheduled onto nodes with and without the
+            // selector
+            vec![]
+        };
 
         let node_selector: BTreeMap<String, String> = default_node_selector
             .into_iter()
