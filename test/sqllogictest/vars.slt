@@ -661,6 +661,7 @@ simple conn=parker_3,user=parker
 ALTER ROLE joe SET cluster TO wont_work;
 ----
 db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'parker' role needs CREATEROLE privileges on SYSTEM
 
 statement ok
 ALTER ROLE joe SET cluster TO will_work

@@ -501,6 +501,7 @@ simple conn=student,user=student
 COMMENT ON ROLE teacher IS 'updated_teacher_comment';
 ----
 db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'student' role needs CREATEROLE privileges on SYSTEM
 
 statement ok
 DROP ROLE student;

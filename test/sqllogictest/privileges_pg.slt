@@ -274,6 +274,7 @@ simple conn=regress_priv_user2,user=regress_priv_user2
 INSERT INTO atest2 VALUES ('foo', true);
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user2' role needs INSERT privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user2,user=regress_priv_user2
 INSERT INTO atest1 SELECT 1, b FROM atest1;
@@ -289,16 +290,19 @@ simple conn=regress_priv_user2,user=regress_priv_user2
 UPDATE atest2 SET col2 = NOT col2; -- fail
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user2' role needs UPDATE privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user2,user=regress_priv_user2
 DELETE FROM atest2;
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user2' role needs DELETE privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user2,user=regress_priv_user2
 COPY atest2 FROM stdin;
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user2' role needs INSERT privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user2,user=regress_priv_user2
 GRANT SELECT ON atest1 TO PUBLIC;
@@ -332,57 +336,68 @@ simple conn=regress_priv_user3,user=regress_priv_user3
 SELECT * FROM atest2;
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user3' role needs SELECT privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 INSERT INTO atest1 VALUES (2, 'two');
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest1"
+DETAIL: The 'regress_priv_user3' role needs INSERT privileges on TABLE "materialize.public.atest1"
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 INSERT INTO atest2 VALUES ('foo', true);
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user3' role needs INSERT privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 INSERT INTO atest1 SELECT 1, b FROM atest1;
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest1"
+DETAIL: The 'regress_priv_user3' role needs INSERT privileges on TABLE "materialize.public.atest1"
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 UPDATE atest1 SET a = 1 WHERE a = 2;
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest1"
+DETAIL: The 'regress_priv_user3' role needs UPDATE privileges on TABLE "materialize.public.atest1"
 
 # Intentional (and documented) difference, we require SELECT for UPDATE
 simple conn=regress_priv_user3,user=regress_priv_user3
 UPDATE atest2 SET col2 = NULL;
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user3' role needs SELECT privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 UPDATE atest2 SET col2 = NOT col2; -- fails; requires SELECT on atest2
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user3' role needs SELECT privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 DELETE FROM atest2;
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user3' role needs DELETE privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 COPY atest2 FROM stdin;
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user3' role needs INSERT privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 SELECT * FROM atest1 WHERE ( b IN ( SELECT col1 FROM atest2 ) );
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user3' role needs SELECT privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 SELECT * FROM atest2 WHERE ( col1 IN ( SELECT b FROM atest1 ) );
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user3' role needs SELECT privileges on TABLE "materialize.public.atest2"
 
 # Can't test COPY with SLT?
 #simple conn=regress_priv_user4,user=regress_priv_user4
@@ -431,6 +446,7 @@ simple conn=regress_priv_user3,user=regress_priv_user3
 SELECT * FROM atestv2;
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user3' role needs SELECT privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 CREATE TABLE atest3 (one int, two int, three int);
@@ -458,6 +474,7 @@ simple conn=regress_priv_user3,user=regress_priv_user3
 SELECT * FROM atestv2; -- fail
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user3' role needs SELECT privileges on TABLE "materialize.public.atest2"
 
 simple conn=regress_priv_user3,user=regress_priv_user3
 GRANT SELECT ON atestv1 TO regress_priv_user4;
@@ -485,6 +502,7 @@ simple conn=regress_priv_user4,user=regress_priv_user4
 SELECT * FROM atestv2;
 ----
 db error: ERROR: permission denied for VIEW "materialize.public.atestv2"
+DETAIL: The 'regress_priv_user4' role needs SELECT privileges on VIEW "materialize.public.atestv2"
 
 simple conn=regress_priv_user4,user=regress_priv_user4
 SELECT * FROM atestv3;
@@ -495,6 +513,7 @@ simple conn=regress_priv_user4,user=regress_priv_user4
 SELECT * FROM atestv0;
 ----
 db error: ERROR: permission denied for VIEW "materialize.public.atestv0"
+DETAIL: The 'regress_priv_user4' role needs SELECT privileges on VIEW "materialize.public.atestv0"
 
 simple conn=regress_priv_user4,user=regress_priv_user4
 CREATE VIEW atestv4 AS SELECT * FROM atestv3; -- nested view
@@ -515,6 +534,7 @@ simple conn=regress_priv_user2,user=regress_priv_user2
 SELECT * FROM atestv3;
 ----
 db error: ERROR: permission denied for VIEW "materialize.public.atestv3"
+DETAIL: The 'regress_priv_user2' role needs SELECT privileges on VIEW "materialize.public.atestv3"
 
 simple conn=regress_priv_user2,user=regress_priv_user2
 SELECT * FROM atestv4;
@@ -530,3 +550,4 @@ simple conn=regress_priv_user2,user=regress_priv_user2
 SELECT * FROM atestv2;
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.atest2"
+DETAIL: The 'regress_priv_user3' role needs SELECT privileges on TABLE "materialize.public.atest2"
