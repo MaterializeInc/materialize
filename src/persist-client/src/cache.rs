@@ -61,6 +61,7 @@ pub struct PersistClientCache {
     pub(crate) state_cache: Arc<StateCache>,
     pubsub_sender: Arc<dyn PubSubSender>,
     _pubsub_receiver_task: JoinHandle<()>,
+    txn_ctx: std::sync::OnceLock<Arc<dyn Any + Send + Sync>>,
 }
 
 #[derive(Debug)]
@@ -95,7 +96,18 @@ impl PersistClientCache {
             state_cache,
             pubsub_sender: pubsub_client.sender,
             _pubsub_receiver_task,
+            txn_ctx: Default::default(),
         }
+    }
+
+    /// TODO(jkosh44/danh) Remove this.
+    pub fn txn_ctx<T: Default + Send + Sync + 'static>(&self) -> Arc<T> {
+        Arc::clone(self.txn_ctx.get_or_init(|| {
+            let txn_ctx: Arc<dyn Any + Send + Sync> = Arc::new(T::default());
+            txn_ctx
+        }))
+        .downcast::<T>()
+        .unwrap()
     }
 
     /// A test helper that returns a [PersistClientCache] disconnected from

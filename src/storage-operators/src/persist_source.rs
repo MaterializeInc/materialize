@@ -29,7 +29,7 @@ use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::fetch::{SerdeLeasedBatchPart, ShardSourcePart};
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
-use mz_persist_txn::operator::txns_progress;
+use mz_persist_txn::operator::{txns_progress, TxnsContext};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationType, Row, RowArena, Timestamp};
@@ -219,10 +219,13 @@ where
     // system. This means the "logical" upper may be ahead of the "physical"
     // upper. Render a dataflow operator that passes through the input and
     // translates the progress frontiers as necessary.
+    let persist_txn_ctx = persist_clients.txn_ctx::<TxnsContext<G::Timestamp>>();
     let (stream, txns_tokens) = match metadata.txns_shard {
         Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _, _>(
             stream,
             &source_id.to_string(),
+            (*persist_txn_ctx).clone(),
+            Arc::clone(&persist_clients).cfg(),
             move || {
                 let (c, l) = (
                     Arc::clone(&persist_clients),

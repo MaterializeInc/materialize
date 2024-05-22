@@ -34,7 +34,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::metrics::Metrics;
-use crate::txn_read::{DataListenNext, DataSnapshot, DataSubscribeBlocked};
+use crate::txn_read::{DataListenNext, DataRemapEntry, DataSnapshot, DataSubscribe};
 use crate::TxnsCodecDefault;
 
 /// A cache of the txn shard contents, optimized for various in-memory
@@ -365,15 +365,19 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     ///
     /// Callers must first wait for [`TxnsCache::update_gt`] with the same or
     /// later timestamp to return. Panics otherwise.
-    pub(crate) fn data_subscribe<K, V, D>(
-        &self,
-        data_id: ShardId,
-        as_of: T,
-    ) -> DataSubscribeBlocked<T> {
+    pub(crate) fn data_subscribe(&self, data_id: ShardId, as_of: T) -> DataSubscribe<T> {
         self.assert_only_data_id(&data_id);
         assert!(self.progress_exclusive > as_of);
         let snapshot = self.data_snapshot(data_id, as_of);
-        DataSubscribeBlocked(snapshot)
+        let remap = DataRemapEntry {
+            physical_upper: snapshot.empty_to.clone(),
+            logical_upper: snapshot.empty_to.clone(),
+        };
+        DataSubscribe {
+            data_id,
+            snapshot: Some(snapshot),
+            remap,
+        }
     }
 
     /// Returns the minimum timestamp not known to be applied by this cache.
@@ -1166,6 +1170,7 @@ mod tests {
                 data_id,
                 as_of,
                 Antichain::new(),
+                true,
             )
         }
     }

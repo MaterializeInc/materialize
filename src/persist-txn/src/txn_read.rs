@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::instrument;
 use mz_ore::task::AbortOnDropHandle;
+use mz_ore::vec::VecExt;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::{Cursor, LazyPartStats, ListenEvent, ReadHandle, Since, Subscribe};
@@ -61,16 +62,8 @@ pub struct DataSnapshot<T> {
 impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     /// Unblocks reading a snapshot at `self.as_of` by waiting for the latest
     /// write before that time and then running an empty CaA if necessary.
-    ///
-    /// Returns a frontier that is greater than the as_of and less_equal the
-    /// physical upper of the data shard. This is suitable for use as an initial
-    /// input to `TxnsCache::data_listen_next` (after reading up to it, of
-    /// course).
     #[instrument(level = "debug", fields(shard = %self.data_id, ts = ?self.as_of, empty_to = ?self.empty_to))]
-    pub(crate) async fn unblock_read<K, V, D>(
-        &self,
-        mut data_write: WriteHandle<K, V, T, D>,
-    ) -> Antichain<T>
+    pub(crate) async fn unblock_read<K, V, D>(&self, mut data_write: WriteHandle<K, V, T, D>)
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -107,7 +100,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
                 "CaA data snapshot {:.9} shard finalized",
                 self.data_id.to_string(),
             );
-            return Antichain::new();
+            return;
         };
 
         // TODO(jkosh44) We should not be writing to unregistered shards, but
@@ -143,7 +136,6 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
                 }
             }
         }
-        Antichain::from_elem(self.empty_to.clone())
     }
 
     /// See [ReadHandle::snapshot_and_fetch].
@@ -300,48 +292,42 @@ pub struct DataRemapEntry<T> {
     pub logical_upper: T,
 }
 
-/// A token exchangeable for a [`DataSubscribe`].
-///
-/// Must be unblocked via [`DataSubscribeBlocked::unblock_subscribe`].
-#[derive(Debug)]
-pub(crate) struct DataSubscribeBlocked<T>(pub(crate) DataSnapshot<T>);
-
-/// A token that keeps track of a [`DataRemapEntry`] for shard `data_id`.
+/// Keeps track of a [`DataRemapEntry`] for shard `data_id`.
 #[derive(Debug)]
 pub(crate) struct DataSubscribe<T> {
     /// The id of the data shard.
     pub(crate) data_id: ShardId,
+    /// The initial snapshot, used to unblock the reading of the initial
+    /// snapshot.
+    pub(crate) snapshot: Option<DataSnapshot<T>>,
     /// The physical and logical upper of `data_id`.
     pub(crate) remap: DataRemapEntry<T>,
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> DataSubscribeBlocked<T> {
-    /// Unblocks the snapshot portion of this subscribe. See
-    /// [`DataSnapshot::unblock_read`].
-    ///
-    /// Returns `None` if the upper of the data shard is the empty antichain.
-    #[instrument(level = "debug", fields(shard = %self.0.data_id, ts = ?self.0.as_of, empty_to = ?self.0.empty_to))]
-    pub(crate) async fn unblock_subscribe<K, V, D>(
-        self,
-        data_write: WriteHandle<K, V, T, D>,
-    ) -> Option<DataSubscribe<T>>
-    where
-        K: Debug + Codec,
-        V: Debug + Codec,
-        D: Semigroup + Codec64 + Send + Sync,
-    {
-        let snapshot = self.0;
-        let empty_to = snapshot.unblock_read(data_write).await;
-        let Some(empty_to) = empty_to.into_option() else {
-            return None;
-        };
-        Some(DataSubscribe {
-            data_id: snapshot.data_id,
-            remap: DataRemapEntry {
-                physical_upper: empty_to.clone(),
-                logical_upper: empty_to,
-            },
-        })
+/// An active subscription of [`DataRemapEntry`]s for a data shard.
+#[derive(Debug)]
+pub struct DataSubscription<T: Timestamp + Lattice + Codec64> {
+    /// Metadata and current [`DataRemapEntry`] for the data shard.
+    subscribe: DataSubscribe<T>,
+    /// Channel to send [`DataRemapEntry`]s.
+    tx: mpsc::UnboundedSender<DataRemapEntry<T>>,
+}
+
+#[async_trait::async_trait]
+pub(crate) trait UnblockRead<T>: Debug + Send {
+    async fn unblock_read(self: Box<Self>, snapshot: DataSnapshot<T>);
+}
+
+#[async_trait::async_trait]
+impl<K, V, T, D> UnblockRead<T> for WriteHandle<K, V, T, D>
+where
+    K: Debug + Codec + Send + Sync,
+    V: Debug + Codec + Send + Sync,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    async fn unblock_read(self: Box<Self>, snapshot: DataSnapshot<T>) {
+        snapshot.unblock_read(*self).await;
     }
 }
 
@@ -367,10 +353,11 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
             TxnsSubscribeTask::<T, C>::open(&client, txns_id, None, tx.clone()).await;
 
         let mut task = TxnsReadTask {
-            cache,
             rx,
+            cache,
             pending_waits_by_ts: BTreeSet::new(),
             pending_waits_by_id: BTreeMap::new(),
+            data_subscriptions: Vec::new(),
         };
 
         let read_task =
@@ -397,6 +384,24 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
     pub async fn data_snapshot(&self, data_id: ShardId, as_of: T) -> DataSnapshot<T> {
         self.send(|tx| TxnsReadCmd::DataSnapshot { data_id, as_of, tx })
             .await
+    }
+
+    /// Initiate a subscription to `data_id`.
+    ///
+    /// Returns a channel that [`DataRemapEntry`]s are sent over.
+    pub(crate) async fn data_subscribe(
+        &self,
+        data_id: ShardId,
+        as_of: T,
+        unblock: Box<dyn UnblockRead<T>>,
+    ) -> mpsc::UnboundedReceiver<DataRemapEntry<T>> {
+        self.send(|tx| TxnsReadCmd::DataSubscribe {
+            data_id,
+            as_of,
+            unblock,
+            tx,
+        })
+        .await
     }
 
     /// See [TxnsCache::update_ge].
@@ -487,6 +492,12 @@ enum TxnsReadCmd<T> {
         as_of: T,
         tx: oneshot::Sender<DataSnapshot<T>>,
     },
+    DataSubscribe {
+        data_id: ShardId,
+        as_of: T,
+        unblock: Box<dyn UnblockRead<T>>,
+        tx: oneshot::Sender<mpsc::UnboundedReceiver<DataRemapEntry<T>>>,
+    },
     Wait {
         id: Uuid,
         ts: WaitTs<T>,
@@ -569,6 +580,7 @@ struct TxnsReadTask<T: Timestamp + Lattice + Codec64> {
     cache: TxnsCacheState<T>,
     pending_waits_by_ts: BTreeSet<(WaitTs<T>, Uuid)>,
     pending_waits_by_id: BTreeMap<Uuid, PendingWait<T>>,
+    data_subscriptions: Vec<DataSubscription<T>>,
 }
 
 /// A pending "wait" notification that we will complete once the frontier
@@ -621,14 +633,13 @@ where
                         entries
                     );
 
-                    let prev_frontier = self.cache.progress_exclusive.clone();
-                    self.cache.push_entries(entries, frontier.clone());
-                    if prev_frontier < self.cache.progress_exclusive {
-                        debug!(
-                            "compacting TxnsRead cache to {:?} progress={:?}",
-                            prev_frontier, self.cache.progress_exclusive
-                        );
+                    self.cache.push_entries(entries.clone(), frontier.clone());
+
+                    for subscription in &mut self.data_subscriptions {
+                        Self::update_subscription(subscription, &self.cache);
                     }
+                    self.data_subscriptions
+                        .drain_filter_swapping(|subscription| !subscription.tx.is_closed());
 
                     // The frontier has advanced, so respond to waits and retain
                     // those that still have to wait.
@@ -664,6 +675,33 @@ where
                     let res = self.cache.data_snapshot(data_id, as_of.clone());
                     let _ = tx.send(res);
                 }
+                TxnsReadCmd::DataSubscribe {
+                    data_id,
+                    as_of,
+                    unblock,
+                    tx,
+                } => {
+                    let mut subscribe = self.cache.data_subscribe(data_id, as_of.clone());
+                    if let Some(snapshot) = subscribe.snapshot.take() {
+                        mz_ore::task::spawn(
+                            || "persist-txn::unblock_subscribe",
+                            unblock.unblock_read(snapshot),
+                        );
+                    }
+                    let (sub_tx, sub_rx) = mpsc::unbounded_channel();
+                    // Send the initial remap entry.
+                    sub_tx
+                        .send(subscribe.remap.clone())
+                        .expect("receiver still in scope");
+                    let mut subscription = DataSubscription {
+                        subscribe,
+                        tx: sub_tx,
+                    };
+                    // Fill the subscriber in on the updates from as_of to the current progress.
+                    Self::update_subscription(&mut subscription, &self.cache);
+                    self.data_subscriptions.push(subscription);
+                    let _ = tx.send(sub_rx);
+                }
                 TxnsReadCmd::Wait { id, ts, tx } => {
                     let mut pending_wait = PendingWait { ts, tx: Some(tx) };
                     let completed = pending_wait.maybe_complete(&self.cache.progress_exclusive);
@@ -674,13 +712,50 @@ where
                     }
                 }
                 TxnsReadCmd::CancelWait { id } => {
-                    let pending_wait = self.pending_waits_by_id.remove(&id).expect("missing wait");
-                    let wait_ts = pending_wait.ts.clone();
-                    self.pending_waits_by_ts.remove(&(wait_ts, id));
+                    // A waiter may have been dropped after a wait completed,
+                    // but before hearing about the completion. In that case
+                    // they will have tried to cancel an already cleaned up
+                    // wait.
+                    if let Some(pending_wait) = self.pending_waits_by_id.remove(&id) {
+                        self.pending_waits_by_ts.remove(&(pending_wait.ts, id));
+                    }
                 }
             }
         }
         warn!("TxnsReadTask shutting down");
+    }
+
+    fn update_subscription(subscription: &mut DataSubscription<T>, cache: &TxnsCacheState<T>) {
+        loop {
+            match cache.data_listen_next(
+                &subscription.subscribe.data_id,
+                &subscription.subscribe.remap.logical_upper,
+            ) {
+                // The data shard got a write!
+                DataListenNext::ReadDataTo(new_upper) => {
+                    // A write means both the physical and logical upper advance.
+                    subscription.subscribe.remap.physical_upper = new_upper.clone();
+                    subscription.subscribe.remap.logical_upper = new_upper.clone();
+                }
+                // We know there are no writes in `[logical_upper,
+                // new_progress)`, so advance our output frontier.
+                DataListenNext::EmitLogicalProgress(new_progress) => {
+                    assert!(subscription.subscribe.remap.physical_upper < new_progress);
+                    assert!(subscription.subscribe.remap.logical_upper < new_progress);
+
+                    subscription.subscribe.remap.logical_upper = new_progress.clone();
+                }
+                // We've caught up to the txns upper, and we have to wait for
+                // more before updates before sending more pairs.
+                DataListenNext::WaitForTxnsProgress => break,
+            };
+            // Not an error if the receiver hung up, they just need be cleaned up at some point.
+            let _ = subscription.tx.send(subscription.subscribe.remap.clone());
+        }
+        assert_eq!(
+            cache.progress_exclusive, subscription.subscribe.remap.logical_upper,
+            "we should update the subscription up to the current progress_exclusive"
+        );
     }
 }
 
