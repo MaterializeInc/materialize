@@ -20,7 +20,7 @@
     {%- elif expression.strip().lower() == "null" and data_type.strip().lower() == "list" -%}
        NULL::text list
     {%- elif expression.strip().lower() == "null" and data_type.strip().lower() == "record" -%}
-      SELECT row() WHERE false
+      (SELECT row() WHERE false)
     {%- else -%}
       cast({{ expression }} as {{ data_type }})
     {%- endif -%}
