@@ -17,8 +17,7 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures::future::BoxFuture;
-use futures::{FutureExt, Stream};
+use futures::Stream;
 use mz_ore::instrument;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::vec::VecExt;

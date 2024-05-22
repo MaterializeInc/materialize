@@ -44,7 +44,7 @@ use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::debug;
 
 use crate::txn_cache::TxnsCache;
-use crate::txn_read::{DataRemapEntry, TxnsRead};
+use crate::txn_read::{DataListenNext, DataRemapEntry, TxnsRead};
 use crate::TxnsCodecDefault;
 
 /// An operator for translating physical data shard frontiers into logical ones.
@@ -158,7 +158,6 @@ where
 fn txns_progress_source_local<K, V, T, D, P, C, G>(
     scope: G,
     name: &str,
-    ctx: TxnsContext<T>,
     client: impl Future<Output = PersistClient> + 'static,
     txns_id: ShardId,
     data_id: ShardId,
@@ -193,7 +192,7 @@ where
         let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
 
         let _ = txns_cache.update_gt(&as_of).await;
-        let subscribe = txns_cache.data_subscribe(data_id, as_of.clone());
+        let mut subscribe = txns_cache.data_subscribe(data_id, as_of.clone());
         let data_write = client
             .open_writer::<K, V, T, D>(
                 data_id,
@@ -203,10 +202,9 @@ where
             )
             .await
             .expect("schema shouldn't change");
-        let (mut subscribe, fut) = subscribe.unblock_subscribe(data_write);
-        fut.await;
-
-        let mut physical_upper = T::minimum();
+        if let Some(snapshot) = subscribe.snapshot.take() {
+            snapshot.unblock_read(data_write).await;
+        }
 
         debug!("{} emitting {:?}", name, subscribe.remap);
         remap_output.give(&cap, subscribe.remap.clone()).await;
