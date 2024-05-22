@@ -1271,10 +1271,10 @@ async fn execute_stmt<S: ResultSender>(
             )
             .into()
         }
-        ExecuteResponse::SendingRows { future: mut rows, instance_id } => {
+        ExecuteResponse::SendingRows { future: mut rows, instance_id, strategy } => {
             let rows = match await_rows(sender, client, &mut rows).await? {
                 PeekResponseUnary::Rows(rows) => {
-                    RecordFirstRowStream::record(execute_started, client, Some(instance_id));
+                    RecordFirstRowStream::record(execute_started, client, Some(instance_id), Some(strategy));
                     rows
                 }
                 PeekResponseUnary::Error(e) => {
@@ -1299,6 +1299,7 @@ async fn execute_stmt<S: ResultSender>(
                 execute_started,
                 client,
                 Some(instance_id),
+                None,
             ),
             ctx_extra,
         },

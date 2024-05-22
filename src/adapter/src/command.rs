@@ -38,7 +38,7 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
-use crate::statement_logging::StatementEndedExecutionReason;
+use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, AppendWebhookError};
@@ -358,6 +358,7 @@ pub enum ExecuteResponse {
         #[derivative(Debug = "ignore")]
         future: RowsFuture,
         instance_id: ComputeInstanceId,
+        strategy: StatementExecutionStrategy,
     },
     /// Like `SendingRows`, but the rows are known to be available
     /// immediately, and thus the execution is considered ended in the coordinator.

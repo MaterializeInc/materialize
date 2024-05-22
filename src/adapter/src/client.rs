@@ -57,7 +57,7 @@ use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, TransactionId,
 };
-use crate::statement_logging::StatementEndedExecutionReason;
+use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, AppendWebhookError, PeekResponseUnary, StartupResponse};
@@ -1049,8 +1049,9 @@ impl RecordFirstRowStream {
         execute_started: Instant,
         client: &SessionClient,
         instance_id: Option<ComputeInstanceId>,
+        strategy: Option<StatementExecutionStrategy>,
     ) -> Self {
-        let histogram = Self::histogram(client, instance_id);
+        let histogram = Self::histogram(client, instance_id, strategy);
         Self {
             rows,
             execute_started,
@@ -1059,7 +1060,11 @@ impl RecordFirstRowStream {
         }
     }
 
-    fn histogram(client: &SessionClient, instance_id: Option<ComputeInstanceId>) -> Histogram {
+    fn histogram(
+        client: &SessionClient,
+        instance_id: Option<ComputeInstanceId>,
+        strategy: Option<StatementExecutionStrategy>,
+    ) -> Histogram {
         let isolation_level = *client
             .session
             .as_ref()
@@ -1070,12 +1075,16 @@ impl RecordFirstRowStream {
             Some(i) => Cow::Owned(i.to_string()),
             None => Cow::Borrowed("none"),
         };
+        let strategy = match strategy {
+            Some(s) => s.name(),
+            None => "none",
+        };
 
         client
             .inner()
             .metrics()
             .time_to_first_row_seconds
-            .with_label_values(&[&instance, isolation_level.as_str()])
+            .with_label_values(&[&instance, isolation_level.as_str(), strategy])
     }
 
     /// If you want to match [`RecordFirstRowStream`]'s logic but don't need
@@ -1084,8 +1093,10 @@ impl RecordFirstRowStream {
         execute_started: Instant,
         client: &SessionClient,
         instance_id: Option<ComputeInstanceId>,
+        strategy: Option<StatementExecutionStrategy>,
     ) {
-        Self::histogram(client, instance_id).observe(execute_started.elapsed().as_secs_f64());
+        Self::histogram(client, instance_id, strategy)
+            .observe(execute_started.elapsed().as_secs_f64());
     }
 
     pub async fn recv(&mut self) -> Option<PeekResponseUnary> {

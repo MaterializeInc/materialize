@@ -21,7 +21,7 @@ use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, SessionConfig, TransactionStatus,
 };
-use mz_adapter::statement_logging::StatementEndedExecutionReason;
+use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
     verify_datum_desc, AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse,
     PeekResponseUnary, RowsFuture,
@@ -1426,6 +1426,7 @@ where
             ExecuteResponse::SendingRows {
                 future: rx,
                 instance_id,
+                strategy,
             } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
@@ -1441,6 +1442,7 @@ where
                         execute_started,
                         &self.adapter_client,
                         Some(instance_id),
+                        Some(strategy),
                     )),
                     max_rows,
                     get_response,
@@ -1467,6 +1469,7 @@ where
                         execute_started,
                         &self.adapter_client,
                         None,
+                        Some(StatementExecutionStrategy::Constant),
                     )),
                     max_rows,
                     get_response,
@@ -1527,6 +1530,7 @@ where
                             execute_started,
                             &self.adapter_client,
                             Some(instance_id),
+                            None,
                         )),
                         max_rows,
                         get_response,
@@ -1576,6 +1580,7 @@ where
                                     execute_started,
                                     &self.adapter_client,
                                     Some(instance_id),
+                                    None,
                                 ),
                             )
                             .await
@@ -1606,6 +1611,7 @@ where
                     ExecuteResponse::SendingRows {
                         future: rows_rx,
                         instance_id,
+                        strategy,
                     } => {
                         let span = tracing::debug_span!("sending_rows");
                         let rows = self.row_future_to_stream(&span, rows_rx).await?;
@@ -1622,6 +1628,7 @@ where
                                     execute_started,
                                     &self.adapter_client,
                                     Some(instance_id),
+                                    Some(strategy),
                                 ),
                             )
                             .await
@@ -1646,6 +1653,7 @@ where
                                     execute_started,
                                     &self.adapter_client,
                                     None,
+                                    Some(StatementExecutionStrategy::Constant),
                                 ),
                             )
                             .instrument(span)
