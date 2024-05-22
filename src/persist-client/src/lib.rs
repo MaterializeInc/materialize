@@ -34,7 +34,7 @@ use crate::cache::{PersistClientCache, StateCache};
 use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
-use crate::fetch::BatchFetcher;
+use crate::fetch::{BatchFetcher, BatchFetcherConfig};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::{parse_id, Schemas};
 use crate::internal::gc::GarbageCollector;
@@ -422,6 +422,7 @@ impl PersistClient {
             val: val_schema,
         };
         let fetcher = BatchFetcher {
+            cfg: BatchFetcherConfig::new(&self.cfg),
             blob: Arc::clone(&self.blob),
             metrics: Arc::clone(&self.metrics),
             shard_metrics,
