@@ -18,7 +18,7 @@ use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder};
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use timely::container::{CapacityContainerBuilder, ContainerBuilder};
+use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushContainer, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
@@ -132,23 +132,39 @@ where
     /// is allowed to fail. The first returned stream will contain the
     /// successful applications of `logic`, while the second returned stream
     /// will contain the failed applications.
-    fn map_fallible<D2, E, L>(&self, name: &str, mut logic: L) -> (Stream<G, D2>, Stream<G, E>)
+    fn map_fallible<DCB, ECB, D2, E, L>(
+        &self,
+        name: &str,
+        mut logic: L,
+    ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
     where
-        D2: Data,
-        E: Data,
+        DCB: ContainerBuilder,
+        DCB::Container: PushContainer,
+        ECB: ContainerBuilder,
+        ECB::Container: PushContainer,
+        D2: PushInto<DCB::Container>,
+        E: PushInto<ECB::Container>,
         L: FnMut(D1) -> Result<D2, E> + 'static,
     {
-        self.flat_map_fallible(name, move |record| Some(logic(record)))
+        self.flat_map_fallible::<DCB, ECB, _, _, _, _>(name, move |record| Some(logic(record)))
     }
 
     /// Like [`timely::dataflow::operators::map::Map::flat_map`], but `logic`
     /// is allowed to fail. The first returned stream will contain the
     /// successful applications of `logic`, while the second returned stream
     /// will contain the failed applications.
-    fn flat_map_fallible<D2, E, I, L>(&self, name: &str, logic: L) -> (Stream<G, D2>, Stream<G, E>)
+    fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
+        &self,
+        name: &str,
+        logic: L,
+    ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
     where
-        D2: Data,
-        E: Data,
+        DCB: ContainerBuilder,
+        DCB::Container: PushContainer,
+        ECB: ContainerBuilder,
+        ECB::Container: PushContainer,
+        D2: PushInto<DCB::Container>,
+        E: PushInto<ECB::Container>,
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
 
@@ -180,29 +196,37 @@ where
     /// returned collection will contain successful applications of `logic`,
     /// while the second returned collection will contain the failed
     /// applications.
-    fn map_fallible<D2, E, L>(
+    ///
+    /// Callers need to specify the following type parameters:
+    /// * `DCB`: The container builder for the `Ok` output.
+    /// * `ECB`: The container builder for the `Err` output.
+    fn map_fallible<DCB, ECB, D2, E, L>(
         &self,
         name: &str,
         mut logic: L,
     ) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
+        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>,
+        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>,
         D2: Data,
         E: Data,
         L: FnMut(D1) -> Result<D2, E> + 'static,
     {
-        self.flat_map_fallible(name, move |record| Some(logic(record)))
+        self.flat_map_fallible::<DCB, ECB, _, _, _, _>(name, move |record| Some(logic(record)))
     }
 
     /// Like [`Collection::flat_map`], but `logic` is allowed to fail. The first
     /// returned collection will contain the successful applications of `logic`,
     /// while the second returned collection will contain the failed
     /// applications.
-    fn flat_map_fallible<D2, E, I, L>(
+    fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
         &self,
         name: &str,
         logic: L,
     ) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
+        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>,
+        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>,
         D2: Data,
         E: Data,
         I: IntoIterator<Item = Result<D2, E>>,
@@ -406,23 +430,27 @@ where
     // resolved. The `logic` `FnMut` needs to be borrowed in the `flat_map` call, not moved in
     // so the simple `|d1| logic(d1)` closure is load-bearing
     #[allow(clippy::redundant_closure)]
-    fn flat_map_fallible<D2, E, I, L>(
+    fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
         &self,
         name: &str,
         mut logic: L,
-    ) -> (Stream<G, D2>, Stream<G, E>)
+    ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
     where
-        D2: Data,
-        E: Data,
+        DCB: ContainerBuilder,
+        DCB::Container: PushContainer,
+        ECB: ContainerBuilder,
+        ECB::Container: PushContainer,
+        D2: PushInto<DCB::Container>,
+        E: PushInto<ECB::Container>,
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static,
     {
         let mut storage = Vec::new();
-        self.unary_fallible(Pipeline, name, move |_, _| {
+        self.unary_fallible::<DCB, ECB, _, _>(Pipeline, name, move |_, _| {
             Box::new(move |input, ok_output, err_output| {
                 input.for_each(|time, data| {
-                    let mut ok_session = ok_output.session(&time);
-                    let mut err_session = err_output.session(&time);
+                    let mut ok_session = ok_output.session_with_builder(&time);
+                    let mut err_session = err_output.session_with_builder(&time);
                     data.swap(&mut storage);
                     for r in storage.drain(..).flat_map(|d1| logic(d1)) {
                         match r {
@@ -492,23 +520,27 @@ where
         operator::empty(scope).as_collection()
     }
 
-    fn flat_map_fallible<D2, E, I, L>(
+    fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
         &self,
         name: &str,
         mut logic: L,
     ) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
+        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>,
+        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>,
         D2: Data,
         E: Data,
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static,
     {
-        let (ok_stream, err_stream) = self.inner.flat_map_fallible(name, move |(d1, t, r)| {
-            logic(d1).into_iter().map(move |res| match res {
-                Ok(d2) => Ok((d2, t.clone(), r.clone())),
-                Err(e) => Err((e, t.clone(), r.clone())),
-            })
-        });
+        let (ok_stream, err_stream) =
+            self.inner
+                .flat_map_fallible::<DCB, ECB, _, _, _, _>(name, move |(d1, t, r)| {
+                    logic(d1).into_iter().map(move |res| match res {
+                        Ok(d2) => Ok((d2, t.clone(), r.clone())),
+                        Err(e) => Err((e, t.clone(), r.clone())),
+                    })
+                });
         (ok_stream.as_collection(), err_stream.as_collection())
     }
 

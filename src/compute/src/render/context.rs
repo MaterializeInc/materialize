@@ -28,6 +28,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::Capability;
@@ -996,10 +997,11 @@ where
         thinning: &Vec<usize>,
     ) -> (MzArrangement<S>, Collection<S, DataflowError, i64>) {
         // Catch-all: Just use RowRow.
-        let (oks, errs) = oks.map_fallible(
-            "FormArrangementKey",
-            specialized_arrangement_key(key.clone(), thinning.clone()),
-        );
+        let (oks, errs) = oks
+            .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
+                "FormArrangementKey",
+                specialized_arrangement_key(key.clone(), thinning.clone()),
+            );
         let oks = oks.mz_arrange::<RowRowSpine<_, _>>(name);
         (MzArrangement::RowRow(oks), errs)
     }

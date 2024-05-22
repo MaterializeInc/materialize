@@ -23,6 +23,7 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
@@ -93,8 +94,10 @@ where
         let non_null_assertions = sink.non_null_assertions.clone();
         let from_desc = sink.from_desc.clone();
         if !non_null_assertions.is_empty() {
+            let name = format!("NullAssertions({sink_id:?})");
+            type CB<C> = CapacityContainerBuilder<C>;
             let (oks, null_errs) =
-                ok_collection.map_fallible("NullAssertions({sink_id:?})", move |row| {
+                ok_collection.map_fallible::<CB<_>, CB<_>, _, _, _>(&name, move |row| {
                     let mut idx = 0;
                     let mut iter = row.iter();
                     for &i in &non_null_assertions {

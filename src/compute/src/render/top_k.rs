@@ -32,6 +32,7 @@ use mz_repr::{Datum, DatumVec, Diff, Row, ScalarType, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
@@ -409,8 +410,10 @@ where
 
             // Demux oks and errors.
             let error_logger = self.error_logger();
-            let (oks, errs) =
-                stage.map_fallible("Demuxing Errors", move |(hk, result)| match result {
+            type CB<C> = CapacityContainerBuilder<C>;
+            let (oks, errs) = stage.map_fallible::<CB<_>, CB<_>, _, _, _>(
+                "Demuxing Errors",
+                move |(hk, result)| match result {
                     Err(v) => {
                         let mut hk_iter = hk.iter();
                         let h = hk_iter.next().unwrap().unwrap_uint64();
@@ -420,7 +423,8 @@ where
                         Err(EvalError::Internal(message.to_string()).into())
                     }
                     Ok(t) => Ok((hk, t)),
-                });
+                },
+            );
             (input, oks, Some(errs))
         } else {
             // Build non-validating topk stage.

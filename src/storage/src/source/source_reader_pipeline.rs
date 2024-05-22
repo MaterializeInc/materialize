@@ -804,11 +804,15 @@ where
     });
 
     // TODO(petrosagg): output the two streams directly
-    let (ok_muxed_stream, err_muxed_stream) =
-        reclocked_stream.map_fallible("reclock-demux-ok-err", |((output, r), ts, diff)| match r {
-            Ok(ok) => Ok(((output, ok), ts, diff)),
-            Err(err) => Err(((output, err), ts, diff.into())),
-        });
+    type CB<C> = CapacityContainerBuilder<C>;
+    let (ok_muxed_stream, err_muxed_stream) = reclocked_stream
+        .map_fallible::<CB<_>, CB<_>, _, _, _>(
+            "reclock-demux-ok-err",
+            |((output, r), ts, diff)| match r {
+                Ok(ok) => Ok(((output, ok), ts, diff)),
+                Err(err) => Err(((output, err), ts, diff.into())),
+            },
+        );
 
     // We use the output index from the source export to route values to its ok and err streams. We
     // do this obliquely by generating as many partitions as there are output indices and then
