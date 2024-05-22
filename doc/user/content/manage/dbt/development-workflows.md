@@ -19,7 +19,7 @@ using [dbt](/manage/dbt/) as your deployment tool.
 
 When you're prototyping your use case and fine-tuning the underlying data model,
 your priority is **iteration speed**. dbt has many features that can help speed
-up development, like [node selection](#node-selection) and [model preview](#preview-model-results).
+up development, like [node selection](#node-selection) and [model preview](#model-results-preview).
 Before you start, we recommend getting familiar with how these features
 work with the `dbt-materialize` adapter to make the most of your development
 time.
