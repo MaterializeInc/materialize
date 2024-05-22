@@ -105,7 +105,7 @@ pub fn format_str(
     s: &str,
     length: Option<VarCharMaxLength>,
     fail_on_len: bool,
-) -> Result<String, anyhow::Error> {
+) -> Result<&str, anyhow::Error> {
     Ok(match length {
         // Note that length is 1-indexed, so finding `None` means the string's
         // characters don't exceed the length, while finding `Some` means it
@@ -113,17 +113,17 @@ pub fn format_str(
         Some(l) => {
             let l = usize::cast_from(l.into_u32());
             match s.char_indices().nth(l) {
-                None => s.to_string(),
+                None => s,
                 Some((idx, _)) => {
                     if !fail_on_len || s[idx..].chars().all(|c| c.is_ascii_whitespace()) {
-                        s[..idx].to_string()
+                        &s[..idx]
                     } else {
                         bail!("{} exceeds maximum length of {}", s, l)
                     }
                 }
             }
         }
-        None => s.to_string(),
+        None => s,
     })
 }
 
