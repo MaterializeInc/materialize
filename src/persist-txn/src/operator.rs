@@ -525,6 +525,7 @@ where
     None
 }
 
+/// The process global [`TxnRead`] that any operator can communicate with.
 #[derive(Default, Debug, Clone)]
 pub struct TxnsContext<T: Clone> {
     read: Arc<tokio::sync::OnceCell<TxnsRead<T>>>,
@@ -658,16 +659,18 @@ impl DataSubscribe {
                 })
             });
             let data_stream = data_stream.probe_with(&mut data);
-            let dyn_cfgs = ConfigSet::default().add(&USE_GLOBAL_TXN_CACHE_SOURCE);
+            // We purposely do not use the `ConfigSet` in `client` so that
+            // different tests can set different values.
+            let config_set = ConfigSet::default().add(&USE_GLOBAL_TXN_CACHE_SOURCE);
             let mut updates = ConfigUpdates::default();
             updates.add(&USE_GLOBAL_TXN_CACHE_SOURCE, use_global_txn_cache);
-            updates.apply(&dyn_cfgs);
+            updates.apply(&config_set);
             let (data_stream, mut txns_progress_token) =
                 txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _, _>(
                     data_stream,
                     name,
                     TxnsContext::default(),
-                    &dyn_cfgs,
+                    &config_set,
                     || std::future::ready(client.clone()),
                     txns_id,
                     data_id,
