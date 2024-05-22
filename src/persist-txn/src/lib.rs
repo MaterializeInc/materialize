@@ -164,7 +164,7 @@
 //!     .apply(&mut txns).await;
 //!
 //! // Read data shard(s) at some `read_ts`.
-//! let mut subscribe = DataSubscribe::new("example", client, txns_id, d1, 4, Antichain::new());
+//! let mut subscribe = DataSubscribe::new("example", client, txns_id, d1, 4, Antichain::new(), true);
 //! while subscribe.progress() <= 4 {
 //!     subscribe.step();
 //! #   tokio::task::yield_now().await;
@@ -753,6 +753,7 @@ pub mod tests {
                 data_id,
                 as_of,
                 Antichain::new(),
+                true,
             );
             data_subscribe.step_past(until - 1).await;
             self.assert_eq(data_id, as_of, until, data_subscribe.output().clone());

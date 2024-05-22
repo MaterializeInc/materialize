@@ -18,7 +18,7 @@ use std::time::Duration;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ConfigUpdates};
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
 use mz_persist_client::cfg::{RetryParameters, USE_GLOBAL_TXN_CACHE_SOURCE};
@@ -525,7 +525,6 @@ where
     None
 }
 
-/// WIP
 #[derive(Default, Debug, Clone)]
 pub struct TxnsContext<T: Clone> {
     read: Arc<tokio::sync::OnceCell<TxnsRead<T>>>,
@@ -623,6 +622,7 @@ impl DataSubscribe {
         data_id: ShardId,
         as_of: u64,
         until: Antichain<u64>,
+        use_global_txn_cache: bool,
     ) -> Self {
         let mut worker = Worker::new(
             WorkerConfig::default(),
@@ -658,12 +658,16 @@ impl DataSubscribe {
                 })
             });
             let data_stream = data_stream.probe_with(&mut data);
+            let dyn_cfgs = ConfigSet::default().add(&USE_GLOBAL_TXN_CACHE_SOURCE);
+            let mut updates = ConfigUpdates::default();
+            updates.add(&USE_GLOBAL_TXN_CACHE_SOURCE, use_global_txn_cache);
+            updates.apply(&dyn_cfgs);
             let (data_stream, mut txns_progress_token) =
                 txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _, _>(
                     data_stream,
                     name,
                     TxnsContext::default(),
-                    client.dyncfgs(),
+                    &dyn_cfgs,
                     || std::future::ready(client.clone()),
                     txns_id,
                     data_id,
@@ -820,6 +824,7 @@ impl DataSubscribeTask {
             data_id,
             as_of,
             Antichain::new(),
+            true,
         );
         let mut output = Vec::new();
         loop {
@@ -1045,6 +1050,7 @@ mod tests {
             d0,
             3,
             Antichain::from_elem(5),
+            true,
         );
         // Manually step the dataflow, instead of going through the
         // `DataSubscribe` helper because we're interested in all captured

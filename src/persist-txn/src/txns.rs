@@ -1179,7 +1179,7 @@ mod tests {
             );
             let data_id =
                 self.data_ids[usize::cast_from(self.rng.next_u64()) % self.data_ids.len()];
-            match self.rng.next_u64() % 5 {
+            match self.rng.next_u64() % 6 {
                 0 => self.write(data_id).await,
                 // The register and forget impls intentionally don't switch on
                 // whether it's already registered to stress idempotence.
@@ -1189,7 +1189,8 @@ mod tests {
                     debug!("stress update {:.9} to {}", data_id.to_string(), self.ts);
                     let _ = self.txns.txns_cache.update_ge(&self.ts).await;
                 }
-                4 => self.start_read(data_id),
+                4 => self.start_read(data_id, true),
+                5 => self.start_read(data_id, false),
                 _ => unreachable!(""),
             }
             debug!("stress {} step {} DONE ts={}", self.idx, self.step, self.ts);
@@ -1305,7 +1306,7 @@ mod tests {
             .await
         }
 
-        fn start_read(&mut self, data_id: ShardId) {
+        fn start_read(&mut self, data_id: ShardId, use_global_txn_cache: bool) {
             debug!(
                 "stress start_read {:.9} at {}",
                 data_id.to_string(),
@@ -1326,6 +1327,7 @@ mod tests {
                         data_id,
                         as_of,
                         Antichain::new(),
+                        use_global_txn_cache,
                     );
                     let data_id = format!("{:.9}", data_id.to_string());
                     let _guard = info_span!("read_worker", %data_id, as_of).entered();

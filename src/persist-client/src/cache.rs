@@ -61,9 +61,6 @@ pub struct PersistClientCache {
     pub(crate) state_cache: Arc<StateCache>,
     pubsub_sender: Arc<dyn PubSubSender>,
     _pubsub_receiver_task: JoinHandle<()>,
-
-    // WIP hack plumb this around instead (What does this mean? Why not have this be `std::sync::OnceLock<Arc<TxnRead>>`?)
-    // This is the `TxnRead` for the `clusterd` process.
     txn_ctx: std::sync::OnceLock<Arc<dyn Any + Send + Sync>>,
 }
 
@@ -103,14 +100,14 @@ impl PersistClientCache {
         }
     }
 
-    /// WIP
+    /// TODO(jkosh44/danh) Remove this.
     pub fn txn_ctx<T: Default + Send + Sync + 'static>(&self) -> Arc<T> {
         Arc::clone(self.txn_ctx.get_or_init(|| {
             let txn_ctx: Arc<dyn Any + Send + Sync> = Arc::new(T::default());
             txn_ctx
         }))
         .downcast::<T>()
-        .expect("WIP")
+        .unwrap()
     }
 
     /// A test helper that returns a [PersistClientCache] disconnected from
