@@ -210,6 +210,7 @@ impl Optimize<Index> for Optimizer {
                 index_id,
                 index_key: idx.keys.clone(),
                 index_on_id: idx.on,
+                exported_index_id: self.exported_index_id,
             });
         }
 

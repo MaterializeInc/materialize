@@ -47,7 +47,7 @@ Used Indexes:
 Target cluster: quickstart
 
 Notices:
-  - Notice: The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+  - Notice: Index materialize.public.t_idx2 is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
     Hint: Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
 
 EOF
@@ -70,7 +70,7 @@ Used Indexes:
 Target cluster: quickstart
 
 Notices:
-  - Notice: The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+  - Notice: Index materialize.public.t_idx2 is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
     Hint: Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
 
 EOF
@@ -86,8 +86,8 @@ WHERE
   idx.name LIKE 't_idx%'
 ----
 An identical index already exists
-The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
-The current index is identical to materialize.public.t_idx1, which is also defined on t((a + █)).
+Index materialize.public.t_idx2 is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+Index materialize.public.t_idx2 is identical to materialize.public.t_idx1, which is also defined on t((a + █)).
 Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
 Please drop all indexes except the first index created on t((a + █)) and recreate all dependent objects.
 NULL
@@ -127,7 +127,7 @@ Used Indexes:
 Target cluster: quickstart
 
 Notices:
-  - Notice: The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+  - Notice: Index materialize.public.t_idx3 is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
     Hint: Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
 
 EOF
@@ -143,8 +143,8 @@ WHERE
   idx.name = 't_idx3'
 ----
 An identical index already exists
-The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
-The current index is identical to materialize.public.t_idx1, which is also defined on t((a + █)).
+Index materialize.public.t_idx3 is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+Index materialize.public.t_idx3 is identical to materialize.public.t_idx1, which is also defined on t((a + █)).
 Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
 Please drop all indexes except the first index created on t((a + █)) and recreate all dependent objects.
 NULL
