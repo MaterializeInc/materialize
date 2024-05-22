@@ -198,7 +198,9 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
             Antichain::from_elem(0u64),
         ),
         index: 0,
-        updates: data.batches().collect::<Vec<_>>(),
+        updates: mz_persist::indexed::encoding::BlobTraceUpdates::Row(
+            data.batches().collect::<Vec<_>>(),
+        ),
     };
 
     g.bench_function(BenchmarkId::new("trace", data.goodput_pretty()), |b| {

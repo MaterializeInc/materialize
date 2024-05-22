@@ -64,7 +64,6 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
-mz-repr = { path = "../repr" }
 serde_json = "1.0.89"
 tempfile = "3.8.1"
 
