@@ -57,7 +57,7 @@ pub struct AdminArgs {
     pub(crate) commit: bool,
 
     /// !!DANGER ZONE!! - Has the posibility of breaking production!
-    /// 
+    ///
     /// Allows specifying an expected `applier_version` of the shard we're operating on, so we can
     /// modify old/leaked shards.
     #[clap(long)]
