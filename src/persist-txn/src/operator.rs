@@ -44,7 +44,7 @@ use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::debug;
 
 use crate::txn_cache::TxnsCache;
-use crate::txn_read::{DataListenNext, DataRemapEntry, TxnsRead};
+use crate::txn_read::{DataRemapEntry, TxnsRead};
 use crate::TxnsCodecDefault;
 
 /// An operator for translating physical data shard frontiers into logical ones.
@@ -158,6 +158,7 @@ where
 fn txns_progress_source_local<K, V, T, D, P, C, G>(
     scope: G,
     name: &str,
+    ctx: TxnsContext<T>,
     client: impl Future<Output = PersistClient> + 'static,
     txns_id: ShardId,
     data_id: ShardId,
@@ -204,6 +205,8 @@ where
             .expect("schema shouldn't change");
         let (mut subscribe, fut) = subscribe.unblock_subscribe(data_write);
         fut.await;
+
+        let mut physical_upper = T::minimum();
 
         debug!("{} emitting {:?}", name, subscribe.remap);
         remap_output.give(&cap, subscribe.remap.clone()).await;
