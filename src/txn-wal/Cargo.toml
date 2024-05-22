@@ -1,5 +1,5 @@
 [package]
-name = "mz-persist-txn"
+name = "mz-txn-wal"
 description = "Atomic multi-shard mz_persist_client writes"
 version = "0.0.0"
 edition.workspace = true

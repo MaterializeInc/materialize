@@ -1292,5 +1292,5 @@ Snapshot {
     },
     storage_collection_metadata: {},
     unfinalized_shards: {},
-    persist_txn_shard: {},
+    txn_wal_shard: {},
 }

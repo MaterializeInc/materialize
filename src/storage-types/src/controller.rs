@@ -45,8 +45,8 @@ pub struct CollectionMetadata {
     pub status_shard: Option<ShardId>,
     /// The `RelationDesc` that describes the contents of the `data_shard`.
     pub relation_desc: RelationDesc,
-    /// The shard id of the persist-txn shard, if `self.data_shard` is managed
-    /// by the persist-txn system, or None if it's not.
+    /// The shard id of the txn-wal shard, if `self.data_shard` is managed
+    /// by the txn-wal system, or None if it's not.
     pub txns_shard: Option<ShardId>,
 }
 
@@ -204,8 +204,8 @@ pub enum StorageError<T> {
     CollectionMetadataAlreadyExists(GlobalId),
     /// Some other collection is already writing to this persist shard.
     PersistShardAlreadyInUse(String),
-    /// Persist txn shard already exists.
-    PersistTxnShardAlreadyExists,
+    /// Txn WAL shard already exists.
+    TxnWalShardAlreadyExists,
     /// The item that a subsource refers to is unexpectedly missing from the
     /// source.
     MissingSubsourceReference {
@@ -236,7 +236,7 @@ impl<T: Debug + Display + 'static> Error for StorageError<T> {
             Self::ShuttingDown(_) => None,
             Self::CollectionMetadataAlreadyExists(_) => None,
             Self::PersistShardAlreadyInUse(_) => None,
-            Self::PersistTxnShardAlreadyExists => None,
+            Self::TxnWalShardAlreadyExists => None,
             Self::MissingSubsourceReference { .. } => None,
             Self::Generic(err) => err.source(),
         }
@@ -306,8 +306,8 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
             Self::PersistShardAlreadyInUse(shard) => {
                 write!(f, "persist shard already in use: {shard}")
             }
-            Self::PersistTxnShardAlreadyExists => {
-                write!(f, "persist txn shard already exists")
+            Self::TxnWalShardAlreadyExists => {
+                write!(f, "txn WAL already exists")
             }
             Self::MissingSubsourceReference {
                 ingestion_id,
@@ -355,39 +355,39 @@ impl<T> From<DataflowError> for StorageError<T> {
 
 #[derive(Clone, Copy, Debug, PartialEq, num_enum::IntoPrimitive)]
 #[repr(u64)]
-pub enum PersistTxnTablesImpl {
+pub enum TxnWalTablesImpl {
     Eager = 1,
     Lazy = 2,
 }
 
-impl std::fmt::Display for PersistTxnTablesImpl {
+impl std::fmt::Display for TxnWalTablesImpl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PersistTxnTablesImpl::Eager => f.write_str("eager"),
-            PersistTxnTablesImpl::Lazy => f.write_str("lazy"),
+            TxnWalTablesImpl::Eager => f.write_str("eager"),
+            TxnWalTablesImpl::Lazy => f.write_str("lazy"),
         }
     }
 }
 
-impl std::str::FromStr for PersistTxnTablesImpl {
+impl std::str::FromStr for TxnWalTablesImpl {
     type Err = Box<(dyn std::error::Error + Send + Sync + 'static)>;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "off" | "eager" => Ok(PersistTxnTablesImpl::Eager),
-            "lazy" => Ok(PersistTxnTablesImpl::Lazy),
+            "off" | "eager" => Ok(TxnWalTablesImpl::Eager),
+            "lazy" => Ok(TxnWalTablesImpl::Lazy),
             _ => Err(s.into()),
         }
     }
 }
 
-impl TryFrom<u64> for PersistTxnTablesImpl {
+impl TryFrom<u64> for TxnWalTablesImpl {
     type Error = u64;
 
     fn try_from(value: u64) -> Result<Self, Self::Error> {
         match value {
-            0 | 1 => Ok(PersistTxnTablesImpl::Eager),
-            2 => Ok(PersistTxnTablesImpl::Lazy),
+            0 | 1 => Ok(TxnWalTablesImpl::Eager),
+            2 => Ok(TxnWalTablesImpl::Lazy),
             _ => Err(value),
         }
     }

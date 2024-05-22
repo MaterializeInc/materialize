@@ -150,7 +150,7 @@ class Action:
             )
         if exe.db.scenario in (
             Scenario.Kill,
-            Scenario.TogglePersistTxn,
+            Scenario.ToggleTxnWal,
             Scenario.BackupRestore,
         ):
             result.extend(
@@ -165,7 +165,7 @@ class Action:
                     "Broken pipe",
                 ]
             )
-        if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ToggleTxnWal):
             # Expected, see #20465
             result.extend(["unknown catalog item", "unknown schema"])
         if exe.db.scenario == Scenario.Rename:
@@ -352,7 +352,7 @@ class SQLsmithAction(Action):
         except:
             if exe.db.scenario not in (
                 Scenario.Kill,
-                Scenario.TogglePersistTxn,
+                Scenario.ToggleTxnWal,
                 Scenario.BackupRestore,
             ):
                 raise
@@ -1053,7 +1053,7 @@ class DropRoleAction(Action):
             except QueryError as e:
                 # expected, see #20465
                 if (
-                    exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal)
                     or "unknown role" not in e.msg
                 ):
                     raise e
@@ -1105,7 +1105,7 @@ class DropClusterAction(Action):
             except QueryError as e:
                 # expected, see #20465
                 if (
-                    exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal)
                     or "unknown cluster" not in e.msg
                 ):
                     raise e
@@ -1235,7 +1235,7 @@ class DropClusterReplicaAction(Action):
             except QueryError as e:
                 # expected, see #20465
                 if (
-                    exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal)
                     or "has no CLUSTER REPLICA named" not in e.msg
                 ):
                     raise e
@@ -1264,7 +1264,7 @@ class GrantPrivilegesAction(Action):
             except QueryError as e:
                 # expected, see #20465
                 if (
-                    exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal)
                     or "unknown role" not in e.msg
                 ):
                     raise e
@@ -1293,7 +1293,7 @@ class RevokePrivilegesAction(Action):
             except QueryError as e:
                 # expected, see #20465
                 if (
-                    exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn)
+                    exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal)
                     or "unknown role" not in e.msg
                 ):
                     raise e
@@ -1519,7 +1519,7 @@ class BackupRestoreAction(Action):
 class CreateWebhookSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ToggleTxnWal):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -1571,7 +1571,7 @@ class DropWebhookSourceAction(Action):
 class CreateKafkaSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ToggleTxnWal):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -1603,7 +1603,7 @@ class CreateKafkaSourceAction(Action):
                 source.create(exe)
                 exe.db.kafka_sources.append(source)
             except:
-                if exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn):
+                if exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal):
                     raise
         return True
 
@@ -1634,7 +1634,7 @@ class DropKafkaSourceAction(Action):
 class CreateMySqlSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ToggleTxnWal):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -1670,7 +1670,7 @@ class CreateMySqlSourceAction(Action):
                 source.create(exe)
                 exe.db.mysql_sources.append(source)
             except:
-                if exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn):
+                if exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal):
                     raise
         return True
 
@@ -1701,7 +1701,7 @@ class DropMySqlSourceAction(Action):
 class CreatePostgresSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
+        if exe.db.scenario in (Scenario.Kill, Scenario.ToggleTxnWal):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -1737,7 +1737,7 @@ class CreatePostgresSourceAction(Action):
                 source.create(exe)
                 exe.db.postgres_sources.append(source)
             except:
-                if exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn):
+                if exe.db.scenario not in (Scenario.Kill, Scenario.ToggleTxnWal):
                     raise
         return True
 
@@ -1875,7 +1875,7 @@ class HttpPostAction(Action):
                 # Expected when Mz is killed
                 if exe.db.scenario not in (
                     Scenario.Kill,
-                    Scenario.TogglePersistTxn,
+                    Scenario.ToggleTxnWal,
                     Scenario.BackupRestore,
                 ):
                     raise
@@ -1883,7 +1883,7 @@ class HttpPostAction(Action):
                 # expected, see #20465
                 if exe.db.scenario not in (
                     Scenario.Kill,
-                    Scenario.TogglePersistTxn,
+                    Scenario.ToggleTxnWal,
                 ) or ("404: no object was found at the path" not in e.msg):
                     raise e
         return True

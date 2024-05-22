@@ -25,7 +25,7 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ident;
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use once_cell::sync::Lazy;
@@ -587,11 +587,13 @@ pub static PERSIST_FAST_PATH_LIMIT: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static PERSIST_TXN_TABLES: VarDefinition = VarDefinition::new(
+pub static TXN_WAL_TABLES: VarDefinition = VarDefinition::new(
+    // The actual name is kept as "persist_txn_tables" instead of "txn_wal_tables" for historical
+    // reasons.
     "persist_txn_tables",
-    value!(PersistTxnTablesImpl; PersistTxnTablesImpl::Eager),
+    value!(TxnWalTablesImpl; TxnWalTablesImpl::Eager),
     "\
-    Whether to use the new persist-txn tables implementation or the legacy \
+    Whether to use the new txn-wal tables implementation or the legacy \
     one.
 
     Only takes effect on restart. Any changes will also cause clusterd \

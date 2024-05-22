@@ -55,7 +55,7 @@ members = [
     "src/persist-cli",
     "src/persist-client",
     "src/persist-proc",
-    "src/persist-txn",
+    "src/txn-wal",
     "src/persist-types",
     "src/pgcopy",
     "src/pgrepr",

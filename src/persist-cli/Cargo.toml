@@ -30,10 +30,10 @@ mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["bytes_", "network", "tracing_", "test"] }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
-mz-persist-txn = { path = "../persist-txn" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
 mz-timestamp-oracle = { path = "../timestamp-oracle" }
+mz-txn-wal = { path = "../txn-wal" }
 num_cpus = "1.14.0"
 num_enum = "0.5.7"
 prometheus = { version = "0.13.3", default-features = false }

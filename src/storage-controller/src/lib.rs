@@ -40,10 +40,6 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
-use mz_persist_txn::metrics::Metrics as TxnMetrics;
-use mz_persist_txn::txn_read::TxnsRead;
-use mz_persist_txn::txns::TxnsHandle;
-use mz_persist_txn::INIT_FORGET_ALL;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::RustType;
@@ -66,7 +62,7 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{
-    AlterError, CollectionMetadata, PersistTxnTablesImpl, StorageError, TxnsCodecRow,
+    AlterError, CollectionMetadata, StorageError, TxnWalTablesImpl, TxnsCodecRow,
 };
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::instances::StorageInstanceId;
@@ -79,6 +75,10 @@ use mz_storage_types::sources::{
     SourceExport,
 };
 use mz_storage_types::AlterCompatible;
+use mz_txn_wal::metrics::Metrics as TxnMetrics;
+use mz_txn_wal::txn_read::TxnsRead;
+use mz_txn_wal::txns::TxnsHandle;
+use mz_txn_wal::INIT_FORGET_ALL;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -96,7 +96,7 @@ mod rehydration;
 mod statistics;
 
 #[derive(Debug)]
-enum PersistTxns<T> {
+enum TxnsWal<T> {
     EnabledEager {
         txns_id: ShardId,
         txns_client: PersistClient,
@@ -107,14 +107,14 @@ enum PersistTxns<T> {
     },
 }
 
-impl<T: Timestamp + Lattice + Codec64> PersistTxns<T> {
+impl<T: Timestamp + Lattice + Codec64> TxnsWal<T> {
     fn expect_enabled_lazy(&self, txns_id: &ShardId) -> &TxnsRead<T> {
         match self {
-            PersistTxns::EnabledLazy { txns_read, .. } => {
+            TxnsWal::EnabledLazy { txns_read, .. } => {
                 assert_eq!(txns_id, txns_read.txns_id());
                 txns_read
             }
-            PersistTxns::EnabledEager { .. } => {
+            TxnsWal::EnabledEager { .. } => {
                 panic!("set if txns are enabled and lazy")
             }
         }
@@ -176,9 +176,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
-    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// Whether to use the new txn-wal tables implementation or the legacy
     /// one.
-    txns: PersistTxns<T>,
+    txns: TxnsWal<T>,
     /// Whether we have run `txns_init` yet (required before create_collections
     /// and the various flavors of append).
     txns_init_run: bool,
@@ -492,15 +492,15 @@ where
                     _ => None,
                 };
 
-                // If the shard is being managed by persist-txn (initially, tables), then we need to
+                // If the shard is being managed by txn-wal (initially, tables), then we need to
                 // pass along the shard id for the txns shard to dataflow rendering.
                 let txns_shard = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) => match &self.txns {
-                        // If we're not using lazy persist-txn upper (i.e. we're
+                        // If we're not using lazy txn-wal upper (i.e. we're
                         // using eager uppers) then all reads should be done
                         // normally.
-                        PersistTxns::EnabledEager { .. } => None,
-                        PersistTxns::EnabledLazy { txns_read, .. } => Some(*txns_read.txns_id()),
+                        TxnsWal::EnabledEager { .. } => None,
+                        TxnsWal::EnabledLazy { txns_read, .. } => Some(*txns_read.txns_id()),
                     },
                     DataSource::Ingestion(_)
                     | DataSource::IngestionExport { .. }
@@ -821,7 +821,7 @@ where
                 .await
                 .expect("table worker unexpectedly shut down");
             for (id, mut collection_state) in collection_states {
-                if let PersistTxns::EnabledLazy { .. } = &self.txns {
+                if let TxnsWal::EnabledLazy { .. } = &self.txns {
                     if collection_state.write_frontier.less_than(&advance_to) {
                         collection_state.write_frontier = Antichain::from_elem(advance_to.clone());
                     }
@@ -1619,14 +1619,14 @@ where
         let metadata = &self.collection(id)?.collection_metadata;
         let contents = match metadata.txns_shard.as_ref() {
             None => {
-                // We're not using persist-txn for tables, so we can take a snapshot directly.
+                // We're not using txn-wal for tables, so we can take a snapshot directly.
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
                 read_handle
                     .snapshot_and_fetch(Antichain::from_elem(as_of))
                     .await
             }
             Some(txns_id) => {
-                // We _are_ using persist-txn for tables. It advances the physical upper of the
+                // We _are_ using txn-wal for tables. It advances the physical upper of the
                 // shard lazily, so we need to ask it for the snapshot to ensure the read is
                 // unblocked.
                 //
@@ -2502,8 +2502,8 @@ where
     /// that prevents an old Coordinator, `A`, from getting a new write
     /// timestamp that is higher than `B`'s boot timestamp. Below is the
     /// implications for all persist transaction scenarios, `on` means a
-    /// Coordinator turning the persist txn flag on, `off` means a Coordinator
-    /// turning the persist txn flag off.
+    /// Coordinator turning the txn flag flag on, `off` means a Coordinator
+    /// turning the txn wal flag off.
     ///
     /// The following series of events is a concern:
     ///   1. `A` writes at `t_0`, s.t. `t_0` > `B`'s boot timestamp.
@@ -2513,7 +2513,7 @@ where
     ///
     /// - `off` -> `off`: If `B`` manages to append `t_1` before A appends `t_0`
     ///    then the `t_0` append will panic and we won't acknowledge the write
-    ///   to the user (or similarly `t_2` and `t_1`). Before persist-txn,
+    ///   to the user (or similarly `t_2` and `t_1`). Before txn-wal,
     ///   appends are not atomic, so we might get a partial append. This is fine
     ///   because we only support single table transactions.
     /// - `on` -> `on`: The txn-shard is meant to correctly handle two writers
@@ -2547,7 +2547,7 @@ where
     async fn init_txns(&mut self, init_ts: T) -> Result<(), StorageError<Self::Timestamp>> {
         assert_eq!(self.txns_init_run, false);
         let (txns_id, txns_client) = match &self.txns {
-            PersistTxns::EnabledEager {
+            TxnsWal::EnabledEager {
                 txns_id,
                 txns_client,
             } => {
@@ -2557,7 +2557,7 @@ where
                 );
                 (txns_id, txns_client)
             }
-            PersistTxns::EnabledLazy {
+            TxnsWal::EnabledLazy {
                 txns_read,
                 txns_client,
             } => {
@@ -2749,9 +2749,9 @@ impl From<NonZeroI64> for PersistEpoch {
 /// `self` parameter.
 ///
 pub fn prepare_initialization<T>(txn: &mut dyn StorageTxn<T>) -> Result<(), StorageError<T>> {
-    if txn.get_persist_txn_shard().is_none() {
+    if txn.get_txn_wal_shard().is_none() {
         let txns_id = ShardId::new();
-        txn.write_persist_txn_shard(txns_id.to_string())?;
+        txn.write_txn_wal_shard(txns_id.to_string())?;
     }
 
     Ok(())
@@ -2779,7 +2779,7 @@ where
         now: NowFn,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
-        persist_txn_tables: PersistTxnTablesImpl,
+        txn_wal_tables: TxnWalTablesImpl,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
     ) -> Self {
@@ -2789,7 +2789,7 @@ where
         // durably recorded before it is used, otherwise we risk leaking persist
         // state.
         let txns_id = txn
-            .get_persist_txn_shard()
+            .get_txn_wal_shard()
             .expect("must call prepare initialization before creating storage controller");
         let txns_id = ShardId::from_str(txns_id.as_str()).expect("shard ID must be valid");
 
@@ -2807,20 +2807,17 @@ where
             Arc::new(UnitSchema),
         )
         .await;
-        let persist_table_worker = persist_handles::PersistTableWriteWorker::new_txns(
-            tx.clone(),
-            txns,
-            persist_txn_tables,
-        );
-        let txns = match persist_txn_tables {
-            PersistTxnTablesImpl::Lazy => {
+        let persist_table_worker =
+            persist_handles::PersistTableWriteWorker::new_txns(tx.clone(), txns, txn_wal_tables);
+        let txns = match txn_wal_tables {
+            TxnWalTablesImpl::Lazy => {
                 let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
-                PersistTxns::EnabledLazy {
+                TxnsWal::EnabledLazy {
                     txns_read,
                     txns_client,
                 }
             }
-            PersistTxnTablesImpl::Eager => PersistTxns::EnabledEager {
+            TxnWalTablesImpl::Eager => TxnsWal::EnabledEager {
                 txns_id,
                 txns_client,
             },

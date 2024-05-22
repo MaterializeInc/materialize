@@ -43,8 +43,8 @@ use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::{ConnectionCounter, Var, PERSIST_TXN_TABLES};
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_sql::session::vars::{ConnectionCounter, Var, TXN_WAL_TABLES};
+use mz_storage_types::controller::TxnWalTablesImpl;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
@@ -89,12 +89,12 @@ pub struct Config {
     pub secrets_controller: Arc<dyn SecretsController>,
     /// VpcEndpoint controller configuration.
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
-    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// Whether to use the new txn-wal tables implementation or the legacy
     /// one.
     ///
     /// If specified, this overrides the value stored in Launch Darkly (and
     /// mirrored to the catalog storage's "config" collection).
-    pub persist_txn_tables_cli: Option<PersistTxnTablesImpl>,
+    pub txn_wal_tables_cli: Option<TxnWalTablesImpl>,
 
     // === Adapter options. ===
     /// Catalog configuration.
@@ -441,14 +441,14 @@ impl Listeners {
             .open(boot_ts, &bootstrap_args, config.deploy_generation, None)
             .await?;
 
-        let persist_txn_tables_current_ld =
-            get_ld_value(PERSIST_TXN_TABLES.name(), &remote_system_parameters, |x| {
-                PersistTxnTablesImpl::from_str(x).map_err(|x| x.to_string())
+        let txn_wal_tables_current_ld =
+            get_ld_value(TXN_WAL_TABLES.name(), &remote_system_parameters, |x| {
+                TxnWalTablesImpl::from_str(x).map_err(|x| x.to_string())
             })?;
         // Get the value from Launch Darkly as of the last time this environment
         // was running. (Ideally it would be the above current value, but that's
         // not guaranteed: we don't want to block startup on it if LD is down.)
-        let persist_txn_tables_stash_ld = adapter_storage.get_persist_txn_tables().await?;
+        let txn_wal_tables_stash_ld = adapter_storage.get_txn_wal_tables().await?;
 
         // Load the adapter catalog from disk.
         if !config
@@ -471,37 +471,36 @@ impl Listeners {
         );
 
         // Initialize controller.
-        let persist_txn_tables_default = config
+        let txn_wal_tables_default = config
             .system_parameter_defaults
-            .get(PERSIST_TXN_TABLES.name())
+            .get(TXN_WAL_TABLES.name())
             .map(|x| {
-                PersistTxnTablesImpl::from_str(x).map_err(|err| {
+                TxnWalTablesImpl::from_str(x).map_err(|err| {
                     anyhow!(
                         "failed to parse default for {}: {}",
-                        PERSIST_TXN_TABLES.name(),
+                        TXN_WAL_TABLES.name(),
                         err
                     )
                 })
             })
             .transpose()?;
-        let mut persist_txn_tables =
-            persist_txn_tables_default.unwrap_or(PersistTxnTablesImpl::Eager);
-        if let Some(value) = persist_txn_tables_stash_ld {
-            persist_txn_tables = value;
+        let mut txn_wal_tables = txn_wal_tables_default.unwrap_or(TxnWalTablesImpl::Eager);
+        if let Some(value) = txn_wal_tables_stash_ld {
+            txn_wal_tables = value;
         }
-        if let Some(value) = persist_txn_tables_current_ld {
-            persist_txn_tables = value;
+        if let Some(value) = txn_wal_tables_current_ld {
+            txn_wal_tables = value;
         }
-        if let Some(value) = config.persist_txn_tables_cli {
-            persist_txn_tables = value;
+        if let Some(value) = config.txn_wal_tables_cli {
+            txn_wal_tables = value;
         }
         info!(
             "persist_txn_tables value of {} computed from default {:?} catalog {:?} LD {:?} and flag {:?}",
-            persist_txn_tables,
-            persist_txn_tables_default,
-            persist_txn_tables_stash_ld,
-            persist_txn_tables_current_ld,
-            config.persist_txn_tables_cli,
+            txn_wal_tables,
+            txn_wal_tables_default,
+            txn_wal_tables_stash_ld,
+            txn_wal_tables_current_ld,
+            config.txn_wal_tables_cli,
         );
 
         // Initialize adapter.
@@ -511,7 +510,7 @@ impl Listeners {
             connection_context: config.controller.connection_context.clone(),
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
-            controller_persist_txn_tables: persist_txn_tables,
+            controller_txn_wal_tables: txn_wal_tables,
             storage: adapter_storage,
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,

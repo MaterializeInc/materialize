@@ -26,13 +26,13 @@ use mz_persist_client::read::Since;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
-use mz_persist_txn::txn_read::DataSnapshot;
-use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
 use mz_storage_client::client::{StorageResponse, TimestamplessUpdate, Update};
-use mz_storage_types::controller::{InvalidUpper, PersistTxnTablesImpl, TxnsCodecRow};
+use mz_storage_types::controller::{InvalidUpper, TxnWalTablesImpl, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
+use mz_txn_wal::txn_read::DataSnapshot;
+use mz_txn_wal::txns::{Tidy, TxnsHandle};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::UnboundedSender;
@@ -367,13 +367,13 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     pub(crate) fn new_txns(
         frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
-        persist_txn_tables: PersistTxnTablesImpl,
+        txn_wal_tables: TxnWalTablesImpl,
     ) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
         mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
             let mut worker = TxnsTableWorker {
-                persist_txn_tables,
+                txn_wal_tables,
                 frontier_responses,
                 txns,
                 write_handles: BTreeMap::new(),
@@ -449,7 +449,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 }
 
 struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
-    persist_txn_tables: PersistTxnTablesImpl,
+    txn_wal_tables: TxnWalTablesImpl,
     frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
@@ -471,7 +471,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                     let _ = tx.send(());
                 }
                 PersistTableWriteCmd::Update(_id, _write_handle) => {
-                    unimplemented!("TODO: Support migrations on persist-txn backed collections")
+                    unimplemented!("TODO: Support migrations on txn-wal backed collections")
                 }
                 PersistTableWriteCmd::DropHandles { forget_ts, ids, tx } => {
                     self.drop_handles(ids, forget_ts).instrument(span).await;
@@ -538,12 +538,12 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 // - Crash.
                 // - Reboot.
                 // - Try and read s at 10.
-                match self.persist_txn_tables {
-                    PersistTxnTablesImpl::Eager => {
+                match self.txn_wal_tables {
+                    TxnWalTablesImpl::Eager => {
                         self.tidy
                             .merge(self.txns.apply_eager_le(&register_ts).await);
                     }
-                    PersistTxnTablesImpl::Lazy => {}
+                    TxnWalTablesImpl::Lazy => {}
                 };
                 self.send_new_uppers(new_uppers);
             }
@@ -607,11 +607,11 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 }
             )
         );
-        // TODO: persist-txn doesn't take an advance_to yet, it uses
+        // TODO: txn-wal doesn't take an advance_to yet, it uses
         // timestamp.step_forward. This is the same in all cases, so just assert that
         // for now. Note that this uses the _persist_ StepForward, not the
         // TimestampManipulation one (the impls are the same) because that's what
-        // persist-txn uses.
+        // txn-wal uses.
         assert_eq!(
             advance_to,
             mz_persist_types::StepForward::step_forward(&write_ts)
@@ -640,9 +640,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 // TODO: Do the applying in a background task. This will be a
                 // significant INSERT latency performance win.
                 debug!("applying {:?}", apply);
-                let tidy = match self.persist_txn_tables {
-                    PersistTxnTablesImpl::Lazy => apply.apply(&mut self.txns).await,
-                    PersistTxnTablesImpl::Eager => apply.apply_eager(&mut self.txns).await,
+                let tidy = match self.txn_wal_tables {
+                    TxnWalTablesImpl::Lazy => apply.apply(&mut self.txns).await,
+                    TxnWalTablesImpl::Eager => apply.apply_eager(&mut self.txns).await,
                 };
                 self.tidy.merge(tidy);
                 // Committing a txn advances the logical upper of _every_ data

@@ -51,7 +51,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--blob", type=str, choices=["mem", "maelstrom"], default="maelstrom"
     )
     parser.add_argument(
-        "--persist-txn", type=bool, default=False, action=argparse.BooleanOptionalAction
+        "--txn-wal", type=bool, default=False, action=argparse.BooleanOptionalAction
     )
 
     args = parser.parse_args()
@@ -74,7 +74,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         blob_uri = ""
 
     maelstrom_cmd = "maelstrom"
-    if args.persist_txn:
+    if args.txn_wal:
         maelstrom_cmd = "maelstrom-txn"
 
     c.run(

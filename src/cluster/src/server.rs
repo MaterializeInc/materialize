@@ -22,9 +22,9 @@ use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_txn::operator::TxnsContext;
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
 use mz_service::local::LocalClient;
+use mz_txn_wal::operator::TxnsContext;
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
 use timely::WorkerConfig;
@@ -43,7 +43,7 @@ pub struct ClusterConfig {
     pub metrics_registry: MetricsRegistry,
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
-    /// Context necessary for rendering persist-txn operators.
+    /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
     pub tracing_handle: Arc<TracingHandle>,
@@ -60,7 +60,7 @@ where
     timely_container: TimelyContainerRef<C, R, Worker::Activatable>,
     /// Handle to the persist infrastructure.
     persist_clients: Arc<PersistClientCache>,
-    /// Context necessary for rendering persist-txn operators.
+    /// Context necessary for rendering txn-wal operators.
     txns_ctx: TxnsContext,
     /// The handle to the Tokio runtime.
     tokio_handle: tokio::runtime::Handle,

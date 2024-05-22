@@ -113,9 +113,9 @@
 //! # use std::sync::Arc;
 //! # use mz_ore::metrics::MetricsRegistry;
 //! # use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-//! # use mz_persist_txn::metrics::Metrics;
-//! # use mz_persist_txn::operator::DataSubscribe;
-//! # use mz_persist_txn::txns::TxnsHandle;
+//! # use mz_txn_wal::metrics::Metrics;
+//! # use mz_txn_wal::operator::DataSubscribe;
+//! # use mz_txn_wal::txns::TxnsHandle;
 //! # use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 //! # use timely::progress::Antichain;
 //! #
@@ -236,7 +236,7 @@ mod proto {
     use prost::Message;
     use uuid::Uuid;
 
-    include!(concat!(env!("OUT_DIR"), "/mz_persist_txn.proto.rs"));
+    include!(concat!(env!("OUT_DIR"), "/mz_txn_wal.proto.rs"));
 
     impl ProtoIdBatch {
         pub(crate) fn new(batch: ProtoBatch) -> ProtoIdBatch {
@@ -262,7 +262,7 @@ mod proto {
     }
 }
 
-/// Adds the full set of all persist-txn `Config`s.
+/// Adds the full set of all txn-wal `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&crate::INIT_FORGET_ALL)

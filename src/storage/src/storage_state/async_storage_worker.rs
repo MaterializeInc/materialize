@@ -240,7 +240,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                             } = &export.storage_metadata;
                             assert_eq!(
                                 txns_shard, &None,
-                                "source {} unexpectedly using persist-txn",
+                                "source {} unexpectedly using txn-wal",
                                 id
                             );
                             let client = persist_clients

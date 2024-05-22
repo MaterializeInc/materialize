@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_txn::operator::TxnsContext;
+use mz_txn_wal::operator::TxnsContext;
 use timely::worker::Worker as TimelyWorker;
 
 /// A trait for letting specific server implementations hook

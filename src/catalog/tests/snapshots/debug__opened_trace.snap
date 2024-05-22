@@ -1949,7 +1949,7 @@ Trace {
     unfinalized_shards: CollectionTrace {
         values: [],
     },
-    persist_txn_shard: CollectionTrace {
+    txn_wal_shard: CollectionTrace {
         values: [],
     },
 }

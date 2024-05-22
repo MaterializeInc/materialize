@@ -30,7 +30,6 @@ use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::fetch::{SerdeLeasedBatchPart, ShardSourcePart};
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
-use mz_persist_txn::operator::{txns_progress, TxnsContext};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationType, Row, RowArena, Timestamp};
@@ -42,6 +41,7 @@ use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::probe::ProbeNotify;
+use mz_txn_wal::operator::{txns_progress, TxnsContext};
 use serde::{Deserialize, Serialize};
 use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
@@ -187,13 +187,13 @@ where
         };
 
         // Our default listen sleeps are tuned for the case of a shard that is
-        // written once a second, but persist-txns allows these to be lazy.
+        // written once a second, but txn-wal allows these to be lazy.
         // Override the tuning to reduce crdb load. The pubsub fallback
         // responsibility is then replaced by manual "one state" wakeups in the
         // txns_progress operator.
         let cfg = persist_clients.cfg().configs.clone();
         let subscribe_sleep = match metadata.txns_shard {
-            Some(_) => Some(move || mz_persist_txn::operator::txns_data_shard_retry_params(&cfg)),
+            Some(_) => Some(move || mz_txn_wal::operator::txns_data_shard_retry_params(&cfg)),
             None => None,
         };
 
@@ -220,7 +220,7 @@ where
         stream.leave()
     });
 
-    // If a txns_shard was provided, then this shard is in the persist-txn
+    // If a txns_shard was provided, then this shard is in the txn-wal
     // system. This means the "logical" upper may be ahead of the "physical"
     // upper. Render a dataflow operator that passes through the input and
     // translates the progress frontiers as necessary.

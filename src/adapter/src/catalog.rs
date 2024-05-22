@@ -65,7 +65,7 @@ use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
@@ -197,9 +197,9 @@ impl Catalog {
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
         builtin_migration_metadata: BuiltinMigrationMetadata,
-        // Whether to use the new persist-txn tables implementation or the
+        // Whether to use the new txn-wal tables implementation or the
         // legacy one.
-        persist_txn_tables: PersistTxnTablesImpl,
+        txn_wal_tables: TxnWalTablesImpl,
     ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
     {
         let mut controller = {
@@ -211,8 +211,7 @@ impl Catalog {
 
             let read_only_tx = storage.transaction().await?;
 
-            mz_controller::Controller::new(config, envd_epoch, persist_txn_tables, &read_only_tx)
-                .await
+            mz_controller::Controller::new(config, envd_epoch, txn_wal_tables, &read_only_tx).await
         };
 
         self.initialize_storage_controller_state(

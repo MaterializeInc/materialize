@@ -50,7 +50,6 @@ mz-mysql-util = { path = "../mysql-util" }
 mz-ore = { path = "../ore", features = ["async", "tracing_", "chrono", "metrics"] }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
-mz-persist-txn = { path = "../persist-txn" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pid-file = { path = "../pid-file" }
@@ -65,6 +64,7 @@ mz-storage-client = { path = "../storage-client" }
 mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
+mz-txn-wal = { path = "../txn-wal" }
 once_cell = { version = "1.16.0" }
 postgres-protocol = { version = "0.6.5" }
 prometheus = { version = "0.13.3", default-features = false }

@@ -385,8 +385,8 @@ steps:
               composition: zippy
               args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m]
 
-      - id: zippy-user-tables-persist-txn
-        label: "Zippy User Tables + toggle persist-txn"
+      - id: zippy-user-tables-txn-wal
+        label: "Zippy User Tables + toggle txn-wal"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
@@ -394,7 +394,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=UserTablesTogglePersistTxn, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=UserTablesToggleTxnWal, --actions=10000, --max-execution-time=30m]
 
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
@@ -765,8 +765,8 @@ steps:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-persist-txn-toggle
-        label: "Checks + Toggle persist_txn"
+      - id: checks-txn-wal-toggle
+        label: "Checks + Toggle txn_wal"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
@@ -775,10 +775,10 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=PersistTxnToggle, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=TxnWalToggle, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-persist-txn-fencing
-        label: "Checks + persist_txn fencing"
+      - id: checks-txn-wal-fencing
+        label: "Checks + txn_wal fencing"
         depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
@@ -786,7 +786,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=PersistTxnFencing, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=TxnWalFencing, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-migrate-x86-64-aarch64
         label: "Checks migrate from x86-64 to aarch64"
@@ -973,8 +973,8 @@ steps:
               composition: persist
               args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
-      - id: persist-txn-maelstrom
-        label: Maelstrom coverage of persist-txn
+      - id: txn-wal-maelstrom
+        label: Maelstrom coverage of txn-wal
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
@@ -983,7 +983,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: persist
-              args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --rate=500, --persist-txn]
+              args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --rate=500, --txn-wal]
 
       - id: persistence-failpoints
         label: Persistence failpoints
@@ -1419,8 +1419,8 @@ steps:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=16]
 
-      - id: parallel-workload-persist-txn
-        label: "Parallel Workload (toggle persist-txn)"
+      - id: parallel-workload-txn-wal
+        label: "Parallel Workload (toggle txn-wal)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
@@ -1429,7 +1429,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=toggle-persist-txn, --threads=16]
+              args: [--runtime=1500, --scenario=toggle-txn-wal, --threads=16]
 
   - id: incident-70
     label: "Test for incident 70"
@@ -1488,13 +1488,13 @@ steps:
           args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
     sanitizer: skip
 
-  - id: persist-txn-fencing
-    label: Persist-txn fencing
+  - id: txn-wal-fencing
+    label: Txn-wal fencing
     depends_on: build-aarch64
     timeout_in_minutes: 120
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: persist-txn-fencing
+          composition: txn-wal-fencing
 
     agents:
       queue: linux-aarch64

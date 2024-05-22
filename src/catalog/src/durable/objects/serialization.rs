@@ -43,10 +43,10 @@ use crate::durable::objects::{
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
     ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey,
-    ItemValue, PersistTxnShardValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
-    StorageCollectionMetadataKey, StorageCollectionMetadataValue, StorageUsageKey,
-    SystemPrivilegesKey, SystemPrivilegesValue, UnfinalizedShardKey,
+    ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
+    ServerConfigurationValue, SettingKey, SettingValue, StorageCollectionMetadataKey,
+    StorageCollectionMetadataValue, StorageUsageKey, SystemPrivilegesKey, SystemPrivilegesValue,
+    TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -741,7 +741,9 @@ impl RustType<proto::UnfinalizedShardKey> for UnfinalizedShardKey {
     }
 }
 
-impl RustType<proto::PersistTxnShardValue> for PersistTxnShardValue {
+// The proto message is called `PersistTxnShardValue` and not `TxnWalShardValue` for historical
+// reasons.
+impl RustType<proto::PersistTxnShardValue> for TxnWalShardValue {
     fn into_proto(&self) -> proto::PersistTxnShardValue {
         proto::PersistTxnShardValue {
             shard: self.shard.to_string(),
@@ -749,7 +751,7 @@ impl RustType<proto::PersistTxnShardValue> for PersistTxnShardValue {
     }
 
     fn from_proto(proto: proto::PersistTxnShardValue) -> Result<Self, TryFromProtoError> {
-        Ok(PersistTxnShardValue { shard: proto.shard })
+        Ok(TxnWalShardValue { shard: proto.shard })
     }
 }
 

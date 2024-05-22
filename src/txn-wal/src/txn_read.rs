@@ -213,7 +213,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         // (probably marginal) and historical `as_of`s (probably less marginal
         // but not common in mz right now). Fixing this more precisely in a
         // performant way (i.e. no crdb queries involved) seems to require that
-        // persist-txn always keep track of the latest write, even when it's
+        // txn-wal always keep track of the latest write, even when it's
         // known to have been applied. `snapshot_stats` is an estimate anyway,
         // it doesn't even attempt to account for things like consolidation, so
         // this seems fine for now.
@@ -361,9 +361,9 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
         };
 
         let read_task =
-            mz_ore::task::spawn(|| "persist-txn::read_task", async move { task.run().await });
+            mz_ore::task::spawn(|| "txn-wal::read_task", async move { task.run().await });
 
-        let subscribe_task = mz_ore::task::spawn(|| "persist-txn::subscribe_task", async move {
+        let subscribe_task = mz_ore::task::spawn(|| "txn-wal::subscribe_task", async move {
             subscribe_task.run().await
         });
 

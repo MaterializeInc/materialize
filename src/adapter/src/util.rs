@@ -343,7 +343,7 @@ impl<T> ShouldHalt for StorageError<T> {
             StorageError::ResourceExhausted(_)
             | StorageError::CollectionMetadataAlreadyExists(_)
             | StorageError::PersistShardAlreadyInUse(_)
-            | StorageError::PersistTxnShardAlreadyExists => true,
+            | StorageError::TxnWalShardAlreadyExists => true,
             StorageError::UpdateBeyondUpper(_)
             | StorageError::ReadBeforeSince(_)
             | StorageError::InvalidUppers(_)

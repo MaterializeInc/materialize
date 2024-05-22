@@ -13,7 +13,7 @@ from materialize.checks.mzcompose_actions import Down, KillMz, StartMz
 from materialize.checks.scenarios import Scenario
 
 
-class PersistTxnToggle(Scenario):
+class TxnWalToggle(Scenario):
     """Toggle persist_txn_tables between `off` and `eager`"""
 
     def actions(self) -> list[Action]:
@@ -47,7 +47,7 @@ class PersistTxnToggle(Scenario):
         ]
 
 
-class PersistTxnFencing(Scenario):
+class TxnWalFencing(Scenario):
     """Switch between two instances with different persist_txn_tables settings.
     Fencing should kick in to prevent data corruption."""
 

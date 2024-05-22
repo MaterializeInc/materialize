@@ -207,7 +207,7 @@ class Executor:
             # Expected when Mz is killed
             if self.db.scenario not in (
                 Scenario.Kill,
-                Scenario.TogglePersistTxn,
+                Scenario.ToggleTxnWal,
                 Scenario.BackupRestore,
             ):
                 raise

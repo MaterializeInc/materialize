@@ -61,9 +61,9 @@ def get_ancestor_overrides_for_performance_regressions(
             "62ea182963be5b956e13115b8ad39f7835fc4351": MzVersion.parse_mz("v0.91.0"),
             # PR#24906 (Compute operator hydration status logging) increased number of messages against v0.88.1
             "067ae870eef724f7eb5851b5745b9ff52b881481": MzVersion.parse_mz("v0.89.0"),
-            # PR#24918 (persist-txn: switch to a new operator protocol for lazy) increased number of messages against v0.86.1 (but got reverted in 0.87.1)
+            # PR#24918 (txn-wal: switch to a new operator protocol for lazy) increased number of messages against v0.86.1 (but got reverted in 0.87.1)
             "b648576b52b8ba9bb3a4732f7022ab5c06ebed32": MzVersion.parse_mz("v0.87.0"),
-            # PR#23659 (persist-txn: enable in CI with "eager uppers") introduces regressions against v0.79.0
+            # PR#23659 (txn-wal: enable in CI with "eager uppers") introduces regressions against v0.79.0
             "c4f520a57a3046e5074939d2ea345d1c72be7079": MzVersion.parse_mz("v0.80.0"),
             # PR#23421 (coord: smorgasbord of improvements for the crdb-backed timestamp oracle) introduces regressions against 0.78.13
             "5179ebd39aea4867622357a832aaddcde951b411": MzVersion.parse_mz("v0.79.0"),
@@ -83,7 +83,7 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_SCALABILITY_REGRESSIONS: dict
     str, MzVersion
 ] = {
     # insert newer commits at the top
-    # PR#23659 (persist-txn: enable in CI with "eager uppers") introduces regressions against v0.79.0
+    # PR#23659 (txn-wal: enable in CI with "eager uppers") introduces regressions against v0.79.0
     "c4f520a57a3046e5074939d2ea345d1c72be7079": MzVersion.parse_mz("v0.80.0"),
     # PR#23421 (coord: smorgasbord of improvements for the crdb-backed timestamp oracle) introduces regressions against 0.78.13
     "5179ebd39aea4867622357a832aaddcde951b411": MzVersion.parse_mz("v0.79.0"),

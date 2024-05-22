@@ -56,7 +56,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{StorageController, StorageMetadata, StorageTxn};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::controller::TxnWalTablesImpl;
 use serde::Serialize;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -164,9 +164,9 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
     /// The URL for Persist PubSub.
     persist_pubsub_url: String,
-    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// Whether to use the new txn-wal tables implementation or the legacy
     /// one.
-    persist_txn_tables: PersistTxnTablesImpl,
+    txn_wal_tables: TxnWalTablesImpl,
 
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
@@ -236,7 +236,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             metrics_rx: _,
             frontiers_ticker: _,
             persist_pubsub_url: _,
-            persist_txn_tables: _,
+            txn_wal_tables: _,
             secrets_args: _,
             objects_to_unfulfilled_watch_sets,
             immediate_watch_sets,
@@ -557,9 +557,9 @@ where
     pub async fn new(
         config: ControllerConfig,
         envd_epoch: NonZeroI64,
-        // Whether to use the new persist-txn tables implementation or the
+        // Whether to use the new txn-wal tables implementation or the
         // legacy one.
-        persist_txn_tables: PersistTxnTablesImpl,
+        txn_wal_tables: TxnWalTablesImpl,
         storage_txn: &dyn StorageTxn<T>,
     ) -> Self {
         let storage_controller = mz_storage_controller::Controller::new(
@@ -569,7 +569,7 @@ where
             config.now,
             envd_epoch,
             config.metrics_registry.clone(),
-            persist_txn_tables,
+            txn_wal_tables,
             config.connection_context,
             storage_txn,
         )
@@ -597,7 +597,7 @@ where
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
             frontiers_ticker,
             persist_pubsub_url: config.persist_pubsub_url,
-            persist_txn_tables,
+            txn_wal_tables,
             secrets_args: config.secrets_args,
             objects_to_unfulfilled_watch_sets: BTreeMap::new(),
             immediate_watch_sets: Vec::new(),

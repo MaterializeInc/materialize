@@ -39,7 +39,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Opaque;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::{Diff, RelationDesc, ScalarType};
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_storage_types::sources::SourceData;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -48,7 +48,7 @@ use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
 use crate::durable::initialize::{
-    DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
+    DEPLOY_GENERATION, SYSTEM_CONFIG_SYNCED_KEY, TXN_WAL_TABLES, USER_VERSION_KEY,
 };
 use crate::durable::metrics::Metrics;
 use crate::durable::objects::serialization::proto;
@@ -601,8 +601,8 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::UnfinalizedShard(key, ()) => {
                         apply(&mut snapshot.unfinalized_shards, key, &(), diff);
                     }
-                    StateUpdateKind::PersistTxnShard((), value) => {
-                        apply(&mut snapshot.persist_txn_shard, &(), value, diff);
+                    StateUpdateKind::TxnWalShard((), value) => {
+                        apply(&mut snapshot.txn_wal_shard, &(), value, diff);
                     }
                 }
             }
@@ -1251,16 +1251,14 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn get_persist_txn_tables(
-        &mut self,
-    ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
+    async fn get_txn_wal_tables(&mut self) -> Result<Option<TxnWalTablesImpl>, CatalogError> {
         let value = self
             .with_trace(|trace| {
                 Ok(trace
                     .into_iter()
                     .rev()
                     .filter_map(|(kind, _, _)| match kind {
-                        StateUpdateKind::Config(key, value) if key.key == PERSIST_TXN_TABLES => {
+                        StateUpdateKind::Config(key, value) if key.key == TXN_WAL_TABLES => {
                             Some(value.value)
                         }
                         _ => None,
@@ -1269,7 +1267,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             })
             .await?;
         value
-            .map(PersistTxnTablesImpl::try_from)
+            .map(TxnWalTablesImpl::try_from)
             .transpose()
             .map_err(|err| {
                 DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
@@ -1573,8 +1571,8 @@ impl Trace {
                 StateUpdateKind::UnfinalizedShard(k, ()) => {
                     trace.unfinalized_shards.values.push(((k, ()), ts, diff))
                 }
-                StateUpdateKind::PersistTxnShard((), v) => {
-                    trace.persist_txn_shard.values.push((((), v), ts, diff))
+                StateUpdateKind::TxnWalShard((), v) => {
+                    trace.txn_wal_shard.values.push((((), v), ts, diff))
                 }
             }
         }

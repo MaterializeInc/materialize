@@ -784,7 +784,7 @@ pub struct Snapshot {
     pub storage_collection_metadata:
         BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
     pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
-    pub persist_txn_shard: BTreeMap<(), proto::PersistTxnShardValue>,
+    pub txn_wal_shard: BTreeMap<(), proto::PersistTxnShardValue>,
 }
 
 impl Snapshot {
@@ -998,7 +998,7 @@ pub struct UnfinalizedShardKey {
 /// This value is stored transparently, however, it should only ever be
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
-pub struct PersistTxnShardValue {
+pub struct TxnWalShardValue {
     pub(crate) shard: String,
 }
 

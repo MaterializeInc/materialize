@@ -40,14 +40,14 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::Diagnostics;
-use mz_persist_txn::operator::TxnsContext;
-use mz_persist_txn::txn_cache::TxnsCache;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, RowCollection, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
+use mz_txn_wal::operator::TxnsContext;
+use mz_txn_wal::txn_cache::TxnsCache;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::dataflow::operators::probe;
@@ -101,7 +101,7 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
-    /// Context necessary for rendering persist-txn operators.
+    /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
     pub command_history: ComputeCommandHistory<UIntGauge>,
@@ -958,8 +958,8 @@ impl PersistPeek {
             .await
             .map_err(|e| e.to_string())?;
 
-        // If we are using persist-txn for this collection, then the upper might
-        // be advanced lazily and we have to go through persist-txn for reads.
+        // If we are using txn-wal for this collection, then the upper might
+        // be advanced lazily and we have to go through txn-wal for reads.
         //
         // TODO: If/when we have a process-wide TxnsRead worker for clusterd,
         // use in here (instead of opening a new TxnsCache) to save a persist

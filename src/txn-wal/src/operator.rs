@@ -557,6 +557,9 @@ impl TxnsContext {
     }
 }
 
+// Existing configs use the prefix "persist_txns_" for historical reasons. New
+// configs should use the prefix "txn_wal_".
+
 pub(crate) const DATA_SHARD_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
     "persist_txns_data_shard_retryer_initial_backoff",
     Duration::from_millis(1024),
@@ -575,7 +578,7 @@ pub(crate) const DATA_SHARD_RETRYER_CLAMP: Config<Duration> = Config::new(
     "The backoff clamp duration when polling for new batches from a txns data shard persist_source.",
 );
 
-/// Retry configuration for persist-txns data shard override of
+/// Retry configuration for txn-wal data shard override of
 /// `next_listen_batch`.
 pub fn txns_data_shard_retry_params(cfg: &ConfigSet) -> RetryParameters {
     RetryParameters {
