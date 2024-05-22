@@ -335,7 +335,7 @@ impl ConnectionOptionExtracted {
                     None | Some("disable") => tokio_postgres::config::SslMode::Disable,
                     // "prefer" intentionally omitted because it has dubious security
                     // properties.
-                    Some("require") => tokio_postgres::config::SslMode::Require,
+                    Some("require") | Some("required") => tokio_postgres::config::SslMode::Require,
                     Some("verify_ca") | Some("verify-ca") => {
                         tokio_postgres::config::SslMode::VerifyCa
                     }
@@ -410,7 +410,7 @@ impl ConnectionOptionExtracted {
                     None | Some("DISABLED") => MySqlSslMode::Disabled,
                     // "preferred" intentionally omitted because it has dubious security
                     // properties.
-                    Some("REQUIRED") => MySqlSslMode::Required,
+                    Some("REQUIRED") | Some("REQUIRE") => MySqlSslMode::Required,
                     Some("VERIFY_CA") | Some("VERIFY-CA") => MySqlSslMode::VerifyCa,
                     Some("VERIFY_IDENTITY") | Some("VERIFY-IDENTITY") => {
                         MySqlSslMode::VerifyIdentity
