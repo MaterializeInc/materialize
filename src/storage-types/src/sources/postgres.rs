@@ -16,7 +16,6 @@ use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
-use mz_sql_parser::ast::UnresolvedItemName;
 use once_cell::sync::Lazy;
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
@@ -105,8 +104,12 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
         vec![]
     }
 
-    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
-        self.publication_details.output_idx_for_name(name)
+    fn get_subsource_resolver(&self) -> super::SubsourceResolver {
+        super::SubsourceResolver::new(
+            &self.publication_details.database,
+            &self.publication_details.tables,
+        )
+        .expect("already validated that SubsourceResolver elements are valid")
     }
 }
 
@@ -286,22 +289,6 @@ pub struct PostgresSourcePublicationDetails {
     /// prior to this field being introduced
     pub timeline_id: Option<u64>,
     pub database: String,
-}
-
-impl PostgresSourcePublicationDetails {
-    pub fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
-        let (namespace, name) = match &name.0[..] {
-            [database, namespace, name] if database.as_str() == self.database => {
-                (namespace.as_str(), name.as_str())
-            }
-            _ => return None,
-        };
-
-        self.tables
-            .iter()
-            .position(|t| t.namespace == namespace && t.name == name)
-            .map(|idx| idx + 1)
-    }
 }
 
 impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {

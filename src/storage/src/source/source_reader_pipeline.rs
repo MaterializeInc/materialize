@@ -88,7 +88,7 @@ pub struct RawSourceCreationConfig {
     /// The ID of this instantiation of this source.
     pub id: GlobalId,
     /// The details of the outputs from this ingestion.
-    pub source_exports: BTreeMap<GlobalId, SourceExport<CollectionMetadata>>,
+    pub source_exports: BTreeMap<GlobalId, SourceExport<usize, CollectionMetadata>>,
     /// The ID of the worker on which this operator is executing
     pub worker_id: usize,
     /// The total count of workers
@@ -814,15 +814,16 @@ where
             },
         );
 
-    // We use the output index from the source export to route values to its ok and err streams. We
-    // do this obliquely by generating as many partitions as there are output indices and then
-    // dropping all unused partitions.
+    // We use the output index from the source export to route values to its ok
+    // and err streams. There is one partition per source export; however,
+    // source export indices can be non-contiguous, so we need to ensure we have
+    // at least as many as we reference.
     let partition_count = u64::cast_from(
         source_exports
-            .iter()
-            .map(|(_, SourceExport { output_index, .. })| *output_index)
+            .values()
+            .map(|export| export.ingestion_output)
             .max()
-            .unwrap_or_default()
+            .expect("source exports must have elements")
             + 1,
     );
 
