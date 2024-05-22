@@ -357,6 +357,7 @@ impl Coordinator {
         let resp = ExecuteResponse::Subscribing {
             rx,
             ctx_extra: std::mem::take(ctx.extra_mut()),
+            instance_id: cluster_id,
         };
         let resp = match copy_to {
             None => resp,

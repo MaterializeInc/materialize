@@ -515,7 +515,7 @@ impl crate::coord::Coordinator {
         // differently.
 
         // If we must build the view, ship the dataflow.
-        let (peek_command, drop_dataflow, is_fast_path, peek_target) = match fast_path {
+        let (peek_command, drop_dataflow, is_fast_path, peek_target, strategy) = match fast_path {
             PeekPlan::FastPath(FastPathPlan::PeekExisting(
                 _coll_id,
                 idx_id,
@@ -526,6 +526,7 @@ impl crate::coord::Coordinator {
                 None,
                 true,
                 PeekTarget::Index { id: idx_id },
+                StatementExecutionStrategy::FastPath,
             ),
             PeekPlan::FastPath(FastPathPlan::PeekPersist(coll_id, map_filter_project)) => {
                 let peek_command = (coll_id, None, timestamp, map_filter_project);
@@ -543,6 +544,7 @@ impl crate::coord::Coordinator {
                         id: coll_id,
                         metadata,
                     },
+                    StatementExecutionStrategy::PersistFastPath,
                 )
             }
             PeekPlan::SlowPath(PeekDataflowPlan {
@@ -585,6 +587,7 @@ impl crate::coord::Coordinator {
                     Some(index_id),
                     false,
                     PeekTarget::Index { id: index_id },
+                    StatementExecutionStrategy::Standard,
                 )
             }
             _ => {
@@ -661,6 +664,8 @@ impl crate::coord::Coordinator {
 
         Ok(crate::ExecuteResponse::SendingRows {
             future: Box::pin(rows_rx),
+            instance_id: compute_instance,
+            strategy,
         })
     }
 

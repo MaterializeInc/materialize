@@ -16,6 +16,7 @@ use derivative::Derivative;
 use enum_kinds::EnumKind;
 use futures::future::BoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
+use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -37,7 +38,7 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
-use crate::statement_logging::StatementEndedExecutionReason;
+use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, AppendWebhookError};
@@ -356,6 +357,8 @@ pub enum ExecuteResponse {
     SendingRows {
         #[derivative(Debug = "ignore")]
         future: RowsFuture,
+        instance_id: ComputeInstanceId,
+        strategy: StatementExecutionStrategy,
     },
     /// Like `SendingRows`, but the rows are known to be available
     /// immediately, and thus the execution is considered ended in the coordinator.
@@ -376,6 +379,7 @@ pub enum ExecuteResponse {
     Subscribing {
         rx: RowBatchStream,
         ctx_extra: ExecuteContextExtra,
+        instance_id: ComputeInstanceId,
     },
     /// The active transaction committed.
     TransactionCommitted {

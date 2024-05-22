@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -21,6 +22,7 @@ use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
+use mz_compute_types::ComputeInstanceId;
 use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{org_id_conn_bits, IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID};
@@ -55,7 +57,7 @@ use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, TransactionId,
 };
-use crate::statement_logging::StatementEndedExecutionReason;
+use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, AppendWebhookError, PeekResponseUnary, StartupResponse};
@@ -370,7 +372,7 @@ Issue a SQL query to get started. Need help?
             .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
             .await?
         {
-            (ExecuteResponse::SendingRows { future }, _) => match future.await {
+            (ExecuteResponse::SendingRows { future, .. }, _) => match future.await {
                 PeekResponseUnary::Rows(rows) => Ok(rows),
                 PeekResponseUnary::Canceled => bail!("query canceled"),
                 PeekResponseUnary::Error(e) => bail!(e),
@@ -1046,8 +1048,10 @@ impl RecordFirstRowStream {
         rows: Box<dyn Stream<Item = PeekResponseUnary> + Unpin + Send + Sync>,
         execute_started: Instant,
         client: &SessionClient,
+        instance_id: Option<ComputeInstanceId>,
+        strategy: Option<StatementExecutionStrategy>,
     ) -> Self {
-        let histogram = Self::histogram(client);
+        let histogram = Self::histogram(client, instance_id, strategy);
         Self {
             rows,
             execute_started,
@@ -1056,25 +1060,43 @@ impl RecordFirstRowStream {
         }
     }
 
-    fn histogram(client: &SessionClient) -> Histogram {
+    fn histogram(
+        client: &SessionClient,
+        instance_id: Option<ComputeInstanceId>,
+        strategy: Option<StatementExecutionStrategy>,
+    ) -> Histogram {
         let isolation_level = *client
             .session
             .as_ref()
             .expect("session invariant")
             .vars()
             .transaction_isolation();
+        let instance = match instance_id {
+            Some(i) => Cow::Owned(i.to_string()),
+            None => Cow::Borrowed("none"),
+        };
+        let strategy = match strategy {
+            Some(s) => s.name(),
+            None => "none",
+        };
 
         client
             .inner()
             .metrics()
             .time_to_first_row_seconds
-            .with_label_values(&[isolation_level.as_str()])
+            .with_label_values(&[&instance, isolation_level.as_str(), strategy])
     }
 
     /// If you want to match [`RecordFirstRowStream`]'s logic but don't need
     /// a UnboundedReceiver, you can tell it when to record an observation.
-    pub fn record(execute_started: Instant, client: &SessionClient) {
-        Self::histogram(client).observe(execute_started.elapsed().as_secs_f64());
+    pub fn record(
+        execute_started: Instant,
+        client: &SessionClient,
+        instance_id: Option<ComputeInstanceId>,
+        strategy: Option<StatementExecutionStrategy>,
+    ) {
+        Self::histogram(client, instance_id, strategy)
+            .observe(execute_started.elapsed().as_secs_f64());
     }
 
     pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
