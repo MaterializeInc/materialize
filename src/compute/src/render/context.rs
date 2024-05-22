@@ -936,7 +936,12 @@ where
         });
 
         use differential_dataflow::AsCollection;
-        let (oks, errs) = stream.as_collection().map_fallible("OkErr", |x| x);
+        let (oks, errs) = stream
+            .as_collection()
+            .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
+                "OkErr",
+                |x| x,
+            );
 
         (oks, errors.concat(&errs))
     }
