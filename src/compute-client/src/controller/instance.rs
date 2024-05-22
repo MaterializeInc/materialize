@@ -533,11 +533,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     ///  2. There must be no outstanding read capabilities on the collection. As long as someone
     ///     still holds read capabilities on a collection, we need to keep it around to be able
     ///     to properly handle downgrading of said capabilities.
-    ///  3. All replica write frontiers for the collection must have advanced to the empty
-    ///     frontier. Advancement to the empty frontier signals that replicas are done computing
-    ///     the collection and that they won't send more `ComputeResponse`s for it. As long as we
-    ///     might receive responses for a collection we want to keep it around to be able to
-    ///     validate and handle these responses.
+    ///  3. All replica frontiers for the collection must have advanced to the empty frontier.
+    ///     Advancement to the empty frontiers signals that replicas are done computing the
+    ///     collection and that they won't send more `ComputeResponse`s for it. As long as we might
+    ///     receive responses for a collection we want to keep it around to be able to validate and
+    ///     handle these responses.
     fn cleanup_collections(&mut self) {
         let to_remove: Vec<_> = self
             .collections_iter()
@@ -546,6 +546,10 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                     && collection.read_frontier().is_empty()
                     && collection
                         .replica_write_frontiers
+                        .values()
+                        .all(|frontier| frontier.is_empty())
+                    && collection
+                        .replica_input_frontiers
                         .values()
                         .all(|frontier| frontier.is_empty())
             })

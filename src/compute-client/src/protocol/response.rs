@@ -41,7 +41,8 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// collection.
     ///
     /// Replicas must send `Frontiers` responses for compute collections that are indexes or
-    /// storage sinks. Replicas must not send `Frontiers` responses for subscribes ([#16274]).
+    /// storage sinks. Replicas must not send `Frontiers` responses for subscribes and copy-tos
+    /// ([#16274]).
     ///
     /// Replicas must never report regressing frontiers. Specifically:
     ///
