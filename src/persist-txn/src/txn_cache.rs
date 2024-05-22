@@ -370,8 +370,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         assert!(self.progress_exclusive > as_of);
         let snapshot = self.data_snapshot(data_id, as_of);
         let remap = DataRemapEntry {
-            physical_upper: snapshot.empty_to.step_forward(),
-            logical_upper: snapshot.empty_to.step_forward(),
+            physical_upper: snapshot.empty_to.clone(),
+            logical_upper: snapshot.empty_to.clone(),
         };
         DataSubscribe {
             data_id,
