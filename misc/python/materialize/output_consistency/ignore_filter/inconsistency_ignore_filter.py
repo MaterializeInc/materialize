@@ -211,6 +211,8 @@ class PostExecutionInconsistencyIgnoreFilterBase:
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
+        # Content mismatch ignore entries should only operate on the expression of the column with the mismatch (and on
+        # expressions in other parts of the query like, for example, the WHERE part)!
         return NoIgnore()
 
     def _shall_ignore_row_count_mismatch(
