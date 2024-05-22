@@ -190,6 +190,10 @@ impl ExprHumanizer for TestCatalog {
         None
     }
 
+    fn humanize_column(&self, _id: GlobalId, _column: usize) -> Option<String> {
+        None
+    }
+
     fn id_exists(&self, id: GlobalId) -> bool {
         self.names.contains_key(&id)
     }

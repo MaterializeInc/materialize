@@ -443,6 +443,9 @@ pub trait ExprHumanizer: fmt::Debug {
     /// Returns a vector of column names for the relation identified by `id`.
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>>;
 
+    /// Returns the `#column` name for the relation identified by `id`.
+    fn humanize_column(&self, id: GlobalId, column: usize) -> Option<String>;
+
     /// Returns whether the specified id exists.
     fn id_exists(&self, id: GlobalId) -> bool;
 }
@@ -504,6 +507,16 @@ impl<'a> ExprHumanizer for ExprHumanizerExt<'a> {
         }
     }
 
+    fn humanize_column(&self, id: GlobalId, column: usize) -> Option<String> {
+        match self.items.get(&id) {
+            Some(item) => match &item.column_names {
+                Some(column_names) => Some(column_names[column].clone()),
+                None => None,
+            },
+            None => self.inner.humanize_column(id, column),
+        }
+    }
+
     fn id_exists(&self, id: GlobalId) -> bool {
         self.items.contains_key(&id) || self.inner.id_exists(id)
     }
@@ -556,6 +569,10 @@ impl ExprHumanizer for DummyHumanizer {
     }
 
     fn column_names_for_id(&self, _id: GlobalId) -> Option<Vec<String>> {
+        None
+    }
+
+    fn humanize_column(&self, _id: GlobalId, _column: usize) -> Option<String> {
         None
     }
 

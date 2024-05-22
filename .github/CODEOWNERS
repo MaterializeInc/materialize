@@ -66,6 +66,7 @@
 /src/dyncfgs                        @danhhz
 /src/environmentd                   @MaterializeInc/adapter
 /src/expr                           @MaterializeInc/compute
+/src/expr-parser                    @MaterializeInc/compute
 /src/expr-test-util                 @MaterializeInc/compute
 /src/fivetran-destination           @MaterializeInc/adapter
 /src/frontegg-auth                  @MaterializeInc/adapter
@@ -97,6 +98,10 @@
 /src/prof                           @teskje
 /src/proto                          @aalexandrov
 /src/repr                           @MaterializeInc/storage @MaterializeInc/compute
+# The `explain` and `optimize` modules are owned solely by the compute team.
+/src/repr/src/explain               @MaterializeInc/compute
+/src/repr/src/optimize              @MaterializeInc/compute
+# The row representation is owned by the persist team.
 /src/repr/src/row                   @MaterializeInc/persist
 /src/repr-test-util                 @MaterializeInc/compute
 /src/rocksdb                        @MaterializeInc/storage

@@ -33,7 +33,6 @@ use mz_repr::GlobalId;
 use tracing::error;
 
 pub mod analysis;
-pub mod attribute;
 pub mod canonicalization;
 pub mod canonicalize_mfp;
 pub mod column_knowledge;

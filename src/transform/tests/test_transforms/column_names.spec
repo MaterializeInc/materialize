@@ -18,6 +18,14 @@ DefSource name=t0
 ----
 Source defined as t0
 
+# Define t1 source
+define
+DefSource name=t1
+  - c2: bigint
+  - c3: bigint
+----
+Source defined as t1
+
 # Constant
 explain with=column_names
 Constant // { types: "(bigint, bigint)" }
@@ -158,8 +166,8 @@ Union // { column_names: "(c0, c1)" }
 explain with=column_names
 Join on=(#1 = #2)
   Get t0
-  Get t0
+  Get t1
 ----
-Join on=(#1 = #2) // { column_names: "(c0, c1, c0, c1)" }
+Join on=(#1 = #2) // { column_names: "(c0, c1, c2, c3)" }
   Get t0 // { column_names: "(c0, c1)" }
-  Get t0 // { column_names: "(c0, c1)" }
+  Get t1 // { column_names: "(c2, c3)" }

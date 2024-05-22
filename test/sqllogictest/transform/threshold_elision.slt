@@ -482,10 +482,7 @@ Target cluster: quickstart
 
 EOF
 
-# WMR -- Threshold inside the cycle -- The Threshold could be eliminated only if we propagated non-negativity through
-# recursive bindings.
-# Currently a negative example.
-# The "Advanced" implementation from #18175 should handle this.
+# WMR -- Threshold inside the cycle.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 WITH MUTUALLY RECURSIVE
@@ -501,23 +498,21 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0
 ----
 Explained Query:
-  Return // { non_negative: true }
-    Get l0 // { non_negative: true }
+  Return // { non_negative: false }
+    Get l0 // { non_negative: false }
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0, #1] // { non_negative: true }
-        Union // { non_negative: true }
+      Distinct project=[#0, #1] // { non_negative: false }
+        Union // { non_negative: false }
           Project (#0, #4) // { non_negative: true }
             Map ((#1 || "_init")) // { non_negative: true }
               ReadStorage materialize.public.people // { non_negative: true }
-          Threshold // { non_negative: true }
-            Union // { non_negative: false }
-              Distinct project=[#0, (#1 || "_iter")] // { non_negative: false }
-                Get l0 // { non_negative: true }
-              Negate // { non_negative: false }
-                Distinct project=[#0, (#1 || "_iter")] // { non_negative: false }
-                  Filter (#0 > 1) // { non_negative: false }
-                    Get l0 // { non_negative: true }
+          Distinct project=[#0, (#1 || "_iter")] // { non_negative: false }
+            Get l0 // { non_negative: false }
+          Negate // { non_negative: false }
+            Distinct project=[#0, (#1 || "_iter")] // { non_negative: false }
+              Filter (#0 > 1) // { non_negative: false }
+                Get l0 // { non_negative: false }
 
 Target cluster: quickstart
 

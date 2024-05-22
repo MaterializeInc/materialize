@@ -262,8 +262,8 @@ mod support {
             // Assemble type information once for the whole expression.
             use crate::analysis::{DerivedBuilder, RelationType, UniqueKeys};
             let mut builder = DerivedBuilder::new(features);
-            builder.require::<RelationType>();
-            builder.require::<UniqueKeys>();
+            builder.require(RelationType);
+            builder.require(UniqueKeys);
             let derived = builder.visit(expr);
             let derived_view = derived.as_view();
 

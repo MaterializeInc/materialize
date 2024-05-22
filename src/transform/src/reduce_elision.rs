@@ -37,8 +37,8 @@ impl crate::Transform for ReduceElision {
     ) -> Result<(), crate::TransformError> {
         // Assemble type information once for the whole expression.
         let mut builder = DerivedBuilder::new(ctx.features);
-        builder.require::<RelationType>();
-        builder.require::<UniqueKeys>();
+        builder.require(RelationType);
+        builder.require(UniqueKeys);
         let derived = builder.visit(relation);
         let derived_view = derived.as_view();
 

@@ -16,6 +16,9 @@ use mz_expr::MirRelationExpr;
 pub use common::{Derived, DerivedBuilder, DerivedView};
 
 pub use arity::Arity;
+pub use cardinality::Cardinality;
+pub use column_names::{ColumnName, ColumnNames};
+pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
 pub use subtree::SubtreeSize;
 pub use types::RelationType;
@@ -44,6 +47,7 @@ pub trait Analysis: 'static {
     /// The return result will be associated with this expression for this analysis,
     /// and the analyses will continue.
     fn derive(
+        &self,
         expr: &MirRelationExpr,
         index: usize,
         results: &[Self::Value],
@@ -98,6 +102,17 @@ pub mod common {
             if let Some(bundle) = self.analyses.get(&type_id) {
                 if let Some(bundle) = bundle.as_any().downcast_ref::<Bundle<A>>() {
                     return Some(&bundle.results[..]);
+                }
+            }
+            None
+        }
+        /// Return an owned version of analysis results derived so far,
+        /// replacing them with an empty vector.
+        pub fn take_results<A: Analysis>(&mut self) -> Option<Vec<A::Value>> {
+            let type_id = TypeId::of::<Bundle<A>>();
+            if let Some(bundle) = self.analyses.get_mut(&type_id) {
+                if let Some(bundle) = bundle.as_any_mut().downcast_mut::<Bundle<A>>() {
+                    return Some(std::mem::take(&mut bundle.results));
                 }
             }
             None
@@ -258,7 +273,7 @@ pub mod common {
                 result: Derived::default(),
                 features,
             };
-            builder.require::<SubtreeSize>();
+            builder.require(SubtreeSize);
             builder
         }
     }
@@ -268,7 +283,7 @@ pub mod common {
         ///
         /// This ensures that `A` will be performed, and before any analysis that
         /// invokes this method.
-        pub fn require<A: Analysis>(&mut self) {
+        pub fn require<A: Analysis>(&mut self, analysis: A) {
             // The method recursively descends through required analyses, first
             // installing each in `result.analyses` and second in `result.order`.
             // The first is an obligation, and serves as an indication that we have
@@ -285,6 +300,7 @@ pub mod common {
                 self.result.analyses.insert(
                     type_id,
                     Box::new(Bundle::<A> {
+                        analysis,
                         results: Vec::new(),
                         fuel: 100,
                         allow_optimistic: self.features.enable_letrec_fixpoint_analysis,
@@ -364,10 +380,17 @@ pub mod common {
         ///
         /// NOTE: This is required until <https://github.com/rust-lang/rfcs/issues/2765> is fixed
         fn as_any(&self) -> &dyn std::any::Any;
+        /// Upcasts `self` to a `&mut dyn Any`.
+        ///
+        /// NOTE: This is required until <https://github.com/rust-lang/rfcs/issues/2765> is fixed
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
     }
 
     /// A wrapper for analysis state.
     struct Bundle<A: Analysis> {
+        /// The algorithm instance used to derive the results.
+        analysis: A,
+        /// A vector of results.
         results: Vec<A::Value>,
         /// Counts down with each `LetRec` re-iteration, to avoid unbounded effort.
         /// Should it reach zero, the analysis should discard its results and restart as if pessimistic.
@@ -398,6 +421,9 @@ pub mod common {
             update
         }
         fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
             self
         }
     }
@@ -449,13 +475,13 @@ pub mod common {
                 // Visit `body` and then the `LetRec` and return whether it evolved.
                 let body = upper - 2;
                 self.analyse_optimistic(exprs, body + 1 - sizes[body], body + 1, depends, lattice)?;
-                let value = A::derive(exprs[upper - 1], upper - 1, &self.results[..], depends);
+                let value = self.derive(exprs[upper - 1], upper - 1, depends);
                 Ok(lattice.meet_assign(&mut self.results[upper - 1], value))
             } else {
                 // If not a `LetRec`, we still want to revisit results and update them with meet.
                 let mut changed = false;
                 for index in lower..upper {
-                    let value = A::derive(exprs[index], index, &self.results[..], depends);
+                    let value = self.derive(exprs[index], index, depends);
                     changed = lattice.meet_assign(&mut self.results[index], value);
                 }
                 Ok(changed)
@@ -467,10 +493,15 @@ pub mod common {
             // TODO: consider making iterative, from some `bottom()` up using `join_assign()`.
             self.results.clear();
             for (index, expr) in exprs.iter().enumerate() {
-                self.results
-                    .push(A::derive(expr, index, &self.results[..], depends));
+                self.results.push(self.derive(expr, index, depends));
             }
             true
+        }
+
+        #[inline]
+        fn derive(&self, expr: &MirRelationExpr, index: usize, depends: &Derived) -> A::Value {
+            self.analysis
+                .derive(expr, index, &self.results[..], depends)
         }
     }
 }
@@ -492,6 +523,7 @@ pub mod subtree {
         type Value = usize;
 
         fn derive(
+            &self,
             expr: &MirRelationExpr,
             index: usize,
             results: &[Self::Value],
@@ -525,6 +557,7 @@ mod arity {
         type Value = usize;
 
         fn derive(
+            &self,
             expr: &MirRelationExpr,
             index: usize,
             results: &[Self::Value],
@@ -555,6 +588,7 @@ mod types {
         type Value = Option<Vec<ColumnType>>;
 
         fn derive(
+            &self,
             expr: &MirRelationExpr,
             index: usize,
             results: &[Self::Value],
@@ -598,10 +632,11 @@ mod unique_keys {
         type Value = Vec<Vec<usize>>;
 
         fn announce_dependencies(builder: &mut DerivedBuilder) {
-            builder.require::<Arity>();
+            builder.require(Arity);
         }
 
         fn derive(
+            &self,
             expr: &MirRelationExpr,
             index: usize,
             results: &[Self::Value],
@@ -708,6 +743,7 @@ mod non_negative {
         type Value = bool;
 
         fn derive(
+            &self,
             expr: &MirRelationExpr,
             index: usize,
             results: &[Self::Value],
@@ -755,6 +791,1003 @@ mod non_negative {
             let changed = *into && !item;
             *into = *into && item;
             changed
+        }
+    }
+}
+
+mod column_names {
+    use std::ops::Range;
+
+    use super::Analysis;
+    use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
+    use mz_repr::GlobalId;
+
+    /// An abstract type denoting an inferred column name.
+    #[derive(Debug, Clone)]
+    pub enum ColumnName {
+        /// A column with name inferred to be equal to a GlobalId schema column.
+        Global(GlobalId, usize),
+        /// An column with an unknown name.
+        Unknown,
+    }
+
+    impl ColumnName {
+        fn is_known(&self) -> bool {
+            matches!(self, ColumnName::Global(..))
+        }
+    }
+
+    /// Compute the column types of each subtree of a [MirRelationExpr] from the
+    /// bottom-up.
+    #[derive(Debug)]
+    pub struct ColumnNames;
+
+    impl ColumnNames {
+        /// fallback schema consisting of ordinal column names: #0, #1, ...
+        fn anonymous(range: Range<usize>) -> impl Iterator<Item = ColumnName> {
+            range.map(|_| ColumnName::Unknown)
+        }
+
+        /// fallback schema consisting of ordinal column names: #0, #1, ...
+        fn extend_with_scalars(column_names: &mut Vec<ColumnName>, scalars: &Vec<MirScalarExpr>) {
+            for scalar in scalars {
+                column_names.push(match scalar {
+                    MirScalarExpr::Column(c) => column_names[*c].clone(),
+                    _ => ColumnName::Unknown,
+                });
+            }
+        }
+    }
+
+    impl Analysis for ColumnNames {
+        type Value = Vec<ColumnName>;
+
+        fn derive(
+            &self,
+            expr: &MirRelationExpr,
+            index: usize,
+            results: &[Self::Value],
+            depends: &crate::analysis::Derived,
+        ) -> Self::Value {
+            use MirRelationExpr::*;
+
+            match expr {
+                Constant { rows: _, typ } => {
+                    // Fallback to an anonymous schema for constants.
+                    ColumnNames::anonymous(0..typ.arity()).collect()
+                }
+                Get {
+                    id: Id::Global(id),
+                    typ,
+                    access_strategy: _,
+                } => {
+                    // Emit ColumnName::Global instanceds for each column in the
+                    // `Get` type. Those can be resolved to real names later when an
+                    // ExpressionHumanizer is available.
+                    (0..typ.columns().len())
+                        .map(|c| ColumnName::Global(*id, c))
+                        .collect()
+                }
+                Get {
+                    id: Id::Local(id),
+                    typ,
+                    access_strategy: _,
+                } => {
+                    let index_child = *depends.bindings().get(id).expect("id in scope");
+                    if index_child < results.len() {
+                        results[index_child].clone()
+                    } else {
+                        // Possible because we infer LetRec bindings in order. This
+                        // can be improved by introducing a fixpoint loop in the
+                        // Env<A>::schedule_tasks LetRec handling block.
+                        ColumnNames::anonymous(0..typ.arity()).collect()
+                    }
+                }
+                Let {
+                    id: _,
+                    value: _,
+                    body: _,
+                } => {
+                    // Return the column names of the `body`.
+                    results[index - 1].clone()
+                }
+                LetRec {
+                    ids: _,
+                    values: _,
+                    limits: _,
+                    body: _,
+                } => {
+                    // Return the column names of the `body`.
+                    results[index - 1].clone()
+                }
+                Project { input: _, outputs } => {
+                    // Permute the column names of the input.
+                    let input_column_names = &results[index - 1];
+                    let mut column_names = vec![];
+                    for col in outputs {
+                        column_names.push(input_column_names[*col].clone());
+                    }
+                    column_names
+                }
+                Map { input: _, scalars } => {
+                    // Extend the column names of the input with anonymous columns.
+                    let mut column_names = results[index - 1].clone();
+                    Self::extend_with_scalars(&mut column_names, scalars);
+                    column_names
+                }
+                FlatMap {
+                    input: _,
+                    func,
+                    exprs: _,
+                } => {
+                    // Extend the column names of the input with anonymous columns.
+                    let mut column_names = results[index - 1].clone();
+                    let func_output_start = column_names.len();
+                    let func_output_end = column_names.len() + func.output_arity();
+                    column_names.extend(Self::anonymous(func_output_start..func_output_end));
+                    column_names
+                }
+                Filter {
+                    input: _,
+                    predicates: _,
+                } => {
+                    // Return the column names of the `input`.
+                    results[index - 1].clone()
+                }
+                Join {
+                    inputs: _,
+                    equivalences: _,
+                    implementation: _,
+                } => {
+                    let mut input_results = depends
+                        .children_of_rev(index, expr.children().count())
+                        .map(|child| &results[child])
+                        .collect::<Vec<_>>();
+                    input_results.reverse();
+
+                    let mut column_names = vec![];
+                    for input_column_names in input_results {
+                        column_names.extend(input_column_names.iter().cloned());
+                    }
+                    column_names
+                }
+                Reduce {
+                    input: _,
+                    group_key,
+                    aggregates,
+                    monotonic: _,
+                    expected_group_size: _,
+                } => {
+                    // We clone and extend the input vector and then remove the part
+                    // associated with the input at the end.
+                    let mut column_names = results[index - 1].clone();
+                    let input_arity = column_names.len();
+
+                    // Infer the group key part.
+                    Self::extend_with_scalars(&mut column_names, group_key);
+                    // Infer the aggregates part.
+                    let aggs_start = group_key.len();
+                    let aggs_end = group_key.len() + aggregates.len();
+                    column_names.extend(Self::anonymous(aggs_start..aggs_end));
+                    // Remove the prefix associated with the input
+                    column_names.drain(0..input_arity);
+
+                    column_names
+                }
+                TopK {
+                    input: _,
+                    group_key: _,
+                    order_key: _,
+                    limit: _,
+                    offset: _,
+                    monotonic: _,
+                    expected_group_size: _,
+                } => {
+                    // Return the column names of the `input`.
+                    results[index - 1].clone()
+                }
+                Negate { input: _ } => {
+                    // Return the column names of the `input`.
+                    results[index - 1].clone()
+                }
+                Threshold { input: _ } => {
+                    // Return the column names of the `input`.
+                    results[index - 1].clone()
+                }
+                Union { base: _, inputs: _ } => {
+                    // Use the first non-empty column across all inputs.
+                    let mut column_names = vec![];
+
+                    let mut inputs_results = depends
+                        .children_of_rev(index, expr.children().count())
+                        .map(|child| &results[child])
+                        .collect::<Vec<_>>();
+
+                    let base_results = inputs_results.pop().unwrap();
+                    inputs_results.reverse();
+
+                    for (i, mut column_name) in base_results.iter().cloned().enumerate() {
+                        for input_results in inputs_results.iter() {
+                            if !column_name.is_known() && input_results[i].is_known() {
+                                column_name = input_results[i].clone();
+                                break;
+                            }
+                        }
+                        column_names.push(column_name);
+                    }
+
+                    column_names
+                }
+                ArrangeBy { input: _, keys: _ } => {
+                    // Return the column names of the `input`.
+                    results[index - 1].clone()
+                }
+            }
+        }
+    }
+}
+
+mod explain {
+    //! Derived attributes framework and definitions.
+
+    use std::collections::BTreeMap;
+
+    use mz_expr::explain::ExplainContext;
+    use mz_expr::MirRelationExpr;
+    use mz_ore::stack::RecursionLimitError;
+    use mz_repr::explain::{AnnotatedPlan, Attributes};
+
+    // Attributes should have shortened paths when exported.
+    use super::cardinality::HumanizedSymbolicExpression;
+    use super::DerivedBuilder;
+
+    impl<'c> From<&ExplainContext<'c>> for DerivedBuilder<'c> {
+        fn from(context: &ExplainContext<'c>) -> DerivedBuilder<'c> {
+            let mut builder = DerivedBuilder::new(context.features);
+            if context.config.subtree_size {
+                builder.require(super::SubtreeSize);
+            }
+            if context.config.non_negative {
+                builder.require(super::NonNegative);
+            }
+            if context.config.types {
+                builder.require(super::RelationType);
+            }
+            if context.config.arity {
+                builder.require(super::Arity);
+            }
+            if context.config.keys {
+                builder.require(super::UniqueKeys);
+            }
+            if context.config.cardinality {
+                builder.require(super::Cardinality::default());
+            }
+            if context.config.column_names || context.config.humanized_exprs {
+                builder.require(super::ColumnNames);
+            }
+            builder
+        }
+    }
+
+    /// Produce an [`AnnotatedPlan`] wrapping the given [`MirRelationExpr`] along
+    /// with [`Attributes`] derived from the given context configuration.
+    pub fn annotate_plan<'a>(
+        plan: &'a MirRelationExpr,
+        context: &'a ExplainContext,
+    ) -> Result<AnnotatedPlan<'a, MirRelationExpr>, RecursionLimitError> {
+        let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
+        let config = context.config;
+
+        // We want to annotate the plan with attributes in the following cases:
+        // 1. An attribute was explicitly requested in the ExplainConfig.
+        // 2. Humanized expressions were requested in the ExplainConfig (in which
+        //    case we need to derive the ColumnNames attribute).
+        if config.requires_attributes() || config.humanized_exprs {
+            // get the annotation keys
+            let subtree_refs = plan.post_order_vec();
+            // get the annotation values
+            let builder = DerivedBuilder::from(context);
+            let derived = builder.visit(plan);
+
+            if config.subtree_size {
+                for (expr, subtree_size) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::SubtreeSize>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.subtree_size = Some(*subtree_size);
+                }
+            }
+            if config.non_negative {
+                for (expr, non_negative) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::NonNegative>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.non_negative = Some(*non_negative);
+                }
+            }
+
+            if config.arity {
+                for (expr, arity) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::Arity>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.arity = Some(*arity);
+                }
+            }
+
+            if config.types {
+                for (expr, types) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived
+                        .results::<super::RelationType>()
+                        .unwrap()
+                        .into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.types = Some(types.clone());
+                }
+            }
+
+            if config.keys {
+                for (expr, keys) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::UniqueKeys>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.keys = Some(keys.clone());
+                }
+            }
+
+            if config.cardinality {
+                for (expr, card) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::Cardinality>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    let value = HumanizedSymbolicExpression::new(card, context.humanizer);
+                    attrs.cardinality = Some(value.to_string());
+                }
+            }
+
+            if config.column_names || config.humanized_exprs {
+                for (expr, column_names) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::ColumnNames>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    let value = column_names
+                        .iter()
+                        .map(|column_name| match column_name {
+                            super::ColumnName::Global(id, c) => context
+                                .humanizer
+                                .humanize_column(*id, *c)
+                                .unwrap_or_default(),
+                            super::ColumnName::Unknown => String::new(),
+                        })
+                        .collect();
+                    attrs.column_names = Some(value);
+                }
+            }
+        }
+
+        Ok(AnnotatedPlan { plan, annotations })
+    }
+}
+
+/// Definition and helper structs for the [`Cardinality`] attribute.
+mod cardinality {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use mz_expr::{
+        BinaryFunc, Id, JoinImplementation, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
+        VariadicFunc,
+    };
+    use mz_ore::cast::CastLossy;
+    use mz_repr::GlobalId;
+
+    use mz_repr::explain::ExprHumanizer;
+    use ordered_float::OrderedFloat;
+
+    use super::{Analysis, Arity, SubtreeSize, UniqueKeys};
+    use crate::symbolic::SymbolicExpression;
+
+    /// Compute the estimated cardinality of each subtree of a [MirRelationExpr] from the bottom up.
+    #[allow(missing_debug_implementations)]
+    pub struct Cardinality {
+        /// A factorizer for generating appropriating scaling factors
+        pub factorize: Box<dyn Factorizer + Send + Sync>,
+    }
+
+    impl Default for Cardinality {
+        fn default() -> Self {
+            Cardinality {
+                factorize: Box::new(WorstCaseFactorizer {
+                    cardinalities: BTreeMap::new(),
+                }),
+            }
+        }
+    }
+
+    /// The variables used in symbolic expressions representing cardinality
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum FactorizerVariable {
+        /// The total cardinality of a given global id
+        Id(GlobalId),
+        /// The inverse of the number of distinct keys in the index held in the given column, i.e., 1/|# of distinct keys|
+        ///
+        /// TODO(mgree): need to correlate this back to a given global table, to feed in statistics (or have a sub-attribute for collecting this)
+        Index(usize),
+        /// An unbound local or other unknown quantity
+        Unknown,
+    }
+
+    /// SymbolicExpressions specialized to factorizer variables
+    pub type SymExp = SymbolicExpression<FactorizerVariable>;
+
+    /// A `Factorizer` computes selectivity factors
+    pub trait Factorizer {
+        /// Compute selectivity for the flat map of `tf`
+        fn flat_map(&self, tf: &TableFunc, input: &SymExp) -> SymExp;
+        /// Computes selectivity of the predicate `expr`, given that `unique_columns` are indexed/unique
+        ///
+        /// The result should be in the range [0, 1.0]
+        fn predicate(&self, expr: &MirScalarExpr, unique_columns: &BTreeSet<usize>) -> SymExp;
+        /// Computes selectivity for a filter
+        fn filter(
+            &self,
+            predicates: &Vec<MirScalarExpr>,
+            keys: &Vec<Vec<usize>>,
+            input: &SymExp,
+        ) -> SymExp;
+        /// Computes selectivity for a join; the cardinality estimate for each input is paired with the keys on that input
+        ///
+        /// `unique_columns` maps column references (that are indexed/unique) to their relation's index in `inputs`
+        fn join(
+            &self,
+            equivalences: &Vec<Vec<MirScalarExpr>>,
+            implementation: &JoinImplementation,
+            unique_columns: BTreeMap<usize, usize>,
+            inputs: Vec<&SymExp>,
+        ) -> SymExp;
+        /// Computes selectivity for a reduce
+        fn reduce(
+            &self,
+            group_key: &Vec<MirScalarExpr>,
+            expected_group_size: &Option<u64>,
+            input: &SymExp,
+        ) -> SymExp;
+        /// Computes selectivity for a topk
+        fn topk(
+            &self,
+            group_key: &Vec<usize>,
+            limit: &Option<MirScalarExpr>,
+            expected_group_size: &Option<u64>,
+            input: &SymExp,
+        ) -> SymExp;
+        /// Computes slectivity for a threshold
+        fn threshold(&self, input: &SymExp) -> SymExp;
+    }
+
+    /// The simplest possible `Factorizer` that aims to generate worst-case, upper-bound cardinalities
+    #[derive(Debug)]
+    pub struct WorstCaseFactorizer {
+        /// cardinalities for each `GlobalId` and its unique values
+        pub cardinalities: BTreeMap<FactorizerVariable, usize>,
+    }
+
+    /// The default selectivity for predicates we know nothing about.
+    ///
+    /// It is safe to use this instead of `FactorizerVariable::Index(col)`.
+    pub const WORST_CASE_SELECTIVITY: f64 = 0.1;
+
+    impl Factorizer for WorstCaseFactorizer {
+        fn flat_map(&self, tf: &TableFunc, input: &SymExp) -> SymExp {
+            match tf {
+                TableFunc::Wrap { types, width } => {
+                    input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
+                }
+                _ => {
+                    // TODO(mgree) what explosion factor should we make up?
+                    input * &SymExp::from(4.0)
+                }
+            }
+        }
+
+        fn predicate(&self, expr: &MirScalarExpr, unique_columns: &BTreeSet<usize>) -> SymExp {
+            let index_cardinality = |expr: &MirScalarExpr| -> Option<SymExp> {
+                match expr {
+                    MirScalarExpr::Column(col) => {
+                        if unique_columns.contains(col) {
+                            Some(SymbolicExpression::symbolic(FactorizerVariable::Index(
+                                *col,
+                            )))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            };
+
+            match expr {
+                MirScalarExpr::Column(_)
+                | MirScalarExpr::Literal(_, _)
+                | MirScalarExpr::CallUnmaterializable(_) => SymExp::from(1.0),
+                MirScalarExpr::CallUnary { func, expr } => match func {
+                    UnaryFunc::Not(_) => 1.0 - self.predicate(expr, unique_columns),
+                    UnaryFunc::IsTrue(_) | UnaryFunc::IsFalse(_) => SymExp::from(0.5),
+                    UnaryFunc::IsNull(_) => {
+                        if let Some(icard) = index_cardinality(expr) {
+                            icard
+                        } else {
+                            SymExp::from(WORST_CASE_SELECTIVITY)
+                        }
+                    }
+                    _ => SymExp::from(WORST_CASE_SELECTIVITY),
+                },
+                MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                    match func {
+                        BinaryFunc::Eq => {
+                            match (index_cardinality(expr1), index_cardinality(expr2)) {
+                                (Some(icard1), Some(icard2)) => {
+                                    SymbolicExpression::max(icard1, icard2)
+                                }
+                                (Some(icard), None) | (None, Some(icard)) => icard,
+                                (None, None) => SymExp::from(WORST_CASE_SELECTIVITY),
+                            }
+                        }
+                        // 1.0 - the Eq case
+                        BinaryFunc::NotEq => {
+                            match (index_cardinality(expr1), index_cardinality(expr2)) {
+                                (Some(icard1), Some(icard2)) => {
+                                    1.0 - SymbolicExpression::max(icard1, icard2)
+                                }
+                                (Some(icard), None) | (None, Some(icard)) => 1.0 - icard,
+                                (None, None) => SymExp::from(1.0 - WORST_CASE_SELECTIVITY),
+                            }
+                        }
+                        BinaryFunc::Lt | BinaryFunc::Lte | BinaryFunc::Gt | BinaryFunc::Gte => {
+                            // TODO(mgree) if we have high/low key values and one of the columns is an index, we can do better
+                            SymExp::from(0.33)
+                        }
+                        _ => SymExp::from(1.0), // TOOD(mgree): are there other interesting cases?
+                    }
+                }
+                MirScalarExpr::CallVariadic { func, exprs } => match func {
+                    VariadicFunc::And => {
+                        // can't use SymExp::product because it expects a vector of references :/
+                        let mut factor = SymExp::from(1.0);
+
+                        for expr in exprs {
+                            factor = factor * self.predicate(expr, unique_columns);
+                        }
+
+                        factor
+                    }
+                    VariadicFunc::Or => {
+                        // TODO(mgree): BETWEEN will get compiled down to an OR of appropriate bounds---we could try to detect it and be clever
+
+                        // F(expr1 OR expr2) = F(expr1) + F(expr2) - F(expr1) * F(expr2), but generalized
+                        let mut exprs = exprs.into_iter();
+
+                        let mut expr1;
+
+                        if let Some(first) = exprs.next() {
+                            expr1 = self.predicate(first, unique_columns);
+                        } else {
+                            return SymExp::from(1.0);
+                        }
+
+                        for expr2 in exprs {
+                            let expr2 = self.predicate(expr2, unique_columns);
+
+                            // TODO(mgree) a big expression! two things could help: hash-consing and simplification
+                            expr1 = expr1.clone() + expr2.clone() - expr1.clone() * expr2;
+                        }
+                        expr1
+                    }
+                    _ => SymExp::from(1.0),
+                },
+                MirScalarExpr::If { cond: _, then, els } => SymExp::max(
+                    self.predicate(then, unique_columns),
+                    self.predicate(els, unique_columns),
+                ),
+            }
+        }
+
+        fn filter(
+            &self,
+            predicates: &Vec<MirScalarExpr>,
+            keys: &Vec<Vec<usize>>,
+            input: &SymExp,
+        ) -> SymExp {
+            // TODO(mgree): should we try to do something for indices built on multiple columns?
+            let mut unique_columns = BTreeSet::new();
+            for key in keys {
+                if key.len() == 1 {
+                    unique_columns.insert(key[0]);
+                }
+            }
+
+            // worst case scaling factor is 1
+            let mut factor = SymExp::from(1.0);
+
+            for expr in predicates {
+                let predicate_scaling_factor = self.predicate(expr, &unique_columns);
+
+                // constant scaling factors should be in [0,1]
+                debug_assert!(
+                match predicate_scaling_factor {
+                    SymExp::Constant(OrderedFloat(n)) => 0.0 <= n && n <= 1.0,
+                    _ => true,
+                },
+                "predicate scaling factor {predicate_scaling_factor} should be in the range [0,1]"
+            );
+
+                factor = factor * predicate_scaling_factor;
+            }
+
+            input.clone() * factor
+        }
+
+        fn join(
+            &self,
+            equivalences: &Vec<Vec<MirScalarExpr>>,
+            _implementation: &JoinImplementation,
+            unique_columns: BTreeMap<usize, usize>,
+            inputs: Vec<&SymExp>,
+        ) -> SymExp {
+            let mut inputs = inputs.into_iter().cloned().collect::<Vec<_>>();
+
+            for equiv in equivalences {
+                // those sources which have a unique key
+                let mut unique_sources = BTreeSet::new();
+                let mut all_unique = true;
+
+                for expr in equiv {
+                    if let MirScalarExpr::Column(col) = expr {
+                        if let Some(idx) = unique_columns.get(col) {
+                            unique_sources.insert(*idx);
+                        } else {
+                            all_unique = false;
+                        }
+                    } else {
+                        all_unique = false;
+                    }
+                }
+
+                // no unique columns in this equivalence
+                if unique_sources.is_empty() {
+                    continue;
+                }
+
+                // ALL unique columns in this equivalence
+                if all_unique {
+                    // these inputs have unique keys for _all_ of the equivalence, so they're a bound on how many rows we'll get from those sources
+                    // we'll find the leftmost such input and use it to hold the minimum; the other sources we set to 1.0 (so they have no effect)
+                    let mut sources = unique_sources.iter();
+
+                    let lhs_idx = *sources.next().unwrap();
+                    let mut lhs = std::mem::replace(&mut inputs[lhs_idx], SymExp::f64(1.0));
+                    for &rhs_idx in sources {
+                        let rhs = std::mem::replace(&mut inputs[rhs_idx], SymExp::f64(1.0));
+                        lhs = SymExp::min(lhs, rhs);
+                    }
+
+                    inputs[lhs_idx] = lhs;
+
+                    // best option! go look at the next equivalence
+                    continue;
+                }
+
+                // some unique columns in this equivalence
+                for idx in unique_sources {
+                    // when joining R and S on R.x = S.x, if R.x is unique and S.x is not, we're bounded above by the cardinality of S
+                    inputs[idx] = SymExp::f64(1.0);
+                }
+            }
+
+            SymbolicExpression::product(inputs)
+        }
+
+        fn reduce(
+            &self,
+            group_key: &Vec<MirScalarExpr>,
+            expected_group_size: &Option<u64>,
+            input: &SymExp,
+        ) -> SymExp {
+            // TODO(mgree): if no `group_key` is present, we can do way better
+
+            if let Some(group_size) = expected_group_size {
+                input / f64::cast_lossy(*group_size)
+            } else if group_key.is_empty() {
+                SymExp::from(1.0)
+            } else {
+                // in the worst case, every row is its own group
+                input.clone()
+            }
+        }
+
+        fn topk(
+            &self,
+            group_key: &Vec<usize>,
+            limit: &Option<MirScalarExpr>,
+            expected_group_size: &Option<u64>,
+            input: &SymExp,
+        ) -> SymExp {
+            // TODO: support simple arithmetic expressions
+            let k = limit
+                .as_ref()
+                .and_then(|l| l.as_literal_int64())
+                .map_or(1, |l| std::cmp::max(0, l));
+
+            if let Some(group_size) = expected_group_size {
+                input * (f64::cast_lossy(k) / f64::cast_lossy(*group_size))
+            } else if group_key.is_empty() {
+                SymExp::from(k)
+            } else {
+                // in the worst case, every row is its own group
+                input.clone()
+            }
+        }
+
+        fn threshold(&self, input: &SymExp) -> SymExp {
+            // worst case scaling factor is 1
+            input.clone()
+        }
+    }
+
+    impl Analysis for Cardinality {
+        type Value = SymExp;
+
+        fn announce_dependencies(builder: &mut crate::analysis::DerivedBuilder) {
+            builder.require(crate::analysis::Arity);
+            builder.require(crate::analysis::UniqueKeys);
+        }
+
+        fn derive(
+            &self,
+            expr: &MirRelationExpr,
+            index: usize,
+            results: &[Self::Value],
+            depends: &crate::analysis::Derived,
+        ) -> Self::Value {
+            use MirRelationExpr::*;
+
+            let sizes = depends
+                .as_view()
+                .results::<SubtreeSize>()
+                .expect("SubtreeSize analysis results missing");
+            let arity = depends
+                .as_view()
+                .results::<Arity>()
+                .expect("Arity analysis results missing");
+            let keys = depends
+                .as_view()
+                .results::<UniqueKeys>()
+                .expect("UniqueKeys analysis results missing");
+
+            match expr {
+                Constant { rows, .. } => {
+                    SymExp::from(rows.as_ref().map_or_else(|_| 0, |v| v.len()))
+                }
+                Get { id, .. } => match id {
+                    Id::Local(id) => match depends.bindings().get(id) {
+                        Some(value) => results[*value].clone(),
+                        None => SymExp::symbolic(FactorizerVariable::Unknown),
+                    },
+                    Id::Global(id) => SymbolicExpression::symbolic(FactorizerVariable::Id(*id)),
+                },
+                Let { .. } | Project { .. } | Map { .. } | ArrangeBy { .. } | Negate { .. } => {
+                    results[index - 1].clone()
+                }
+                LetRec { .. } =>
+                // TODO(mgree): implement a recurrence-based approach (or at least identify common idioms, e.g. transitive closure)
+                {
+                    SymbolicExpression::symbolic(FactorizerVariable::Unknown)
+                }
+                Union { base: _, inputs: _ } => {
+                    let inputs = depends
+                        .children_of_rev(index, expr.children().count())
+                        .map(|off| results[off].clone())
+                        .collect();
+                    SymbolicExpression::sum(inputs)
+                }
+                FlatMap { func, .. } => {
+                    let input = &results[index - 1];
+                    self.factorize.flat_map(func, input)
+                }
+                Filter { predicates, .. } => {
+                    let input = &results[index - 1];
+                    let keys = depends.results::<UniqueKeys>().expect("UniqueKeys missing");
+                    let keys = &keys[index - 1];
+                    self.factorize.filter(predicates, keys, input)
+                }
+                Join {
+                    equivalences,
+                    implementation,
+                    inputs,
+                    ..
+                } => {
+                    let mut input_results = Vec::with_capacity(inputs.len());
+
+                    // maps a column to the index in `inputs` that it belongs to
+                    let mut unique_columns = BTreeMap::new();
+                    let mut key_offset = 0;
+
+                    let mut offset = 1;
+                    for idx in 0..inputs.len() {
+                        let input = &results[index - offset];
+                        input_results.push(input);
+
+                        let arity = arity[index - offset];
+                        let keys = &keys[index - offset];
+                        for key in keys {
+                            if key.len() == 1 {
+                                unique_columns.insert(key_offset + key[0], idx);
+                            }
+                        }
+                        key_offset += arity;
+
+                        offset += &sizes[index - offset];
+                    }
+
+                    self.factorize
+                        .join(equivalences, implementation, unique_columns, input_results)
+                }
+                Reduce {
+                    group_key,
+                    expected_group_size,
+                    ..
+                } => {
+                    let input = &results[index - 1];
+                    self.factorize.reduce(group_key, expected_group_size, input)
+                }
+                TopK {
+                    group_key,
+                    limit,
+                    expected_group_size,
+                    ..
+                } => {
+                    let input = &results[index - 1];
+                    self.factorize
+                        .topk(group_key, limit, expected_group_size, input)
+                }
+                Threshold { .. } => {
+                    let input = &results[index - 1];
+                    self.factorize.threshold(input)
+                }
+            }
+        }
+    }
+
+    impl SymExp {
+        /// Render a symbolic expression nicely
+        pub fn humanize(
+            &self,
+            h: &dyn ExprHumanizer,
+            f: &mut std::fmt::Formatter<'_>,
+        ) -> std::fmt::Result {
+            self.humanize_factor(h, f)
+        }
+
+        fn humanize_factor(
+            &self,
+            h: &dyn ExprHumanizer,
+            f: &mut std::fmt::Formatter<'_>,
+        ) -> std::fmt::Result {
+            use SymbolicExpression::*;
+            match self {
+                Sum(ss) => {
+                    assert!(ss.len() >= 2);
+
+                    let mut ss = ss.iter();
+                    ss.next().unwrap().humanize_factor(h, f)?;
+                    for s in ss {
+                        write!(f, " + ")?;
+                        s.humanize_factor(h, f)?;
+                    }
+                    Ok(())
+                }
+                _ => self.humanize_term(h, f),
+            }
+        }
+
+        fn humanize_term(
+            &self,
+            h: &dyn ExprHumanizer,
+            f: &mut std::fmt::Formatter<'_>,
+        ) -> std::fmt::Result {
+            use SymbolicExpression::*;
+            match self {
+                Product(ps) => {
+                    assert!(ps.len() >= 2);
+
+                    let mut ps = ps.iter();
+                    ps.next().unwrap().humanize_term(h, f)?;
+                    for p in ps {
+                        write!(f, " * ")?;
+                        p.humanize_term(h, f)?;
+                    }
+                    Ok(())
+                }
+                _ => self.humanize_atom(h, f),
+            }
+        }
+
+        fn humanize_atom(
+            &self,
+            h: &dyn ExprHumanizer,
+            f: &mut std::fmt::Formatter<'_>,
+        ) -> std::fmt::Result {
+            use SymbolicExpression::*;
+            match self {
+                Constant(OrderedFloat::<f64>(n)) => write!(f, "{n}"),
+                Symbolic(FactorizerVariable::Id(v), n) => {
+                    let id = h.humanize_id(*v).unwrap_or_else(|| format!("{v:?}"));
+                    write!(f, "{id}")?;
+
+                    if *n > 1 {
+                        write!(f, "^{n}")?;
+                    }
+
+                    Ok(())
+                }
+                Symbolic(FactorizerVariable::Index(col), n) => {
+                    write!(f, "icard(#{col})^{n}")
+                }
+                Symbolic(FactorizerVariable::Unknown, n) => {
+                    write!(f, "unknown^{n}")
+                }
+                Max(e1, e2) => {
+                    write!(f, "max(")?;
+                    e1.humanize_factor(h, f)?;
+                    write!(f, ", ")?;
+                    e2.humanize_factor(h, f)?;
+                    write!(f, ")")
+                }
+                Min(e1, e2) => {
+                    write!(f, "min(")?;
+                    e1.humanize_factor(h, f)?;
+                    write!(f, ", ")?;
+                    e2.humanize_factor(h, f)?;
+                    write!(f, ")")
+                }
+                Sum(_) | Product(_) => {
+                    write!(f, "(")?;
+                    self.humanize_factor(h, f)?;
+                    write!(f, ")")
+                }
+            }
+        }
+    }
+
+    impl std::fmt::Display for SymExp {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.humanize(&mz_repr::explain::DummyHumanizer, f)
+        }
+    }
+
+    /// Wrapping struct for pretty printing of symbolic expressions
+    #[allow(missing_debug_implementations)]
+    pub struct HumanizedSymbolicExpression<'a, 'b> {
+        expr: &'a SymExp,
+        humanizer: &'b dyn ExprHumanizer,
+    }
+
+    impl<'a, 'b> HumanizedSymbolicExpression<'a, 'b> {
+        /// Pairs a symbolic expression with a way to render GlobalIds
+        pub fn new(expr: &'a SymExp, humanizer: &'b dyn ExprHumanizer) -> Self {
+            Self { expr, humanizer }
+        }
+    }
+
+    impl<'a, 'b> std::fmt::Display for HumanizedSymbolicExpression<'a, 'b> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.expr.normalize().humanize(self.humanizer, f)
         }
     }
 }

@@ -32,11 +32,12 @@ impl Analysis for Equivalences {
     type Value = EquivalenceClasses;
 
     fn announce_dependencies(builder: &mut DerivedBuilder) {
-        builder.require::<Arity>();
-        builder.require::<RelationType>(); // needed for expression reduction.
+        builder.require(Arity);
+        builder.require(RelationType); // needed for expression reduction.
     }
 
     fn derive(
+        &self,
         expr: &MirRelationExpr,
         _index: usize,
         results: &[Self::Value],

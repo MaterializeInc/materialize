@@ -416,11 +416,11 @@ with mutually recursive
 select * from c0;
 ----
 Explained Query:
-  Return // { keys: "([0], [0, 1, 2, 3])" }
-    Get l0 // { keys: "([0], [0, 1, 2, 3])" }
+  Return // { keys: "([0])" }
+    Get l0 // { keys: "([0])" }
   With Mutually Recursive
     cte l0 =
-      TopK group_by=[#0] limit=1 // { keys: "([0], [0, 1, 2, 3])" }
+      TopK group_by=[#0] limit=1 // { keys: "([0])" }
         Distinct project=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
           Union // { keys: "()" }
             Project (#0..=#2, #0) // { keys: "()" }
@@ -720,11 +720,11 @@ with mutually recursive
 select * from c0
 ----
 Explained Query:
-  Return // { keys: "([0], [0, 1, 2, 3, 4])" }
-    Get l1 // { keys: "([0], [0, 1, 2, 3, 4])" }
+  Return // { keys: "([0])" }
+    Get l1 // { keys: "([0])" }
   With Mutually Recursive
     cte l1 =
-      TopK group_by=[#0] limit=1 // { keys: "([0], [0, 1, 2, 3, 4])" }
+      TopK group_by=[#0] limit=1 // { keys: "([0])" }
         Distinct project=[#0..=#4] // { keys: "([0, 1, 2, 3, 4])" }
           Union // { keys: "()" }
             Map (null, null) // { keys: "()" }
