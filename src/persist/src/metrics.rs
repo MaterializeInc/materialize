@@ -186,7 +186,7 @@ impl ArrowColumnMetrics {
 /// Metrics for a Parquet file that we write to S3.
 #[derive(Debug, Clone)]
 pub struct ParquetMetrics {
-    pub(crate) encoded_size: IntCounter,
+    pub(crate) encoded_size: IntCounterVec,
     pub(crate) num_row_groups: IntCounterVec,
     pub(crate) k_metrics: ParquetColumnMetrics,
     pub(crate) v_metrics: ParquetColumnMetrics,
@@ -201,6 +201,7 @@ impl ParquetMetrics {
         let encoded_size: IntCounterVec = registry.register(metric!(
             name: "mz_persist_parquet_encoded_size",
             help: "encoded size of a parquet file that we write to S3",
+            var_labels: ["format"],
         ));
         let num_row_groups: IntCounterVec = registry.register(metric!(
             name: "mz_persist_parquet_row_group_count",
@@ -215,7 +216,7 @@ impl ParquetMetrics {
         ));
 
         ParquetMetrics {
-            encoded_size: encoded_size.with_label_values(&[]),
+            encoded_size,
             num_row_groups,
             k_metrics: ParquetColumnMetrics::new("k", &column_size),
             v_metrics: ParquetColumnMetrics::new("v", &column_size),

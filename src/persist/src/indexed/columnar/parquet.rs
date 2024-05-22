@@ -249,6 +249,7 @@ fn report_parquet_metrics(
     metrics
         .parquet()
         .encoded_size
+        .with_label_values(&[format])
         .inc_by(u64::cast_from(bytes_written));
 
     let report_column_size = |col_name: &str, metrics: &ParquetColumnMetrics| {

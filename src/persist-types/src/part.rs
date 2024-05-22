@@ -56,7 +56,7 @@ impl Part {
         Ok(stats.some)
     }
 
-    /// Returns an [`arrow2`] array representing the `key` column.
+    /// Returns an [`arrow`] array representing the `key` column.
     pub fn to_key_arrow(&self) -> Option<(Field, StructArray)> {
         self.key.to_arrow_struct().map(|array| {
             let field = Field::new("k_s", array.data_type().clone(), false);
@@ -64,7 +64,7 @@ impl Part {
         })
     }
 
-    /// Returns an [`arrow2`] array representing the `val` column.
+    /// Returns an [`arrow`] array representing the `val` column.
     pub fn to_val_arrow(&self) -> Option<(Field, StructArray)> {
         self.val.to_arrow_struct().map(|array| {
             let field = Field::new("v_s", array.data_type().clone(), false);
@@ -72,7 +72,7 @@ impl Part {
         })
     }
 
-    /// Returns [`arrow2`] types representing this [`Part`].
+    /// Returns [`arrow`] types representing this [`Part`].
     pub fn to_arrow(&self) -> (Vec<Field>, Vec<Arc<dyn Array>>) {
         let (mut fields, mut arrays) = (Vec::new(), Vec::<Arc<dyn Array>>::new());
 
