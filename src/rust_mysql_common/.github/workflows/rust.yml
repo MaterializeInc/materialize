@@ -1,0 +1,34 @@
+name: Rust
+
+on:
+  push:
+    branches: [master, v0.28.x]
+  pull_request:
+    branches: [master]
+
+env:
+  RUSTFLAGS: -D warnings
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rustfmt
+        run: cargo fmt -- --check
+      - name: Features subsets
+        run: |
+          ruby -e "fs=['bigdecimal02', 'bigdecimal03', 'bigdecimal', 'chrono', 'rust_decimal', 'time02', 'time', 'frunk', 'derive', 'binlog']; \
+            (1..fs.length).each do |n| puts fs.combination(n).to_a.map {|x| x.join(\" \")}.join(\"\n\"); end" \
+          | while read -r line; do \
+            echo "$line" && cargo check --quiet --tests --no-default-features --features "flate2/zlib test $line" --profile features-subsets; \
+          done
+      - name: Build
+        run: cargo build
+      - name: Run tests
+        run: cargo test --features test
+      - name: Run derive tests
+        run: (cd derive && cargo test)
