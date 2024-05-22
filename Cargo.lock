@@ -5239,6 +5239,7 @@ dependencies = [
  "mz-persist-types",
  "mz-postgres-client",
  "mz-proto",
+ "mz-repr",
  "once_cell",
  "openssl",
  "openssl-sys",

@@ -638,7 +638,7 @@ impl RowEncoder {
 
 impl PartEncoder<Row> for RowEncoder {
     fn encode(&mut self, val: &Row) {
-        self.len += 1;
+        self.inc_len();
         for (encoder, datum) in self.col_encoders.iter_mut().zip(val.iter()) {
             encoder.encode(datum);
         }

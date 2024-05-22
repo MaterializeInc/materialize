@@ -629,10 +629,6 @@ impl ColumnRef<()> for BooleanBuffer {
             .as_any()
             .downcast_ref::<BooleanArray>()
             .ok_or_else(|| format!("expected BooleanArray but was {:?}", array.data_type()))?;
-        if array.logical_nulls().is_some() {
-            return Err("unexpected validity for non-optional bool".to_owned());
-        }
-
         Ok(array.values().clone())
     }
 }
