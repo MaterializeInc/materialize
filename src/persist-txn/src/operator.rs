@@ -202,9 +202,7 @@ where
             )
             .await
             .expect("schema shouldn't change");
-        let (Some(mut subscribe), fut) = subscribe.unblock_subscribe(data_write) else {
-            return;
-        };
+        let (mut subscribe, fut) = subscribe.unblock_subscribe(data_write);
         fut.await;
 
         debug!("{} emitting {:?}", name, subscribe.remap);

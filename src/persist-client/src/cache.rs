@@ -19,7 +19,6 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_dyncfg::ConfigSet;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle};
@@ -127,11 +126,6 @@ impl PersistClientCache {
     /// Returns the [PersistConfig] being used by this cache.
     pub fn cfg(&self) -> &PersistConfig {
         &self.cfg
-    }
-
-    /// Returns persist's [ConfigSet].
-    pub fn dyncfgs(&self) -> &ConfigSet {
-        &self.cfg.configs
     }
 
     /// Returns persist `Metrics`.

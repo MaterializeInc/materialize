@@ -323,14 +323,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> DataSubscribeB
     /// [`DataSnapshot::unblock_read`].
     ///
     /// Returns a [`DataSubscribe`] and a future that must be awaited to
-    /// unblock that snapshot. The returned subscribe is `None` if the upper
-    /// of the data shard is the empty antichain.
+    /// unblock that snapshot.
     #[must_use]
     #[instrument(level = "debug", fields(shard = %self.0.data_id, ts = ?self.0.as_of, empty_to = ?self.0.empty_to))]
     pub(crate) fn unblock_subscribe<'a, K, V, D>(
         self,
         data_write: WriteHandle<K, V, T, D>,
-    ) -> (Option<DataSubscribe<T>>, BoxFuture<'a, ()>)
+    ) -> (DataSubscribe<T>, BoxFuture<'a, ()>)
     where
         K: Debug + Codec + Send + Sync,
         V: Debug + Codec + Send + Sync,
@@ -343,10 +342,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> DataSubscribeB
             self.0.data_id.to_string()
         );
 
-        if data_write.shared_upper().is_empty() {
-            return (None, async {}.boxed());
-        }
-
         let subscribe = DataSubscribe {
             data_id: self.0.data_id.clone(),
             remap: DataRemapEntry {
@@ -358,7 +353,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> DataSubscribeB
             self.0.unblock_read(data_write).await;
         }
         .boxed();
-        (Some(subscribe), fut)
+        (subscribe, fut)
     }
 }
 
@@ -366,7 +361,7 @@ pub(crate) trait UnblockSubscribe<T>: Debug + Send {
     fn unblock_subscribe<'a>(
         self: Box<Self>,
         subscribe: DataSubscribeBlocked<T>,
-    ) -> (Option<DataSubscribe<T>>, BoxFuture<'a, ()>);
+    ) -> (DataSubscribe<T>, BoxFuture<'a, ()>);
 }
 
 impl<K, V, T, D> UnblockSubscribe<T> for WriteHandle<K, V, T, D>
@@ -379,7 +374,7 @@ where
     fn unblock_subscribe<'a>(
         self: Box<Self>,
         subscribe: DataSubscribeBlocked<T>,
-    ) -> (Option<DataSubscribe<T>>, BoxFuture<'a, ()>) {
+    ) -> (DataSubscribe<T>, BoxFuture<'a, ()>) {
         subscribe.unblock_subscribe(*self)
     }
 }
@@ -736,12 +731,7 @@ where
                 } => {
                     let subscribe = self.cache.data_subscribe(data_id, as_of.clone());
                     let (sub_tx, sub_rx) = mpsc::unbounded_channel();
-                    let (Some(subscribe), fut) = unblock.unblock_subscribe(subscribe) else {
-                        // Data shard upper is the empty antichain, so we can
-                        // return earler and drop the sender.
-                        let _ = tx.send(sub_rx);
-                        return;
-                    };
+                    let (subscribe, fut) = unblock.unblock_subscribe(subscribe);
                     mz_ore::task::spawn(|| "persist-txn::unblock_subscribe", fut);
                     // Send the initial remap entry.
                     sub_tx
