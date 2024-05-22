@@ -126,6 +126,9 @@ impl CharWhiteSpace {
 /// * `fail_on_len` - Return an error if `s`'s character count exceeds the
 ///   specified maximum length.
 /// * `white_space` - Express how to handle trailing whitespace on `s`
+///
+/// This function should only fail when `fail_on_len` is `true` _and_ `length`
+/// is present and exceeded.
 fn format_char_str(
     s: &str,
     length: Option<CharLength>,
@@ -158,6 +161,9 @@ fn format_char_str(
 ///
 /// The value returned is appropriate to store in `Datum::String`, but _is not_
 /// appropriate to return to clients.
+///
+/// This function should only fail when `fail_on_len` is `true` _and_ `length`
+/// is present and exceeded.
 pub fn format_str_trim(
     s: &str,
     length: Option<CharLength>,
