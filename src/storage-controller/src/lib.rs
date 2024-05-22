@@ -90,6 +90,7 @@ use tokio_stream::StreamMap;
 use tracing::{debug, info, warn};
 
 use crate::rehydration::RehydratingStorageClient;
+use crate::statistics::StatsState;
 mod collection_mgmt;
 mod collection_status;
 mod persist_handles;
@@ -194,7 +195,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    sink_statistics: Arc<Mutex<BTreeMap<GlobalId, Option<SinkStatisticsUpdate>>>>,
+    sink_statistics: Arc<Mutex<BTreeMap<GlobalId, statistics::StatsState<SinkStatisticsUpdate>>>>,
     /// A way to update the statistics interval in the statistics tasks.
     statistics_interval_sender: Sender<Duration>,
 
@@ -834,7 +835,7 @@ where
                 source_statistics
                     .source_statistics
                     .entry(id)
-                    .or_insert(None);
+                    .or_insert(StatsState::new(SourceStatisticsUpdate::new(id)));
             }
             for id in new_webhook_statistic_entries {
                 source_statistics.webhook_statistics.entry(id).or_default();
@@ -1152,7 +1153,7 @@ where
                 .lock()
                 .expect("poisoned")
                 .entry(id)
-                .or_insert(None);
+                .or_insert(StatsState::new(SinkStatisticsUpdate::new(id)));
 
             client.send(StorageCommand::RunSinks(vec![cmd]));
         }
@@ -1789,12 +1790,7 @@ where
                         shared_stats
                             .source_statistics
                             .entry(stat.id)
-                            .and_modify(|current| match current {
-                                Some(ref mut current) => current.incorporate(stat),
-                                None => {
-                                    *current = Some(stat.with_metrics(&self.metrics));
-                                }
-                            });
+                            .and_modify(|current| current.stat().incorporate(stat));
                     }
                 }
 
@@ -1804,10 +1800,7 @@ where
                         // Don't override it if its been removed.
                         shared_stats
                             .entry(stat.id)
-                            .and_modify(|current| match current {
-                                Some(ref mut current) => current.incorporate(stat),
-                                None => *current = Some(stat),
-                            });
+                            .and_modify(|current| current.stat().incorporate(stat));
                     }
                 }
             }
