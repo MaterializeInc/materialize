@@ -39,6 +39,7 @@ futures = "0.3.25"
 futures-util = "0.3"
 h2 = "0.3.13"
 hex = "0.4.3"
+itertools = "0.10.5"
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["bytes_", "test", "tracing_"] }

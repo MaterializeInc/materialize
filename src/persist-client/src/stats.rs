@@ -13,8 +13,9 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use mz_dyncfg::{Config, ConfigSet};
-use mz_persist::indexed::columnar::ColumnarRecords;
-use mz_persist_types::part::PartBuilder;
+use mz_ore::soft_panic_or_log;
+use mz_persist::indexed::encoding::BlobTraceUpdates;
+use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec;
 
@@ -121,16 +122,31 @@ pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
     }
 }
 
-pub(crate) fn part_stats_for_legacy_part<K: Codec, V: Codec>(
+/// Encodes a [`ColumnarRecords`] into a [`Part`] and calculates [`PartStats`].
+///
+/// Note: The [`Part`] will contain the same data as [`ColumnarRecords`], but
+/// the [`Part`] will have the data fully structured as opposed to an opaque
+/// binary blob.
+pub(crate) fn encode_updates<K, V>(
     schemas: &Schemas<K, V>,
-    part: &[ColumnarRecords],
-) -> Result<PartStats, String> {
-    // This is a laughably inefficient placeholder implementation of stats
-    // on the old part format. We don't intend to make this fast, rather we
-    // intend to compute stats on the new part format.
+    updates: &BlobTraceUpdates,
+) -> Result<(Part, PartStats), String>
+where
+    K: Codec,
+    V: Codec,
+{
+    let updates = match updates {
+        BlobTraceUpdates::Row(updates) => itertools::Either::Left(updates.into_iter()),
+        BlobTraceUpdates::Both((codec, _structured)) => {
+            // This is super unexpected, but not worthy of a panic.
+            soft_panic_or_log!("re-encoding structured data?");
+            itertools::Either::Right(std::iter::once(codec))
+        }
+    };
+
     let mut builder = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref())?;
-    for x in part {
-        for ((k, v), t, d) in x.iter() {
+    for update in updates {
+        for ((k, v), t, d) in update.iter() {
             let k = K::decode(k)?;
             let v = V::decode(v)?;
             let t = i64::from_le_bytes(t);
@@ -140,8 +156,9 @@ pub(crate) fn part_stats_for_legacy_part<K: Codec, V: Codec>(
         }
     }
     let part = builder.finish();
+    let stats = PartStats::new(&part)?;
 
-    PartStats::new(&part)
+    Ok((part, stats))
 }
 
 /// Statistics about the contents of a shard as_of some time.
