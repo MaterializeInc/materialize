@@ -116,17 +116,18 @@ We considered several alternatives:
 
 The `eq-type` and `eq-indx` approach came up in early discussions.
 These are fundamentally hacks, with the upside of being quick fixes.
-The downside is the addition of a tricky corner case, some risk (what if keeping the types separate matters somewhere we've forgotten about?), and some technical debt.
+The downside is the addition of a tricky corner case, some risk (what if keeping the types separate matters somewhere we've forgotten about?), and some technical debt/mess-making.
 
-The `remixvc` and `remix++` approaches address the problem at the user/adapter side. Such rewriting feels a bit risky/annoying, and I'm not sure how it would interact with sources.
+The `remixvc` and `remix++` approaches address the problem at the user/adapter side.
+Such rewriting feels a bit risky/annoying/confusing, and I'm not sure how it would interact with sources.
 
 ## Open questions
-
-It's possible that (as Nikhil worries) there could be somewhere in the pgwire or WS layers that calls `.typ()` on a `MirRelationExpr` and expects a `SqlScalarType` but will now find a `ReprScalarType`.
-I don't know those layers well, but we could derisk some of the work of PR 2 by checking for that in advance.
-(In any case, the Rust type checker will be eager to tell us about it.)
 
 How should we report `ReprScalarType`s to the user in `EXPLAIN PLAN`s?
 There's a potential for confusion if we report something as type `string` that the user expected to have type `VARCHAR(18)` or something similar.
 Apparently we already treat `string` as a synonym for `text`... can we somehow choose names that will be unambiguous?
 Say, `mzstring` or `charseq` or `utf8`?
+
+It's possible that (as Nikhil worries) somewhere in the pgwire or WS layers calls `.typ()` on a `MirRelationExpr` and expects a `SqlScalarType` but will now find a `ReprScalarType`.
+I don't know those layers well, but we could derisk some of the work of PR #2 by checking for that in advance.
+(In any case, the Rust type checker will be eager to tell us about it.)
