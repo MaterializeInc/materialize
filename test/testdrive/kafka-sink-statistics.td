@@ -52,3 +52,13 @@ simple_view_sink 2 2 true true
   JOIN mz_internal.mz_sink_statistics u ON s.id = u.id
   WHERE s.name IN ('simple_view_sink')
 simple_view_sink 2 2 true true
+
+> ALTER CONNECTION kafka_conn SET (BROKER 'asdf') WITH (VALIDATE = false);
+> ALTER CONNECTION kafka_conn SET (BROKER '${testdrive.kafka-addr}') WITH (VALIDATE = true);
+
+> INSERT INTO t VALUES ('key1', 'value')
+> SELECT s.name, u.messages_staged, u.messages_committed, u.bytes_staged > 0, bytes_staged = bytes_committed
+  FROM mz_sinks s
+  JOIN mz_internal.mz_sink_statistics u ON s.id = u.id
+  WHERE s.name IN ('simple_view_sink')
+simple_view_sink 3 3 true true

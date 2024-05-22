@@ -781,18 +781,22 @@ where
         }
 
         {
-            // Enusre all sources are associated with the statistics.
+            // Ensure all sources are associated with the statistics.
+            //
+            // We currently do not call `create_collections` after we have initialized the source
+            // statistics scrapers, but in the interest of safety, avoid overriding existing
+            // statistics values.
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
-            source_statistics.source_statistics.extend(
-                new_source_statistic_entries
-                    .into_iter()
-                    .map(|id| (id, None)),
-            );
-            source_statistics.webhook_statistics.extend(
-                new_webhook_statistic_entries
-                    .into_iter()
-                    .map(|id| (id, Default::default())),
-            );
+
+            for id in new_source_statistic_entries {
+                source_statistics
+                    .source_statistics
+                    .entry(id)
+                    .or_insert(None);
+            }
+            for id in new_webhook_statistic_entries {
+                source_statistics.webhook_statistics.entry(id).or_default();
+            }
         }
 
         // Register the tables all in one batch.
@@ -1300,10 +1304,14 @@ where
                     export_id: id,
                 })?;
 
+            // Just like with `new_source_statistic_entries`, we can probably
+            // `insert` here, but in the interest of safety, never override
+            // existing values.
             self.sink_statistics
                 .lock()
                 .expect("poisoned")
-                .insert(id, None);
+                .entry(id)
+                .or_insert(None);
 
             client.send(StorageCommand::RunSinks(vec![cmd]));
         }
@@ -1367,11 +1375,6 @@ where
                 .entry(export.description.instance_id)
                 .or_default();
             update.push((cmd, export));
-
-            self.sink_statistics
-                .lock()
-                .expect("poisoned")
-                .insert(id, None);
         }
 
         for (instance_id, updates) in updates_by_instance {
