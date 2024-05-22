@@ -525,7 +525,7 @@ where
     None
 }
 
-/// The process global [`TxnRead`] that any operator can communicate with.
+/// The process global [`TxnsRead`] that any operator can communicate with.
 #[derive(Default, Debug, Clone)]
 pub struct TxnsContext<T: Clone> {
     read: Arc<tokio::sync::OnceCell<TxnsRead<T>>>,
