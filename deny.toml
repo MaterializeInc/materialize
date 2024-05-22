@@ -148,7 +148,6 @@ name = "rustls"
 [[bans.deny]]
 name = "lazy_static"
 wrappers = [
-  "arrow-csv",
   "bindgen",
   "bstr",
   "console",
