@@ -29,6 +29,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_txn::operator::TxnsContext;
 use mz_storage_types::connections::ConnectionContext;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
@@ -191,6 +192,8 @@ struct Worker<'w, A: Allocate> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
+    /// Context necessary for rendering persist-txn operators.
+    txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
@@ -207,6 +210,7 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             ActivatorSender,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,
     ) {
         if config.context.worker_core_affinity {
@@ -219,6 +223,7 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             metrics: config.metrics,
             context: config.context,
             persist_clients,
+            txns_ctx,
             compute_state: None,
             tracing_handle,
         }
@@ -497,6 +502,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 self.compute_state = Some(ComputeState::new(
                     self.timely_worker.index(),
                     Arc::clone(&self.persist_clients),
+                    self.txns_ctx.clone(),
                     self.metrics.clone(),
                     Arc::clone(&self.tracing_handle),
                     self.context.clone(),

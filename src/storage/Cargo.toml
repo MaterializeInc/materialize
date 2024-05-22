@@ -50,6 +50,7 @@ mz-mysql-util = { path = "../mysql-util" }
 mz-ore = { path = "../ore", features = ["async", "tracing_", "chrono", "metrics"] }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
+mz-persist-txn = { path = "../persist-txn" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pid-file = { path = "../pid-file" }

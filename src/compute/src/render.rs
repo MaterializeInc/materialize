@@ -222,6 +222,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                         inner,
                         *source_id,
                         Arc::clone(&compute_state.persist_clients),
+                        &compute_state.txns_ctx,
+                        &compute_state.worker_config,
                         source.storage_metadata.clone(),
                         dataflow.as_of.clone(),
                         SnapshotMode::Include,

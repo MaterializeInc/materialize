@@ -107,6 +107,8 @@ where
         &mut desired_oks.scope(),
         sink_id,
         Arc::clone(&compute_state.persist_clients),
+        &compute_state.txns_ctx,
+        &compute_state.worker_config,
         target.clone(),
         source_as_of,
         SnapshotMode::Include,

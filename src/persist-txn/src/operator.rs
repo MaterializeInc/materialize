@@ -9,6 +9,7 @@
 
 //! Timely operators for the crate
 
+use std::any::Any;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::mpsc::TryRecvError;
@@ -92,8 +93,8 @@ use crate::TxnsCodecDefault;
 pub fn txns_progress<K, V, T, D, P, C, F, G>(
     passthrough: Stream<G, P>,
     name: &str,
-    ctx: TxnsContext<T>,
-    config_set: &ConfigSet,
+    ctx: &TxnsContext,
+    worker_dyncfgs: &ConfigSet,
     client_fn: impl Fn() -> F,
     txns_id: ShardId,
     data_id: ShardId,
@@ -113,11 +114,11 @@ where
     G: Scope<Timestamp = T>,
 {
     let unique_id = (name, passthrough.scope().addr()).hashed();
-    let (remap, source_button) = if USE_GLOBAL_TXN_CACHE_SOURCE.get(config_set) {
+    let (remap, source_button) = if USE_GLOBAL_TXN_CACHE_SOURCE.get(worker_dyncfgs) {
         txns_progress_source_global::<K, V, T, D, P, C, G>(
             passthrough.scope(),
             name,
-            ctx,
+            ctx.clone(),
             client_fn(),
             txns_id,
             data_id,
@@ -273,7 +274,7 @@ where
 fn txns_progress_source_global<K, V, T, D, P, C, G>(
     scope: G,
     name: &str,
-    ctx: TxnsContext<T>,
+    ctx: TxnsContext,
     client: impl Future<Output = PersistClient> + 'static,
     txns_id: ShardId,
     data_id: ShardId,
@@ -305,7 +306,7 @@ where
 
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        let txns_read = ctx.get_or_init::<C>(&client, txns_id).await;
+        let txns_read = ctx.get_or_init::<T, C>(&client, txns_id).await;
 
         let _ = txns_read.update_gt(as_of.clone()).await;
         let data_write = client
@@ -527,20 +528,29 @@ where
 
 /// The process global [`TxnsRead`] that any operator can communicate with.
 #[derive(Default, Debug, Clone)]
-pub struct TxnsContext<T: Clone> {
-    read: Arc<tokio::sync::OnceCell<TxnsRead<T>>>,
+pub struct TxnsContext {
+    read: Arc<tokio::sync::OnceCell<Box<dyn Any + Send + Sync>>>,
 }
 
-impl<T: Timestamp + Lattice + Codec64> TxnsContext<T> {
-    async fn get_or_init<C>(&self, client: &PersistClient, txns_id: ShardId) -> TxnsRead<T>
+impl TxnsContext {
+    async fn get_or_init<T, C>(&self, client: &PersistClient, txns_id: ShardId) -> TxnsRead<T>
     where
-        T: TotalOrder + StepForward,
+        T: Timestamp + Lattice + Codec64 + TotalOrder + StepForward,
         C: TxnsCodec + 'static,
     {
         let read = self
             .read
-            .get_or_init(|| TxnsRead::start::<C>(client.clone(), txns_id))
-            .await;
+            .get_or_init(|| {
+                let client = client.clone();
+                async move {
+                    let read: Box<dyn Any + Send + Sync> =
+                        Box::new(TxnsRead::<T>::start::<C>(client, txns_id).await);
+                    read
+                }
+            })
+            .await
+            .downcast_ref::<TxnsRead<T>>()
+            .expect("timestamp types should match");
         // We initially only have one txns shard in the system.
         assert_eq!(&txns_id, read.txns_id());
         read.clone()
@@ -669,7 +679,7 @@ impl DataSubscribe {
                 txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _, _>(
                     data_stream,
                     name,
-                    TxnsContext::default(),
+                    &TxnsContext::default(),
                     &config_set,
                     || std::future::ready(client.clone()),
                     txns_id,

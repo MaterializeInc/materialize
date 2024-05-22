@@ -22,6 +22,7 @@ use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_txn::operator::TxnsContext;
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
 use mz_service::local::LocalClient;
 use timely::communication::initialize::WorkerGuards;
@@ -42,6 +43,8 @@ pub struct ClusterConfig {
     pub metrics_registry: MetricsRegistry,
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
+    /// Context necessary for rendering persist-txn operators.
+    pub txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
     pub tracing_handle: Arc<TracingHandle>,
 }
@@ -57,6 +60,8 @@ where
     timely_container: TimelyContainerRef<C, R, Worker::Activatable>,
     /// Handle to the persist infrastructure.
     persist_clients: Arc<PersistClientCache>,
+    /// Context necessary for rendering persist-txn operators.
+    txns_ctx: TxnsContext,
     /// The handle to the Tokio runtime.
     tokio_handle: tokio::runtime::Handle,
     /// A process-global handle to tracing configuration.
@@ -110,6 +115,7 @@ where
             let client = ClusterClient::new(
                 Arc::clone(&timely_container),
                 Arc::clone(&config.persist_clients),
+                config.txns_ctx.clone(),
                 tokio_executor.clone(),
                 Arc::clone(&config.tracing_handle),
                 worker_config,
@@ -132,6 +138,7 @@ where
     fn new(
         timely_container: TimelyContainerRef<C, R, Worker::Activatable>,
         persist_clients: Arc<PersistClientCache>,
+        txns_ctx: TxnsContext,
         tokio_handle: tokio::runtime::Handle,
         tracing_handle: Arc<TracingHandle>,
         worker_config: Worker,
@@ -140,6 +147,7 @@ where
             timely_container,
             inner: None,
             persist_clients,
+            txns_ctx,
             tokio_handle,
             tracing_handle,
             worker: worker_config,
@@ -151,6 +159,7 @@ where
         config: TimelyConfig,
         epoch: ClusterStartupEpoch,
         persist_clients: Arc<PersistClientCache>,
+        txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,
         tokio_executor: Handle,
     ) -> Result<TimelyContainer<C, R, Worker::Activatable>, Error> {
@@ -220,6 +229,7 @@ where
                 .take()
                 .unwrap();
             let persist_clients = Arc::clone(&persist_clients);
+            let txns_ctx = txns_ctx.clone();
             let user_worker_config = user_worker_config.clone();
             let tracing_handle = Arc::clone(&tracing_handle);
             Worker::build_and_run(
@@ -227,6 +237,7 @@ where
                 timely_worker,
                 client_rx,
                 persist_clients,
+                txns_ctx,
                 tracing_handle,
             )
         })
@@ -253,6 +264,7 @@ where
         // forever, possibly creating a fair share of confusion in the orchestrator.
 
         let persist_clients = Arc::clone(&self.persist_clients);
+        let txns_ctx = self.txns_ctx.clone();
         let handle = self.tokio_handle.clone();
         let tracing_handle = Arc::clone(&self.tracing_handle);
 
@@ -275,6 +287,7 @@ where
                 config,
                 epoch,
                 persist_clients,
+                txns_ctx,
                 tracing_handle,
                 handle,
             )
