@@ -5412,6 +5412,7 @@ dependencies = [
 name = "mz-persist-txn"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "crossbeam-channel",
  "differential-dataflow",

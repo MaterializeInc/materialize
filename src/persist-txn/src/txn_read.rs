@@ -17,8 +17,7 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures::future::BoxFuture;
-use futures::{FutureExt, Stream};
+use futures::Stream;
 use mz_ore::instrument;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::vec::VecExt;
@@ -302,18 +301,13 @@ pub struct DataRemapEntry<T> {
     pub logical_upper: T,
 }
 
-/// A token exchangeable for a subscription to physical and logical uppers
-/// of a data shard.
-///
-/// Must be unblocked via [`DataSubscribeBlocked::unblock_subscribe`].
-#[derive(Debug)]
-pub(crate) struct DataSubscribeBlocked<T>(pub(crate) DataSnapshot<T>);
-
 /// Keeps track of a [`DataRemapEntry`] for shard `data_id`.
 #[derive(Debug)]
 pub(crate) struct DataSubscribe<T> {
     /// The id of the data shard.
     pub(crate) data_id: ShardId,
+    /// WIP
+    pub(crate) snapshot: Option<DataSnapshot<T>>,
     /// The physical and logical upper of `data_id`.
     pub(crate) remap: DataRemapEntry<T>,
 }
@@ -327,69 +321,21 @@ pub struct DataSubscription<T: Timestamp + Lattice + Codec64> {
     tx: mpsc::UnboundedSender<DataRemapEntry<T>>,
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> DataSubscribeBlocked<T> {
-    /// Unblocks the snapshot portion of this subscribe. See
-    /// [`DataSnapshot::unblock_read`].
-    ///
-    /// Returns a [`DataSubscribe`] and a future that must be awaited to
-    /// unblock that snapshot. The returned subscribce is `None` if the upper
-    /// of the data shard is the empty antichain.
-    #[must_use]
-    #[instrument(level = "debug", fields(shard = %self.0.data_id, ts = ?self.0.as_of, empty_to = ?self.0.empty_to))]
-    pub(crate) fn unblock_subscribe<'a, K, V, D>(
-        self,
-        data_write: WriteHandle<K, V, T, D>,
-    ) -> (Option<DataSubscribe<T>>, BoxFuture<'a, ()>)
-    where
-        K: Debug + Codec + Send + Sync,
-        V: Debug + Codec + Send + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
-    {
-        debug!(
-            "unblock_subscribe latest_write={:?} as_of={:?} for {:.9}",
-            self.0.latest_write,
-            self.0.as_of,
-            self.0.data_id.to_string()
-        );
-
-        if data_write.shared_upper().is_empty() {
-            return (None, async {}.boxed());
-        }
-
-        let subscribe = DataSubscribe {
-            data_id: self.0.data_id.clone(),
-            remap: DataRemapEntry {
-                physical_upper: self.0.empty_to.clone(),
-                logical_upper: self.0.empty_to.clone(),
-            },
-        };
-        let fut = async move {
-            self.0.unblock_read(data_write).await;
-        }
-        .boxed();
-        (Some(subscribe), fut)
-    }
+#[async_trait::async_trait]
+pub(crate) trait UnblockRead<T>: Debug + Send {
+    async fn unblock_read(self: Box<Self>, snapshot: DataSnapshot<T>);
 }
 
-pub(crate) trait UnblockSubscribe<T>: Debug + Send {
-    fn unblock_subscribe<'a>(
-        self: Box<Self>,
-        subscribe: DataSubscribeBlocked<T>,
-    ) -> (Option<DataSubscribe<T>>, BoxFuture<'a, ()>);
-}
-
-impl<K, V, T, D> UnblockSubscribe<T> for WriteHandle<K, V, T, D>
+#[async_trait::async_trait]
+impl<K, V, T, D> UnblockRead<T> for WriteHandle<K, V, T, D>
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    fn unblock_subscribe<'a>(
-        self: Box<Self>,
-        subscribe: DataSubscribeBlocked<T>,
-    ) -> (Option<DataSubscribe<T>>, BoxFuture<'a, ()>) {
-        subscribe.unblock_subscribe(*self)
+    async fn unblock_read(self: Box<Self>, snapshot: DataSnapshot<T>) {
+        snapshot.unblock_read(*self).await;
     }
 }
 
@@ -455,7 +401,7 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
         &self,
         data_id: ShardId,
         as_of: T,
-        unblock: Box<dyn UnblockSubscribe<T>>,
+        unblock: Box<dyn UnblockRead<T>>,
     ) -> mpsc::UnboundedReceiver<DataRemapEntry<T>> {
         self.send(|tx| TxnsReadCmd::DataSubscribe {
             data_id,
@@ -557,7 +503,7 @@ enum TxnsReadCmd<T> {
     DataSubscribe {
         data_id: ShardId,
         as_of: T,
-        unblock: Box<dyn UnblockSubscribe<T>>,
+        unblock: Box<dyn UnblockRead<T>>,
         tx: oneshot::Sender<mpsc::UnboundedReceiver<DataRemapEntry<T>>>,
     },
     Wait {
@@ -743,16 +689,14 @@ where
                     unblock,
                     tx,
                 } => {
-                    let subscribe = self.cache.data_subscribe(data_id, as_of.clone());
-                    let (subscribe, fut) = unblock.unblock_subscribe(subscribe);
+                    let mut subscribe = self.cache.data_subscribe(data_id, as_of.clone());
+                    if let Some(snapshot) = subscribe.snapshot.take() {
+                        mz_ore::task::spawn(
+                            || "persist-txn::unblock_subscribe",
+                            unblock.unblock_read(snapshot),
+                        );
+                    }
                     let (sub_tx, sub_rx) = mpsc::unbounded_channel();
-                    let Some(subscribe) = subscribe else {
-                        // Data shard upper is the empty antichain, so we can
-                        // return earler and drop the sender.
-                        let _ = tx.send(sub_rx);
-                        return;
-                    };
-                    mz_ore::task::spawn(|| "persist-txn::unblock_subscribe", fut);
                     // Send the initial remap entry.
                     sub_tx
                         .send(subscribe.remap.clone())
