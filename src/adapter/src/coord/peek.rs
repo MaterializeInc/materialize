@@ -661,6 +661,7 @@ impl crate::coord::Coordinator {
 
         Ok(crate::ExecuteResponse::SendingRows {
             future: Box::pin(rows_rx),
+            instance_id: compute_instance,
         })
     }
 

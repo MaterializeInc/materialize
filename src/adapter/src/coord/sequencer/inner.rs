@@ -2619,7 +2619,7 @@ impl Coordinator {
                     Ok(diffs)
                 };
             let diffs = match peek_response {
-                ExecuteResponse::SendingRows { future: batch } => {
+                ExecuteResponse::SendingRows { future: batch, .. } => {
                     // TODO(jkosh44): This timeout should be removed;
                     // we should instead periodically ensure clusters are
                     // healthy and actively cancel any work waiting on unhealthy

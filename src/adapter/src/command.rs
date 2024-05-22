@@ -16,6 +16,7 @@ use derivative::Derivative;
 use enum_kinds::EnumKind;
 use futures::future::BoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
+use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -356,6 +357,7 @@ pub enum ExecuteResponse {
     SendingRows {
         #[derivative(Debug = "ignore")]
         future: RowsFuture,
+        instance_id: ComputeInstanceId,
     },
     /// Like `SendingRows`, but the rows are known to be available
     /// immediately, and thus the execution is considered ended in the coordinator.
@@ -376,6 +378,7 @@ pub enum ExecuteResponse {
     Subscribing {
         rx: RowBatchStream,
         ctx_extra: ExecuteContextExtra,
+        instance_id: ComputeInstanceId,
     },
     /// The active transaction committed.
     TransactionCommitted {

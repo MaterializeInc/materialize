@@ -1423,7 +1423,10 @@ where
                 )
                 .await
             }
-            ExecuteResponse::SendingRows { future: rx } => {
+            ExecuteResponse::SendingRows {
+                future: rx,
+                instance_id,
+            } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
 
@@ -1437,6 +1440,7 @@ where
                         Box::new(UnboundedReceiverStream::new(rows)),
                         execute_started,
                         &self.adapter_client,
+                        Some(instance_id),
                     )),
                     max_rows,
                     get_response,
@@ -1462,6 +1466,7 @@ where
                         Box::new(stream),
                         execute_started,
                         &self.adapter_client,
+                        None,
                     )),
                     max_rows,
                     get_response,
@@ -1492,7 +1497,11 @@ where
                 }
                 command_complete!()
             }
-            ExecuteResponse::Subscribing { rx, ctx_extra } => {
+            ExecuteResponse::Subscribing {
+                rx,
+                ctx_extra,
+                instance_id,
+            } => {
                 if fetch_portal_name.is_none() {
                     let mut msg = ErrorResponse::notice(
                         SqlState::WARNING,
@@ -1517,6 +1526,7 @@ where
                             Box::new(UnboundedReceiverStream::new(rx)),
                             execute_started,
                             &self.adapter_client,
+                            Some(instance_id),
                         )),
                         max_rows,
                         get_response,
@@ -1552,7 +1562,11 @@ where
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
                 match *resp {
-                    ExecuteResponse::Subscribing { rx, ctx_extra } => {
+                    ExecuteResponse::Subscribing {
+                        rx,
+                        ctx_extra,
+                        instance_id,
+                    } => {
                         let (result, statement_ended_execution_reason) = match self
                             .copy_rows(
                                 format,
@@ -1561,6 +1575,7 @@ where
                                     Box::new(UnboundedReceiverStream::new(rx)),
                                     execute_started,
                                     &self.adapter_client,
+                                    Some(instance_id),
                                 ),
                             )
                             .await
@@ -1588,7 +1603,10 @@ where
                             .retire_execute(ctx_extra, statement_ended_execution_reason);
                         return result;
                     }
-                    ExecuteResponse::SendingRows { future: rows_rx } => {
+                    ExecuteResponse::SendingRows {
+                        future: rows_rx,
+                        instance_id,
+                    } => {
                         let span = tracing::debug_span!("sending_rows");
                         let rows = self.row_future_to_stream(&span, rows_rx).await?;
                         // We don't need to finalize execution here;
@@ -1603,6 +1621,7 @@ where
                                     Box::new(UnboundedReceiverStream::new(rows)),
                                     execute_started,
                                     &self.adapter_client,
+                                    Some(instance_id),
                                 ),
                             )
                             .await
@@ -1626,6 +1645,7 @@ where
                                     Box::new(rows),
                                     execute_started,
                                     &self.adapter_client,
+                                    None,
                                 ),
                             )
                             .instrument(span)

@@ -1271,10 +1271,10 @@ async fn execute_stmt<S: ResultSender>(
             )
             .into()
         }
-        ExecuteResponse::SendingRows { future: mut rows } => {
+        ExecuteResponse::SendingRows { future: mut rows, instance_id } => {
             let rows = match await_rows(sender, client, &mut rows).await? {
                 PeekResponseUnary::Rows(rows) => {
-                    RecordFirstRowStream::record(execute_started, client);
+                    RecordFirstRowStream::record(execute_started, client, Some(instance_id));
                     rows
                 }
                 PeekResponseUnary::Error(e) => {
@@ -1291,13 +1291,14 @@ async fn execute_stmt<S: ResultSender>(
         ExecuteResponse::SendingRowsImmediate { rows } => {
             SqlResult::rows(client, rows, &desc.relation_desc.expect("RelationDesc must exist")).into()
         }
-        ExecuteResponse::Subscribing { rx, ctx_extra } => StatementResult::Subscribe {
+        ExecuteResponse::Subscribing { rx, ctx_extra, instance_id } => StatementResult::Subscribe {
             tag: "SUBSCRIBE".into(),
             desc: desc.relation_desc.unwrap(),
             rx: RecordFirstRowStream::new(
                 Box::new(UnboundedReceiverStream::new(rx)),
                 execute_started,
                 client,
+                Some(instance_id),
             ),
             ctx_extra,
         },
