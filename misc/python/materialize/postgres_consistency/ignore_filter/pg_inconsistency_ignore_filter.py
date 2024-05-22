@@ -24,9 +24,13 @@ from materialize.output_consistency.expression.expression_with_args import (
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     involves_data_type_category,
+    is_any_date_time_expression,
+    is_known_to_involve_exact_data_types,
+    matches_any_expression_arg,
     matches_fun_by_any_name,
     matches_fun_by_name,
     matches_op_by_pattern,
+    matches_x_and_y,
     matches_x_or_y,
 )
 from materialize.output_consistency.ignore_filter.ignore_verdict import (
@@ -60,6 +64,10 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
 )
 from materialize.output_consistency.input_data.return_specs.text_return_spec import (
     TextReturnTypeSpec,
+)
+from materialize.output_consistency.input_data.types.number_types_provider import (
+    DOUBLE_TYPE_IDENTIFIER,
+    REAL_TYPE_IDENTIFIER,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -485,6 +493,16 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if query_template.limit == 0:
             return YesIgnore("#17189: LIMIT 0 does not swallow errors")
 
+        if (
+            query_template.matches_any_expression(
+                partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
+                True,
+            )
+            and "invalid input syntax for type" in mz_error_msg
+        ):
+            # Postgres returns regtype which can be cast to numbers while mz returns a string
+            return YesIgnore("regtype of postgres can be cast")
+
         return NoIgnore()
 
     def _shall_ignore_content_mismatch(
@@ -493,11 +511,8 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
-        details_by_strategy_key = error.get_details_by_strategy_key()
-        mz_error_details = details_by_strategy_key[
-            EvaluationStrategyKey.MZ_DATAFLOW_RENDERING
-        ]
-        pg_error_details = details_by_strategy_key[EvaluationStrategyKey.POSTGRES]
+        col_index = error.col_index
+        assert col_index is not None
 
         def matches_math_op_with_large_or_tiny_val(expression: Expression) -> bool:
             if isinstance(expression, ExpressionWithArgs):
@@ -619,24 +634,61 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#26846: eszett in upper")
 
-        if (
-            query_template.matches_any_expression(
-                partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
-                True,
-            )
-            and str(mz_error_details.value) == "time"
-            and str(pg_error_details.value) == "time without time zone"
-        ):
-            return YesIgnore("Different type name for time")
-
         if query_template.matches_any_expression(
             partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
             True,
-        ) and query_template.matches_any_expression(
-            partial(matches_fun_by_name, function_name_in_lower_case="array_agg"),
-            True,
         ):
-            return YesIgnore("#27150: array_agg(pg_typeof(...)) in pg flattens result")
+            if query_template.matches_any_expression(is_any_date_time_expression, True):
+                # "time without time zone" (mz) vs. "time" (pg)
+                # The condition is rather generic because it must also match when a text operation (e.g., upper)
+                # is applied to the string.
+                return YesIgnore("Different type name for time")
+
+            if query_template.matches_any_expression(
+                partial(matches_fun_by_name, function_name_in_lower_case="array_agg"),
+                True,
+            ):
+                return YesIgnore(
+                    "#27150: array_agg(pg_typeof(...)) in pg flattens result"
+                )
+
+            if query_template.matches_specific_select_or_filter_expression(
+                col_index,
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers={REAL_TYPE_IDENTIFIER},
+                ),
+                True,
+            ) and not query_template.matches_specific_select_or_filter_expression(
+                col_index,
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers={DOUBLE_TYPE_IDENTIFIER},
+                ),
+                True,
+            ):
+                # e.g., round(1::REAL) returns REAL in mz but DOUBLE PRECISION in pg
+                return YesIgnore("mz does not use double when operating on real value")
+
+            if query_template.matches_any_expression(
+                partial(
+                    matches_x_and_y,
+                    x=partial(
+                        matches_fun_by_name, function_name_in_lower_case="pg_typeof"
+                    ),
+                    y=partial(
+                        matches_any_expression_arg,
+                        arg_matcher=partial(
+                            matches_fun_by_name, function_name_in_lower_case="pg_typeof"
+                        ),
+                    ),
+                ),
+                True,
+            ):
+                # nested invocation of pg_typeof
+                return YesIgnore(
+                    "pg_typeof(pg_typeof(...)) returns regtype in pg but text in mz"
+                )
 
         return NoIgnore()
 

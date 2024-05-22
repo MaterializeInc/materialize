@@ -88,6 +88,16 @@ def matches_expression_with_only_plain_arguments(expression: Expression) -> bool
     return True
 
 
+def matches_any_expression_arg(
+    expression: Expression, arg_matcher: Callable[[Expression], bool]
+) -> bool:
+    if isinstance(expression, ExpressionWithArgs):
+        for arg_expression in expression.args:
+            if arg_matcher(arg_expression):
+                return True
+    return False
+
+
 def matches_nested_expression(expression: Expression) -> bool:
     return not matches_expression_with_only_plain_arguments(expression)
 
@@ -113,6 +123,17 @@ def involves_data_type_category(
     expression: Expression, data_type_category: DataTypeCategory
 ) -> bool:
     return expression.resolve_return_type_category() == data_type_category
+
+
+def is_known_to_involve_exact_data_types(
+    expression: Expression, internal_data_type_identifiers: set[str]
+):
+    exact_data_type = expression.try_resolve_exact_data_type()
+
+    if exact_data_type is None:
+        return False
+
+    return exact_data_type.internal_identifier in internal_data_type_identifiers
 
 
 def is_operation_tagged(expression: Expression, tag: str) -> bool:
