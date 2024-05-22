@@ -297,7 +297,8 @@ pub struct DataRemapEntry<T> {
 pub(crate) struct DataSubscribe<T> {
     /// The id of the data shard.
     pub(crate) data_id: ShardId,
-    /// WIP
+    /// The initial snapshot, used to unblock the reading of the initial
+    /// snapshot.
     pub(crate) snapshot: Option<DataSnapshot<T>>,
     /// The physical and logical upper of `data_id`.
     pub(crate) remap: DataRemapEntry<T>,
