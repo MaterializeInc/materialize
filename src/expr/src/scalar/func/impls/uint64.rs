@@ -137,6 +137,10 @@ impl<'a> EagerUnaryFunc<'a> for CastUint64ToNumeric {
         ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
 
+    fn could_error(&self) -> bool {
+        self.0.is_some()
+    }
+
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastNumericToUint64)
     }
