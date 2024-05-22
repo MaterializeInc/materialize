@@ -86,6 +86,7 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_txn::operator::TxnsContext;
 use mz_repr::{GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
@@ -153,6 +154,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         connection_context: ConnectionContext,
         instance_context: StorageInstanceContext,
         persist_clients: Arc<PersistClientCache>,
+        txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,
         shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
     ) -> Self {
@@ -209,6 +211,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             timely_worker_peers: timely_worker.peers(),
             instance_context,
             persist_clients,
+            txns_ctx,
             sink_tokens: BTreeMap::new(),
             sink_write_frontiers: BTreeMap::new(),
             dropped_ids: BTreeSet::new(),
@@ -276,6 +279,8 @@ pub struct StorageState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     pub persist_clients: Arc<PersistClientCache>,
+    /// Context necessary for rendering persist-txn operators.
+    pub txns_ctx: TxnsContext,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     /// NB: The type of the tokens must not be changed to something other than `PressOnDropButton`

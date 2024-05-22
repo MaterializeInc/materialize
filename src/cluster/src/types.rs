@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_txn::operator::TxnsContext;
 use timely::worker::Worker as TimelyWorker;
 
 /// A trait for letting specific server implementations hook
@@ -38,6 +39,7 @@ pub trait AsRunnableWorker<C, R> {
             crossbeam_channel::Sender<Self::Activatable>,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,
     );
 }

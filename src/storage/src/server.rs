@@ -16,6 +16,7 @@ use mz_cluster::server::TimelyContainerRef;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_txn::operator::TxnsContext;
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
@@ -102,6 +103,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             crossbeam_channel::Sender<std::thread::Thread>,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,
     ) {
         Worker::new(
@@ -112,6 +114,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             config.connection_context,
             config.instance_context,
             persist_clients,
+            txns_ctx,
             tracing_handle,
             config.shared_rocksdb_write_buffer_manager,
         )

@@ -10,6 +10,7 @@
 //! A source that reads from an a persist shard.
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use mz_dyncfg::ConfigSet;
 use mz_persist_client::project::{error_free, ProjectionPushdown};
 use std::convert::Infallible;
 use std::fmt::Debug;
@@ -134,6 +135,10 @@ pub fn persist_source<G>(
     scope: &mut G,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
+    txns_ctx: &TxnsContext,
+    // In case we need to use a dyncfg to decide which operators to render in a
+    // dataflow.
+    worker_dyncfgs: &ConfigSet,
     metadata: CollectionMetadata,
     as_of: Option<Antichain<Timestamp>>,
     snapshot_mode: SnapshotMode,
@@ -219,13 +224,12 @@ where
     // system. This means the "logical" upper may be ahead of the "physical"
     // upper. Render a dataflow operator that passes through the input and
     // translates the progress frontiers as necessary.
-    let persist_txn_ctx = persist_clients.txn_ctx::<TxnsContext<G::Timestamp>>();
     let (stream, txns_tokens) = match metadata.txns_shard {
         Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _, _>(
             stream,
             &source_id.to_string(),
-            (*persist_txn_ctx).clone(),
-            Arc::clone(&persist_clients).cfg(),
+            txns_ctx,
+            worker_dyncfgs,
             move || {
                 let (c, l) = (
                     Arc::clone(&persist_clients),

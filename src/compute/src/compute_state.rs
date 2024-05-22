@@ -40,6 +40,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::Diagnostics;
+use mz_persist_txn::operator::TxnsContext;
 use mz_persist_txn::txn_cache::TxnsCache;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
@@ -100,6 +101,8 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
+    /// Context necessary for rendering persist-txn operators.
+    pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
     pub command_history: ComputeCommandHistory<UIntGauge>,
     /// Max size in bytes of any result.
@@ -145,6 +148,7 @@ impl ComputeState {
     pub fn new(
         worker_id: usize,
         persist_clients: Arc<PersistClientCache>,
+        txns_ctx: TxnsContext,
         metrics: ComputeMetrics,
         tracing_handle: Arc<TracingHandle>,
         context: ComputeInstanceContext,
@@ -162,6 +166,7 @@ impl ComputeState {
             pending_peeks: Default::default(),
             compute_logger: None,
             persist_clients,
+            txns_ctx,
             command_history,
             max_result_size: u64::MAX,
             linear_join_spec: Default::default(),

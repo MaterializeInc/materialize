@@ -20,6 +20,7 @@ futures = "0.3.25"
 http = "0.2.8"
 mz-aws-util = { path = "../aws-util" }
 mz-arrow-util = { path = "../arrow-util" }
+mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }

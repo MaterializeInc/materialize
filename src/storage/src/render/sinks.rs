@@ -55,6 +55,8 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         scope,
         sink.from,
         Arc::clone(&storage_state.persist_clients),
+        &storage_state.txns_ctx,
+        storage_state.storage_configuration.config_set(),
         sink.from_storage_metadata.clone(),
         Some(sink.as_of.clone()),
         snapshot_mode,

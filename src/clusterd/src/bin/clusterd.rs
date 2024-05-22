@@ -30,6 +30,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
+use mz_persist_txn::operator::TxnsContext;
 use mz_pid_file::PidFile;
 use mz_service::emit_boot_diagnostics;
 use mz_service::grpc::{GrpcServer, MAX_GRPC_MESSAGE_SIZE};
@@ -273,6 +274,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             GrpcPubSubClient::connect(cfg, metrics)
         },
     ));
+    let txns_ctx = TxnsContext::default();
 
     let connection_context = ConnectionContext::from_cli_args(
         args.environment_id,
@@ -288,6 +290,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         mz_cluster::server::ClusterConfig {
             metrics_registry: metrics_registry.clone(),
             persist_clients: Arc::clone(&persist_clients),
+            txns_ctx: txns_ctx.clone(),
             tracing_handle: Arc::clone(&tracing_handle),
         },
         SYSTEM_TIME.clone(),
@@ -313,6 +316,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         mz_cluster::server::ClusterConfig {
             metrics_registry,
             persist_clients,
+            txns_ctx,
             tracing_handle,
         },
         ComputeInstanceContext {
