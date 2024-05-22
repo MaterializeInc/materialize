@@ -614,7 +614,7 @@ class Composition:
             errors = [
                 TestFailureDetails(
                     error_message,
-                    details=str(e.cause),
+                    details=str(e.cause) if e.cause is not None else None,
                     location=None,
                     line_number=None,
                     test_case_name_override=self.current_test_case_name_override,
