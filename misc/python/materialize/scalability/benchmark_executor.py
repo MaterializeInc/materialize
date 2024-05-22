@@ -29,8 +29,10 @@ from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.schema import Schema
 from materialize.scalability.workload import Workload, WorkloadWithContext
 from materialize.scalability.workload_result import WorkloadResult
-from materialize.scalability.workloads import *  # noqa: F401 F403
-from materialize.scalability.workloads_test import *  # noqa: F401 F403
+from materialize.scalability.workloads.connection_workloads import *  # noqa: F401 F403
+from materialize.scalability.workloads.ddl_workloads import *  # noqa: F401 F403
+from materialize.scalability.workloads.dml_dql_workloads import *  # noqa: F401 F403
+from materialize.scalability.workloads.self_test_workloads import *  # noqa: F401 F403
 
 # number of retries in addition to the first run
 MAX_RETRIES_ON_REGRESSION = 2
