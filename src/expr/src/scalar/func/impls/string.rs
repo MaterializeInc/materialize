@@ -666,7 +666,7 @@ pub struct CastStringToVarChar {
 
 impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
     type Input = &'a str;
-    type Output = Result<VarChar<&str>, EvalError>;
+    type Output = Result<VarChar<&'a str>, EvalError>;
 
     fn call(&self, a: &'a str) -> Result<VarChar<&'a str>, EvalError> {
         let s =
