@@ -8,10 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.data_ingest.query_error import QueryError
-
-
 class WorkerFailedException(Exception):
-    def __init__(self, message: str, cause: QueryError | None):
+    def __init__(self, message: str, cause: Exception | None):
         super().__init__(message)
         self.cause = cause

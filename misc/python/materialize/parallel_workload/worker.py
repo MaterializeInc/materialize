@@ -39,7 +39,7 @@ class Worker:
     exe: Executor | None
     ignored_errors: defaultdict[str, Counter[type[Action]]]
     composition: Composition | None
-    failed_query_error: QueryError | None
+    occurred_exception: Exception | None
 
     def __init__(
         self,
@@ -62,7 +62,7 @@ class Worker:
         self.system = system
         self.ignored_errors = defaultdict(Counter)
         self.composition = composition
-        self.failed_query_error = None
+        self.occurred_exception = None
         self.exe = None
 
     def run(
@@ -124,9 +124,12 @@ class Worker:
                         break
                 else:
                     thread_name = threading.current_thread().getName()
-                    self.failed_query_error = e
+                    self.occurred_exception = e
                     print(f"+++ [{thread_name}] Query failed: {e.query} {e.msg}")
                     raise
+            except Exception as e:
+                self.occurred_exception = e
+                raise e
 
         self.exe.cur._c.close()
         if self.exe.ws:
