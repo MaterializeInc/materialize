@@ -325,14 +325,22 @@ impl<T: Timestamp + Codec64> From<&Description<T>> for ProtoU64Description {
 }
 
 /// Encodes the inline metadata for a trace batch into a base64 string.
-pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(
-    batch: &BlobTraceBatchPart<T>,
-    format: ProtoBatchFormat,
-) -> String {
+pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(batch: &BlobTraceBatchPart<T>) -> String {
+    let (format, format_metadata) = match &batch.updates {
+        // For the legacy Row format, we only write it as `ParquetKvtd`.
+        BlobTraceUpdates::Row(_) => (ProtoBatchFormat::ParquetKvtd, None),
+        // For the newer structured format we track some metadata about the version of the format.
+        BlobTraceUpdates::Both { .. } => {
+            let metadata = ProtoFormatMetadata::StructuredMigration(1);
+            (ProtoBatchFormat::ParquetStructured, Some(metadata))
+        }
+    };
+
     let inline = ProtoBatchPartInline {
         format: format.into(),
         desc: Some((&batch.desc).into()),
         index: batch.index,
+        format_metadata,
     };
     let inline_encoded = inline.encode_to_vec();
     base64::encode(inline_encoded)
