@@ -44,10 +44,10 @@ use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::difference::Multiply;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
+use differential_dataflow::operators::join::{EffortBuilder, JoinSession};
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::Data;
 use mz_repr::Diff;
-use timely::container::{CapacityContainerBuilder, PushContainer, PushInto};
+use timely::container::ContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::Tee;
@@ -66,13 +66,13 @@ use crate::render::context::ShutdownToken;
 /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
 /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
 /// every value returned by the iterator.
-pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, YFn, C>(
+pub(super) fn mz_join_core<G, Tr1, Tr2, L, YFn, CB>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
     shutdown_token: ShutdownToken,
     mut result: L,
     yield_fn: YFn,
-) -> StreamCore<G, C>
+) -> StreamCore<G, CB::Container>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -80,12 +80,14 @@ where
     Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
         + Clone
         + 'static,
-    L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
-    I: IntoIterator,
-    I::Item: Data,
+    L: FnMut(
+            Tr1::Key<'_>,
+            Tr1::Val<'_>,
+            Tr2::Val<'_>,
+            &mut JoinSession<Tr1::Time, CB, CB::Container>,
+        ) + 'static,
     YFn: Fn(Instant, usize) -> bool + 'static,
-    C: PushContainer,
-    (I::Item, G::Timestamp, Diff): PushInto<C>,
+    CB: ContainerBuilder + 'static,
 {
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
@@ -531,7 +533,7 @@ where
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<T, C1, C2, D>
+struct Deferred<T, C1, C2>
 where
     T: Timestamp,
     C1: Cursor<Time = T, Diff = Diff>,
@@ -543,15 +545,13 @@ where
     storage2: C2::Storage,
     capability: Capability<T>,
     done: bool,
-    temp: Vec<(D, T, Diff)>,
 }
 
-impl<T, C1, C2, D> Deferred<T, C1, C2, D>
+impl<T, C1, C2> Deferred<T, C1, C2>
 where
     T: Timestamp + Lattice,
     C1: Cursor<Time = T, Diff = Diff>,
     C2: for<'a> Cursor<Key<'a> = C1::Key<'a>, Time = T, Diff = Diff>,
-    D: Data,
 {
     fn new(
         cursor1: C1,
@@ -567,7 +567,6 @@ where
             storage2,
             capability,
             done: false,
-            temp: Vec::new(),
         }
     }
 
@@ -576,30 +575,26 @@ where
     }
 
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
-    fn work<L, I, YFn, C>(
+    fn work<L, CB, YFn>(
         &mut self,
-        output: &mut OutputHandleCore<T, CapacityContainerBuilder<C>, Tee<T, C>>,
+        output: &mut OutputHandleCore<T, EffortBuilder<CB>, Tee<T, CB::Container>>,
         mut logic: L,
         yield_fn: YFn,
         work: &mut usize,
     ) where
-        I: IntoIterator<Item = D>,
-        L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I,
+        L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>, &mut JoinSession<T, CB, CB::Container>),
         YFn: Fn(usize) -> bool,
-        C: PushContainer,
-        (D, T, Diff): PushInto<C>,
+        CB: ContainerBuilder,
     {
         let meet = self.capability.time();
 
-        let mut session = output.session(&self.capability);
+        let mut session = output.session_with_builder(&self.capability);
 
         let storage1 = &self.storage1;
         let storage2 = &self.storage2;
 
         let cursor1 = &mut self.cursor1;
         let cursor2 = &mut self.cursor2;
-
-        let temp = &mut self.temp;
 
         let flush = |data: &mut Vec<_>, session: &mut Session<_, _, _>| {
             let old_len = data.len();
@@ -610,8 +605,6 @@ where
             session.give_iterator(data.drain(..));
             recovered
         };
-
-        assert_eq!(temp.len(), 0);
 
         let mut buffer = Vec::default();
 
@@ -625,7 +618,8 @@ where
                     while let Some(val1) = cursor1.get_val(storage1) {
                         while let Some(val2) = cursor2.get_val(storage2) {
                             // Evaluate logic on `key, val1, val2`. Note the absence of time and diff.
-                            let mut result = logic(key, val1, val2).into_iter().peekable();
+                            let mut result =
+                                logic(key, val1, val2, &mut session).into_iter().peekable();
 
                             // We can only produce output if the result return something.
                             if let Some(first) = result.next() {
@@ -647,11 +641,13 @@ where
                                     // Single element, single time
                                     (false, 1) => {
                                         let (time, diff) = buffer.pop().unwrap();
+                                        // TODO: get rid of temp
                                         temp.push((first, time, diff));
                                     }
                                     // Multiple elements or multiple times
                                     (_, _) => {
                                         for d in std::iter::once(first).chain(result) {
+                                            // TODO: get rid of temp
                                             temp.extend(buffer.iter().map(|(time, diff)| {
                                                 (d.clone(), time.clone(), diff.clone())
                                             }))
@@ -665,7 +661,7 @@ where
                         cursor1.step_val(storage1);
                         cursor2.rewind_vals(storage2);
 
-                        *work = work.saturating_add(temp.len());
+                        *work = work.saturating_add(session.builder().take());
 
                         if yield_fn(*work) {
                             // Returning here is only allowed because we leave the cursors in a
@@ -684,6 +680,7 @@ where
             }
         }
 
+        // TODO: get rid of temp
         if !temp.is_empty() {
             *work -= flush(temp, &mut session);
         }
