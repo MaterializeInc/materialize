@@ -317,13 +317,15 @@ def run(
         while time.time() < end_time:
             for thread in threads:
                 if not thread.is_alive():
-                    query_error = None
+                    occurred_exception = None
                     for worker in workers:
                         worker.end_time = time.time()
-                        query_error = query_error or worker.failed_query_error
+                        occurred_exception = (
+                            occurred_exception or worker.occurred_exception
+                        )
                     raise WorkerFailedException(
                         f"^^^ +++ Thread {thread.name} failed, exiting",
-                        query_error,
+                        occurred_exception,
                     )
             time.sleep(REPORT_TIME)
             print(
