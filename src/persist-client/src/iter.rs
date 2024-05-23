@@ -195,10 +195,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
 
             // Sort the cursors by the data that they point to.
             let kvt = |(cursor, t, _): &(Cursor, T, D)| {
-                cursor
-                    .clone()
-                    .peek(&part)
-                    .map(move |(k, v, _, _)| (k, v, t.clone()))
+                cursor.get(&part).map(move |(k, v, _, _)| (k, v, t.clone()))
             };
             cursors.sort_by(|a, b| kvt(a).cmp(&kvt(b)));
 
@@ -222,8 +219,8 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
                 Some((k, v, t))
             }
             ConsolidationPart::Sorted { part, cursors } => {
-                let (cursor, t, _) = cursors.front_mut()?;
-                let (k, v, _, _) = cursor.peek(part)?;
+                let (cursor, t, _) = cursors.front()?;
+                let (k, v, _, _) = cursor.get(part)?;
                 Some((k, v, t.clone()))
             }
         }
@@ -702,9 +699,9 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPartIter<'a,
         match self {
             Self::Encoded { next, .. } => next.clone(),
             Self::Sorted { part, cursors, .. } => {
-                let (mut cursor, t, d) = cursors.front()?.clone();
-                let (k, v, _, _) = cursor.peek(part)?;
-                Some((k, v, t, d))
+                let (cursor, t, d) = cursors.front()?;
+                let (k, v, _, _) = cursor.get(part)?;
+                Some((k, v, t.clone(), d.clone()))
             }
         }
     }
@@ -741,8 +738,8 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> Iterator
                 out
             }
             ConsolidationPartIter::Sorted { part, cursors, .. } => {
-                let (mut cursor, t, d) = cursors.pop_front()?;
-                let (k, v, _, _) = cursor.peek(part)?;
+                let (cursor, t, d) = cursors.pop_front()?;
+                let (k, v, _, _) = cursor.get(part)?;
                 Some((k, v, t, d))
             }
         }
