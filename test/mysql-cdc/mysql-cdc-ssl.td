@@ -108,10 +108,11 @@ $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
 
 # server: hostssl, client: require => OK
+# also test `require` or `required`.
 > CREATE CONNECTION mysql_conn TO MYSQL (
   HOST mysql,
   USER hostssl,
-  SSL MODE required
+  SSL MODE require
   );
 > CREATE SOURCE "mz_source"
   FROM MYSQL CONNECTION mysql_conn

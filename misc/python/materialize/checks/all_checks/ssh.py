@@ -62,12 +62,13 @@ class SshPg(Check):
             Testdrive(schemas() + dedent(s))
             for s in [
                 """
+                # Also test `required` over `require`.
                 > CREATE CONNECTION pg_ssh2 TO POSTGRES (
                   HOST postgres,
                   DATABASE postgres,
                   USER postgres,
                   PASSWORD SECRET pgpass,
-                  SSL MODE require,
+                  SSL MODE required,
                   SSH TUNNEL ssh_tunnel_0);
 
                 > CREATE SOURCE mz_source_ssh2
