@@ -191,7 +191,7 @@ impl<S: Clone> IngestionDescription<S> {
             let ingestion_output = match ingestion_output {
                 Some(ingestion_output) => {
                     subsource_resolver
-                        .resolve_details_idx(&ingestion_output.0)
+                        .resolve_idx(&ingestion_output.0)
                         .expect("must have all subsource references")
                         // output indices are the native details idx + 1 to
                         // account for the `None` value representing 0.
@@ -1455,6 +1455,41 @@ impl<'a> SubsourceResolver {
         Ok(SubsourceResolver { inner })
     }
 
+    /// Returns the canonical reference and index from which it originated in
+    /// the `referenceable_items` provided to [`Self::new`].
+    ///
+    /// # Args
+    /// - `name` is `&[Ident]` to let users provide the inner element of either
+    ///   [`UnresolvedItemName`] or [`ExportReference`].
+    /// - `canonicalize_to_width` limits the number of elements in the returned
+    ///   [`UnresolvedItemName`];this is useful if the source type requires
+    ///   contriving database and schema names that a subsource should not
+    ///   persist as its reference.
+    ///
+    /// # Errors
+    /// - If `name` does not resolve to an item in `self.inner`.
+    ///
+    /// # Panics
+    /// - If `canonicalize_to_width`` is not in `1..=3`.
+    pub fn resolve(
+        &self,
+        name: &[Ident],
+        canonicalize_to_width: usize,
+    ) -> Result<(UnresolvedItemName, usize), SubsourceResolutionError> {
+        let (db, schema, idx) = self.resolve_inner(name)?;
+
+        let item = name.last().expect("must have provided at least 1 element");
+
+        let canonical_name = match canonicalize_to_width {
+            1 => vec![item.clone()],
+            2 => vec![schema.clone(), item.clone()],
+            3 => vec![db.clone(), schema.clone(), item.clone()],
+            o => panic!("canonicalize_to_width values must be 1..=3, but got {}", o),
+        };
+
+        Ok((UnresolvedItemName(canonical_name), idx))
+    }
+
     /// Returns the index from which it originated in the `referenceable_items`
     /// provided to [`Self::new`].
     ///
@@ -1463,15 +1498,38 @@ impl<'a> SubsourceResolver {
     /// [`UnresolvedItemName`] or [`ExportReference`].
     ///
     /// # Errors
-    /// - If the `UnresolvedItemName` does not resolve to an item in
-    ///   `self.inner`.
-    pub fn resolve_details_idx(&self, name: &[Ident]) -> Result<usize, SubsourceResolutionError> {
-        let provided_name = UnresolvedItemName(name.to_vec()).to_string();
+    /// - If `name` does not resolve to an item in `self.inner`.
+    pub fn resolve_idx(&self, name: &[Ident]) -> Result<usize, SubsourceResolutionError> {
+        let (_db, _schema, idx) = self.resolve_inner(name)?;
+        Ok(idx)
+    }
+
+    /// Returns the index from which it originated in the `referenceable_items`
+    /// provided to [`Self::new`].
+    ///
+    /// # Args
+    /// `name` is `&[Ident]` to let users provide the inner element of either
+    /// [`UnresolvedItemName`] or [`ExportReference`].
+    ///
+    /// # Return
+    /// Returns a tuple whose elements are:
+    /// 1. The "database"- or top-level namespace of the reference.
+    /// 2. The "schema"- or second-level namespace of the reference.
+    /// 3. The index to find the item in `referenceable_items` argument provided
+    ///    to `SubsourceResolver::new`.
+    ///
+    /// # Errors
+    /// - If `name` does not resolve to an item in `self.inner`.
+    fn resolve_inner<'name: 'a>(
+        &'a self,
+        name: &'name [Ident],
+    ) -> Result<(&'a Ident, &'a Ident, usize), SubsourceResolutionError> {
+        let get_provided_name = || UnresolvedItemName(name.to_vec()).to_string();
 
         // Names must be composed of 1..=3 elements.
         if !(1..=3).contains(&name.len()) {
             Err(SubsourceResolutionError::DoesNotExist {
-                name: provided_name.clone(),
+                name: get_provided_name(),
             })?;
         }
 
@@ -1493,7 +1551,7 @@ impl<'a> SubsourceResolver {
             self.inner
                 .get(item)
                 .ok_or_else(|| SubsourceResolutionError::DoesNotExist {
-                    name: provided_name.clone(),
+                    name: get_provided_name(),
                 })?;
 
         let schema =
@@ -1501,7 +1559,7 @@ impl<'a> SubsourceResolver {
                 Some(schema) => schema,
                 None => schemas.keys().exactly_one().map_err(|_e| {
                     SubsourceResolutionError::Ambiguous {
-                        name: provided_name.clone(),
+                        name: get_provided_name(),
                     }
                 })?,
             };
@@ -1510,14 +1568,14 @@ impl<'a> SubsourceResolver {
             schemas
                 .get(schema)
                 .ok_or_else(|| SubsourceResolutionError::DoesNotExist {
-                    name: provided_name.clone(),
+                    name: get_provided_name(),
                 })?;
 
         let database = match database {
             Some(database) => database,
             None => databases.keys().exactly_one().map_err(|_e| {
                 SubsourceResolutionError::Ambiguous {
-                    name: provided_name.clone(),
+                    name: get_provided_name(),
                 }
             })?,
         };
@@ -1526,12 +1584,10 @@ impl<'a> SubsourceResolver {
             databases
                 .get(database)
                 .ok_or_else(|| SubsourceResolutionError::DoesNotExist {
-                    name: provided_name.clone(),
+                    name: get_provided_name(),
                 })?;
 
-        // TODO: this same function could also be used to generate canonical
-        // references for subsources.
-        Ok(*reference_idx)
+        Ok((database, schema, *reference_idx))
     }
 }
 
