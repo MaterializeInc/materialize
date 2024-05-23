@@ -2649,17 +2649,25 @@ impl_display!(DropObjectsStatement);
 pub struct DropOwnedStatement<T: AstInfo> {
     /// The roles whose owned objects are being dropped.
     pub role_names: Vec<T::RoleName>,
-    /// Whether `CASCADE` was specified. This will be `false` when
-    /// `RESTRICT` or no drop behavior at all was specified.
-    pub cascade: bool,
+    /// Whether `CASCADE` was specified. `false` for `RESTRICT` and `None` if no drop behavior at
+    /// all was specified.
+    pub cascade: Option<bool>,
+}
+
+impl<T: AstInfo> DropOwnedStatement<T> {
+    pub fn cascade(&self) -> bool {
+        self.cascade == Some(true)
+    }
 }
 
 impl<T: AstInfo> AstDisplay for DropOwnedStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP OWNED BY ");
         f.write_node(&display::comma_separated(&self.role_names));
-        if self.cascade {
+        if let Some(true) = self.cascade {
             f.write_str(" CASCADE");
+        } else if let Some(false) = self.cascade {
+            f.write_str(" RESTRICT");
         }
     }
 }
