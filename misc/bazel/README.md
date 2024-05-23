@@ -58,3 +58,25 @@ specify a Rust toolchain every time you use the `rust_library` rule, you instead
 Rust toolchain that rules resolve during analysis.
 
 Toolchains are defined and registered in the [`WORKSPACE`](/WORKSPACE) file.
+
+# [`rules_rust`](https://github.com/bazelbuild/rules_rust)
+
+For building Rust code we use `rules_rust`. It's primary component is the
+[`crates_repository`](http://bazelbuild.github.io/rules_rust/crate_universe.html#crates_repository) rule.
+
+## [`crates_repository`]
+
+Normally when building a Rust library you define external dependencies in a `Cargo.toml`, and
+`cargo` handles fetching the relevant crates, generally from `crates.io`. The [`crates_repository`]
+rule does the same thing, we define a set of manifests (`Cargo.toml` files), it will analyze them
+and create a Bazel [repository](https://bazel.build/external/overview#repository) containing all of
+the necessary external dependencies.
+
+Then to build our crates, e.g. [`mz-adapter`](/src/adapter/), we use the handy
+[`all_crate_deps`](http://bazelbuild.github.io/rules_rust/crate_universe.html#all_crate_deps)
+macro. When using this macro in a `BUILD.bazel` file, it determines which package we're in (e.g.
+`mz-adapter`) and expands to all of the necessary external dependencies. Unfortunately it does not
+include dependencies from within our own workspace, so we still need to do a bit of manual work
+of specifying dependencies when writing our `BUILD.bazel` files.
+
+In the [`WORKSPACE`](/WORKSPACE) file we define a "root" `crates_repository` named `crates_io`.
