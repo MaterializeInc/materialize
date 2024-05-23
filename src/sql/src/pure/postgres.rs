@@ -20,34 +20,15 @@ use mz_sql_parser::ast::{
     WithOptionValue,
 };
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
+use mz_storage_types::sources::SubsourceResolver;
 use tokio_postgres::types::Oid;
 
-use crate::catalog::SubsourceCatalog;
 use crate::names::{Aug, PartialItemName, ResolvedItemName};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
 use super::error::PgSourcePurificationError;
 use super::RequestedSubsource;
-
-pub(super) fn derive_catalog_from_publication_tables<'a>(
-    database: &'a str,
-    publication_tables: &'a [PostgresTableDesc],
-) -> Result<SubsourceCatalog<&'a PostgresTableDesc>, PlanError> {
-    // An index from table name -> schema name -> database name -> PostgresTableDesc
-    let mut tables_by_name = BTreeMap::new();
-    for table in publication_tables.iter() {
-        tables_by_name
-            .entry(table.name.clone())
-            .or_insert_with(BTreeMap::new)
-            .entry(table.namespace.clone())
-            .or_insert_with(BTreeMap::new)
-            .entry(database.to_string())
-            .or_insert(table);
-    }
-
-    Ok(SubsourceCatalog(tables_by_name))
-}
 
 /// Ensure that we have select permissions on all tables; we have to do this before we
 /// start snapshotting because if we discover we cannot `COPY` from a table while
@@ -69,7 +50,8 @@ pub(super) async fn validate_requested_subsources_privileges(
 /// Additionally, modify `text_columns` so that they contain database-qualified
 /// references to the columns.
 pub(super) fn generate_text_columns(
-    publication_catalog: &SubsourceCatalog<&PostgresTableDesc>,
+    subsource_resolver: &SubsourceResolver,
+    references: &[PostgresTableDesc],
     text_columns: &mut [UnresolvedItemName],
     option_name: &str,
 ) -> Result<BTreeMap<u32, BTreeSet<String>>, PlanError> {
@@ -90,13 +72,15 @@ pub(super) fn generate_text_columns(
 
         let qual_name = UnresolvedItemName(qual);
 
-        let (mut fully_qualified_name, desc) =
-            publication_catalog
-                .resolve(qual_name)
-                .map_err(|e| PlanError::InvalidOptionValue {
+        let (mut fully_qualified_name, idx) =
+            subsource_resolver.resolve(&qual_name.0, 3).map_err(|e| {
+                PlanError::InvalidOptionValue {
                     option_name: option_name.to_string(),
-                    err: Box::new(e),
-                })?;
+                    err: Box::new(e.into()),
+                }
+            })?;
+
+        let desc = &references[idx];
 
         if !desc.columns.iter().any(|column| column.name == col) {
             let column = mz_repr::ColumnName::from(col);

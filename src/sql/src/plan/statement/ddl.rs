@@ -97,7 +97,9 @@ use mz_storage_types::sources::postgres::{
     CastType, PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails,
 };
-use mz_storage_types::sources::{GenericSourceConnection, SourceConnection, SourceDesc, Timeline};
+use mz_storage_types::sources::{
+    GenericSourceConnection, SourceConnection, SourceDesc, SubsourceResolver, Timeline,
+};
 use prost::Message;
 
 use crate::ast::display::AstDisplay;
@@ -800,38 +802,30 @@ pub fn plan_create_source(
             let details = ProtoPostgresSourcePublicationDetails::decode(&*details)
                 .map_err(|e| sql_err!("{}", e))?;
 
-            // Create a "catalog" of the tables in the PG details.
-            let mut tables_by_name = BTreeMap::new();
-            for table in details.tables.iter() {
-                tables_by_name
-                    .entry(table.name.clone())
-                    .or_insert_with(BTreeMap::new)
-                    .entry(table.namespace.clone())
-                    .or_insert_with(BTreeMap::new)
-                    .entry(connection.database.clone())
-                    .or_insert(table);
-            }
+            let publication_details = PostgresSourcePublicationDetails::from_proto(details)
+                .map_err(|e| sql_err!("{}", e))?;
 
-            let publication_catalog = crate::catalog::SubsourceCatalog(tables_by_name);
+            let subsource_resolver =
+                SubsourceResolver::new(&connection.database, &publication_details.tables)
+                    .expect("references validated during purification");
 
             let mut text_cols: BTreeMap<Oid, BTreeSet<String>> = BTreeMap::new();
 
             // Look up the referenced text_columns in the publication_catalog.
             for name in text_columns {
-                let (qual, col) = match name.0.split_last().expect("must have at least one element")
-                {
-                    (col, qual) => (UnresolvedItemName(qual.to_vec()), col.as_str().to_string()),
-                };
+                let (col, qual) = name.0.split_last().expect("must have at least one element");
 
-                let (_name, table_desc) = publication_catalog
-                    .resolve(qual)
+                let idx = subsource_resolver
+                    .resolve_idx(qual)
                     .expect("known to exist from purification");
+
+                let table_desc = &publication_details.tables[idx];
 
                 assert!(
                     table_desc
                         .columns
                         .iter()
-                        .find(|column| column.name == col)
+                        .find(|column| column.name == col.as_str())
                         .is_some(),
                     "validated column exists in table during purification"
                 );
@@ -839,7 +833,7 @@ pub fn plan_create_source(
                 text_cols
                     .entry(Oid(table_desc.oid))
                     .or_default()
-                    .insert(col);
+                    .insert(col.clone().into_string());
             }
 
             // Here we will generate the cast expressions required to convert the text encoded
@@ -848,7 +842,7 @@ pub fn plan_create_source(
             // on the target table
             let mut table_casts = BTreeMap::new();
 
-            for (i, table) in details.tables.iter().enumerate() {
+            for (i, table) in publication_details.tables.iter().enumerate() {
                 // First, construct an expression context where the expression is evaluated on an
                 // imaginary row which has the same number of columns as the upstream table but all
                 // of the types are text
@@ -998,9 +992,6 @@ pub fn plan_create_source(
                 let r = table_casts.insert(i + 1, column_casts);
                 assert!(r.is_none(), "cannot have table defined multiple times");
             }
-
-            let publication_details = PostgresSourcePublicationDetails::from_proto(details)
-                .map_err(|e| sql_err!("{}", e))?;
 
             let connection =
                 GenericSourceConnection::<ReferencedConnection>::from(PostgresSourceConnection {

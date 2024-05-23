@@ -19,8 +19,9 @@ use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
     IdentError, MySqlConfigOptionName, ReferencedSubsources, WithOptionValue,
 };
+use mz_storage_types::sources::SubsourceResolver;
 
-use crate::catalog::{SessionCatalog, SubsourceCatalog};
+use crate::catalog::SessionCatalog;
 use crate::names::Aug;
 use crate::plan::{PlanError, StatementContext};
 use crate::pure::{MySqlSourcePurificationError, ResolvedItemName};
@@ -42,7 +43,7 @@ pub(super) fn mysql_upstream_name(
 }
 
 /// Reverses the `mysql_upstream_name` function.
-fn upstream_name_to_table(
+pub(super) fn upstream_name_to_table(
     name: &UnresolvedItemName,
 ) -> Result<QualifiedTableRef, MySqlSourcePurificationError> {
     if name.0.len() != 2 {
@@ -52,24 +53,6 @@ fn upstream_name_to_table(
         schema_name: name.0[0].as_str(),
         table_name: name.0[1].as_str(),
     })
-}
-
-pub(super) fn derive_catalog_from_tables<'a>(
-    tables: &'a [MySqlTableDesc],
-) -> Result<SubsourceCatalog<&'a MySqlTableDesc>, PlanError> {
-    // An index from table name -> schema name -> MySqlTableDesc
-    let mut tables_by_name = BTreeMap::new();
-    for table in tables.iter() {
-        tables_by_name
-            .entry(table.name.clone())
-            .or_insert_with(BTreeMap::new)
-            .entry(table.schema_name.clone())
-            .or_insert_with(BTreeMap::new)
-            .entry(MYSQL_DATABASE_FAKE_NAME.to_string())
-            .or_insert(table);
-    }
-
-    Ok(SubsourceCatalog(tables_by_name))
 }
 
 pub(super) fn generate_targeted_subsources(
@@ -192,14 +175,18 @@ pub(super) fn map_column_refs<'a>(
 /// Normalize column references to a sorted, deduplicated options list of column names.
 pub(super) fn normalize_column_refs<'a>(
     cols: Vec<UnresolvedItemName>,
-    catalog: &'a SubsourceCatalog<&'a MySqlTableDesc>,
+    subsource_resolver: &SubsourceResolver,
+    tables: &[MySqlTableDesc],
 ) -> Result<Vec<WithOptionValue<Aug>>, MySqlSourcePurificationError> {
     let (seq, unknown): (Vec<_>, Vec<_>) = cols.into_iter().partition(|name| {
         let (column_name, qual) = name.0.split_last().expect("non-empty");
-        match catalog.resolve(UnresolvedItemName::qualified(qual)) {
+        match subsource_resolver.resolve_idx(qual) {
             // TODO: this needs to also introduce the maximum qualification on
             // the columns, i.e. ensure they have the schema name.
-            Ok((_, desc)) => desc.columns.iter().any(|n| &n.name == column_name.as_str()),
+            Ok(idx) => tables[idx]
+                .columns
+                .iter()
+                .any(|n| &n.name == column_name.as_str()),
             Err(_) => false,
         }
     });
@@ -331,7 +318,7 @@ pub(super) async fn purify_subsources(
         Err(MySqlSourcePurificationError::EmptyDatabase)?;
     }
 
-    let mysql_catalog = derive_catalog_from_tables(&tables)?;
+    let subsource_resolver = SubsourceResolver::new(MYSQL_DATABASE_FAKE_NAME, &tables)?;
 
     let mut validated_requested_subsources = vec![];
     match referenced_subsources
@@ -382,22 +369,13 @@ pub(super) async fn purify_subsources(
         ReferencedSubsources::SubsetTables(subsources) => {
             // The user manually selected a subset of upstream tables so we need to
             // validate that the names actually exist and are not ambiguous
-            validated_requested_subsources =
-                super::subsource_gen(subsources, &mysql_catalog, unresolved_source_name)?;
-
-            // subsource_gen automatically inserts the "fully qualified
-            // name," which for MySQL sources includes the fake database
-            // name.
-            for requested_subsource in validated_requested_subsources.iter_mut() {
-                let fake_database_name = requested_subsource.upstream_name.0.remove(0);
-                if fake_database_name.as_str() != MYSQL_DATABASE_FAKE_NAME {
-                    sql_bail!(
-                            "[internal error]: expected first element of upstream reference to be {}, but is {}",
-                            MYSQL_DATABASE_FAKE_NAME,
-                            fake_database_name.as_str()
-                        );
-                }
-            }
+            validated_requested_subsources = super::subsource_gen(
+                subsources,
+                &subsource_resolver,
+                &tables,
+                2,
+                unresolved_source_name,
+            )?;
         }
     }
 
@@ -419,8 +397,12 @@ pub(super) async fn purify_subsources(
     Ok(PurifiedSubsources {
         new_subsources,
         // Normalize column options and remove unused column references.
-        normalized_text_columns: normalize_column_refs(text_columns, &mysql_catalog)?,
-        normalized_ignore_columns: normalize_column_refs(ignore_columns, &mysql_catalog)?,
+        normalized_text_columns: normalize_column_refs(text_columns, &subsource_resolver, &tables)?,
+        normalized_ignore_columns: normalize_column_refs(
+            ignore_columns,
+            &subsource_resolver,
+            &tables,
+        )?,
         tables,
     })
 }
