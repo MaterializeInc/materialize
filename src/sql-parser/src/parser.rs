@@ -3210,6 +3210,8 @@ impl<'a> Parser<'a> {
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
+            AS,
+            UP,
             SCALE,
             TICK,
             MAX,
@@ -3221,6 +3223,14 @@ impl<'a> Parser<'a> {
             PARTITIONS,
             BATCH,
         ])? {
+            AS => {
+                self.expect_keyword(OF)?;
+                LoadGeneratorOptionName::AsOf
+            }
+            UP => {
+                self.expect_keyword(TO)?;
+                LoadGeneratorOptionName::UpTo
+            }
             SCALE => {
                 self.expect_keyword(FACTOR)?;
                 LoadGeneratorOptionName::ScaleFactor

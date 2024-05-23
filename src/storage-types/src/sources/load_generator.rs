@@ -31,6 +31,7 @@ include!(concat!(
 pub const LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT: &str = "offset";
 
 /// Data and progress events of the native stream.
+#[derive(Debug)]
 pub enum Event<F: IntoIterator, D> {
     /// Indicates that timestamps have advanced to frontier F
     Progress(F),
@@ -42,6 +43,8 @@ pub enum Event<F: IntoIterator, D> {
 pub struct LoadGeneratorSourceConnection {
     pub load_generator: LoadGenerator,
     pub tick_micros: Option<u64>,
+    pub as_of: u64,
+    pub up_to: u64,
 }
 
 pub static LOAD_GEN_PROGRESS_DESC: Lazy<RelationDesc> =
@@ -474,6 +477,8 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                 LoadGenerator::KeyValue(kv) => Kind::KeyValue(kv.into_proto()),
             }),
             tick_micros: self.tick_micros,
+            as_of: self.as_of,
+            up_to: self.up_to,
         }
     }
 
@@ -506,6 +511,8 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                 Kind::KeyValue(kv) => LoadGenerator::KeyValue(kv.into_rust()?),
             },
             tick_micros: proto.tick_micros,
+            as_of: proto.as_of,
+            up_to: proto.up_to,
         })
     }
 }
