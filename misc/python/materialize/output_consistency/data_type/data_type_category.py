@@ -20,7 +20,7 @@ class DataTypeCategory(Enum):
 
     NUMERIC = 101
     BOOLEAN = 102
-    TEXT = 103
+    STRING = 103
     DATE_TIME = 104
     BYTEA = 105
     JSONB = 106

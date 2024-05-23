@@ -22,13 +22,13 @@ from materialize.output_consistency.input_data.params.enum_constant_operation_pa
     REGEX_FLAG_PARAM,
     REGEX_PARAM,
     REPETITIONS_PARAM,
-    TEXT_TRIM_SPEC_PARAM,
+    STRING_TRIM_SPEC_PARAM,
 )
 from materialize.output_consistency.input_data.params.number_operation_param import (
     MaxSignedInt4OperationParam,
 )
-from materialize.output_consistency.input_data.params.text_operation_param import (
-    TextOperationParam,
+from materialize.output_consistency.input_data.params.string_operation_param import (
+    StringOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.array_return_spec import (
     ArrayReturnTypeSpec,
@@ -39,8 +39,8 @@ from materialize.output_consistency.input_data.return_specs.boolean_return_spec 
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
-from materialize.output_consistency.input_data.return_specs.text_return_spec import (
-    TextReturnTypeSpec,
+from materialize.output_consistency.input_data.return_specs.string_return_spec import (
+    StringReturnTypeSpec,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -49,122 +49,122 @@ from materialize.output_consistency.operation.operation import (
     OperationRelevance,
 )
 
-TEXT_OPERATION_TYPES: list[DbOperationOrFunction] = []
+STRING_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 TAG_REGEX = "regex"
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbOperation(
         "$ || $",
-        [TextOperationParam(), TextOperationParam()],
-        TextReturnTypeSpec(),
+        [StringOperationParam(), StringOperationParam()],
+        StringReturnTypeSpec(),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbOperation(
         "$ ~ $",
-        [TextOperationParam(), REGEX_PARAM],
+        [StringOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
         comment="matches regular expression, case sensitive",
         tags={TAG_REGEX},
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbOperation(
         "$ ~* $",
-        [TextOperationParam(), REGEX_PARAM],
+        [StringOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
         comment="matches regular expression, case insensitive",
         tags={TAG_REGEX},
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbOperation(
         "$ !~ $",
-        [TextOperationParam(), REGEX_PARAM],
+        [StringOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
         comment="does not match regular expression, case sensitive",
         tags={TAG_REGEX},
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbOperation(
         "$ !~* $",
-        [TextOperationParam(), REGEX_PARAM],
+        [StringOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
         comment="does not match regular expression, case insensitive",
         tags={TAG_REGEX},
     )
 )
 
-TEXT_LIKE_OPERATION = DbOperation(
+STRING_LIKE_OPERATION = DbOperation(
     "$ LIKE $",
-    [TextOperationParam(), LIKE_PARAM],
+    [StringOperationParam(), LIKE_PARAM],
     BooleanReturnTypeSpec(),
     comment="case-sensitive SQL LIKE matching (equal to: $ ~~ $)",
 )
-TEXT_OPERATION_TYPES.append(TEXT_LIKE_OPERATION)
+STRING_OPERATION_TYPES.append(STRING_LIKE_OPERATION)
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbOperation(
         "$ ILIKE $",
-        [TextOperationParam(), LIKE_PARAM],
+        [StringOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
         comment="case-insensitive SQL LIKE matching (equal to: $ ~~* $)",
     )
 )
 
-TEXT_NOT_LIKE_OPERATION = DbOperation(
+STRING_NOT_LIKE_OPERATION = DbOperation(
     "$ NOT LIKE $",
-    [TextOperationParam(), LIKE_PARAM],
+    [StringOperationParam(), LIKE_PARAM],
     BooleanReturnTypeSpec(),
     comment="negative case-sensitive SQL LIKE matching (equal to: $ !~~ $)",
 )
-TEXT_OPERATION_TYPES.append(TEXT_NOT_LIKE_OPERATION)
+STRING_OPERATION_TYPES.append(STRING_NOT_LIKE_OPERATION)
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbOperation(
         "$ NOT ILIKE $",
-        [TextOperationParam(), LIKE_PARAM],
+        [StringOperationParam(), LIKE_PARAM],
         BooleanReturnTypeSpec(),
         comment="negative case-insensitive SQL LIKE matching (equal to: $ !~~* $)",
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "ascii",
-        [TextOperationParam()],
+        [StringOperationParam()],
         NumericReturnTypeSpec(only_integer=True),
         relevance=OperationRelevance.LOW,
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "btrim",
-        [TextOperationParam(), TextOperationParam(optional=True)],
-        TextReturnTypeSpec(),
+        [StringOperationParam(), StringOperationParam(optional=True)],
+        StringReturnTypeSpec(),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "bit_length",
-        [TextOperationParam()],
+        [StringOperationParam()],
         NumericReturnTypeSpec(only_integer=True),
         relevance=OperationRelevance.LOW,
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "char_length",
-        [TextOperationParam()],
+        [StringOperationParam()],
         NumericReturnTypeSpec(only_integer=True),
     )
 )
@@ -180,48 +180,48 @@ chr_function = DbFunction(
             }
         )
     ],
-    TextReturnTypeSpec(),
+    StringReturnTypeSpec(),
 )
 # may introduce a usage of a new line or a backslash
 chr_function.added_characteristics.add(
-    ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS
+    ExpressionCharacteristics.STRING_WITH_SPECIAL_SPACE_CHARS
 )
 chr_function.added_characteristics.add(
-    ExpressionCharacteristics.TEXT_WITH_BACKSLASH_CHAR
+    ExpressionCharacteristics.STRING_WITH_BACKSLASH_CHAR
 )
-TEXT_OPERATION_TYPES.append(chr_function)
+STRING_OPERATION_TYPES.append(chr_function)
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "initcap",
-        [TextOperationParam()],
-        TextReturnTypeSpec(),
+        [StringOperationParam()],
+        StringReturnTypeSpec(),
         since_mz_version=MzVersion.parse_mz("v0.97.0"),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "left",
-        [TextOperationParam(), MaxSignedInt4OperationParam()],
-        TextReturnTypeSpec(),
+        [StringOperationParam(), MaxSignedInt4OperationParam()],
+        StringReturnTypeSpec(),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "length",
-        [TextOperationParam()],
+        [StringOperationParam()],
         NumericReturnTypeSpec(only_integer=True),
     )
 )
 
 LOWER_OPERATION = DbFunction(
     "lower",
-    [TextOperationParam()],
-    TextReturnTypeSpec(),
+    [StringOperationParam()],
+    StringReturnTypeSpec(),
 )
-TEXT_OPERATION_TYPES.append(LOWER_OPERATION)
+STRING_OPERATION_TYPES.append(LOWER_OPERATION)
 
 
 class LpadFunction(DbFunction):
@@ -229,12 +229,12 @@ class LpadFunction(DbFunction):
         super().__init__(
             "lpad",
             [
-                TextOperationParam(),
+                StringOperationParam(),
                 # do not use an arbitrary integer to avoid long durations
                 REPETITIONS_PARAM,
-                TextOperationParam(optional=True),
+                StringOperationParam(optional=True),
             ],
-            TextReturnTypeSpec(),
+            StringReturnTypeSpec(),
         )
 
     def derive_characteristics(
@@ -243,167 +243,167 @@ class LpadFunction(DbFunction):
         length_arg = args[1]
         if isinstance(length_arg, EnumConstant) and length_arg.value == "0":
             return {
-                ExpressionCharacteristics.TEXT_EMPTY
+                ExpressionCharacteristics.STRING_EMPTY
             } | super().derive_characteristics(args)
 
         return super().derive_characteristics(args)
 
 
-TEXT_OPERATION_TYPES.append(LpadFunction())
+STRING_OPERATION_TYPES.append(LpadFunction())
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "ltrim",
-        [TextOperationParam(), TextOperationParam(optional=True)],
-        TextReturnTypeSpec(),
+        [StringOperationParam(), StringOperationParam(optional=True)],
+        StringReturnTypeSpec(),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "octet_length",
-        [TextOperationParam()],
+        [StringOperationParam()],
         NumericReturnTypeSpec(only_integer=True),
         relevance=OperationRelevance.LOW,
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "parse_ident",
-        [TextOperationParam(), BooleanOperationParam(optional=True)],
-        ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.TEXT),
+        [StringOperationParam(), BooleanOperationParam(optional=True)],
+        ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.STRING),
         relevance=OperationRelevance.LOW,
         is_enabled=False,
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbOperation(
         "position($ IN $)",
-        [TextOperationParam(), TextOperationParam()],
+        [StringOperationParam(), StringOperationParam()],
         NumericReturnTypeSpec(only_integer=True),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "regexp_match",
-        [TextOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
-        ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.TEXT),
+        [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
+        ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.STRING),
         tags={TAG_REGEX},
     )
 )
 
 REGEXP_REPLACE = DbFunction(
     "regexp_replace",
-    [TextOperationParam(), REGEX_PARAM, TextOperationParam(), REGEX_FLAG_PARAM],
-    TextReturnTypeSpec(),
+    [StringOperationParam(), REGEX_PARAM, StringOperationParam(), REGEX_FLAG_PARAM],
+    StringReturnTypeSpec(),
     tags={TAG_REGEX},
 )
-TEXT_OPERATION_TYPES.append(REGEXP_REPLACE)
+STRING_OPERATION_TYPES.append(REGEXP_REPLACE)
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "regexp_split_to_array",
-        [TextOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
+        [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
         ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.ARRAY),
         tags={TAG_REGEX},
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "repeat",
         [
-            TextOperationParam(),
+            StringOperationParam(),
             # do not use an arbitrary integer to avoid crashing mz
             REPETITIONS_PARAM,
         ],
-        TextReturnTypeSpec(),
+        StringReturnTypeSpec(),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "replace",
-        [TextOperationParam(), TextOperationParam(), TextOperationParam()],
-        TextReturnTypeSpec(),
+        [StringOperationParam(), StringOperationParam(), StringOperationParam()],
+        StringReturnTypeSpec(),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "right",
-        [TextOperationParam(), MaxSignedInt4OperationParam()],
-        TextReturnTypeSpec(),
+        [StringOperationParam(), MaxSignedInt4OperationParam()],
+        StringReturnTypeSpec(),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "rtrim",
-        [TextOperationParam(), TextOperationParam(optional=True)],
-        TextReturnTypeSpec(),
+        [StringOperationParam(), StringOperationParam(optional=True)],
+        StringReturnTypeSpec(),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "split_part",
         [
-            TextOperationParam(),
-            TextOperationParam(),
+            StringOperationParam(),
+            StringOperationParam(),
             MaxSignedInt4OperationParam(
                 incompatibilities={ExpressionCharacteristics.NEGATIVE}
             ),
         ],
-        TextReturnTypeSpec(),
+        StringReturnTypeSpec(),
         relevance=OperationRelevance.LOW,
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "substring",
         [
-            TextOperationParam(),
+            StringOperationParam(),
             MaxSignedInt4OperationParam(),
             MaxSignedInt4OperationParam(optional=True),
         ],
-        TextReturnTypeSpec(),
+        StringReturnTypeSpec(),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "translate",
-        [TextOperationParam(), TextOperationParam(), TextOperationParam()],
-        TextReturnTypeSpec(),
+        [StringOperationParam(), StringOperationParam(), StringOperationParam()],
+        StringReturnTypeSpec(),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbOperation(
         "trim($ $ FROM $)",
-        [TEXT_TRIM_SPEC_PARAM, TextOperationParam(), TextOperationParam()],
-        TextReturnTypeSpec(),
+        [STRING_TRIM_SPEC_PARAM, StringOperationParam(), StringOperationParam()],
+        StringReturnTypeSpec(),
         relevance=OperationRelevance.LOW,
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "upper",
-        [TextOperationParam()],
-        TextReturnTypeSpec(),
+        [StringOperationParam()],
+        StringReturnTypeSpec(),
     )
 )
 
-TEXT_OPERATION_TYPES.append(
+STRING_OPERATION_TYPES.append(
     DbFunction(
         "constant_time_eq",
-        [TextOperationParam(), TextOperationParam()],
+        [StringOperationParam(), StringOperationParam()],
         BooleanReturnTypeSpec(),
         is_pg_compatible=False,
         since_mz_version=MzVersion.parse_mz("v0.77.0"),

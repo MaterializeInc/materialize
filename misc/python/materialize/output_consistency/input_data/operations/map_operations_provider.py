@@ -21,8 +21,8 @@ from materialize.output_consistency.input_data.params.enum_constant_operation_pa
 from materialize.output_consistency.input_data.params.map_operation_param import (
     MapOperationParam,
 )
-from materialize.output_consistency.input_data.params.text_operation_param import (
-    TextOperationParam,
+from materialize.output_consistency.input_data.params.string_operation_param import (
+    StringOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
@@ -86,7 +86,7 @@ MAP_OPERATION_TYPES.append(
 MAP_OPERATION_TYPES.append(
     DbOperation(
         "MAP[$ => $]",
-        [TextOperationParam(), AnyOperationParam()],
+        [StringOperationParam(), AnyOperationParam()],
         MapReturnTypeSpec(),
         comment="using arbitrary text values as keys",
         since_mz_version=MzVersion.parse_mz("v0.100.0"),
@@ -104,7 +104,7 @@ MAP_OPERATION_TYPES.append(
 MAP_OPERATION_TYPES.append(
     DbFunction(
         "map_agg",
-        [TextOperationParam(), AnyOperationParam()],
+        [StringOperationParam(), AnyOperationParam()],
         MapReturnTypeSpec(),
     )
 )
@@ -114,7 +114,7 @@ MAP_OPERATION_TYPES.append(
         "$ ?& $",
         [
             MapOperationParam(),
-            ArrayOperationParam(value_type_category=DataTypeCategory.TEXT),
+            ArrayOperationParam(value_type_category=DataTypeCategory.STRING),
         ],
         BooleanReturnTypeSpec(),
         comment="contains all keys",
@@ -125,7 +125,7 @@ MAP_OPERATION_TYPES.append(
         "$ ?| $",
         [
             MapOperationParam(),
-            ArrayOperationParam(value_type_category=DataTypeCategory.TEXT),
+            ArrayOperationParam(value_type_category=DataTypeCategory.STRING),
         ],
         BooleanReturnTypeSpec(),
         comment="contains any key",

@@ -11,8 +11,8 @@ from materialize.output_consistency.data_type.data_type_category import DataType
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
-class TextReturnTypeSpec(ReturnTypeSpec):
+class StringReturnTypeSpec(ReturnTypeSpec):
     def __init__(
         self,
     ) -> None:
-        super().__init__(DataTypeCategory.TEXT)
+        super().__init__(DataTypeCategory.STRING)

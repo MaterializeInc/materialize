@@ -51,8 +51,8 @@ from materialize.output_consistency.input_data.operations.set_operations_provide
 from materialize.output_consistency.input_data.operations.special_operations_provider import (
     SPECIAL_OPERATION_TYPES,
 )
-from materialize.output_consistency.input_data.operations.text_operations_provider import (
-    TEXT_OPERATION_TYPES,
+from materialize.output_consistency.input_data.operations.string_operations_provider import (
+    STRING_OPERATION_TYPES,
 )
 from materialize.output_consistency.input_data.operations.trigonometric_operations_provider import (
     TRIGONOMETRIC_OPERATION_TYPES,
@@ -72,7 +72,7 @@ ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
         NUMERIC_OPERATION_TYPES,
         TRIGONOMETRIC_OPERATION_TYPES,
         DATE_TIME_OPERATION_TYPES,
-        TEXT_OPERATION_TYPES,
+        STRING_OPERATION_TYPES,
         BYTEA_OPERATION_TYPES,
         CRYPTO_OPERATION_TYPES,
         JSONB_OPERATION_TYPES,

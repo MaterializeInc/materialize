@@ -9,8 +9,8 @@
 from materialize.output_consistency.input_data.params.any_operation_param import (
     AnyOperationParam,
 )
-from materialize.output_consistency.input_data.return_specs.text_return_spec import (
-    TextReturnTypeSpec,
+from materialize.output_consistency.input_data.return_specs.string_return_spec import (
+    StringReturnTypeSpec,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -23,6 +23,6 @@ SPECIAL_OPERATION_TYPES.append(
     DbFunction(
         "pg_typeof",
         [AnyOperationParam()],
-        TextReturnTypeSpec(),
+        StringReturnTypeSpec(),
     )
 )

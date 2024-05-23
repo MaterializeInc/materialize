@@ -13,14 +13,14 @@ from materialize.output_consistency.input_data.params.bytea_operation_param impo
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     HASH_ALGORITHM_PARAM,
 )
-from materialize.output_consistency.input_data.params.text_operation_param import (
-    TextOperationParam,
+from materialize.output_consistency.input_data.params.string_operation_param import (
+    StringOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.bytea_return_spec import (
     ByteaReturnTypeSpec,
 )
-from materialize.output_consistency.input_data.return_specs.text_return_spec import (
-    TextReturnTypeSpec,
+from materialize.output_consistency.input_data.return_specs.string_return_spec import (
+    StringReturnTypeSpec,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -32,7 +32,7 @@ CRYPTO_OPERATION_TYPES: list[DbOperationOrFunction] = []
 CRYPTO_OPERATION_TYPES.append(
     DbFunction(
         "digest",
-        [TextOperationParam(), HASH_ALGORITHM_PARAM],
+        [StringOperationParam(), HASH_ALGORITHM_PARAM],
         ByteaReturnTypeSpec(),
     )
 )
@@ -48,7 +48,7 @@ CRYPTO_OPERATION_TYPES.append(
 CRYPTO_OPERATION_TYPES.append(
     DbFunction(
         "hmac",
-        [TextOperationParam(), TextOperationParam(), HASH_ALGORITHM_PARAM],
+        [StringOperationParam(), StringOperationParam(), HASH_ALGORITHM_PARAM],
         ByteaReturnTypeSpec(),
     )
 )
@@ -65,7 +65,7 @@ CRYPTO_OPERATION_TYPES.append(
     DbFunction(
         "md5",
         [ByteaOperationParam()],
-        TextReturnTypeSpec(),
+        StringReturnTypeSpec(),
     )
 )
 

@@ -14,13 +14,13 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
-from materialize.output_consistency.input_data.types.text_type_provider import (
+from materialize.output_consistency.input_data.types.string_type_provider import (
     TEXT_TYPE_IDENTIFIER,
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
 
 
-class TextOperationParam(OperationParam):
+class StringOperationParam(OperationParam):
     def __init__(
         self,
         optional: bool = False,
