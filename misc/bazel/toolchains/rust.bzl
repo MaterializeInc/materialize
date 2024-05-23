@@ -18,7 +18,7 @@ load("@rules_rust//rust:repositories.bzl", "rust_repository_set", "DEFAULT_TOOLC
 def rust_toolchains(version, targets):
     """
     Macro that registers Rust toolchains for the provided targets.
-    
+
     `rules_rust` provides a `rust_register_toolchains` macro but it fetches
     more Rust toolchains than we need, i.e. Linux, macOS, FreeBSD, and WASM.
     Instead the alternative of `rust_repostitory_set` is verbose enough that we

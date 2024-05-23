@@ -468,4 +468,3 @@ rust_repositories()
 
 load("@cxxbridge//:defs.bzl", cxxbridge_cmd_deps = "crate_repositories")
 cxxbridge_cmd_deps()
-
