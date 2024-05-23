@@ -35,7 +35,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use crate::txn_cache::{TxnsCache, TxnsCacheState};
+use crate::txn_cache::{DataRegistered, TxnsCache, TxnsCacheState};
 use crate::TxnsCodecDefault;
 
 /// A token exchangeable for a data shard snapshot.
@@ -57,6 +57,8 @@ pub struct DataSnapshot<T> {
     /// Some timestamp s.t. [as_of, empty_to) is known to be empty of
     /// unapplied writes via txns.
     pub(crate) empty_to: T,
+    /// The latest known registration of `data_id`.
+    pub(crate) latest_reg: Option<DataRegistered<T>>,
 }
 
 impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
@@ -93,6 +95,18 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         // registering a reader. On the balance, I think this is a _much_ better
         // set of tradeoffs than the original plan of trying to translate read
         // timestamps to the most recent write and reading that.
+        match &self.latest_reg {
+            // The shard is not registered, so we cannot write to it.
+            None => return,
+            // empty_to is not within the latest registration, so we cannot write to it.
+            Some(DataRegistered {
+                register_ts: _,
+                forget_ts: Some(forget_ts),
+            }) if &self.empty_to > forget_ts => return,
+
+            _ => {}
+        }
+
         let Some(mut data_upper) = data_write.shared_upper().into_option() else {
             // If the upper is the empty antichain, then we've unblocked all
             // possible reads. Return early.
@@ -103,9 +117,6 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
             return;
         };
 
-        // TODO(jkosh44) We should not be writing to unregistered shards, but
-        // we haven't checked to see if this was registered at `self.empty_to`.
-        // See https://github.com/MaterializeInc/materialize/issues/27088.
         while data_upper < self.empty_to {
             // It would be very bad if we accidentally filled any times <=
             // latest_write with empty updates, so defensively assert on each
