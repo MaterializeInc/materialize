@@ -255,6 +255,81 @@ crates_repository(
     cargo_lockfile = "//:Cargo.lock",
     lockfile = "//misc/bazel:Cargo.crates_io.lock",
     rust_version = RUST_VERSION,
+    annotations = {
+        "librocksdb-sys": [crate.annotation(
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.rocksdb.bazel",
+            # Note: The below targets are from the additive build file.
+            build_script_env = {
+                "ROCKSDB_STATIC": "true",
+                "ROCKSDB_LIB_DIR": "$(execpath :rocksdb_lib)",
+                "ROCKSDB_INCLUDE_DIR": "$(execpath :rocksdb_include)",
+            },
+            build_script_data = [
+                ":rocksdb_lib",
+                ":rocksdb_include",
+            ],
+            compile_data = [":rocksdb_lib"],
+        )],
+        "tikv-jemalloc-sys": [crate.annotation(
+            build_script_env = {
+                "JEMALLOC_OVERRIDE": "$(execpath @jemalloc//:libjemalloc)",
+            },
+            build_script_data = ["@jemalloc//:libjemalloc"],
+            compile_data = ["@jemalloc//:libjemalloc"],
+        )],
+        "rdkafka-sys": [crate.annotation(
+            gen_build_script = False,
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.librdkafka.bazel",
+            # Note: This is a target we add from the additive build file above.
+            deps = [":librdkafka"],
+            compile_data = [":rdkafka_lib"],
+            rustc_flags = [
+                "-Lnative=$(execpath :rdkafka_lib)",
+                "-lstatic=rdkafka",
+            ]
+        )],
+        "libz-sys": [crate.annotation(
+            gen_build_script = False,
+            compile_data = ["@zlib//:zlib_static_lib"],
+            rustc_flags = [
+                "-Lnative=$(execpath @zlib//:zlib_static_lib)",
+                "-lstatic=zlib",
+            ]
+        )],
+        "openssl-sys": [crate.annotation(
+            build_script_data = [
+                "@openssl//:openssl_lib",
+                "@openssl//:openssl_include",
+            ],
+            build_script_data_glob = ["build/**/*.c"],
+            build_script_env = {
+                "OPENSSL_STATIC": "true",
+                "OPENSSL_NO_VENDOR": "1",
+                "OPENSSL_LIB_DIR": "$(execpath @openssl//:openssl_lib)",
+                "OPENSSL_INCLUDE_DIR": "$(execpath @openssl//:openssl_include)",
+            },
+            compile_data = ["@openssl//:openssl_lib"],
+        )],
+        "protobuf-src": [crate.annotation(
+            # Note: We shouldn't ever depend on protobuf-src, but if we do, don't try to bootstrap
+            # `protoc`.
+            gen_build_script = False,
+            rustc_env = { "INSTALL_DIR": "fake" },
+        )],
+        "protobuf-native": [crate.annotation(
+            gen_build_script = False,
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.protobuf-native.bazel",
+            deps = [
+                ":compiler-sys",
+                ":compiler-bridge",
+                ":io-sys",
+                ":io-bridge",
+                ":lib-sys",
+                ":lib-bridge",
+                ":internal-bridge",
+            ],
+        )],
+    },
     manifests = [
         "//:Cargo.toml",
         "//:src/adapter-types/Cargo.toml",
@@ -374,4 +449,23 @@ crate_repositories()
 
 load("@rules_rust//crate_universe:repositories.bzl", "crate_universe_dependencies")
 crate_universe_dependencies()
+
+# Third-Party Rust Tools
+#
+# A few crates bind to an external C/C++ library using `cxx`. To build these
+# with Bazel we need to include the `cxx` command line binary.
+
+load("//misc/bazel/rust_deps:repositories.bzl", "rust_repositories")
+rust_repositories()
+
+# Load and include any dependencies the third-party Rust binaries require.
+#
+# Ideally we would call `load(...)` from `rust_repositories()`, but load
+# statements can only be called from the top-level WORKSPACE, so we must do it
+# here.
+#
+# TODO(parkmycar): This should get better when we switch to bzlmod.
+
+load("@cxxbridge//:defs.bzl", cxxbridge_cmd_deps = "crate_repositories")
+cxxbridge_cmd_deps()
 
