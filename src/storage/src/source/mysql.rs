@@ -126,16 +126,22 @@ impl SourceRender for MySqlSourceConnection {
 
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
-        for (_id, SourceExport { output_index, .. }) in &config.source_exports {
+        for (
+            _id,
+            SourceExport {
+                ingestion_output, ..
+            },
+        ) in &config.source_exports
+        {
             // Output index 0 is the primary source which is not a table.
-            if *output_index == 0 {
+            if *ingestion_output == 0 {
                 continue;
             }
 
-            let desc = &self.details.tables[output_index - 1];
+            let desc = &self.details.tables[ingestion_output - 1];
             table_info.insert(
                 MySqlTableName::new(&desc.schema_name, &desc.name),
-                (*output_index, desc.clone()),
+                (*ingestion_output, desc.clone()),
             );
         }
 

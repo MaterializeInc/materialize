@@ -15,7 +15,6 @@ use mz_ore::now::NowFn;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, Row, ScalarType};
-use mz_sql_parser::ast::UnresolvedItemName;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -124,22 +123,15 @@ impl SourceConnection for LoadGeneratorSourceConnection {
         vec![]
     }
 
-    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
-        let name = match &name.0[..] {
-            [database, namespace, name]
-                if database.as_str() == LOAD_GENERATOR_DATABASE_NAME
-                    && namespace.as_str() == self.load_generator.schema_name() =>
-            {
-                name.as_str()
-            }
-            _ => return None,
-        };
-
-        self.load_generator
+    fn get_subsource_resolver(&self) -> super::SubsourceResolver {
+        let views: Vec<_> = self
+            .load_generator
             .views()
-            .iter()
-            .position(|(view_name, _)| *view_name == name)
-            .map(|idx| idx + 1)
+            .into_iter()
+            .map(|(name, _)| (self.load_generator.schema_name(), name))
+            .collect();
+        super::SubsourceResolver::new(LOAD_GENERATOR_DATABASE_NAME, &views)
+            .expect("already validated that SubsourceResolver elements are valid")
     }
 }
 

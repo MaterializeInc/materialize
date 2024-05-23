@@ -215,7 +215,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // Determined which collections need to be snapshot and which already have been.
             if id != config.id && *upper == [MzOffset::minimum()] {
                 // Convert from `GlobalId` to output index.
-                Some(config.source_exports[&id].output_index)
+                Some(config.source_exports[&id].ingestion_output)
             } else {
                 None
             }

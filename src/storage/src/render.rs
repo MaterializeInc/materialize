@@ -304,9 +304,10 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let mut upper_streams = vec![];
             let mut health_streams = vec![source_health];
-            for (export_id, export) in description.source_exports {
+            let source_exports = description.source_exports_with_output_indices();
+            for (export_id, export) in source_exports {
                 let (ok, err) = outputs
-                    .get_mut(export.output_index)
+                    .get_mut(export.ingestion_output)
                     .expect("known to exist");
                 let source_data = ok.map(Ok).concat(&err.map(Err));
 
@@ -315,7 +316,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     primary_source_id,
                     worker_id,
                     &export.storage_metadata.data_shard,
-                    export.output_index,
+                    export.ingestion_output,
                 );
 
                 tracing::info!(
@@ -328,7 +329,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     source_data,
                     storage_state,
                     metrics,
-                    export.output_index,
+                    export.ingestion_output,
                 );
                 upper_streams.push(upper_stream);
                 tokens.extend(sink_tokens);
@@ -343,7 +344,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     }
                 });
                 health_streams.push(sink_health.leave());
-                health_configs.insert(export.output_index, export_id);
+                health_configs.insert(export.ingestion_output, export_id);
             }
 
             mz_scope

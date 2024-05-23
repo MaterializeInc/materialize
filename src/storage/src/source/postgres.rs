@@ -152,21 +152,24 @@ impl SourceRender for PostgresSourceConnection {
 
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
-        for SourceExport { output_index, .. } in config.source_exports.values() {
+        for SourceExport {
+            ingestion_output, ..
+        } in config.source_exports.values()
+        {
             // Output index 0 is the primary source which is not a table.
-            if *output_index == 0 {
+            if *ingestion_output == 0 {
                 continue;
             }
 
             // The output index is 1 greater than the publication details' index
             // to account for the primary output being at index 0.
-            let table_idx = *output_index - 1;
+            let table_idx = *ingestion_output - 1;
             let desc = self.publication_details.tables[table_idx].clone();
 
             // Tables are indexed by their native index, but table casts are
             // indexed by the output index.
-            let casts = self.table_casts[output_index].clone();
-            table_info.insert(desc.oid, (*output_index, desc.clone(), casts.clone()));
+            let casts = self.table_casts[ingestion_output].clone();
+            table_info.insert(desc.oid, (*ingestion_output, desc.clone(), casts.clone()));
         }
 
         let metrics = config.metrics.get_postgres_source_metrics(config.id);

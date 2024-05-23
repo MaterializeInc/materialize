@@ -71,8 +71,8 @@ use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
-    GenericSourceConnection, IngestionDescription, SourceConnection, SourceData, SourceDesc,
-    SourceExport,
+    ExportReference, GenericSourceConnection, IngestionDescription, SourceConnection, SourceData,
+    SourceDesc, SourceExport,
 };
 use mz_storage_types::AlterCompatible;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -628,7 +628,7 @@ where
                 ingestion.source_exports.insert(
                     id,
                     SourceExport {
-                        output_index: 0,
+                        ingestion_output: None,
                         storage_metadata: (),
                     },
                 );
@@ -726,27 +726,15 @@ where
                         CollectionDescription {
                             data_source: DataSource::Ingestion(ingestion_desc),
                             ..
-                        } => {
-                            // DataSource::IngestionExport names the object it
-                            // wants to export, so we look up the output index
-                            // for that name.
-                            let output_index = ingestion_desc
-                                .desc
-                                .connection
-                                .output_idx_for_name(external_reference)
-                                .ok_or(StorageError::MissingSubsourceReference {
-                                    ingestion_id: *ingestion_id,
-                                    reference: external_reference.clone(),
-                                })?;
-
-                            ingestion_desc.source_exports.insert(
-                                id,
-                                SourceExport {
-                                    output_index,
-                                    storage_metadata: (),
-                                },
-                            )
-                        }
+                        } => ingestion_desc.source_exports.insert(
+                            id,
+                            SourceExport {
+                                ingestion_output: Some(ExportReference::from(
+                                    external_reference.clone(),
+                                )),
+                                storage_metadata: (),
+                            },
+                        ),
                         _ => unreachable!(
                             "SourceExport must only refer to primary sources that already exist"
                         ),
@@ -1017,6 +1005,8 @@ where
                     .desc
                     .alter_compatible(ingestion_id, source_desc)?;
 
+                let subsource_resolver = cur_ingestion.desc.connection.get_subsource_resolver();
+
                 // Ensure updated `SourceDesc` contains reference to all
                 // current external references.
                 for export_id in cur_ingestion
@@ -1040,10 +1030,9 @@ where
                         }
                     };
 
-                    if source_desc
-                        .connection
-                        .output_idx_for_name(external_reference)
-                        .is_none()
+                    if subsource_resolver
+                        .resolve_details_idx(&external_reference.0)
+                        .is_err()
                     {
                         tracing::warn!(
                             "subsource {export_id} of {ingestion_id} refers to \
@@ -1073,62 +1062,6 @@ where
     ) -> Result<(), StorageError<Self::Timestamp>> {
         self.check_alter_ingestion_source_desc(ingestion_id, &source_desc)?;
 
-        let collection = self.collection(ingestion_id).expect("validated exists");
-        let curr_ingestion = match &collection.description.data_source {
-            DataSource::Ingestion(active_ingestion) => active_ingestion,
-            _ => unreachable!("verified collection refers to ingestion"),
-        };
-
-        // Generate new source exports because they might have changed.
-        let mut source_exports = BTreeMap::new();
-        // Each source includes a `0` output index export "for the
-        // primary source", whether it's used or not.
-        source_exports.insert(
-            ingestion_id,
-            SourceExport {
-                output_index: 0,
-                storage_metadata: (),
-            },
-        );
-
-        // Get the updated output indices for each source export.
-        //
-        // TODO(#26766): this could be simpler if the output indices
-        // were determined in rendering, e.g. `SourceExport` had an
-        // `Option<UnresolvedItemName>` instead of a `usize` and we
-        // looked up its output index when we were aligning the
-        // rendering outputs.
-        for export_id in curr_ingestion.source_exports.keys() {
-            if *export_id == ingestion_id {
-                // Already inserted above
-                continue;
-            }
-
-            let DataSource::IngestionExport {
-                ingestion_id,
-                external_reference,
-            } = &self.collection(*export_id)?.description.data_source
-            else {
-                panic!("source exports must be DataSource::IngestionExport")
-            };
-
-            let output_index = source_desc
-                .connection
-                .output_idx_for_name(external_reference)
-                .ok_or(StorageError::MissingSubsourceReference {
-                    ingestion_id: *ingestion_id,
-                    reference: external_reference.clone(),
-                })?;
-
-            source_exports.insert(
-                *export_id,
-                SourceExport {
-                    output_index,
-                    storage_metadata: (),
-                },
-            );
-        }
-
         // Update the `SourceDesc` and the source exports
         // simultaneously.
         let collection = self
@@ -1139,8 +1072,8 @@ where
             DataSource::Ingestion(curr_ingestion) => curr_ingestion,
             _ => unreachable!("verified collection refers to ingestion"),
         };
+
         curr_ingestion.desc = source_desc;
-        curr_ingestion.source_exports = source_exports;
         tracing::debug!("altered {ingestion_id}'s SourceDesc");
 
         // n.b. we do not re-run updated ingestions because updating the source
@@ -3721,7 +3654,7 @@ where
         for (
             export_id,
             SourceExport {
-                output_index,
+                ingestion_output,
                 storage_metadata: (),
             },
         ) in ingestion_description.source_exports
@@ -3730,8 +3663,8 @@ where
             source_exports.insert(
                 export_id,
                 SourceExport {
+                    ingestion_output,
                     storage_metadata: export_storage_metadata,
-                    output_index,
                 },
             );
         }

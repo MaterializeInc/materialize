@@ -34,8 +34,11 @@ use mz_repr::{
     ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow, RelationDesc, Row,
     RowDecoder, RowEncoder,
 };
-use mz_sql_parser::ast::UnresolvedItemName;
+use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
+use proptest::collection::vec;
 use proptest::prelude::any;
+use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest::string::string_regex;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -68,6 +71,32 @@ pub use crate::sources::postgres::PostgresSourceConnection;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 
+/// A fraternal twin of [`UnresolvedItemName`] that can implement [`Arbitrary`].
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct ExportReference(pub Vec<Ident>);
+
+impl proptest::prelude::Arbitrary for ExportReference {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        // Generate a set of valid `Ident` strings.
+        let string_strategy = string_regex("[a-zA-Z_][a-zA-Z0-9_$]{3,10}").unwrap();
+
+        vec(string_strategy, 0..100)
+            .prop_map(|inner| {
+                ExportReference(inner.into_iter().map(|i| Ident::new(i).unwrap()).collect())
+            })
+            .boxed()
+    }
+}
+
+impl From<UnresolvedItemName> for ExportReference {
+    fn from(value: UnresolvedItemName) -> Self {
+        ExportReference(value.0)
+    }
+}
+
 /// A description of a source ingestion
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedConnection> {
@@ -83,10 +112,7 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     ///
     /// # Notes
     /// - For multi-output sources:
-    ///     - Add subsources by adding a new [`SourceExport`]. Look up the
-    ///       appropriate output index using
-    ///       [`SourceConnection::output_idx_for_name`], which is available
-    ///       through [`SourceDesc::connection`].
+    ///     - Add subsources by adding a new [`SourceExport`].
     ///     - Remove subsources by removing the [`SourceExport`].
     ///
     ///   Re-rendering/executing the source after making these modifications
@@ -101,9 +127,9 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     /// - This field should not be populated by the storage controller in
     ///   response to collections being created.
     #[proptest(
-        strategy = "proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 0..4)"
+        strategy = "proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<Option<ExportReference>, S>>(), 0..4)"
     )]
-    pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
+    pub source_exports: BTreeMap<GlobalId, SourceExport<Option<ExportReference>, S>>,
     /// The ID of the instance in which to install the source.
     pub instance_id: StorageInstanceId,
     /// The ID of this ingestion's remap/progress collection.
@@ -146,6 +172,45 @@ impl<S> IngestionDescription<S> {
     }
 }
 
+impl<S: Clone> IngestionDescription<S> {
+    pub fn source_exports_with_output_indices(&self) -> BTreeMap<GlobalId, SourceExport<usize, S>> {
+        let subsource_resolver = self.desc.connection.get_subsource_resolver();
+
+        let mut source_exports = BTreeMap::new();
+
+        for (
+            id,
+            SourceExport {
+                ingestion_output,
+                storage_metadata,
+            },
+        ) in self.source_exports.iter()
+        {
+            let ingestion_output = match ingestion_output {
+                Some(ingestion_output) => {
+                    subsource_resolver
+                        .resolve_details_idx(&ingestion_output.0)
+                        .expect("must have all subsource references")
+                        // output indices are the native details idx + 1 to
+                        // account for the `None` value representing 0.
+                        + 1
+                }
+                None => 0,
+            };
+
+            source_exports.insert(
+                *id,
+                SourceExport {
+                    ingestion_output,
+                    storage_metadata: storage_metadata.clone(),
+                },
+            );
+        }
+
+        source_exports
+    }
+}
+
 impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionDescription<S> {
     fn alter_compatible(
         &self,
@@ -180,21 +245,20 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
                             (
                                 _,
                                 SourceExport {
-                                    output_index: _,
+                                    ingestion_output: l_reference,
                                     storage_metadata: l_metadata,
                                 },
                             ),
                             (
                                 _,
                                 SourceExport {
-                                    output_index: _,
+                                    ingestion_output: r_reference,
                                     storage_metadata: r_metadata,
                                 },
                             ),
                         ) => {
-                            // the output index may change, but the table's metadata
-                            // may not
-                            l_metadata.alter_compatible(id, r_metadata).is_ok()
+                            l_reference == r_reference
+                                && l_metadata.alter_compatible(id, r_metadata).is_ok()
                         }
                         _ => true,
                     }),
@@ -245,19 +309,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
-pub struct SourceExport<S = ()> {
-    /// The index of the exported output stream.
-    ///
-    /// For all sources, the output index `0` is meant to be the "primary
-    /// source"'s output. For Kafka, this represents the data ingested by the
-    /// topic. However, for multi-output sources like PG and MySQL, this is an
-    /// unused collection.
-    ///
-    /// To account for the 0th index belong to the primary source,
-    /// implementations of [`SourceConnection::output_idx_for_name`] might need
-    /// to adjust the output index, e.g. by adding 1 to the index of the name
-    /// they search for.
-    pub output_index: usize,
+pub struct SourceExport<O: proptest::prelude::Arbitrary, S = ()> {
+    /// Which output from the ingestion this source refers to.
+    pub ingestion_output: O,
     /// The collection metadata needed to write the exported data
     pub storage_metadata: S,
 }
@@ -309,20 +363,50 @@ impl ProtoMapEntry<GlobalId, CollectionMetadata> for ProtoSourceImport {
     }
 }
 
-impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceExport {
-    fn from_rust<'a>(entry: (&'a GlobalId, &'a SourceExport<CollectionMetadata>)) -> Self {
+impl ProtoMapEntry<GlobalId, SourceExport<Option<ExportReference>, CollectionMetadata>>
+    for ProtoSourceExport
+{
+    fn from_rust<'a>(
+        (id, source_export): (
+            &'a GlobalId,
+            &'a SourceExport<Option<ExportReference>, CollectionMetadata>,
+        ),
+    ) -> Self {
         ProtoSourceExport {
-            id: Some(entry.0.into_proto()),
-            output_index: entry.1.output_index.into_proto(),
-            storage_metadata: Some(entry.1.storage_metadata.into_proto()),
+            id: Some(id.into_proto()),
+            ingestion_output: source_export
+                .ingestion_output
+                .iter()
+                .map(|e| &e.0)
+                .flatten()
+                .map(|i| i.clone().into_string())
+                .collect(),
+            storage_metadata: Some(source_export.storage_metadata.into_proto()),
         }
     }
 
-    fn into_rust(self) -> Result<(GlobalId, SourceExport<CollectionMetadata>), TryFromProtoError> {
+    fn into_rust(
+        self,
+    ) -> Result<
+        (
+            GlobalId,
+            SourceExport<Option<ExportReference>, CollectionMetadata>,
+        ),
+        TryFromProtoError,
+    > {
         Ok((
             self.id.into_rust_if_some("ProtoSourceExport::id")?,
             SourceExport {
-                output_index: self.output_index.into_rust()?,
+                ingestion_output: if self.ingestion_output.is_empty() {
+                    None
+                } else {
+                    Some(ExportReference(
+                        self.ingestion_output
+                            .into_iter()
+                            .map(|i| Ident::new(i).expect("proto encoding must roundtrip"))
+                            .collect(),
+                    ))
+                },
                 storage_metadata: self
                     .storage_metadata
                     .into_rust_if_some("ProtoSourceExport::storage_metadata")?,
@@ -640,14 +724,8 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     /// columns are returned in the order specified by the user.
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)>;
 
-    /// Returns the output index for `name` if this source contains it.
-    ///
-    /// We use the output index to provide a consistent correlation in multi-output sources between
-    /// the ingestion dataflow and storage rendering's use of persist as a sink.
-    ///
-    /// We want to allow dynamic lookup of these values because the output index can change. if e.g.
-    /// the source's underlying structure changes due to adding and removing subsources.
-    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize>;
+    /// Returns a [`SubsourceResolver`] for this source connection's subsources.
+    fn get_subsource_resolver(&self) -> SubsourceResolver;
 }
 
 #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -947,12 +1025,12 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         }
     }
 
-    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
+    fn get_subsource_resolver(&self) -> SubsourceResolver {
         match self {
-            Self::Kafka(conn) => conn.output_idx_for_name(name),
-            Self::Postgres(conn) => conn.output_idx_for_name(name),
-            Self::MySql(conn) => conn.output_idx_for_name(name),
-            Self::LoadGenerator(conn) => conn.output_idx_for_name(name),
+            Self::Kafka(conn) => conn.get_subsource_resolver(),
+            Self::Postgres(conn) => conn.get_subsource_resolver(),
+            Self::MySql(conn) => conn.get_subsource_resolver(),
+            Self::LoadGenerator(conn) => conn.get_subsource_resolver(),
         }
     }
 }
@@ -1264,6 +1342,189 @@ impl Schema<SourceData> for RelationDesc {
             ok,
             err,
         })
+    }
+}
+
+/// Describes how subsource references should be organized in a multi-level
+/// hierarchy.
+///
+/// For both PostgreSQL and MySQL sources, these levels of reference are
+/// intrinsic to the items which we're referencing. If there are other naming
+/// schemas for other types of sources we discover, we might need to revisit
+/// this.
+pub trait SubsourceCatalogReference {
+    /// The "second" level of namespacing for the reference.
+    fn schema_name(&self) -> &str;
+    /// The lowest level of namespacing for the reference.
+    fn item_name(&self) -> &str;
+}
+
+impl SubsourceCatalogReference for mz_mysql_util::MySqlTableDesc {
+    fn schema_name(&self) -> &str {
+        &self.schema_name
+    }
+
+    fn item_name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl SubsourceCatalogReference for mz_postgres_util::desc::PostgresTableDesc {
+    fn schema_name(&self) -> &str {
+        &self.namespace
+    }
+
+    fn item_name(&self) -> &str {
+        &self.name
+    }
+}
+
+// This implementation provides a means of converting arbitrary objects into a
+// `SubsourceCatalogReference`, e.g. load generator view names.
+impl<'a> SubsourceCatalogReference for (&'a str, &'a str) {
+    fn schema_name(&self) -> &str {
+        self.0
+    }
+
+    fn item_name(&self) -> &str {
+        self.1
+    }
+}
+
+/// Stores and resolves references to a `&[T: SubsourceCatalogTable]`.
+///
+/// This is meant to provide an API to quickly look up a source's subsources.
+///
+/// For sources that do not provide any subsources, use the `Default`
+/// implementation, which is empty and will not be able to resolve any
+/// references.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubsourceResolver {
+    inner: BTreeMap<Ident, BTreeMap<Ident, BTreeMap<Ident, usize>>>,
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum SubsourceResolutionError {
+    #[error("reference to {name} not found in source")]
+    DoesNotExist { name: String },
+    #[error(
+        "reference to {name} is ambiguous, consider specifying an additional \
+    layer of qualification"
+    )]
+    Ambiguous { name: String },
+    #[error("invalid identifier: {0}")]
+    Ident(#[from] IdentError),
+}
+
+impl<'a> SubsourceResolver {
+    /// Constructs a new `SubsourceResolver` from a slice of `T:
+    /// SubsourceCatalogReference`.
+    ///
+    /// # Errors
+    /// - If any `&str` provided cannot be taken to an [`Ident`].
+    pub fn new<T: SubsourceCatalogReference>(
+        database: &str,
+        referenceable_items: &'a [T],
+    ) -> Result<SubsourceResolver, SubsourceResolutionError> {
+        // An index from table name -> schema name -> database name -> index in
+        // `referenceable_items`.
+        let mut inner = BTreeMap::new();
+
+        let database = Ident::new(database)?;
+
+        for (reference_idx, item) in referenceable_items.iter().enumerate() {
+            let item_name = Ident::new(item.item_name())?;
+            let schema_name = Ident::new(item.schema_name())?;
+
+            inner
+                .entry(item_name)
+                .or_insert_with(BTreeMap::new)
+                .entry(schema_name)
+                .or_insert_with(BTreeMap::new)
+                .entry(database.clone())
+                .or_insert(reference_idx);
+        }
+
+        Ok(SubsourceResolver { inner })
+    }
+
+    /// Returns the index from which it originated in the `referenceable_items`
+    /// provided to [`Self::new`].
+    ///
+    /// # Args
+    /// `name` is `&[Ident]` to let users provide the inner element of either
+    /// [`UnresolvedItemName`] or [`ExportReference`].
+    ///
+    /// # Errors
+    /// - If the `UnresolvedItemName` does not resolve to an item in
+    ///   `self.inner`.
+    pub fn resolve_details_idx(&self, name: &[Ident]) -> Result<usize, SubsourceResolutionError> {
+        let provided_name = UnresolvedItemName(name.to_vec()).to_string();
+
+        // Names must be composed of 1..=3 elements.
+        if !(1..=3).contains(&name.len()) {
+            Err(SubsourceResolutionError::DoesNotExist {
+                name: provided_name.clone(),
+            })?;
+        }
+
+        // Fill on the leading elements with `None` if they aren't present.
+        let mut names = std::iter::repeat(None)
+            .take(3 - name.len())
+            .chain(name.iter().map(Some));
+
+        let database = names.next().flatten();
+        let schema = names.next().flatten();
+        let item = names
+            .next()
+            .flatten()
+            .expect("must have provided the item name");
+
+        assert!(names.next().is_none(), "expected a 3-element iterator");
+
+        let schemas =
+            self.inner
+                .get(item)
+                .ok_or_else(|| SubsourceResolutionError::DoesNotExist {
+                    name: provided_name.clone(),
+                })?;
+
+        let schema =
+            match schema {
+                Some(schema) => schema,
+                None => schemas.keys().exactly_one().map_err(|_e| {
+                    SubsourceResolutionError::Ambiguous {
+                        name: provided_name.clone(),
+                    }
+                })?,
+            };
+
+        let databases =
+            schemas
+                .get(schema)
+                .ok_or_else(|| SubsourceResolutionError::DoesNotExist {
+                    name: provided_name.clone(),
+                })?;
+
+        let database = match database {
+            Some(database) => database,
+            None => databases.keys().exactly_one().map_err(|_e| {
+                SubsourceResolutionError::Ambiguous {
+                    name: provided_name.clone(),
+                }
+            })?,
+        };
+
+        let reference_idx =
+            databases
+                .get(database)
+                .ok_or_else(|| SubsourceResolutionError::DoesNotExist {
+                    name: provided_name.clone(),
+                })?;
+
+        // TODO: this same function could also be used to generate canonical
+        // references for subsources.
+        Ok(*reference_idx)
     }
 }
 
