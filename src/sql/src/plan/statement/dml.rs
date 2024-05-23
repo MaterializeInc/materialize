@@ -627,10 +627,10 @@ pub fn plan_explain_pushdown(
 
 pub fn plan_explain_timestamp(
     scx: &StatementContext,
-    ExplainTimestampStatement { format, select }: ExplainTimestampStatement<Aug>,
+    explain: ExplainTimestampStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    let format = match format {
+    let format = match explain.format() {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
@@ -642,12 +642,12 @@ pub fn plan_explain_timestamp(
             desc: _,
             finishing: _,
             scope: _,
-        } = query::plan_root_query(scx, select.query, QueryLifetime::OneShot)?;
+        } = query::plan_root_query(scx, explain.select.query, QueryLifetime::OneShot)?;
         raw_plan.bind_parameters(params)?;
 
         raw_plan
     };
-    let when = query::plan_as_of(scx, select.as_of)?;
+    let when = query::plan_as_of(scx, explain.select.as_of)?;
 
     Ok(Plan::ExplainTimestamp(ExplainTimestampPlan {
         format,

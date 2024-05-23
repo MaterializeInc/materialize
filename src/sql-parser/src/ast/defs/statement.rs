@@ -3350,14 +3350,23 @@ impl_display_t!(ExplainPushdownStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainTimestampStatement<T: AstInfo> {
-    pub format: ExplainFormat,
+    pub format: Option<ExplainFormat>,
     pub select: SelectStatement<T>,
+}
+
+impl<T: AstInfo> ExplainTimestampStatement<T> {
+    pub fn format(&self) -> ExplainFormat {
+        self.format.unwrap_or(ExplainFormat::Text)
+    }
 }
 
 impl<T: AstInfo> AstDisplay for ExplainTimestampStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("EXPLAIN TIMESTAMP AS ");
-        f.write_node(&self.format);
+        f.write_str("EXPLAIN TIMESTAMP");
+        if let Some(format) = &self.format {
+            f.write_str(" AS ");
+            f.write_node(format);
+        }
         f.write_str(" FOR ");
         f.write_node(&self.select);
     }

@@ -169,9 +169,23 @@ ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, 
 parse-statement
 EXPLAIN TIMESTAMP FOR SELECT 1
 ----
+EXPLAIN TIMESTAMP FOR SELECT 1
+=>
+ExplainTimestamp(ExplainTimestampStatement { format: None, select: SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None } })
+
+parse-statement
+EXPLAIN TIMESTAMP AS TEXT FOR SELECT 1
+----
 EXPLAIN TIMESTAMP AS TEXT FOR SELECT 1
 =>
-ExplainTimestamp(ExplainTimestampStatement { format: Text, select: SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None } })
+ExplainTimestamp(ExplainTimestampStatement { format: Some(Text), select: SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None } })
+
+parse-statement
+EXPLAIN TIMESTAMP AS JSON FOR SELECT 1
+----
+EXPLAIN TIMESTAMP AS JSON FOR SELECT 1
+=>
+ExplainTimestamp(ExplainTimestampStatement { format: Some(Json), select: SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None } })
 
 parse-statement
 EXPLAIN AS JSON SELECT * FROM foo

@@ -7670,13 +7670,13 @@ impl<'a> Parser<'a> {
     fn parse_explain_timestamp(&mut self) -> Result<Statement<Raw>, ParserError> {
         let format = if self.parse_keyword(AS) {
             match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
-                Some(TEXT) => ExplainFormat::Text,
-                Some(JSON) => ExplainFormat::Json,
+                Some(TEXT) => Some(ExplainFormat::Text),
+                Some(JSON) => Some(ExplainFormat::Json),
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }
         } else {
-            ExplainFormat::Text
+            None
         };
 
         self.expect_keyword(FOR)?;
