@@ -242,6 +242,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 latest_write: None,
                 as_of,
                 empty_to,
+                latest_reg: None,
             };
         };
 
@@ -256,13 +257,15 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             .rev()
             .find(|x| **x <= as_of && *x >= min_unapplied_ts)
             .cloned();
+        let latest_reg = all.last_reg().clone();
 
         debug!(
-            "data_snapshot {:.9} latest_write={:?} as_of={:?} empty_to={:?}: all={:?}",
+            "data_snapshot {:.9} latest_write={:?} as_of={:?} empty_to={:?} latest_reg={:?}: all={:?}",
             data_id.to_string(),
             latest_write,
             as_of,
             empty_to,
+            latest_reg,
             all,
         );
         let ret = DataSnapshot {
@@ -270,13 +273,12 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             latest_write,
             as_of,
             empty_to,
+            latest_reg: Some(latest_reg),
         };
         assert_eq!(ret.validate(), Ok(()));
         ret
     }
 
-    // TODO(jkosh44) This method can likely be simplified to return
-    // DataRemapEntry directly.
     /// Returns the next action to take when iterating a Listen on a data shard.
     ///
     /// A data shard Listen is executed by repeatedly calling this method with
@@ -1001,7 +1003,8 @@ impl<T> Default for DataTimes<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) struct DataRegistered<T> {
     /// The inclusive time at which the data shard was added to the txns set.
     ///
@@ -1184,6 +1187,8 @@ mod tests {
                 latest_write,
                 as_of,
                 empty_to,
+                // TODO(jkosh44)
+                latest_reg: None,
             }
         };
         #[track_caller]
@@ -1491,6 +1496,7 @@ mod tests {
                 latest_write: None,
                 as_of: 0,
                 empty_to: 10,
+                latest_reg: None,
             }
         );
     }
