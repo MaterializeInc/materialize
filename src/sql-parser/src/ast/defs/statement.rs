@@ -3197,24 +3197,42 @@ impl_display_t!(SubscribeRelation);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainPlanStatement<T: AstInfo> {
-    pub stage: ExplainStage,
+    pub stage: Option<ExplainStage>,
     pub with_options: Vec<ExplainPlanOption<T>>,
-    pub format: ExplainFormat,
+    pub format: Option<ExplainFormat>,
     pub explainee: Explainee<T>,
+}
+
+impl<T: AstInfo> ExplainPlanStatement<T> {
+    pub fn stage(&self) -> ExplainStage {
+        self.stage.unwrap_or(ExplainStage::GlobalPlan)
+    }
+
+    pub fn format(&self) -> ExplainFormat {
+        self.format.unwrap_or(ExplainFormat::Text)
+    }
 }
 
 impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("EXPLAIN ");
-        f.write_node(&self.stage);
+        f.write_str("EXPLAIN");
+        if let Some(stage) = &self.stage {
+            f.write_str(" ");
+            f.write_node(stage);
+        }
         if !self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
-        f.write_str(" AS ");
-        f.write_node(&self.format);
-        f.write_str(" FOR ");
+        if let Some(format) = &self.format {
+            f.write_str(" AS ");
+            f.write_node(format);
+        }
+        if self.stage.is_some() {
+            f.write_str(" FOR");
+        }
+        f.write_str(" ");
         f.write_node(&self.explainee);
     }
 }
@@ -3941,7 +3959,7 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
 }
 impl_display_t!(Explainee);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum ExplainFormat {
     /// Human readable display format
     Text,

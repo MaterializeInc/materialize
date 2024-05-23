@@ -7615,14 +7615,14 @@ impl<'a> Parser<'a> {
 
         let format = if self.parse_keyword(AS) {
             match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
-                Some(TEXT) => ExplainFormat::Text,
-                Some(JSON) => ExplainFormat::Json,
-                Some(DOT) => ExplainFormat::Dot,
+                Some(TEXT) => Some(ExplainFormat::Text),
+                Some(JSON) => Some(ExplainFormat::Json),
+                Some(DOT) => Some(ExplainFormat::Dot),
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }
         } else {
-            ExplainFormat::Text
+            None
         };
 
         if has_stage {
@@ -7639,7 +7639,7 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Statement::ExplainPlan(ExplainPlanStatement {
-            stage: stage.unwrap_or_else(|| ExplainStage::GlobalPlan),
+            stage,
             with_options,
             format,
             explainee,

@@ -21,79 +21,79 @@
 parse-statement
 EXPLAIN SELECT 665
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR SELECT 665
+EXPLAIN SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 parse-statement
 EXPLAIN RAW PLAN FOR SELECT 665
 ----
-EXPLAIN RAW PLAN AS TEXT FOR SELECT 665
+EXPLAIN RAW PLAN FOR SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: RawPlan, with_options: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+ExplainPlan(ExplainPlanStatement { stage: Some(RawPlan), with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 parse-statement
 EXPLAIN DECORRELATED PLAN FOR SELECT 665
 ----
-EXPLAIN DECORRELATED PLAN AS TEXT FOR SELECT 665
+EXPLAIN DECORRELATED PLAN FOR SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: DecorrelatedPlan, with_options: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+ExplainPlan(ExplainPlanStatement { stage: Some(DecorrelatedPlan), with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN FOR SELECT 665
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR SELECT 665
+EXPLAIN OPTIMIZED PLAN FOR SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 parse-statement
 EXPLAIN PHYSICAL PLAN FOR SELECT 665
 ----
-EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT 665
+EXPLAIN PHYSICAL PLAN FOR SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: PhysicalPlan, with_options: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+ExplainPlan(ExplainPlanStatement { stage: Some(PhysicalPlan), with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 parse-statement
 EXPLAIN SELECT 665
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR SELECT 665
+EXPLAIN SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN FOR VIEW foo
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR VIEW foo
+EXPLAIN OPTIMIZED PLAN FOR VIEW foo
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW foo
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR MATERIALIZED VIEW foo
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW foo
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: MaterializedView(Name(UnresolvedItemName([Ident("foo")]))) })
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: MaterializedView(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN FOR INDEX foo
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR INDEX foo
+EXPLAIN OPTIMIZED PLAN FOR INDEX foo
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: Index(Name(UnresolvedItemName([Ident("foo")]))) })
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: Index(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN FOR REPLAN VIEW foo
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR REPLAN VIEW foo
+EXPLAIN OPTIMIZED PLAN FOR REPLAN VIEW foo
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: ReplanView(Name(UnresolvedItemName([Ident("foo")]))) })
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: ReplanView(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR REPLAN VIEW foo
 ----
-EXPLAIN LOCALLY OPTIMIZED PLAN AS TEXT FOR REPLAN VIEW foo
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR REPLAN VIEW foo
 =>
-ExplainPlan(ExplainPlanStatement { stage: LocalPlan, with_options: [], format: Text, explainee: ReplanView(Name(UnresolvedItemName([Ident("foo")]))) })
+ExplainPlan(ExplainPlanStatement { stage: Some(LocalPlan), with_options: [], format: None, explainee: ReplanView(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
 EXPLAIN PLAN FOR REPLAN VIEW foo
@@ -105,23 +105,23 @@ EXPLAIN PLAN FOR REPLAN VIEW foo
 parse-statement
 EXPLAIN OPTIMIZED PLAN FOR REPLAN MATERIALIZED VIEW foo
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR REPLAN MATERIALIZED VIEW foo
+EXPLAIN OPTIMIZED PLAN FOR REPLAN MATERIALIZED VIEW foo
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: ReplanMaterializedView(Name(UnresolvedItemName([Ident("foo")]))) })
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: ReplanMaterializedView(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN FOR REPLAN INDEX foo
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR REPLAN INDEX foo
+EXPLAIN OPTIMIZED PLAN FOR REPLAN INDEX foo
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: ReplanIndex(Name(UnresolvedItemName([Ident("foo")]))) })
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: ReplanIndex(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR VIEW foo
 ----
-EXPLAIN LOCALLY OPTIMIZED PLAN AS TEXT FOR VIEW foo
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR VIEW foo
 =>
-ExplainPlan(ExplainPlanStatement { stage: LocalPlan, with_options: [], format: Text, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
+ExplainPlan(ExplainPlanStatement { stage: Some(LocalPlan), with_options: [], format: None, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
 EXPLAIN PLAN FOR VIEW foo
@@ -133,38 +133,38 @@ EXPLAIN PLAN FOR VIEW foo
 parse-statement
 EXPLAIN OPTIMIZED PLAN WITH(types) FOR VIEW foo
 ----
-EXPLAIN OPTIMIZED PLAN WITH (TYPES) AS TEXT FOR VIEW foo
+EXPLAIN OPTIMIZED PLAN WITH (TYPES) FOR VIEW foo
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [ExplainPlanOption { name: Types, value: None }], format: Text, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [ExplainPlanOption { name: Types, value: None }], format: None, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN WITH(arity, types) FOR VIEW foo
 ----
-EXPLAIN OPTIMIZED PLAN WITH (ARITY, TYPES) AS TEXT FOR VIEW foo
+EXPLAIN OPTIMIZED PLAN WITH (ARITY, TYPES) FOR VIEW foo
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [ExplainPlanOption { name: Arity, value: None }, ExplainPlanOption { name: Types, value: None }], format: Text, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [ExplainPlanOption { name: Arity, value: None }, ExplainPlanOption { name: Types, value: None }], format: None, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
 EXPLAIN ((SELECT 1))
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR SELECT 1
+EXPLAIN SELECT 1
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR WITH a AS (SELECT 1) SELECT * FROM a
 ----
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR WITH a AS (SELECT 1) SELECT * FROM a
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("a"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: Some(Text), explainee: Select(SelectStatement { query: Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("a"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 # regression test for #16029
 parse-statement
 EXPLAIN WITH a AS (SELECT 1) SELECT * FROM a
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR WITH a AS (SELECT 1) SELECT * FROM a
+EXPLAIN WITH a AS (SELECT 1) SELECT * FROM a
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("a"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("a"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 parse-statement
 EXPLAIN TIMESTAMP FOR SELECT 1
@@ -176,30 +176,30 @@ ExplainTimestamp(ExplainTimestampStatement { format: Text, select: SelectStateme
 parse-statement
 EXPLAIN AS JSON SELECT * FROM foo
 ----
-EXPLAIN OPTIMIZED PLAN AS JSON FOR SELECT * FROM foo
+EXPLAIN AS JSON SELECT * FROM foo
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Json, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: Some(Json), explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 parse-statement
 EXPLAIN OPTIMIZER TRACE WITH (types) AS TEXT FOR BROKEN SELECT 1 + 1
 ----
 EXPLAIN OPTIMIZER TRACE WITH (TYPES) AS TEXT FOR BROKEN SELECT 1 + 1
 =>
-ExplainPlan(ExplainPlanStatement { stage: Trace, with_options: [ExplainPlanOption { name: Types, value: None }], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, true) })
+ExplainPlan(ExplainPlanStatement { stage: Some(Trace), with_options: [ExplainPlanOption { name: Types, value: None }], format: Some(Text), explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, true) })
 
 parse-statement
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE VIEW mv AS SELECT 665
 ----
-EXPLAIN LOCALLY OPTIMIZED PLAN AS TEXT FOR CREATE VIEW mv AS SELECT 665
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: LocalPlan, with_options: [], format: Text, explainee: CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("mv")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } }, false) })
+ExplainPlan(ExplainPlanStatement { stage: Some(LocalPlan), with_options: [], format: None, explainee: CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("mv")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } }, false) })
 
 parse-statement
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE OR REPLACE VIEW mv AS SELECT 665
 ----
-EXPLAIN LOCALLY OPTIMIZED PLAN AS TEXT FOR CREATE OR REPLACE VIEW mv AS SELECT 665
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE OR REPLACE VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: LocalPlan, with_options: [], format: Text, explainee: CreateView(CreateViewStatement { if_exists: Replace, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("mv")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } }, false) })
+ExplainPlan(ExplainPlanStatement { stage: Some(LocalPlan), with_options: [], format: None, explainee: CreateView(CreateViewStatement { if_exists: Replace, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("mv")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } }, false) })
 
 parse-statement
 EXPLAIN CREATE VIEW mv AS SELECT 665
@@ -211,30 +211,30 @@ EXPLAIN CREATE VIEW mv AS SELECT 665
 parse-statement
 EXPLAIN WITH (humanized expressions) CREATE MATERIALIZED VIEW mv AS SELECT 665
 ----
-EXPLAIN OPTIMIZED PLAN WITH (HUMANIZED EXPRESSIONS) AS TEXT FOR CREATE MATERIALIZED VIEW mv AS SELECT 665
+EXPLAIN WITH (HUMANIZED EXPRESSIONS) CREATE MATERIALIZED VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [ExplainPlanOption { name: HumanizedExpressions, value: None }], format: Text, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, false) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [ExplainPlanOption { name: HumanizedExpressions, value: None }], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, false) })
 
 parse-statement
 EXPLAIN BROKEN CREATE MATERIALIZED VIEW mv AS SELECT 665
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR BROKEN CREATE MATERIALIZED VIEW mv AS SELECT 665
+EXPLAIN BROKEN CREATE MATERIALIZED VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, true) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, true) })
 
 parse-statement
 EXPLAIN BROKEN CREATE DEFAULT INDEX ON q1
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR BROKEN CREATE DEFAULT INDEX ON q1
+EXPLAIN BROKEN CREATE DEFAULT INDEX ON q1
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("q1")])), key_parts: None, with_options: [], if_not_exists: false }, true) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("q1")])), key_parts: None, with_options: [], if_not_exists: false }, true) })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN FOR CREATE INDEX ON v(auction_id)
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR CREATE INDEX ON v (auction_id)
+EXPLAIN OPTIMIZED PLAN FOR CREATE INDEX ON v (auction_id)
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("v")])), key_parts: Some([Identifier([Ident("auction_id")])]), with_options: [], if_not_exists: false }, false) })
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("v")])), key_parts: Some([Identifier([Ident("auction_id")])]), with_options: [], if_not_exists: false }, false) })
 
 parse-statement
 EXPLAIN VALUE SCHEMA AS TEXT FOR CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE UPSERT
@@ -267,9 +267,9 @@ ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Key, statement: Creat
 parse-statement
 EXPLAIN SELECT 665 AS OF 3
 ----
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR SELECT 665 AS OF 3
+EXPLAIN SELECT 665 AS OF 3
 =>
-ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(At(Value(Number("3")))) }, false) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(At(Value(Number("3")))) }, false) })
 
 parse-statement
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value > 10
@@ -281,6 +281,6 @@ ExplainPushdown(ExplainPushdownStatement { explainee: Select(SelectStatement { q
 parse-statement
 EXPLAIN PLAN INSIGHTS FOR SELECT 1
 ----
-EXPLAIN PLAN INSIGHTS AS TEXT FOR SELECT 1
+EXPLAIN PLAN INSIGHTS FOR SELECT 1
 =>
-ExplainPlan(ExplainPlanStatement { stage: PlanInsights, with_options: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+ExplainPlan(ExplainPlanStatement { stage: Some(PlanInsights), with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
