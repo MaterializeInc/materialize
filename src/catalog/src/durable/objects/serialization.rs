@@ -741,16 +741,14 @@ impl RustType<proto::UnfinalizedShardKey> for UnfinalizedShardKey {
     }
 }
 
-// The proto message is called `PersistTxnShardValue` and not `TxnWalShardValue` for historical
-// reasons.
-impl RustType<proto::PersistTxnShardValue> for TxnWalShardValue {
-    fn into_proto(&self) -> proto::PersistTxnShardValue {
-        proto::PersistTxnShardValue {
+impl RustType<proto::TxnWalShardValue> for TxnWalShardValue {
+    fn into_proto(&self) -> proto::TxnWalShardValue {
+        proto::TxnWalShardValue {
             shard: self.shard.to_string(),
         }
     }
 
-    fn from_proto(proto: proto::PersistTxnShardValue) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: proto::TxnWalShardValue) -> Result<Self, TryFromProtoError> {
         Ok(TxnWalShardValue { shard: proto.shard })
     }
 }

@@ -170,14 +170,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v48, v49, v50, v51, v52, v53, v54, v55, v56);
+objects!(v48, v49, v50, v51, v52, v53, v54, v55, v56, v57);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 56;
+pub const CATALOG_VERSION: u64 = 57;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -197,11 +197,13 @@ mod v52_to_v53;
 mod v53_to_v54;
 mod v54_to_v55;
 mod v55_to_v56;
+mod v56_to_v57;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum MigrationAction<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw> {
     /// Deletes the provided key.
+    #[allow(unused)]
     Delete(V1),
     /// Inserts the provided key-value pair. The key must not currently exist!
     #[allow(unused)]
@@ -299,6 +301,9 @@ async fn run_upgrade(
         }
         55 => {
             run_versioned_upgrade(unopened_catalog_state, mode, version, v55_to_v56::upgrade).await
+        }
+        56 => {
+            run_versioned_upgrade(unopened_catalog_state, mode, version, v56_to_v57::upgrade).await
         }
 
         // Up-to-date, no migration needed!

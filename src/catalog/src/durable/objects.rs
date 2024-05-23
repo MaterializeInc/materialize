@@ -784,7 +784,7 @@ pub struct Snapshot {
     pub storage_collection_metadata:
         BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
     pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
-    pub txn_wal_shard: BTreeMap<(), proto::PersistTxnShardValue>,
+    pub txn_wal_shard: BTreeMap<(), proto::TxnWalShardValue>,
 }
 
 impl Snapshot {

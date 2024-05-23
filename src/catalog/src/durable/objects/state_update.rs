@@ -263,7 +263,7 @@ pub enum StateUpdateKind {
         proto::StorageCollectionMetadataValue,
     ),
     UnfinalizedShard(proto::UnfinalizedShardKey, ()),
-    TxnWalShard((), proto::PersistTxnShardValue),
+    TxnWalShard((), proto::TxnWalShardValue),
 }
 
 impl StateUpdateKind {
@@ -437,8 +437,8 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     )
                 }
                 StateUpdateKind::TxnWalShard((), value) => {
-                    proto::state_update_kind::Kind::PersistTxnShard(
-                        proto::state_update_kind::PersistTxnShard {
+                    proto::state_update_kind::Kind::TxnWalShard(
+                        proto::state_update_kind::TxnWalShard {
                             value: Some(value.clone()),
                         },
                     )
@@ -671,14 +671,12 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     })?,
                     (),
                 ),
-                proto::state_update_kind::Kind::PersistTxnShard(
-                    proto::state_update_kind::PersistTxnShard { value },
+                proto::state_update_kind::Kind::TxnWalShard(
+                    proto::state_update_kind::TxnWalShard { value },
                 ) => StateUpdateKind::TxnWalShard(
                     (),
                     value.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "state_update_kind::PersistTxnShard::value",
-                        )
+                        TryFromProtoError::missing_field("state_update_kind::TxnWalShard::value")
                     })?,
                 ),
             },

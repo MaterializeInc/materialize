@@ -2003,7 +2003,7 @@ pub struct TransactionBatch {
         Diff,
     )>,
     pub(crate) unfinalized_shards: Vec<(proto::UnfinalizedShardKey, (), Diff)>,
-    pub(crate) txn_wal_shard: Vec<((), proto::PersistTxnShardValue, Diff)>,
+    pub(crate) txn_wal_shard: Vec<((), proto::TxnWalShardValue, Diff)>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     pub(crate) storage_usage_updates: Vec<(proto::StorageUsageKey, (), Diff)>,
 }

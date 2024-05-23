@@ -274,7 +274,7 @@ collection_impl!({
 collection_impl!({
     name: TxnWalShardCollection,
     key: (),
-    value: proto::PersistTxnShardValue,
+    value: proto::TxnWalShardValue,
     collection_type: CollectionType::TxnWalShard,
     trace_field: txn_wal_shard,
     update: StateUpdateKind::TxnWalShard,
