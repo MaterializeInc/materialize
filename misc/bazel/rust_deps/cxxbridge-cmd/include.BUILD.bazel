@@ -1,0 +1,16 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@cxxbridge//:defs.bzl", "aliases", "all_crate_deps")
+
+rust_binary(
+    name = "cxxbridge-cmd",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    data = [
+        "src/gen/include/cxx.h",
+    ],
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(
+        normal = True,
+    ),
+)
