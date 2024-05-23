@@ -832,7 +832,7 @@ mod tests {
         };
         let ctx_gen = || {
             let indent = Indent::default();
-            let annotations = BTreeMap::new();
+            let annotations = Default::default();
             PlanRenderingContext::<FastPathPlan>::new(indent, &humanizer, annotations, &config)
         };
 

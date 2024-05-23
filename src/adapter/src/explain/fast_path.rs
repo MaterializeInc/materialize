@@ -9,8 +9,6 @@
 
 //! `EXPLAIN` support for [`FastPathPlan`].
 
-use std::collections::BTreeMap;
-
 use mz_expr::explain::{ExplainContext, ExplainMultiPlan};
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 
@@ -44,7 +42,7 @@ impl<'a> Explainable<'a, FastPathPlan> {
             "Explained Query (fast path)".to_string(),
             AnnotatedPlan {
                 plan: self.0,
-                annotations: BTreeMap::default(),
+                annotations: Default::default(),
             },
         )];
 

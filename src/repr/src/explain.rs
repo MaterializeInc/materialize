@@ -31,6 +31,7 @@
 //! not support this `$format`.
 
 use itertools::Itertools;
+use mz_ore::address_map::AddressMap;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -380,7 +381,7 @@ impl<'a> AsRef<&'a dyn ExprHumanizer> for RenderingContext<'a> {
 pub struct PlanRenderingContext<'a, T> {
     pub indent: Indent,
     pub humanizer: &'a dyn ExprHumanizer,
-    pub annotations: BTreeMap<&'a T, Attributes>,
+    pub annotations: AddressMap<'a, T, Attributes>,
     pub config: &'a ExplainConfig,
 }
 
@@ -388,7 +389,7 @@ impl<'a, T> PlanRenderingContext<'a, T> {
     pub fn new(
         indent: Indent,
         humanizer: &'a dyn ExprHumanizer,
-        annotations: BTreeMap<&'a T, Attributes>,
+        annotations: AddressMap<'a, T, Attributes>,
         config: &'a ExplainConfig,
     ) -> PlanRenderingContext<'a, T> {
         PlanRenderingContext {
@@ -613,7 +614,7 @@ pub trait ScalarOps {
 #[allow(missing_debug_implementations)]
 pub struct AnnotatedPlan<'a, T> {
     pub plan: &'a T,
-    pub annotations: BTreeMap<&'a T, Attributes>,
+    pub annotations: AddressMap<'a, T, Attributes>,
 }
 
 /// A container for derived attributes.

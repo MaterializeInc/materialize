@@ -798,7 +798,7 @@ mod non_negative {
 mod column_names {
     use std::ops::Range;
 
-    use super::Analysis;
+    use super::{Analysis, Derived};
     use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
     use mz_repr::explain::ExprHumanizer;
     use mz_repr::GlobalId;
@@ -869,7 +869,7 @@ mod column_names {
             expr: &MirRelationExpr,
             index: usize,
             results: &[Self::Value],
-            depends: &crate::analysis::Derived,
+            depends: &Derived,
         ) -> Self::Value {
             use MirRelationExpr::*;
 
@@ -1060,10 +1060,9 @@ mod column_names {
 mod explain {
     //! Derived attributes framework and definitions.
 
-    use std::collections::BTreeMap;
-
     use mz_expr::explain::ExplainContext;
     use mz_expr::MirRelationExpr;
+    use mz_ore::address_map::AddressMap;
     use mz_ore::stack::RecursionLimitError;
     use mz_repr::explain::{AnnotatedPlan, Attributes};
 
@@ -1105,7 +1104,7 @@ mod explain {
         plan: &'a MirRelationExpr,
         context: &'a ExplainContext,
     ) -> Result<AnnotatedPlan<'a, MirRelationExpr>, RecursionLimitError> {
-        let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
+        let mut annotations = AddressMap::<MirRelationExpr, Attributes>::default();
         let config = context.config;
 
         // We want to annotate the plan with attributes in the following cases:
@@ -1124,7 +1123,7 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::SubtreeSize>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     attrs.subtree_size = Some(*subtree_size);
                 }
             }
@@ -1133,7 +1132,7 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::NonNegative>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     attrs.non_negative = Some(*non_negative);
                 }
             }
@@ -1143,7 +1142,7 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::Arity>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     attrs.arity = Some(*arity);
                 }
             }
@@ -1156,7 +1155,7 @@ mod explain {
                         .unwrap()
                         .into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     attrs.types = Some(types.clone());
                 }
             }
@@ -1166,7 +1165,7 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::UniqueKeys>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     attrs.keys = Some(keys.clone());
                 }
             }
@@ -1176,7 +1175,7 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::Cardinality>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     let value = HumanizedSymbolicExpression::new(card, context.humanizer);
                     attrs.cardinality = Some(value.to_string());
                 }
@@ -1187,7 +1186,7 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::ColumnNames>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     let value = column_names
                         .iter()
                         .map(|column_name| column_name.humanize(context.humanizer))

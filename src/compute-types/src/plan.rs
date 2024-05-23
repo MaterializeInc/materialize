@@ -530,7 +530,7 @@ impl Plan {
         text_string_at(self, || PlanRenderingContext {
             indent: Indent::default(),
             humanizer: humanizer.unwrap_or(&DummyHumanizer),
-            annotations: BTreeMap::default(),
+            annotations: Default::default(),
             config,
         })
     }
