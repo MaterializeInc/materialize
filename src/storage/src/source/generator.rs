@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::time::Duration;
 
@@ -44,41 +45,30 @@ enum GeneratorKind {
     Simple {
         generator: Box<dyn Generator>,
         tick_micros: Option<u64>,
-        // Load generators cannot be rendered until all of their exports are
-        // present.
-        //
-        // TODO(#26765): can this limitation be removed?
-        required_exports: usize,
     },
     KeyValue(KeyValueLoadGenerator),
 }
 
 impl GeneratorKind {
     fn new(g: &LoadGenerator, tick_micros: Option<u64>) -> Self {
-        let required_exports = g.views().len() + 1;
-
         match g {
             LoadGenerator::Auction => GeneratorKind::Simple {
                 generator: Box::new(Auction {}),
                 tick_micros,
-                required_exports,
             },
             LoadGenerator::Counter { max_cardinality } => GeneratorKind::Simple {
                 generator: Box::new(Counter {
                     max_cardinality: max_cardinality.clone(),
                 }),
                 tick_micros,
-                required_exports,
             },
             LoadGenerator::Datums => GeneratorKind::Simple {
                 generator: Box::new(Datums {}),
                 tick_micros,
-                required_exports,
             },
             LoadGenerator::Marketing => GeneratorKind::Simple {
                 generator: Box::new(Marketing {}),
                 tick_micros,
-                required_exports,
             },
             LoadGenerator::Tpch {
                 count_supplier,
@@ -98,17 +88,8 @@ impl GeneratorKind {
                     tick: Duration::from_micros(tick_micros.unwrap_or(0)),
                 }),
                 tick_micros,
-                required_exports,
             },
-            LoadGenerator::KeyValue(kv) => {
-                mz_ore::soft_assert_eq_or_log!(
-                    required_exports,
-                    1,
-                    "KeyValue generators should not have any additional views"
-                );
-
-                GeneratorKind::KeyValue(kv.clone())
-            }
+            LoadGenerator::KeyValue(kv) => GeneratorKind::KeyValue(kv.clone()),
         }
     }
 
@@ -129,15 +110,7 @@ impl GeneratorKind {
             GeneratorKind::Simple {
                 tick_micros,
                 generator,
-                required_exports,
-            } => render_simple_generator(
-                generator,
-                tick_micros,
-                scope,
-                config,
-                committed_uppers,
-                required_exports,
-            ),
+            } => render_simple_generator(generator, tick_micros, scope, config, committed_uppers),
             GeneratorKind::KeyValue(kv) => {
                 key_value::render(kv, scope, config, committed_uppers, start_signal)
             }
@@ -174,7 +147,6 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     scope: &mut G,
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
-    required_exports: usize,
 ) -> (
     Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
     Option<Stream<G, Infallible>>,
@@ -188,15 +160,6 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     let (mut stats_output, stats_stream) = builder.new_output();
 
     let button = builder.build(move |caps| async move {
-        // Do not run the load generator until we have all of our source
-        // exports. Waiting here is fine because we know that their creation and
-        // scheduling of this dataflow is imminent.
-        //
-        // TODO(#26765): can this limitation be removed?
-        if required_exports != config.source_exports.len() {
-            std::future::pending().await
-        }
-
         let [mut cap, stats_cap]: [_; 2] = caps.try_into().unwrap();
 
         if !config.responsible_for(()) {
@@ -236,7 +199,23 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
             None
         };
 
+        // We want to support "partial rendering" of load generator sources.
+        // This change is required to allow that, but is not totally sufficient
+        // because users still don't have a mechanism to express anything other
+        // than `FOR ALL TABLES` for multi-output load generators. This comment
+        // can be tidied up once #26765 lands.
+        let available_exports: BTreeSet<_> = config
+            .source_exports
+            .iter()
+            .map(|(_id, export)| export.output_index)
+            .collect();
+
         while let Some((output, event)) = rows.next() {
+            // Only produce data for available exports.
+            if !available_exports.contains(&output) {
+                continue;
+            }
+
             match event {
                 Event::Message(offset, (value, diff)) => {
                     let message = (
