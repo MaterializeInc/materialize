@@ -979,45 +979,52 @@ pub(crate) struct Cursor {
 }
 
 impl Cursor {
+    /// Get the tuple at the specified pair of indices. If there is no such tuple,
+    /// either because we are out of range or because this tuple has been filtered out,
+    /// this returns `None`.
+    pub fn get<'a, T: Timestamp + Lattice + Codec64>(
+        &self,
+        encoded: &'a EncodedPart<T>,
+    ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
+        let part = encoded.part.updates.get(self.part_idx)?;
+        let ((k, v), t, d) = part.get(self.idx)?;
+
+        let mut t = T::decode(t);
+        // We assert on the write side that at most one of rewrite or
+        // truncation is used, so it shouldn't matter which is run first.
+        //
+        // That said, my (Dan's) intuition here is that rewrite goes first,
+        // though I don't particularly have a justification for it.
+        if let Some(ts_rewrite) = encoded.ts_rewrite.as_ref() {
+            t.advance_by(ts_rewrite.borrow());
+            encoded.metrics.ts_rewrite.inc();
+        }
+
+        // This filtering is really subtle, see the comment above for
+        // what's going on here.
+        let truncated_t = encoded.needs_truncation && {
+            !encoded.registered_desc.lower().less_equal(&t)
+                || encoded.registered_desc.upper().less_equal(&t)
+        };
+        if truncated_t {
+            return None;
+        }
+        Some((k, v, t, d))
+    }
+
     /// A cursor points to a particular update in the backing part data.
     /// If the update it points to is not valid, advance it to the next valid update
     /// if there is one, and return the pointed-to data.
     pub fn peek<'a, T: Timestamp + Lattice + Codec64>(
         &mut self,
-        encoded: &'a EncodedPart<T>,
+        part: &'a EncodedPart<T>,
     ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
-        while let Some(part) = encoded.part.updates.get(self.part_idx) {
-            let ((k, v), t, d) = match part.get(self.idx) {
-                Some(x) => x,
-                None => {
-                    self.part_idx += 1;
-                    self.idx = 0;
-                    continue;
-                }
-            };
-
-            let mut t = T::decode(t);
-            // We assert on the write side that at most one of rewrite or
-            // truncation is used, so it shouldn't matter which is run first.
-            //
-            // That said, my (Dan's) intuition here is that rewrite goes first,
-            // though I don't particularly have a justification for it.
-            if let Some(ts_rewrite) = encoded.ts_rewrite.as_ref() {
-                t.advance_by(ts_rewrite.borrow());
-                encoded.metrics.ts_rewrite.inc();
+        while !self.is_exhausted(part) {
+            let current = self.get(part);
+            if current.is_some() {
+                return current;
             }
-
-            // This filtering is really subtle, see the comment above for
-            // what's going on here.
-            let truncated_t = encoded.needs_truncation && {
-                !encoded.registered_desc.lower().less_equal(&t)
-                    || encoded.registered_desc.upper().less_equal(&t)
-            };
-            if truncated_t {
-                self.idx += 1;
-                continue;
-            }
-            return Some((k, v, t, d));
+            self.advance(part);
         }
         None
     }
@@ -1027,17 +1034,29 @@ impl Cursor {
         &mut self,
         part: &'a EncodedPart<T>,
     ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
-        let update = self.peek(part);
-        if update.is_some() {
-            self.idx += 1;
+        while !self.is_exhausted(part) {
+            let current = self.get(part);
+            self.advance(part);
+            if current.is_some() {
+                return current;
+            }
         }
-        update
+        None
+    }
+
+    /// Returns true if the cursor is past the end of the part data.
+    pub fn is_exhausted<T: Timestamp + Codec64>(&self, part: &EncodedPart<T>) -> bool {
+        self.part_idx >= part.part.updates.len()
     }
 
     /// Advance the cursor just past the end of the most recent update, if there is one.
-    pub fn advance<'a, T: Timestamp + Codec64>(&mut self, part: &'a EncodedPart<T>) {
-        if self.part_idx < part.part.updates.len() {
+    pub fn advance<T: Timestamp + Codec64>(&mut self, part: &EncodedPart<T>) {
+        if let Some(part) = part.part.updates.get(self.part_idx) {
             self.idx += 1;
+            if self.idx >= part.len() {
+                self.part_idx += 1;
+                self.idx = 0;
+            }
         }
     }
 }

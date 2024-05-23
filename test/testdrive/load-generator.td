@@ -48,7 +48,7 @@ exact:COUNTER load generators do not support SCALE FACTOR values
   FROM LOAD GENERATOR AUCTION (AS OF 300, UP TO 301) FOR ALL TABLES;
 
 > SHOW CREATE SOURCE auction_house
-"materialize.public.auction_house" "CREATE SOURCE \"materialize\".\"public\".\"auction_house\" IN CLUSTER \"${arg.single-replica-cluster}\" FROM LOAD GENERATOR AUCTION FOR ALL TABLES EXPOSE PROGRESS AS \"materialize\".\"public\".\"auction_house_progress\""
+"materialize.public.auction_house" "CREATE SOURCE \"materialize\".\"public\".\"auction_house\" IN CLUSTER \"${arg.single-replica-cluster}\" FROM LOAD GENERATOR AUCTION (AS OF = 300, UP TO = 301) FOR ALL TABLES EXPOSE PROGRESS AS \"materialize\".\"public\".\"auction_house_progress\""
 
 > SHOW SOURCES
 accounts                subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}

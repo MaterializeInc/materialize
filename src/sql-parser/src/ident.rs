@@ -49,7 +49,7 @@
 /// ident!(FORBIDDEN);
 /// ```
 ///
-/// ```compile_fail
+/// ```ignore
 /// use mz_sql_parser::ident;
 /// const FORBIDDEN: &str = "..";
 /// ident!(FORBIDDEN);

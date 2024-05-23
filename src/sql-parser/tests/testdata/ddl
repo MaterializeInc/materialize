@@ -2667,28 +2667,28 @@ DROP OWNED BY joe
 ----
 DROP OWNED BY joe
 =>
-DropOwned(DropOwnedStatement { role_names: [Ident("joe")], cascade: false })
+DropOwned(DropOwnedStatement { role_names: [Ident("joe")], cascade: None })
 
 parse-statement
 DROP OWNED BY joe, mike
 ----
 DROP OWNED BY joe, mike
 =>
-DropOwned(DropOwnedStatement { role_names: [Ident("joe"), Ident("mike")], cascade: false })
+DropOwned(DropOwnedStatement { role_names: [Ident("joe"), Ident("mike")], cascade: None })
 
 parse-statement
 DROP OWNED BY joe, mike RESTRICT
 ----
-DROP OWNED BY joe, mike
+DROP OWNED BY joe, mike RESTRICT
 =>
-DropOwned(DropOwnedStatement { role_names: [Ident("joe"), Ident("mike")], cascade: false })
+DropOwned(DropOwnedStatement { role_names: [Ident("joe"), Ident("mike")], cascade: Some(false) })
 
 parse-statement
 DROP OWNED BY joe, mike CASCADE
 ----
 DROP OWNED BY joe, mike CASCADE
 =>
-DropOwned(DropOwnedStatement { role_names: [Ident("joe"), Ident("mike")], cascade: true })
+DropOwned(DropOwnedStatement { role_names: [Ident("joe"), Ident("mike")], cascade: Some(true) })
 
 parse-statement
 ALTER INDEX IF EXISTS alter_index_table_primary_idx SET (RETAIN HISTORY = FOR '1ms')

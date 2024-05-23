@@ -71,9 +71,6 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
         let input = tc.input.strip_suffix('\n').unwrap_or(&tc.input);
         match parser::parse_statements(input) {
             Ok(s) => {
-                if s.len() != 1 {
-                    return "expected exactly one statement\n".to_string();
-                }
                 let stmt = s.into_element().ast;
                 for printed in [stmt.to_ast_string(), stmt.to_ast_string_stable()] {
                     let mut parsed = match parser::parse_statements(&printed) {

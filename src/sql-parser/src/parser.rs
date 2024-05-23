@@ -4123,10 +4123,13 @@ impl<'a> Parser<'a> {
     fn parse_drop_owned(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(BY)?;
         let role_names = self.parse_comma_separated(Parser::parse_identifier)?;
-        let cascade = matches!(
-            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
-            Some(CASCADE),
-        );
+        let cascade = if self.parse_keyword(CASCADE) {
+            Some(true)
+        } else if self.parse_keyword(RESTRICT) {
+            Some(false)
+        } else {
+            None
+        };
         Ok(Statement::DropOwned(DropOwnedStatement {
             role_names,
             cascade,
@@ -7615,14 +7618,14 @@ impl<'a> Parser<'a> {
 
         let format = if self.parse_keyword(AS) {
             match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
-                Some(TEXT) => ExplainFormat::Text,
-                Some(JSON) => ExplainFormat::Json,
-                Some(DOT) => ExplainFormat::Dot,
+                Some(TEXT) => Some(ExplainFormat::Text),
+                Some(JSON) => Some(ExplainFormat::Json),
+                Some(DOT) => Some(ExplainFormat::Dot),
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }
         } else {
-            ExplainFormat::Text
+            None
         };
 
         if has_stage {
@@ -7639,7 +7642,7 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Statement::ExplainPlan(ExplainPlanStatement {
-            stage: stage.unwrap_or_else(|| ExplainStage::GlobalPlan),
+            stage,
             with_options,
             format,
             explainee,
@@ -7670,13 +7673,13 @@ impl<'a> Parser<'a> {
     fn parse_explain_timestamp(&mut self) -> Result<Statement<Raw>, ParserError> {
         let format = if self.parse_keyword(AS) {
             match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
-                Some(TEXT) => ExplainFormat::Text,
-                Some(JSON) => ExplainFormat::Json,
+                Some(TEXT) => Some(ExplainFormat::Text),
+                Some(JSON) => Some(ExplainFormat::Json),
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }
         } else {
-            ExplainFormat::Text
+            None
         };
 
         self.expect_keyword(FOR)?;
@@ -7699,16 +7702,20 @@ impl<'a> Parser<'a> {
 
         self.expect_keyword(SCHEMA)?;
 
-        if self.parse_keyword(AS) {
+        let format = if self.parse_keyword(AS) {
             // only json format is supported
             self.expect_keyword(JSON)?;
-        }
+            Some(ExplainFormat::Json)
+        } else {
+            None
+        };
 
         self.expect_keywords(&[FOR, CREATE])?;
 
         if let Statement::CreateSink(statement) = self.parse_create_sink()? {
             Ok(Statement::ExplainSinkSchema(ExplainSinkSchemaStatement {
                 schema_for,
+                format,
                 statement,
             }))
         } else {
