@@ -70,7 +70,7 @@ CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP MATERIALIZED VIEW"}
@@ -87,14 +87,14 @@ CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE MATERIALIZED VIEW"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP INDEX"}
@@ -323,10 +323,10 @@ CommandComplete {"tag":"CREATE DATABASE"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for CLUSTER \"quickstart\""}]}
-NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for DATABASE \"materialize\""}]}
-NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for SCHEMA \"materialize.public\""}]}
-NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for SYSTEM"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01006"},{"typ":"M","value":"no privileges could be revoked for CLUSTER \"quickstart\""}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01006"},{"typ":"M","value":"no privileges could be revoked for DATABASE \"materialize\""}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01006"},{"typ":"M","value":"no privileges could be revoked for SCHEMA \"materialize.public\""}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01006"},{"typ":"M","value":"no privileges could be revoked for SYSTEM"}]}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ002"},{"typ":"M","value":"active database \"d4\" has been dropped"}]}
 CommandComplete {"tag":"DROP OWNED"}
 ReadyForQuery {"status":"I"}
@@ -388,10 +388,10 @@ CommandComplete {"tag":"CREATE CLUSTER"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for CLUSTER \"quickstart\""}]}
-NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for DATABASE \"materialize\""}]}
-NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for SCHEMA \"materialize.public\""}]}
-NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for SYSTEM"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01006"},{"typ":"M","value":"no privileges could be revoked for CLUSTER \"quickstart\""}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01006"},{"typ":"M","value":"no privileges could be revoked for DATABASE \"materialize\""}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01006"},{"typ":"M","value":"no privileges could be revoked for SCHEMA \"materialize.public\""}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01006"},{"typ":"M","value":"no privileges could be revoked for SYSTEM"}]}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"MZ003"},{"typ":"M","value":"active cluster \"c4\" has been dropped"}]}
 CommandComplete {"tag":"DROP OWNED"}
 ReadyForQuery {"status":"I"}
