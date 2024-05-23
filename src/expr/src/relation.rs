@@ -80,6 +80,9 @@ pub trait CollectionPlan {
     }
 }
 
+/// An identifier for an MIR node.
+pub type MirId = u64;
+
 /// An abstract syntax tree which defines a collection.
 ///
 /// The AST is meant to reflect the capabilities of the `differential_dataflow::Collection` type,

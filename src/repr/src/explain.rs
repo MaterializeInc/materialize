@@ -227,7 +227,8 @@ impl Default for ExplainConfig {
 
 impl ExplainConfig {
     pub fn requires_attributes(&self) -> bool {
-        self.subtree_size
+        self.node_ids
+            || self.subtree_size
             || self.non_negative
             || self.arity
             || self.types
@@ -621,6 +622,7 @@ pub struct AnnotatedPlan<'a, T> {
 #[derive(Clone, Default, Debug)]
 pub struct Attributes {
     pub non_negative: Option<bool>,
+    pub mir_id: Option<u64>, // TODO: use MirId
     pub subtree_size: Option<usize>,
     pub arity: Option<usize>,
     pub types: Option<Option<Vec<ColumnType>>>,
@@ -653,6 +655,11 @@ impl<'a> fmt::Display for HumanizedAttributes<'a> {
     // don't want to display them.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut builder = f.debug_struct("//");
+
+        if self.config.node_ids {
+            let mir_id = self.attrs.mir_id.expect("mir_id");
+            builder.field("mir_id", &mir_id);
+        }
 
         if self.config.subtree_size {
             let subtree_size = self.attrs.subtree_size.expect("subtree_size");

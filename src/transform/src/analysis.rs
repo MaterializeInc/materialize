@@ -19,6 +19,7 @@ pub use arity::Arity;
 pub use cardinality::Cardinality;
 pub use column_names::{ColumnName, ColumnNames};
 pub use explain::annotate_plan;
+pub use node_ids::NodeIds;
 pub use non_negative::NonNegative;
 pub use subtree::SubtreeSize;
 pub use types::RelationType;
@@ -502,6 +503,32 @@ pub mod common {
         fn derive(&self, expr: &MirRelationExpr, index: usize, depends: &Derived) -> A::Value {
             self.analysis
                 .derive(expr, index, &self.results[..], depends)
+        }
+    }
+}
+
+/// Expression IDs in post-order.
+pub mod node_ids {
+
+    use super::{Analysis, Derived};
+    use mz_expr::{MirId, MirRelationExpr};
+    use mz_ore::cast::CastFrom;
+
+    /// Analysis that determines the size in child expressions of relation expressions.
+    #[derive(Debug)]
+    pub struct NodeIds;
+
+    impl Analysis for NodeIds {
+        type Value = MirId;
+
+        fn derive(
+            &self,
+            _expr: &MirRelationExpr,
+            index: usize,
+            _results: &[Self::Value],
+            _depends: &Derived,
+        ) -> Self::Value {
+            u64::cast_from(index)
         }
     }
 }
@@ -1073,6 +1100,9 @@ mod explain {
     impl<'c> From<&ExplainContext<'c>> for DerivedBuilder<'c> {
         fn from(context: &ExplainContext<'c>) -> DerivedBuilder<'c> {
             let mut builder = DerivedBuilder::new(context.features);
+            if context.config.node_ids {
+                builder.require(super::NodeIds);
+            }
             if context.config.subtree_size {
                 builder.require(super::SubtreeSize);
             }
@@ -1118,6 +1148,16 @@ mod explain {
             let builder = DerivedBuilder::from(context);
             let derived = builder.visit(plan);
 
+            if config.node_ids {
+                for (expr, mir_id) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::NodeIds>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry_or_default(expr);
+                    attrs.mir_id = Some(*mir_id);
+                }
+            }
+
             if config.subtree_size {
                 for (expr, subtree_size) in std::iter::zip(
                     subtree_refs.iter(),
@@ -1127,6 +1167,7 @@ mod explain {
                     attrs.subtree_size = Some(*subtree_size);
                 }
             }
+
             if config.non_negative {
                 for (expr, non_negative) in std::iter::zip(
                     subtree_refs.iter(),
