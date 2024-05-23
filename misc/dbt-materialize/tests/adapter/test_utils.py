@@ -23,6 +23,7 @@ from dbt.tests.adapter.utils.fixture_date_spine import (
 from dbt.tests.adapter.utils.fixture_get_intervals_between import (
     models__test_get_intervals_between_yml,
 )
+from dbt.tests.adapter.utils.test_cast import BaseCast
 from dbt.tests.adapter.utils.test_cast_bool_to_text import BaseCastBoolToText
 from dbt.tests.adapter.utils.test_current_timestamp import BaseCurrentTimestampAware
 from dbt.tests.adapter.utils.test_date_spine import BaseDateSpine
@@ -95,6 +96,11 @@ SELECT
     {{ get_intervals_between("'2023-09-01'::date", "'2023-09-12'::date", "day") }} as intervals,
   11 as expected
 """
+
+
+class TestCast(BaseCast):
+    pass
+
 
 # The `cast_bool_to_text` macro works as expected, but we must alter the test case
 # because set operation type conversions do not work properly.

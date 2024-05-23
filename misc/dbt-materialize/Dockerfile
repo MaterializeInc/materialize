@@ -11,4 +11,5 @@ FROM python:3.8.6
 
 COPY . dbt-materialize/
 
+RUN pip install pytest
 RUN pip install ./dbt-materialize[dev]

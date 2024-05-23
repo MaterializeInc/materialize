@@ -19,7 +19,7 @@ using [dbt](/manage/dbt/) as your deployment tool.
 
 When you're prototyping your use case and fine-tuning the underlying data model,
 your priority is **iteration speed**. dbt has many features that can help speed
-up development, like [node selection](#node-selection) and [model preview](#preview-model-results).
+up development, like [node selection](#node-selection) and [model preview](#model-results-preview).
 Before you start, we recommend getting familiar with how these features
 work with the `dbt-materialize` adapter to make the most of your development
 time.
@@ -97,7 +97,7 @@ dbt run --select "path/to/my_model.sql"  # runs a specific model by its path
 
 For a full rundown of selection logic options, check the [dbt documentation](https://docs.getdbt.com/reference/node-selection/syntax).
 
-### Preview model results
+### Model results preview
 
 {{< note >}}
 The `dbt show` command uses a `LIMIT` clause under the hood, which has
@@ -133,6 +133,145 @@ result (i.e. `LIMIT 5`). You can adjust the number of rows returned using the
 It's important to note that previewing results compiles the model and runs the
 compiled SQL against Materialize; it doesn't query the already-materialized
 database relation (see [`dbt-core` #7391](https://github.com/dbt-labs/dbt-core/issues/7391)).
+
+### Unit tests
+
+**Minimum requirements:** `dbt-materialize` v1.8.0+
+
+{{< note >}}
+Complex types like [`map`](/sql/types/map/) and [`list`](/sql/types/list/) are
+not supported in unit tests yet (see [`dbt-adapters` #113](https://github.com/dbt-labs/dbt-adapters/issues/113)).
+For an overview of other known limitations, check the [dbt documentation](https://docs.getdbt.com/docs/build/unit-tests#before-you-begin).
+{{</ note >}}
+
+To validate your SQL logic without fully materializing a model, as well as
+future-proof it against edge cases, you can use [unit tests](https://docs.getdbt.com/docs/build/unit-tests).
+Unit tests can be a **quicker way to iterate on model development** in
+comparison to re-running the models, since you don't need to wait for a model
+to hydrate before you can validate that it produces the expected results.
+
+1. As an example, imagine your dbt project includes the following models:
+
+   **Filename:** _models/my_model_a.sql_
+   ```sql
+   SELECT
+     1 AS a,
+     1 AS id,
+     2 AS not_testing,
+     'a' AS string_a,
+     DATE '2020-01-02' AS date_a
+   ```
+
+   **Filename:** _models/my_model_b.sql_
+   ```sql
+   SELECT
+     2 as b,
+     1 as id,
+     2 as c,
+     'b' as string_b
+   ```
+
+   **Filename:** models/my_model.sql
+   ```sql
+   SELECT
+     a+b AS c,
+     CONCAT(string_a, string_b) AS string_c,
+     not_testing,
+     date_a
+   FROM {{ ref('my_model_a')}} my_model_a
+   JOIN {{ ref('my_model_b' )}} my_model_b
+   ON my_model_a.id = my_model_b.id
+   ```
+
+1. To add a unit test to `my_model`, create a `.yml` file under the `/models`
+   directory, and use the [`unit_tests`](https://docs.getdbt.com/reference/resource-properties/unit-tests)
+   property:
+
+   **Filename:** _models/unit_tests.yml_
+   ```yaml
+   unit_tests:
+     - name: test_my_model
+       model: my_model
+       given:
+         - input: ref('my_model_a')
+           rows:
+             - {id: 1, a: 1}
+         - input: ref('my_model_b')
+           rows:
+             - {id: 1, b: 2}
+             - {id: 2, b: 2}
+       expect:
+         rows:
+           - {c: 2}
+   ```
+
+   For simplicity, this example provides mock data using inline dictionary
+   values, but other formats are supported. Check the [dbt documentation](https://docs.getdbt.com/reference/resource-properties/data-formats)
+   for a full rundown of the available options.
+
+1. Run the unit tests using `dbt test`:
+
+    ```bash
+    dbt test --select test_type:unit
+
+    12:30:14  Running with dbt=1.8.0
+    12:30:14  Registered adapter: materialize=1.8.0
+    12:30:14  Found 6 models, 1 test, 4 seeds, 1 source, 471 macros, 1 unit test
+    12:30:14
+    12:30:16  Concurrency: 1 threads (target='dev')
+    12:30:16
+    12:30:16  1 of 1 START unit_test my_model::test_my_model ................................. [RUN]
+    12:30:17  1 of 1 FAIL 1 my_model::test_my_model .......................................... [FAIL 1 in 1.51s]
+    12:30:17
+    12:30:17  Finished running 1 unit test in 0 hours 0 minutes and 2.77 seconds (2.77s).
+    12:30:17
+    12:30:17  Completed with 1 error and 0 warnings:
+    12:30:17
+    12:30:17  Failure in unit_test test_my_model (models/models/unit_tests.yml)
+    12:30:17
+
+    actual differs from expected:
+
+    @@ ,c
+    +++,3
+    ---,2
+    ```
+
+    It's important to note that the **direct upstream dependencies** of the
+    model that you're unit testing **must exist** in Materialize before you can
+    execute the unit test via `dbt test`. To ensure these dependencies exist,
+    you can use the `--empty` flag to build an empty version of the models:
+
+    ```bash
+    dbt run --select "my_model_a.sql" "my_model_b.sql" --empty
+    ```
+
+    Alternatively, you can execute unit tests as part of the `dbt build`
+    command, which will ensure the upstream depdendencies are created before
+    any unit tests are executed:
+
+    ```bash
+    dbt build --select "+my_model.sql"
+
+    11:53:30  Running with dbt=1.8.0
+    11:53:30  Registered adapter: materialize=1.8.0
+    ...
+    11:53:33  2 of 12 START sql view model public.my_model_a ................................. [RUN]
+    11:53:34  2 of 12 OK created sql view model public.my_model_a ............................ [CREATE VIEW in 0.49s]
+    11:53:34  3 of 12 START sql view model public.my_model_b ................................. [RUN]
+    11:53:34  3 of 12 OK created sql view model public.my_model_b ............................ [CREATE VIEW in 0.45s]
+    ...
+    11:53:35  11 of 12 START unit_test my_model::test_my_model ............................... [RUN]
+    11:53:36  11 of 12 FAIL 1 my_model::test_my_model ........................................ [FAIL 1 in 0.84s]
+    11:53:36  Failure in unit_test test_my_model (models/models/unit_tests.yml)
+    11:53:36
+
+    actual differs from expected:
+
+    @@ ,c
+    +++,3
+    ---,2
+    ```
 
 ## Deployment
 

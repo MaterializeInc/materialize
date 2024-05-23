@@ -571,22 +571,18 @@ and correct results** with millisecond latency whenever you query your views.
 [//]: # "TODO(morsapaes) Call out the cluster configuration for tests and
 store_failures_as once this page is rehashed."
 
-[//]: # "TODO(morsapaes) Add instructions for unit testing after the upcoming
-v1.8 release of dbt Core."
-
 ### Configure continuous testing
 
 Using dbt in a streaming context means that you're able to run data quality and
 integrity [tests](https://docs.getdbt.com/docs/building-a-dbt-project/tests)
-non-stop, and monitor failures as soon as they happen. This is useful for unit
-testing during the development of your dbt models, and later in production to
+non-stop. This is useful to monitor failures as soon as they happen, and
 trigger **real-time alerts** downstream.
 
-1. To configure your project for continuous testing, add a `tests` property to
+1. To configure your project for continuous testing, add a `data_tests` property to
    `dbt_project.yml` with the `store_failures` configuration:
 
     ```yaml
-    tests:
+    data_tests:
       dbt_project.name:
         models:
           +store_failures: true
@@ -601,7 +597,7 @@ trigger **real-time alerts** downstream.
     **Note:** As an alternative, you can specify the `--store-failures` flag
       when running `dbt test`.
 
-1. Add tests to your models using the `tests` property in the model
+1. Add tests to your models using the `data_tests` property in the model
    configuration `.yml` files:
 
     ```yaml
@@ -611,7 +607,7 @@ trigger **real-time alerts** downstream.
         columns:
           - name: col_a
             description: 'column a description'
-            tests:
+            data_tests:
               - not_null
               - unique
     ```
@@ -623,7 +619,7 @@ trigger **real-time alerts** downstream.
 1. Run the tests:
 
     ```bash
-    dbt test
+    dbt test # use --select test_type:data to only run data tests!
     ```
 
     When configured to `store_failures`, this command will create a materialized

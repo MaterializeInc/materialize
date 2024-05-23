@@ -13,22 +13,15 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro get_test_sql(main_sql, fail_calc, warn_if, error_if, limit, cluster) -%}
-    {% if cluster %}
-        {% call statement(auto_begin=True) %}
-            set cluster = {{ cluster }}
-        {% endcall %}
-    {% endif %}
-
-  {{ adapter.dispatch('get_test_sql', 'dbt')(main_sql, fail_calc, warn_if, error_if, limit) }}
-{%- endmacro %}
-
-{% macro get_unit_test_sql(main_sql, expected_fixture_sql, expected_column_names, cluster) -%}
-    {% if cluster %}
-        {% call statement(auto_begin=True) %}
-            set cluster = {{ cluster }}
-        {% endcall %}
-    {% endif %}
-
-  {{ adapter.dispatch('get_unit_test_sql', 'dbt')(main_sql, expected_fixture_sql, expected_column_names) }}
+{% macro materialize__cast(expression, data_type) -%}
+    {#-- Handle types that don't support cast(NULL as type) --#}
+    {%- if expression.strip().lower() == "null" and data_type.strip().lower() == "map" -%}
+      NULL::map[text => text]
+    {%- elif expression.strip().lower() == "null" and data_type.strip().lower() == "list" -%}
+       NULL::text list
+    {%- elif expression.strip().lower() == "null" and data_type.strip().lower() == "record" -%}
+      (SELECT row() WHERE false)
+    {%- else -%}
+      cast({{ expression }} as {{ data_type }})
+    {%- endif -%}
 {%- endmacro %}

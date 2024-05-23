@@ -17,13 +17,12 @@
 from dataclasses import dataclass
 from typing import Optional
 
+import dbt_common.exceptions
 import psycopg2
+from dbt_common.semver import versions_compatible
 
-import dbt.adapters.postgres.connections
-import dbt.exceptions
+from dbt.adapters.events.logging import AdapterLogger
 from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
-from dbt.events import AdapterLogger
-from dbt.semver import versions_compatible
 
 # If you bump this version, bump it in README.md too.
 SUPPORTED_MATERIALIZE_VERSIONS = ">=0.68.0"
@@ -97,7 +96,7 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         mz_version = mz_version.split()[0]  # e.g. v0.79.0-dev
         mz_version = mz_version[1:]  # e.g. 0.79.0-dev
         if not versions_compatible(mz_version, SUPPORTED_MATERIALIZE_VERSIONS):
-            raise dbt.exceptions.DbtRuntimeError(
+            raise dbt_common.exceptions.DbtRuntimeError(
                 f"Detected unsupported Materialize version {mz_version}\n"
                 f"  Supported versions: {SUPPORTED_MATERIALIZE_VERSIONS}"
             )

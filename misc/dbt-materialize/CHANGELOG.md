@@ -1,5 +1,16 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Update base adapter references as part of
+  [decoupling migration from dbt-core](https://github.com/dbt-labs/dbt-adapters/discussions/87)
+  * Migrate to dbt-common and dbt-adapters packages.
+  * Add tests for `--empty` flag as part of [dbt-labs/dbt-core#8971](https://github.com/dbt-labs/dbt-core/pull/8971)
+  * Add functional tests for unit testing.
+* Support enforcing model contracts for the [`map`](https://materialize.com/docs/sql/types/map/),
+  [`list`](https://materialize.com/docs/sql/types/list/),
+  and [`record`](https://materialize.com/docs/sql/types/record/) pseudo-types.
+
 ## 1.7.8 - 2024-05-06
 
 * Fix permission management in blue/green automation macros for non-admin users
@@ -7,7 +18,7 @@
 
 ## 1.7.7 - 2024-04-19
 
-* Tweak [`deploy_permission_validation]`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_permission_validation.sql)
+* Tweak [`deploy_permission_validation`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_permission_validation.sql)
   macro to work around [#26738](https://github.com/MaterializeInc/materialize/issues/26738).
 
 ## 1.7.6 - 2024-04-18

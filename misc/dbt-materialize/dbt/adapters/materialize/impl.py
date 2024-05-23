@@ -17,7 +17,13 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-import dbt.exceptions
+import dbt_common.exceptions
+from dbt_common.contracts.constraints import (
+    ColumnLevelConstraint,
+    ConstraintType,
+)
+from dbt_common.dataclass_schema import ValidationError, dbtClassMixin
+
 from dbt.adapters.base.impl import AdapterConfig, ConstraintSupport
 from dbt.adapters.base.meta import available
 from dbt.adapters.capability import (
@@ -32,14 +38,9 @@ from dbt.adapters.materialize.exceptions import (
     RefreshIntervalConfigNotDictError,
 )
 from dbt.adapters.materialize.relation import MaterializeRelation
-from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.postgres.column import PostgresColumn
+from dbt.adapters.postgres.impl import PostgresAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
-from dbt.contracts.graph.nodes import (
-    ColumnLevelConstraint,
-    ConstraintType,
-)
-from dbt.dataclass_schema import ValidationError, dbtClassMixin
 
 
 # types in ./misc/dbt-materialize need to import generic types from typing
@@ -58,10 +59,12 @@ class MaterializeIndexConfig(dbtClassMixin):
             cls.validate(raw_index)
             return cls.from_dict(raw_index)
         except ValidationError as exc:
-            msg = dbt.exceptions.validator_error_message(exc)
-            dbt.exceptions.CompilationError(f"Could not parse index config: {msg}")
+            msg = dbt_common.exceptions.validator_error_message(exc)
+            dbt_common.exceptions.CompilationError(
+                f"Could not parse index config: {msg}"
+            )
         except TypeError:
-            dbt.exceptions.CompilationError(
+            dbt_common.exceptions.CompilationError(
                 "Invalid index config:\n"
                 f"  Got: {raw_index}\n"
                 '  Expected a dictionary with at minimum a "columns" key'
