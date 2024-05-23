@@ -43,7 +43,7 @@ use mz_secrets::SecretsController;
 use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use openssl::asn1::Asn1Time;
@@ -530,7 +530,7 @@ impl Listeners {
                 deploy_generation: config.deploy_generation,
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
-                persist_txn_tables_cli: Some(PersistTxnTablesImpl::Lazy),
+                txn_wal_tables_cli: Some(TxnWalTablesImpl::Lazy),
                 reload_certs,
             })
             .await?;

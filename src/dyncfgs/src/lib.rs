@@ -27,7 +27,7 @@ use mz_dyncfg::ConfigSet;
 pub fn all_dyncfgs() -> ConfigSet {
     let mut configs = ConfigSet::default();
     configs = mz_persist_client::cfg::all_dyncfgs(configs);
-    configs = mz_persist_txn::all_dyncfgs(configs);
+    configs = mz_txn_wal::all_dyncfgs(configs);
     configs = mz_compute_types::dyncfgs::all_dyncfgs(configs);
     configs = mz_adapter_types::dyncfgs::all_dyncfgs(configs);
     configs = mz_storage_types::dyncfgs::all_dyncfgs(configs);

@@ -31,10 +31,10 @@ use mz_sql::catalog::{
 use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageTxn;
-use mz_storage_types::controller::{PersistTxnTablesImpl, StorageError};
+use mz_storage_types::controller::{StorageError, TxnWalTablesImpl};
 
 use crate::builtin::BuiltinLog;
-use crate::durable::initialize::{PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY};
+use crate::durable::initialize::{SYSTEM_CONFIG_SYNCED_KEY, TXN_WAL_TABLES};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
@@ -42,11 +42,11 @@ use crate::durable::objects::{
     ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
     Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, PersistTxnShardValue, ReplicaConfig, Role,
-    RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, StorageUsageKey, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, UnfinalizedShardKey,
+    IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
+    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    SettingValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue, StorageUsageKey,
+    SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
+    TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
@@ -85,7 +85,7 @@ pub struct Transaction<'a> {
     storage_collection_metadata:
         TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
     unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
-    persist_txn_shard: TableTransaction<(), PersistTxnShardValue>,
+    txn_wal_shard: TableTransaction<(), TxnWalShardValue>,
     // Don't make this a table transaction so that it's not read into the
     // in-memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
@@ -115,7 +115,7 @@ impl<'a> Transaction<'a> {
             system_privileges,
             storage_collection_metadata,
             unfinalized_shards,
-            persist_txn_shard,
+            txn_wal_shard,
         }: Snapshot,
     ) -> Result<Transaction, CatalogError> {
         Ok(Transaction {
@@ -156,7 +156,7 @@ impl<'a> Transaction<'a> {
             // Uniqueness violations for this value occur at the key rather than
             // the value (the key is the unit struct `()` so this is a singleton
             // value).
-            persist_txn_shard: TableTransaction::new(persist_txn_shard, |_a, _b| false)?,
+            txn_wal_shard: TableTransaction::new(txn_wal_shard, |_a, _b| false)?,
             audit_log_updates: Vec::new(),
             storage_usage_updates: Vec::new(),
             op_id: 0,
@@ -1557,16 +1557,13 @@ impl<'a> Transaction<'a> {
         val
     }
 
-    /// Updates the catalog `persist_txn_tables` "config" value to
-    /// match the `persist_txn_tables` "system var" value.
+    /// Updates the catalog `txn_wal_tables` "config" value to
+    /// match the `txn_wal_tables` "system var" value.
     ///
     /// These are mirrored so that we can toggle the flag with Launch Darkly,
     /// but use it in boot before Launch Darkly is available.
-    pub fn set_persist_txn_tables(
-        &mut self,
-        value: PersistTxnTablesImpl,
-    ) -> Result<(), CatalogError> {
-        self.set_config(PERSIST_TXN_TABLES.into(), Some(u64::from(value)))?;
+    pub fn set_txn_wal_tables(&mut self, value: TxnWalTablesImpl) -> Result<(), CatalogError> {
+        self.set_config(TXN_WAL_TABLES.into(), Some(u64::from(value)))?;
         Ok(())
     }
 
@@ -1784,7 +1781,7 @@ impl<'a> Transaction<'a> {
             system_privileges: self.system_privileges.pending(),
             storage_collection_metadata: self.storage_collection_metadata.pending(),
             unfinalized_shards: self.unfinalized_shards.pending(),
-            persist_txn_shard: self.persist_txn_shard.pending(),
+            txn_wal_shard: self.txn_wal_shard.pending(),
             audit_log_updates: self.audit_log_updates,
             storage_usage_updates: self.storage_usage_updates,
         };
@@ -1824,7 +1821,7 @@ impl<'a> Transaction<'a> {
             system_privileges,
             storage_collection_metadata,
             unfinalized_shards,
-            persist_txn_shard,
+            txn_wal_shard,
             audit_log_updates,
             storage_usage_updates,
         } = &mut txn_batch;
@@ -1847,7 +1844,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(system_privileges);
         differential_dataflow::consolidation::consolidate_updates(storage_collection_metadata);
         differential_dataflow::consolidation::consolidate_updates(unfinalized_shards);
-        differential_dataflow::consolidation::consolidate_updates(persist_txn_shard);
+        differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
         differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
         durable_catalog.commit_transaction(txn_batch).await
@@ -1945,22 +1942,22 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
         );
     }
 
-    fn get_persist_txn_shard(&self) -> Option<String> {
-        let items = self.persist_txn_shard.items();
+    fn get_txn_wal_shard(&self) -> Option<String> {
+        let items = self.txn_wal_shard.items();
         items
             .into_values()
             .next()
-            .map(|PersistTxnShardValue { shard }| shard)
+            .map(|TxnWalShardValue { shard }| shard)
     }
 
-    fn write_persist_txn_shard(
+    fn write_txn_wal_shard(
         &mut self,
         shard: String,
     ) -> Result<(), StorageError<mz_repr::Timestamp>> {
-        self.persist_txn_shard
-            .insert((), PersistTxnShardValue { shard }, self.op_id)
+        self.txn_wal_shard
+            .insert((), TxnWalShardValue { shard }, self.op_id)
             .map_err(|err| match err {
-                DurableCatalogError::DuplicateKey => StorageError::PersistTxnShardAlreadyExists,
+                DurableCatalogError::DuplicateKey => StorageError::TxnWalShardAlreadyExists,
                 err => StorageError::Generic(anyhow::anyhow!(err)),
             })
     }
@@ -2006,7 +2003,7 @@ pub struct TransactionBatch {
         Diff,
     )>,
     pub(crate) unfinalized_shards: Vec<(proto::UnfinalizedShardKey, (), Diff)>,
-    pub(crate) persist_txn_shard: Vec<((), proto::PersistTxnShardValue, Diff)>,
+    pub(crate) txn_wal_shard: Vec<((), proto::TxnWalShardValue, Diff)>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     pub(crate) storage_usage_updates: Vec<(proto::StorageUsageKey, (), Diff)>,
 }

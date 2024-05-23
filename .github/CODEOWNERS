@@ -87,7 +87,6 @@
 /src/persist                        @MaterializeInc/persist
 /src/persist-cli                    @MaterializeInc/persist
 /src/persist-client                 @MaterializeInc/persist
-/src/persist-txn                    @MaterializeInc/persist
 /src/persist-types                  @MaterializeInc/persist
 /src/pgcopy                         @MaterializeInc/adapter
 /src/pgrepr                         @MaterializeInc/adapter
@@ -131,6 +130,7 @@
 /src/testdrive                      @MaterializeInc/testing
 /src/timely-util                    @MaterializeInc/compute
 /src/transform                      @MaterializeInc/compute
+/src/txn-wal                        @aljoscha @danhhz @jkosh44
 /src/walkabout                      @benesch
 /src/workspace-hack                 @benesch
 /test

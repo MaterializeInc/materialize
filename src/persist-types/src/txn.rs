@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Types for the persist-txn crate.
+//! Types for the txn-wal crate.
 
 use std::fmt::Debug;
 

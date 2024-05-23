@@ -85,7 +85,7 @@ dependencies = [
 [[deny]]
 name = "mz-storage-types"
 dependencies = [
-    "mz-persist-txn",
+    "mz-txn-wal",
 ]
 
 # Keep various crates in only one of environmentd or clusterd.

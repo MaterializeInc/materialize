@@ -11,12 +11,12 @@
 
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::read::{Cursor, LazyPartStats, ReadHandle, Since};
-use mz_persist_txn::txn_cache::TxnsCache;
 use mz_repr::{Diff, RelationDesc, Row, Timestamp};
 use mz_storage_types::controller::TxnsCodecRow;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::RelationPartStats;
+use mz_txn_wal::txn_cache::TxnsCache;
 use timely::progress::Antichain;
 
 /// This is a streaming-consolidating cursor type specialized to `RelationDesc`.
@@ -34,9 +34,9 @@ pub struct StatsCursor {
 impl StatsCursor {
     pub async fn new(
         handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
-        // If and only if we are using persist-txn to manage this shard, then
+        // If and only if we are using txn-wal to manage this shard, then
         // this must be Some. This is because the upper might be advanced lazily
-        // and we have to go through persist-txn for reads.
+        // and we have to go through txn-wal for reads.
         txns_read: Option<&mut TxnsCache<Timestamp, TxnsCodecRow>>,
         metrics: &Metrics,
         desc: &RelationDesc,

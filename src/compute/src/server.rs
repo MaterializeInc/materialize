@@ -29,8 +29,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_txn::operator::TxnsContext;
 use mz_storage_types::connections::ConnectionContext;
+use mz_txn_wal::operator::TxnsContext;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::source;
@@ -192,7 +192,7 @@ struct Worker<'w, A: Allocate> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
-    /// Context necessary for rendering persist-txn operators.
+    /// Context necessary for rendering txn-wal operators.
     txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,

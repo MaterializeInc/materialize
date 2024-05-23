@@ -31,14 +31,14 @@ use mz_persist_client::metrics::Metrics as PersistMetrics;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_txn::metrics::Metrics as TxnMetrics;
-use mz_persist_txn::operator::DataSubscribeTask;
-use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
 use mz_timestamp_oracle::TimestampOracle;
+use mz_txn_wal::metrics::Metrics as TxnMetrics;
+use mz_txn_wal::operator::DataSubscribeTask;
+use mz_txn_wal::txns::{Tidy, TxnsHandle};
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use tracing::{debug, info};

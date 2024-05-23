@@ -105,9 +105,9 @@ IGNORE_RE = re.compile(
     # Old versions won't support new parameters
     | (platform-checks|legacy-upgrade|upgrade-matrix|feature-benchmark)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     # Fencing warnings are OK in fencing tests
-    | persist-txn-fencing-mz_first-.* \| .*unexpected\ fence\ epoch
-    | persist-txn-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ upper
-    | persist-txn-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ epoch
+    | txn-wal-fencing-mz_first-.* \| .*unexpected\ fence\ epoch
+    | txn-wal-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ upper
+    | txn-wal-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ epoch
     | platform-checks-mz_txn_tables.* \| .*unexpected\ fence\ epoch
     | platform-checks-mz_txn_tables.* \| .*fenced\ by\ new\ catalog\ upper
     | platform-checks-mz_txn_tables.* \| .*fenced\ by\ new\ catalog\ epoch

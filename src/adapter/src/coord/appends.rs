@@ -273,7 +273,7 @@ impl Coordinator {
             advance_to,
         } = self.get_local_write_ts().await;
 
-        // While we're flipping on the feature flags for persist-txn tables and
+        // While we're flipping on the feature flags for txn-wal tables and
         // the separated Postgres timestamp oracle, we also need to confirm
         // leadership on writes _after_ getting the timestamp and _before_
         // writing anything to table shards. See the big comment on `init_txns`

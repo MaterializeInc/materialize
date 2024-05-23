@@ -58,7 +58,7 @@ use mz_service::emit_boot_diagnostics;
 use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::controller::TxnWalTablesImpl;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
@@ -350,7 +350,7 @@ pub struct Args {
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
-    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// Whether to use the new txn-wal tables implementation or the legacy
     /// one.
     ///
     /// Only takes effect on restart. Any changes will also cause clusterd
@@ -359,8 +359,11 @@ pub struct Args {
     /// This value is also configurable via a Launch Darkly parameter of the
     /// same name, but we keep the flag to make testing easier. If specified,
     /// the flag takes precedence over the Launch Darkly param.
+    ///
+    /// This is called "persist-txn-tables" and not "txn-wal-tables" for
+    /// historical reasons.
     #[clap(long, env = "PERSIST_TXN_TABLES", parse(try_from_str))]
-    persist_txn_tables: Option<PersistTxnTablesImpl>,
+    persist_txn_tables: Option<TxnWalTablesImpl>,
     /// The number of worker threads created for the IsolatedRuntime used for
     /// storage related tasks. A negative value will subtract from the number
     /// of threads returned by [`num_cpus::get`].
@@ -957,7 +960,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 deploy_generation: args.deploy_generation,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
-                persist_txn_tables_cli: args.persist_txn_tables,
+                txn_wal_tables_cli: args.persist_txn_tables,
                 reload_certs: mz_server_core::default_cert_reload_ticker(),
             })
             .await

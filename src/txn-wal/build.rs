@@ -15,6 +15,6 @@ fn main() {
     prost_build::Config::new()
         .bytes(["."])
         .extern_path(".mz_persist_client.batch", "::mz_persist_client::batch")
-        .compile_protos(&["persist-txn/src/txns.proto"], &[".."])
+        .compile_protos(&["txn-wal/src/txns.proto"], &[".."])
         .unwrap_or_else(|e| panic!("{e}"))
 }

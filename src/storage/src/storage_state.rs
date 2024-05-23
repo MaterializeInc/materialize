@@ -86,7 +86,6 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_txn::operator::TxnsContext;
 use mz_repr::{GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
@@ -99,6 +98,7 @@ use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::IngestionDescription;
 use mz_storage_types::AlterCompatible;
 use mz_timely_util::builder_async::PressOnDropButton;
+use mz_txn_wal::operator::TxnsContext;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -279,7 +279,7 @@ pub struct StorageState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     pub persist_clients: Arc<PersistClientCache>,
-    /// Context necessary for rendering persist-txn operators.
+    /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.

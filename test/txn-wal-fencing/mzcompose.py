@@ -27,8 +27,8 @@ class Operation(Enum):
 @dataclass
 class Workload:
     name: str
-    persist_txn_first: str = "off"
-    persist_txn_second: str = "eager"
+    txn_wal_first: str = "off"
+    txn_wal_second: str = "eager"
     concurrency: int = 100
     tables: int = 1
     operation = Operation.INSERT
@@ -50,32 +50,32 @@ WORKLOADS = [
     ),
     Workload(
         name="off_to_lazy_simple",
-        persist_txn_first="off",
-        persist_txn_second="lazy",
+        txn_wal_first="off",
+        txn_wal_second="lazy",
     ),
     Workload(
         name="eager_to_lazy_simple",
-        persist_txn_first="eager",
-        persist_txn_second="lazy",
+        txn_wal_first="eager",
+        txn_wal_second="lazy",
     ),
     Workload(
         name="eager_to_off_simple",
-        persist_txn_first="eager",
-        persist_txn_second="off",
+        txn_wal_first="eager",
+        txn_wal_second="off",
     ),
     Workload(name="off_to_eager_many_tables", tables=100),
     Workload(name="off_to_eager_many_connections", concurrency=512),
     Workload(
         name="eager_to_lazy_many_tables",
         tables=100,
-        persist_txn_first="eager",
-        persist_txn_second="lazy",
+        txn_wal_first="eager",
+        txn_wal_second="lazy",
     ),
     Workload(
         name="eager_to_lazy_many_connections",
         concurrency=512,
-        persist_txn_first="eager",
-        persist_txn_second="lazy",
+        txn_wal_first="eager",
+        txn_wal_second="lazy",
     ),
 ]
 
@@ -159,8 +159,8 @@ def run_workload(c: Composition, workload: Workload) -> None:
     c.up("minio", "cockroach")
 
     mzs = {
-        "mz_first": workload.persist_txn_first,
-        "mz_second": workload.persist_txn_second,
+        "mz_first": workload.txn_wal_first,
+        "mz_second": workload.txn_wal_second,
     }
 
     with c.override(

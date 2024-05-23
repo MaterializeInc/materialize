@@ -39,7 +39,7 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
-use mz_sql::session::vars::{OwnedVarInput, Var, VarInput, PERSIST_TXN_TABLES};
+use mz_sql::session::vars::{OwnedVarInput, Var, VarInput, TXN_WAL_TABLES};
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::controller::StorageController;
@@ -2066,17 +2066,17 @@ impl Catalog {
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
                     tx.remove_system_config(&name);
-                    // This mirrors the `persist_txn_tables` "system var" into the catalog
+                    // This mirrors the `txn_wal_tables` "system var" into the catalog
                     // storage "config" collection so that we can toggle the flag with
                     // Launch Darkly, but use it in boot before Launch Darkly is available.
-                    if name == PERSIST_TXN_TABLES.name() {
-                        tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
+                    if name == TXN_WAL_TABLES.name() {
+                        tx.set_txn_wal_tables(state.system_configuration.txn_wal_tables())?;
                     }
                 }
                 Op::ResetAllSystemConfiguration => {
                     state.clear_system_configuration();
                     tx.clear_system_configs();
-                    tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
+                    tx.set_txn_wal_tables(state.system_configuration.txn_wal_tables())?;
                 }
                 Op::UpdateRotatedKeys {
                     id,
@@ -2250,11 +2250,11 @@ impl Catalog {
         state.insert_system_configuration(name, value)?;
         let var = state.get_system_configuration(name)?;
         tx.upsert_system_config(name, var.value())?;
-        // This mirrors the `persist_txn_tables` "system var" into the catalog
+        // This mirrors the `txn_wal_tables` "system var" into the catalog
         // storage "config" collection so that we can toggle the flag with
         // Launch Darkly, but use it in boot before Launch Darkly is available.
-        if name == PERSIST_TXN_TABLES.name() {
-            tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
+        if name == TXN_WAL_TABLES.name() {
+            tx.set_txn_wal_tables(state.system_configuration.txn_wal_tables())?;
         }
         Ok(())
     }

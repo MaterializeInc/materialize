@@ -21,7 +21,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv;
 use mz_rocksdb_types::config::{CompactionStyle, CompressionType};
 use mz_sql_parser::ast::{Ident, TransactionIsolationLevel};
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use serde::Serialize;
 use uncased::UncasedStr;
@@ -1078,7 +1078,7 @@ impl Value for IntervalStyle {
     }
 }
 
-impl Value for PersistTxnTablesImpl {
+impl Value for TxnWalTablesImpl {
     fn type_name() -> Cow<'static, str>
     where
         Self: Sized,
@@ -1093,11 +1093,9 @@ impl Value for PersistTxnTablesImpl {
         let s = extract_single_value(input)?;
         let s = UncasedStr::new(s);
 
-        PersistTxnTablesImpl::from_str(s.as_str()).map_err(|_| {
-            VarParseError::ConstrainedParameter {
-                invalid_values: input.to_vec(),
-                valid_values: Some(vec!["off", "eager", "lazy"]),
-            }
+        TxnWalTablesImpl::from_str(s.as_str()).map_err(|_| VarParseError::ConstrainedParameter {
+            invalid_values: input.to_vec(),
+            valid_values: Some(vec!["off", "eager", "lazy"]),
         })
     }
 

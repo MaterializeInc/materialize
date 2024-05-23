@@ -200,7 +200,7 @@ pub enum Response<T> {
 /// This data should be kept consistent with the state modified using
 /// [`StorageTxn`].
 ///
-/// n.b. the "persist txn shard" is also metadata that's persisted, but if we
+/// n.b. the "txn WAL shard" is also metadata that's persisted, but if we
 /// included it in this struct it would never be read.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct StorageMetadata {
@@ -258,13 +258,13 @@ pub trait StorageTxn<T> {
     /// unfinalized shard collection.
     fn mark_shards_as_finalized(&mut self, shards: BTreeSet<String>);
 
-    /// Get the persist txn shard for this environment if it exists.
-    fn get_persist_txn_shard(&self) -> Option<String>;
+    /// Get the txn WAL shard for this environment if it exists.
+    fn get_txn_wal_shard(&self) -> Option<String>;
 
-    /// Store the specified shard as the environment's persist txn shard.
+    /// Store the specified shard as the environment's txn WAL shard.
     ///
     /// The implementor should error if the shard is already specified.
-    fn write_persist_txn_shard(&mut self, shard: String) -> Result<(), StorageError<T>>;
+    fn write_txn_wal_shard(&mut self, shard: String) -> Result<(), StorageError<T>>;
 }
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
@@ -715,7 +715,7 @@ pub trait StorageController: Debug {
     /// Resets the txns system to a set of invariants necessary for correctness.
     ///
     /// Must be called on boot before create_collections or the various appends.
-    /// This is true _regardless_ of whether the persist-txn feature is on or
+    /// This is true _regardless_ of whether the txn-wal feature is on or
     /// not. See the big comment in the impl of the method for details. Ideally,
     /// this would have just been folded into `Controller::new`, but it needs
     /// the timestamp and there are boot dependency issues.

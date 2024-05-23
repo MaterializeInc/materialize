@@ -155,8 +155,8 @@ class UserTables(Scenario):
         }
 
 
-class UserTablesTogglePersistTxn(Scenario):
-    """A Zippy test using user tables with toggling persist_txn."""
+class UserTablesToggleTxnWal(Scenario):
+    """A Zippy test using user tables with toggling txn_wal."""
 
     def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         workload: dict[ActionOrFactory, float] = {
@@ -169,12 +169,10 @@ class UserTablesTogglePersistTxn(Scenario):
         }
 
         starts: dict[ActionOrFactory, float] = {}
-        for persist_txn in ["off", "eager", "lazy"]:
+        for txn_wal in ["off", "eager", "lazy"]:
             starts[
                 MzStartParameterized(
-                    additional_system_parameter_defaults={
-                        "persist_txn_tables": persist_txn
-                    }
+                    additional_system_parameter_defaults={"persist_txn_tables": txn_wal}
                 )
             ] = 1
 
