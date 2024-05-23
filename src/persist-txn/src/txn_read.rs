@@ -70,9 +70,10 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         D: Semigroup + Codec64 + Send + Sync,
     {
         debug!(
-            "unblock_read latest_write={:?} as_of={:?} for {:.9}",
+            "unblock_read latest_write={:?} as_of={:?} empty_to={:?} for {:.9}",
             self.latest_write,
             self.as_of,
+            self.empty_to,
             self.data_id.to_string()
         );
         // First block until the latest write has been applied.
@@ -257,19 +258,14 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     }
 }
 
-/// The next action to take in a data shard `Listen`.
+/// The next (physical, logical) upper pair for a data shard `Listen`.
 ///
 /// See [crate::txn_cache::TxnsCacheState::data_listen_next].
 #[derive(Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub enum DataListenNext<T> {
-    /// Read the data shard normally, until this timestamp is less_equal what
-    /// has been read.
-    ReadDataTo(T),
-    /// It is known that there are no writes between the progress given to the
-    /// `data_listen_next` call and this timestamp. Advance the data shard
-    /// listen progress to this (exclusive) frontier.
-    EmitLogicalProgress(T),
+    /// The data shard has the following physical and logical upper.
+    Remap(DataRemapEntry<T>),
     /// The data shard listen has caught up to what has been written to the txns
     /// shard. Wait for it to progress with `update_gt` and call
     /// `data_listen_next` again.
@@ -284,6 +280,7 @@ pub enum DataListenNext<T> {
 ///
 /// Invariant: physical_upper <= logical_upper
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct DataRemapEntry<T> {
     /// The physical upper of a data shard.
     pub physical_upper: T,
@@ -731,26 +728,23 @@ where
                 &subscription.subscribe.data_id,
                 &subscription.subscribe.remap.logical_upper,
             ) {
-                // The data shard got a write!
-                DataListenNext::ReadDataTo(new_upper) => {
-                    // A write means both the physical and logical upper advance.
-                    subscription.subscribe.remap.physical_upper = new_upper.clone();
-                    subscription.subscribe.remap.logical_upper = new_upper.clone();
-                }
-                // We know there are no writes in `[logical_upper,
-                // new_progress)`, so advance our output frontier.
-                DataListenNext::EmitLogicalProgress(new_progress) => {
-                    assert!(subscription.subscribe.remap.physical_upper < new_progress);
-                    assert!(subscription.subscribe.remap.logical_upper < new_progress);
-
-                    subscription.subscribe.remap.logical_upper = new_progress.clone();
+                DataListenNext::Remap(remap) => {
+                    assert!(subscription.subscribe.remap.logical_upper < remap.logical_upper);
+                    // Due to unblock read, the subscription may have started
+                    // with a larger physical upper than what the cache is
+                    // aware of. We need to ensure that the physical upper
+                    // always goes up.
+                    if subscription.subscribe.remap.physical_upper < remap.physical_upper {
+                        subscription.subscribe.remap.physical_upper = remap.physical_upper;
+                    }
+                    subscription.subscribe.remap.logical_upper = remap.logical_upper;
+                    // Not an error if the receiver hung up, they just need be cleaned up at some point.
+                    let _ = subscription.tx.send(subscription.subscribe.remap.clone());
                 }
                 // We've caught up to the txns upper, and we have to wait for
                 // more before updates before sending more pairs.
                 DataListenNext::WaitForTxnsProgress => break,
             };
-            // Not an error if the receiver hung up, they just need be cleaned up at some point.
-            let _ = subscription.tx.send(subscription.subscribe.remap.clone());
         }
         assert_eq!(
             cache.progress_exclusive, subscription.subscribe.remap.logical_upper,

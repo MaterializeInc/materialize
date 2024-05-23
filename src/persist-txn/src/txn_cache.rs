@@ -275,19 +275,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         ret
     }
 
-    // TODO(jkosh44) This method can likely be simplified to return
-    // DataRemapEntry directly.
-    /// Returns the next action to take when iterating a Listen on a data shard.
+    /// Returns the latest known physical and logical upper of a data shard,
+    /// s.t. the logical upper is greater than `ts`.
     ///
     /// A data shard Listen is executed by repeatedly calling this method with
     /// an exclusive progress frontier. The returned value indicates an action
-    /// to take. Some of these actions advance the progress frontier, which
-    /// results in calling this method again with a higher timestamp, and thus a
-    /// new action. See [DataListenNext] for specifications of the actions.
-    ///
-    /// Note that this is a state machine on `self.progress_exclusive` and the
-    /// listen progress. DataListenNext indicates which state transitions to
-    /// take.
+    /// to take. Generally the caller will want to read to the physical upper
+    /// and emit logical progress up to the logical upper.
     pub fn data_listen_next(&self, data_id: &ShardId, ts: &T) -> DataListenNext<T> {
         self.assert_only_data_id(data_id);
         assert!(
@@ -298,9 +292,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         );
         // There may be applied and tidied writes before the init_ts that the
         // cache is unaware of. So if this method is called with a timestamp
-        // less than the initial since, it may mistakenly tell the caller to
-        // `EmitLogicalProgress(self.progress_exclusive)` instead of the
-        // correct answer of `ReadTo(tidied_write_ts)`.
+        // less than the initial since, it may mistakenly tell the caller that
+        // the physical upper is less than the most recent tidied write.
         //
         // We know for a fact that there are no unapplied writes, registers, or
         // forgets before the init_ts because the since of the txn shard is
@@ -332,7 +325,10 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             // treat it like a normal shard (i.e. pass through reads) and check
             // again later.
             if ts < &self.progress_exclusive {
-                return ReadDataTo(self.progress_exclusive.clone());
+                return Remap(DataRemapEntry {
+                    physical_upper: self.progress_exclusive.clone(),
+                    logical_upper: self.progress_exclusive.clone(),
+                });
             } else {
                 return WaitForTxnsProgress;
             }
@@ -342,22 +338,24 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         if ts >= &self.progress_exclusive {
             // All caught up, we have to wait.
             WaitForTxnsProgress
-        } else if ts <= physical_ts {
-            // There was some physical write, so read up to that time.
-            ReadDataTo(physical_ts.step_forward())
-        } else if last_reg.forget_ts.is_none() {
-            // Emitting logical progress at the wrong time is a correctness bug,
-            // so be extra defensive about the necessary conditions: the most
-            // recent registration is still active, and we're in it.
-            assert!(last_reg.contains(ts));
-            EmitLogicalProgress(self.progress_exclusive.clone())
-        } else {
+        } else if last_reg.forget_ts.is_some() {
             // The most recent forget is set, which means it's not registered as of
             // the latest information we have. Read to the current progress point
             // normally.
-
-            assert!(ts > &last_reg.register_ts && last_reg.forget_ts.is_some());
-            ReadDataTo(self.progress_exclusive.clone())
+            Remap(DataRemapEntry {
+                physical_upper: self.progress_exclusive.clone(),
+                logical_upper: self.progress_exclusive.clone(),
+            })
+        } else {
+            // Emitting logical progress at the wrong time is a correctness bug,
+            // so be extra defensive about the necessary conditions: the most
+            // recent registration is still active, and the physical timestamp
+            // is in it.
+            assert!(last_reg.contains(physical_ts));
+            Remap(DataRemapEntry {
+                physical_upper: physical_ts.step_forward(),
+                logical_upper: self.progress_exclusive.clone(),
+            })
         }
     }
 
@@ -1186,6 +1184,12 @@ mod tests {
                 empty_to,
             }
         };
+        let remap = |physical_upper: u64, logical_upper: u64| -> DataListenNext<u64> {
+            DataListenNext::Remap(DataRemapEntry {
+                physical_upper,
+                logical_upper,
+            })
+        };
         #[track_caller]
         fn testcase(
             cache: &mut TxnsCacheState<u64>,
@@ -1218,77 +1222,77 @@ mod tests {
         assert_eq!(c.data_listen_next(&d0, &0), WaitForTxnsProgress);
 
         // ts 0 (never registered)
-        testcase(&mut c, 0, d0, ds(None, 0, 1), ReadDataTo(1));
+        testcase(&mut c, 0, d0, ds(None, 0, 1), remap(1, 1));
 
         // ts 1 (direct write)
         // - The cache knows everything < 2.
         // - d0 is not registered in the cache.
         // - We know the shard can't be written to via txn < 2.
         // - So go read the shard normally up to 2.
-        testcase(&mut c, 1, d0, ds(None, 1, 2), ReadDataTo(2));
+        testcase(&mut c, 1, d0, ds(None, 1, 2), remap(2, 2));
 
         // ts 2 (register)
         c.push_register(d0, 2, 1, 2);
-        testcase(&mut c, 2, d0, ds(None, 2, 3), ReadDataTo(3));
+        testcase(&mut c, 2, d0, ds(None, 2, 3), remap(3, 3));
 
         // ts 3 (registered, not written)
-        testcase(&mut c, 3, d0, ds(None, 3, 4), EmitLogicalProgress(4));
+        testcase(&mut c, 3, d0, ds(None, 3, 4), remap(3, 4));
 
         // ts 4 (written via txns)
         c.push_append(d0, vec![4], 4, 1);
-        testcase(&mut c, 4, d0, ds(Some(4), 4, 5), ReadDataTo(5));
+        testcase(&mut c, 4, d0, ds(Some(4), 4, 5), remap(5, 5));
 
         // ts 5 (written via txns, write at preceding ts)
         c.push_append(d0, vec![5], 5, 1);
-        testcase(&mut c, 5, d0, ds(Some(5), 5, 6), ReadDataTo(6));
+        testcase(&mut c, 5, d0, ds(Some(5), 5, 6), remap(6, 6));
 
         // ts 6 (registered, not written, write at preceding ts)
-        testcase(&mut c, 6, d0, ds(Some(5), 6, 7), EmitLogicalProgress(7));
+        testcase(&mut c, 6, d0, ds(Some(5), 6, 7), remap(6, 7));
 
         // ts 7 (written via txns, write at non-preceding ts)
         c.push_append(d0, vec![7], 7, 1);
-        testcase(&mut c, 7, d0, ds(Some(7), 7, 8), ReadDataTo(8));
+        testcase(&mut c, 7, d0, ds(Some(7), 7, 8), remap(8, 8));
 
         // ts 8 (apply and tidy write from ts 4)
         c.push_append(d0, vec![4], 8, -1);
-        testcase(&mut c, 8, d0, ds(Some(7), 8, 9), EmitLogicalProgress(9));
+        testcase(&mut c, 8, d0, ds(Some(7), 8, 9), remap(8, 9));
 
         // ts 9 (apply and tidy write from ts 5)
         c.push_append(d0, vec![5], 9, -1);
-        testcase(&mut c, 9, d0, ds(Some(7), 9, 10), EmitLogicalProgress(10));
+        testcase(&mut c, 9, d0, ds(Some(7), 9, 10), remap(8, 10));
 
         // ts 10 (apply and tidy write from ts 7)
         c.push_append(d0, vec![7], 10, -1);
-        testcase(&mut c, 10, d0, ds(None, 10, 11), EmitLogicalProgress(11));
+        testcase(&mut c, 10, d0, ds(None, 10, 11), remap(8, 11));
 
         // ts 11 (forget)
         // Revisit when
         // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
         // it's unclear how to encode the register timestamp in a forget.
         c.push_register(d0, 11, -1, 11);
-        testcase(&mut c, 11, d0, ds(None, 11, 12), ReadDataTo(12));
+        testcase(&mut c, 11, d0, ds(None, 11, 12), remap(12, 12));
 
         // ts 12 (not registered, not written). This ReadDataTo would block until
         // the write happens at ts 13.
-        testcase(&mut c, 12, d0, ds(None, 12, 13), ReadDataTo(13));
+        testcase(&mut c, 12, d0, ds(None, 12, 13), remap(13, 13));
 
         // ts 13 (written directly)
-        testcase(&mut c, 13, d0, ds(None, 13, 14), ReadDataTo(14));
+        testcase(&mut c, 13, d0, ds(None, 13, 14), remap(14, 14));
 
         // ts 14 (not registered, not written) This ReadDataTo would block until
         // the register happens at 15.
-        testcase(&mut c, 14, d0, ds(None, 14, 15), ReadDataTo(15));
+        testcase(&mut c, 14, d0, ds(None, 14, 15), remap(15, 15));
 
         // ts 15 (registered, previously forgotten)
         c.push_register(d0, 15, 1, 15);
-        testcase(&mut c, 15, d0, ds(None, 15, 16), ReadDataTo(16));
+        testcase(&mut c, 15, d0, ds(None, 15, 16), remap(16, 16));
 
         // ts 16 (forgotten, registered at preceding ts)
         // Revisit when
         // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
         // it's unclear how to encode the register timestamp in a forget.
         c.push_register(d0, 16, -1, 16);
-        testcase(&mut c, 16, d0, ds(None, 16, 17), ReadDataTo(17));
+        testcase(&mut c, 16, d0, ds(None, 16, 17), remap(17, 17));
 
         // Now that we have more history, some of the old answers change! In
         // particular, we have more information on unapplied writes, empty
@@ -1312,23 +1316,23 @@ mod tests {
         assert_eq!(c.data_snapshot(d0, 15), ds(None, 15, 16));
         assert_eq!(c.data_snapshot(d0, 16), ds(None, 16, 17));
 
-        assert_eq!(c.data_listen_next(&d0, &0), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &1), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &2), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &3), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &4), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &5), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &6), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &7), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &8), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &9), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &10), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &11), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &12), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &13), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &14), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &15), ReadDataTo(17));
-        assert_eq!(c.data_listen_next(&d0, &16), ReadDataTo(17));
+        assert_eq!(c.data_listen_next(&d0, &0), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &1), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &2), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &3), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &4), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &5), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &6), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &7), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &8), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &9), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &10), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &11), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &12), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &13), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &14), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &15), remap(17, 17));
+        assert_eq!(c.data_listen_next(&d0, &16), remap(17, 17));
         assert_eq!(c.data_listen_next(&d0, &17), WaitForTxnsProgress);
     }
 

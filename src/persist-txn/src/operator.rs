@@ -229,28 +229,20 @@ where
                 DataListenNext::WaitForTxnsProgress => {
                     let _ = txns_cache.update_gt(&subscribe.remap.logical_upper).await;
                 }
-                // The data shard got a write!
-                DataListenNext::ReadDataTo(new_upper) => {
-                    // A write means both the physical and logical upper advance.
-                    subscribe.remap = DataRemapEntry {
-                        physical_upper: new_upper.clone(),
-                        logical_upper: new_upper,
-                    };
-                    debug!("{} emitting {:?}", name, subscribe.remap);
-                    remap_output.give(&cap, subscribe.remap.clone()).await;
-                }
-                // We know there are no writes in `[logical_upper,
-                // new_progress)`, so advance our output frontier.
-                DataListenNext::EmitLogicalProgress(new_progress) => {
-                    assert!(subscribe.remap.physical_upper < new_progress);
-                    assert!(subscribe.remap.logical_upper < new_progress);
-
-                    subscribe.remap.logical_upper = new_progress;
-                    // As mentioned in the docs on `DataRemapEntry`, we only
-                    // emit updates when the physical upper changes (which
-                    // happens to makes the protocol a tiny bit more
-                    // remap-like).
-                    debug!("{} not emitting {:?}", name, subscribe.remap);
+                DataListenNext::Remap(remap) => {
+                    if remap.physical_upper > subscribe.remap.physical_upper {
+                        subscribe.remap = remap;
+                        debug!("{} emitting {:?}", name, subscribe.remap);
+                        remap_output.give(&cap, subscribe.remap.clone()).await;
+                    } else {
+                        assert!(subscribe.remap.logical_upper < remap.logical_upper);
+                        subscribe.remap.logical_upper = remap.logical_upper;
+                        // As mentioned in the docs on `DataRemapEntry`, we only
+                        // emit updates when the physical upper changes (which
+                        // happens to makes the protocol a tiny bit more
+                        // remap-like).
+                        debug!("{} not emitting {:?}", name, subscribe.remap);
+                    }
                 }
             }
         }
