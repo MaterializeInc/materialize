@@ -9,6 +9,13 @@
 
 $ set-arg-default single-replica-cluster=quickstart
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000
+ALTER SYSTEM SET storage_statistics_interval = 2000
+ALTER SYSTEM SET kafka_socket_timeout = 5000
+ALTER SYSTEM SET kafka_transaction_timeout = 5100
+
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
@@ -54,7 +61,19 @@ simple_view_sink 2 2 true true
 simple_view_sink 2 2 true true
 
 > ALTER CONNECTION kafka_conn SET (BROKER 'asdf') WITH (VALIDATE = false);
+
+# Ensure we shut down first, so the insert later comes after we have restarted.
+> SELECT count(*) > 0 FROM mz_internal.mz_sink_status_history
+  JOIN mz_sinks ON mz_sink_status_history.sink_id = mz_sinks.id
+  WHERE status = 'stalled'
+  AND name = 'simple_view_sink'
+true
+
 > ALTER CONNECTION kafka_conn SET (BROKER '${testdrive.kafka-addr}') WITH (VALIDATE = true);
+
+> SELECT status FROM mz_internal.mz_sink_statuses
+  WHERE name = 'simple_view_sink'
+running
 
 > INSERT INTO t VALUES ('key1', 'value')
 > SELECT s.name, u.messages_staged, u.messages_committed, u.bytes_staged > 0, bytes_staged = bytes_committed
