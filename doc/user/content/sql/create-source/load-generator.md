@@ -37,6 +37,8 @@ _src_name_  | The name for the source.
 **TPCH**     | Use the [tpch](#tpch) load generator.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
+**AS OF**  | The tick at which to start producing data. Defaults to 0. {{< warn-if-unreleased-inline "v0.101" >}}
+**UP TO**  | The tick before which to stop producing data. Defaults to infinite. {{< warn-if-unreleased-inline "v0.101" >}}
 **SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
 **MAX CARDINALITY** | Valid for the `COUNTER` generator. Causes the generator to delete old values to keep the collection at most a given size. Defaults to unlimited.
 **KEYS**                    | Valid for [`KEY VALUE` generator](#key-value).

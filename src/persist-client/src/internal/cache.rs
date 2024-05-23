@@ -27,7 +27,7 @@ pub struct BlobMemCache {
     cfg: ConfigSet,
     metrics: Arc<Metrics>,
     cache: Mutex<lru::Lru<String, SegmentedBytes>>,
-    blob: Arc<dyn Blob + Send + Sync>,
+    blob: Arc<dyn Blob>,
 }
 
 pub(crate) const BLOB_CACHE_MEM_LIMIT_BYTES: Config<usize> = Config::new(
@@ -42,11 +42,7 @@ pub(crate) const BLOB_CACHE_MEM_LIMIT_BYTES: Config<usize> = Config::new(
 );
 
 impl BlobMemCache {
-    pub fn new(
-        cfg: &PersistConfig,
-        metrics: Arc<Metrics>,
-        blob: Arc<dyn Blob + Send + Sync>,
-    ) -> Arc<dyn Blob + Send + Sync> {
+    pub fn new(cfg: &PersistConfig, metrics: Arc<Metrics>, blob: Arc<dyn Blob>) -> Arc<dyn Blob> {
         let eviction_metrics = Arc::clone(&metrics);
         let cache = lru::Lru::new(BLOB_CACHE_MEM_LIMIT_BYTES.get(cfg), move |_, _, _| {
             eviction_metrics.blob_cache_mem.evictions.inc()

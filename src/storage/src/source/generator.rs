@@ -44,6 +44,8 @@ enum GeneratorKind {
     Simple {
         generator: Box<dyn Generator>,
         tick_micros: Option<u64>,
+        as_of: u64,
+        up_to: u64,
         // Load generators cannot be rendered until all of their exports are
         // present.
         //
@@ -54,13 +56,15 @@ enum GeneratorKind {
 }
 
 impl GeneratorKind {
-    fn new(g: &LoadGenerator, tick_micros: Option<u64>) -> Self {
+    fn new(g: &LoadGenerator, tick_micros: Option<u64>, as_of: u64, up_to: u64) -> Self {
         let required_exports = g.views().len() + 1;
 
         match g {
             LoadGenerator::Auction => GeneratorKind::Simple {
                 generator: Box::new(Auction {}),
                 tick_micros,
+                as_of,
+                up_to,
                 required_exports,
             },
             LoadGenerator::Counter { max_cardinality } => GeneratorKind::Simple {
@@ -68,16 +72,22 @@ impl GeneratorKind {
                     max_cardinality: max_cardinality.clone(),
                 }),
                 tick_micros,
+                as_of,
+                up_to,
                 required_exports,
             },
             LoadGenerator::Datums => GeneratorKind::Simple {
                 generator: Box::new(Datums {}),
                 tick_micros,
+                as_of,
+                up_to,
                 required_exports,
             },
             LoadGenerator::Marketing => GeneratorKind::Simple {
                 generator: Box::new(Marketing {}),
                 tick_micros,
+                as_of,
+                up_to,
                 required_exports,
             },
             LoadGenerator::Tpch {
@@ -98,6 +108,8 @@ impl GeneratorKind {
                     tick: Duration::from_micros(tick_micros.unwrap_or(0)),
                 }),
                 tick_micros,
+                as_of,
+                up_to,
                 required_exports,
             },
             LoadGenerator::KeyValue(kv) => {
@@ -128,11 +140,15 @@ impl GeneratorKind {
         match self {
             GeneratorKind::Simple {
                 tick_micros,
+                as_of,
+                up_to,
                 generator,
                 required_exports,
             } => render_simple_generator(
                 generator,
                 tick_micros,
+                as_of.into(),
+                up_to.into(),
                 scope,
                 config,
                 committed_uppers,
@@ -163,7 +179,12 @@ impl SourceRender for LoadGeneratorSourceConnection {
         Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
-        let generator_kind = GeneratorKind::new(&self.load_generator, self.tick_micros);
+        let generator_kind = GeneratorKind::new(
+            &self.load_generator,
+            self.tick_micros,
+            self.as_of,
+            self.up_to,
+        );
         generator_kind.render(scope, config, committed_uppers, start_signal)
     }
 }
@@ -171,6 +192,8 @@ impl SourceRender for LoadGeneratorSourceConnection {
 fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     generator: Box<dyn Generator>,
     tick_micros: Option<u64>,
+    as_of: MzOffset,
+    up_to: MzOffset,
     scope: &mut G,
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
@@ -238,7 +261,21 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 
         while let Some((output, event)) = rows.next() {
             match event {
-                Event::Message(offset, (value, diff)) => {
+                Event::Message(mut offset, (value, diff)) => {
+                    // Fast forward any data before the requested as of.
+                    if offset <= as_of {
+                        offset = as_of;
+                    }
+
+                    // If the load generator produces data at or beyond the
+                    // requested `up_to`, drop it. We'll terminate the load
+                    // generator when the capability advances to the `up_to`,
+                    // but the load generator might produce data far in advance
+                    // of its capability.
+                    if offset >= up_to {
+                        continue;
+                    }
+
                     let message = (
                         output,
                         Ok(SourceMessage {
@@ -256,6 +293,17 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                     }
                 }
                 Event::Progress(Some(offset)) => {
+                    // If we've reached the requested maximum offset, cease.
+                    if offset >= up_to {
+                        break;
+                    }
+
+                    // If the offset is at or below the requested `as_of`, don't
+                    // downgrade the capability.
+                    if offset <= as_of {
+                        continue;
+                    }
+
                     cap.downgrade(&offset);
 
                     // We only sleep if we have surpassed the resume offset so that we can

@@ -1152,6 +1152,8 @@ impl_display!(LoadGenerator);
 pub enum LoadGeneratorOptionName {
     ScaleFactor,
     TickInterval,
+    AsOf,
+    UpTo,
     MaxCardinality,
     Keys,
     SnapshotRounds,
@@ -1167,6 +1169,8 @@ impl AstDisplay for LoadGeneratorOptionName {
         f.write_str(match self {
             LoadGeneratorOptionName::ScaleFactor => "SCALE FACTOR",
             LoadGeneratorOptionName::TickInterval => "TICK INTERVAL",
+            LoadGeneratorOptionName::AsOf => "AS OF",
+            LoadGeneratorOptionName::UpTo => "UP TO",
             LoadGeneratorOptionName::MaxCardinality => "MAX CARDINALITY",
             LoadGeneratorOptionName::Keys => "KEYS",
             LoadGeneratorOptionName::SnapshotRounds => "SNAPSHOT ROUNDS",
@@ -1190,6 +1194,8 @@ impl WithOptionName for LoadGeneratorOptionName {
         match self {
             LoadGeneratorOptionName::ScaleFactor
             | LoadGeneratorOptionName::TickInterval
+            | LoadGeneratorOptionName::AsOf
+            | LoadGeneratorOptionName::UpTo
             | LoadGeneratorOptionName::MaxCardinality
             | LoadGeneratorOptionName::Keys
             | LoadGeneratorOptionName::SnapshotRounds

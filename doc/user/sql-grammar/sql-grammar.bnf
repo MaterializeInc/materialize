@@ -200,6 +200,8 @@ create_source_load_generator ::=
   with_options?
 load_generator_option ::=
     'TICK INTERVAL' interval
+    | 'AS OF' tick
+    | 'UP TO' tick
     | 'SCALE FACTOR' scale_factor
     | 'MAX CARDINALITY' max_cardinality
     | 'KEYS' keys

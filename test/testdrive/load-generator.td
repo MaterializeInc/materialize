@@ -10,14 +10,45 @@
 $ set-arg-default default-replica-size=1
 $ set-arg-default single-replica-cluster=quickstart
 
+> CREATE SOURCE counter_empty
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR COUNTER (AS OF 5, UP TO 5)
+
+> SELECT count(*) FROM counter_empty
+0
+
+> CREATE SOURCE counter_single
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR COUNTER (AS OF 0, UP TO 1)
+
+> SELECT count(*) FROM counter_single
+1
+
+> CREATE SOURCE counter_five
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR COUNTER (AS OF 4, UP TO 5)
+
+> SELECT count(*) FROM counter_five
+5
+
+! CREATE SOURCE counter
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR COUNTER (AS OF 5, UP TO 4)
+contains:UP TO cannot be less than AS OF
+
 ! CREATE SOURCE counter
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (SCALE FACTOR 1)
 exact:COUNTER load generators do not support SCALE FACTOR values
 
+> DROP SOURCE counter_empty, counter_single, counter_five
+
 > CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+  FROM LOAD GENERATOR AUCTION (AS OF 300, UP TO 301) FOR ALL TABLES;
+
+> SHOW CREATE SOURCE auction_house
+"materialize.public.auction_house" "CREATE SOURCE \"materialize\".\"public\".\"auction_house\" IN CLUSTER \"${arg.single-replica-cluster}\" FROM LOAD GENERATOR AUCTION FOR ALL TABLES EXPOSE PROGRESS AS \"materialize\".\"public\".\"auction_house_progress\""
 
 > SHOW SOURCES
 accounts                subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
@@ -27,6 +58,9 @@ auctions                subsource      ${arg.default-replica-size}    ${arg.sing
 bids                    subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
 organizations           subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
 users                   subsource      ${arg.default-replica-size}    ${arg.single-replica-cluster}
+
+> SELECT count(*) FROM bids
+255
 
 # FOR TABLES doesn't always work.
 # A previous test here checked bids, which worked.
@@ -116,13 +150,13 @@ contains: out of range integral type conversion
 
 # Query automatically generated progress topic
 $ set-regex match=\d+ replacement=<NUMBER>
-> SELECT "offset" FROM auction_house_progress
+> SELECT "offset" FROM another.auction_house_progress
 <NUMBER>
 
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
-> EXPLAIN TIMESTAMP FOR SELECT * FROM auction_house_progress
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.auction_house_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+> EXPLAIN TIMESTAMP FOR SELECT * FROM another.auction_house_progress
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.another.auction_house_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
 # Check that for all tables clause is rejected with no subsources
 ! CREATE SOURCE counter6

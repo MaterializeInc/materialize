@@ -1062,15 +1062,26 @@ pub fn plan_create_source(
             let (load_generator, _available_subsources) =
                 load_generator_ast_to_generator(scx, generator, options, include_metadata)?;
 
-            let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
+            let LoadGeneratorOptionExtracted {
+                tick_interval,
+                as_of,
+                up_to,
+                ..
+            } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
                 Some(interval) => Some(interval.as_micros().try_into()?),
                 None => None,
             };
 
+            if up_to < as_of {
+                sql_bail!("UP TO cannot be less than AS OF");
+            }
+
             let connection = GenericSourceConnection::from(LoadGeneratorSourceConnection {
                 load_generator,
                 tick_micros,
+                as_of,
+                up_to,
             });
 
             connection
@@ -1557,6 +1568,8 @@ pub fn plan_create_subsource(
 generate_extracted_config!(
     LoadGeneratorOption,
     (TickInterval, Duration),
+    (AsOf, u64, Default(0_u64)),
+    (UpTo, u64, Default(u64::MAX)),
     (ScaleFactor, f64),
     (MaxCardinality, u64),
     (Keys, u64),
@@ -1578,11 +1591,11 @@ impl LoadGeneratorOptionExtracted {
         let mut options = self.seen.clone();
 
         let permitted_options: &[_] = match loadgen {
-            ast::LoadGenerator::Auction => &[TickInterval],
-            ast::LoadGenerator::Counter => &[TickInterval, MaxCardinality],
-            ast::LoadGenerator::Marketing => &[TickInterval],
-            ast::LoadGenerator::Datums => &[TickInterval],
-            ast::LoadGenerator::Tpch => &[TickInterval, ScaleFactor],
+            ast::LoadGenerator::Auction => &[TickInterval, AsOf, UpTo],
+            ast::LoadGenerator::Counter => &[TickInterval, AsOf, UpTo, MaxCardinality],
+            ast::LoadGenerator::Marketing => &[TickInterval, AsOf, UpTo],
+            ast::LoadGenerator::Datums => &[TickInterval, AsOf, UpTo],
+            ast::LoadGenerator::Tpch => &[TickInterval, AsOf, UpTo, ScaleFactor],
             ast::LoadGenerator::KeyValue => &[
                 TickInterval,
                 Keys,

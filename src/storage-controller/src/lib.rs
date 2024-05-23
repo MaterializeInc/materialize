@@ -1079,12 +1079,6 @@ where
             _ => unreachable!("verified collection refers to ingestion"),
         };
 
-        mz_ore::soft_assert_ne_or_log!(
-            curr_ingestion.desc,
-            source_desc,
-            "alter_ingestion_source_desc should only be called when producing new SourceDesc",
-        );
-
         // Generate new source exports because they might have changed.
         let mut source_exports = BTreeMap::new();
         // Each source includes a `0` output index export "for the

@@ -2683,12 +2683,12 @@ pub struct BlobMetrics {
 
 #[derive(Debug)]
 pub struct MetricsBlob {
-    blob: Arc<dyn Blob + Send + Sync>,
+    blob: Arc<dyn Blob>,
     metrics: Arc<Metrics>,
 }
 
 impl MetricsBlob {
-    pub fn new(blob: Arc<dyn Blob + Send + Sync>, metrics: Arc<Metrics>) -> Self {
+    pub fn new(blob: Arc<dyn Blob>, metrics: Arc<Metrics>) -> Self {
         MetricsBlob { blob, metrics }
     }
 
@@ -2807,12 +2807,12 @@ pub struct ConsensusMetrics {
 
 #[derive(Debug)]
 pub struct MetricsConsensus {
-    consensus: Arc<dyn Consensus + Send + Sync>,
+    consensus: Arc<dyn Consensus>,
     metrics: Arc<Metrics>,
 }
 
 impl MetricsConsensus {
-    pub fn new(consensus: Arc<dyn Consensus + Send + Sync>, metrics: Arc<Metrics>) -> Self {
+    pub fn new(consensus: Arc<dyn Consensus>, metrics: Arc<Metrics>) -> Self {
         MetricsConsensus { consensus, metrics }
     }
 

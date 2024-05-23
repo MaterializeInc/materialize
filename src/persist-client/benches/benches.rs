@@ -244,14 +244,14 @@ fn bench_all_blob<BenchBlobFn>(
     data: &DataGenerator,
     bench_blob_fn: BenchBlobFn,
 ) where
-    BenchBlobFn: Fn(&mut Bencher, &Arc<dyn Blob + Send + Sync>),
+    BenchBlobFn: Fn(&mut Bencher, &Arc<dyn Blob>),
 {
     // Unlike the other ones, create a new mem blob before each call to
     // bench_blob_fn and drop it after to keep mem usage down.
     {
         g.bench_function(BenchmarkId::new("mem", data.goodput_pretty()), |b| {
             let mem_blob = MemBlob::open(MemBlobConfig::default());
-            let mem_blob: Arc<dyn Blob + Send + Sync> = Arc::new(mem_blob);
+            let mem_blob: Arc<dyn Blob> = Arc::new(mem_blob);
             bench_blob_fn(b, &mem_blob);
         });
     }
@@ -263,7 +263,7 @@ fn bench_all_blob<BenchBlobFn>(
         let file_blob = runtime
             .block_on(FileBlob::open(FileBlobConfig::from(temp_dir.path())))
             .expect("failed to create file blob");
-        let file_blob: Arc<dyn Blob + Send + Sync> = Arc::new(file_blob);
+        let file_blob: Arc<dyn Blob> = Arc::new(file_blob);
         g.bench_function(BenchmarkId::new("file", data.goodput_pretty()), |b| {
             bench_blob_fn(b, &file_blob);
         });
@@ -278,7 +278,7 @@ fn bench_all_blob<BenchBlobFn>(
         let s3_blob = runtime
             .block_on(S3Blob::open(config))
             .expect("failed to create s3 blob");
-        let s3_blob: Arc<dyn Blob + Send + Sync> = Arc::new(s3_blob);
+        let s3_blob: Arc<dyn Blob> = Arc::new(s3_blob);
         g.bench_function(BenchmarkId::new("s3", data.goodput_pretty()), |b| {
             bench_blob_fn(b, &s3_blob);
         });
@@ -291,13 +291,13 @@ fn bench_all_consensus<BenchConsensusFn>(
     data: &DataGenerator,
     bench_consensus_fn: BenchConsensusFn,
 ) where
-    BenchConsensusFn: Fn(&mut Bencher, &Arc<dyn Consensus + Send + Sync>),
+    BenchConsensusFn: Fn(&mut Bencher, &Arc<dyn Consensus>),
 {
     // Unlike the other ones, create a new mem blob before each call to
     // bench_consensus_fn and drop it after to keep mem usage down.
     {
         g.bench_function(BenchmarkId::new("mem", data.goodput_pretty()), |b| {
-            let mem_consensus: Arc<dyn Consensus + Send + Sync> = Arc::new(MemConsensus::default());
+            let mem_consensus: Arc<dyn Consensus> = Arc::new(MemConsensus::default());
             bench_consensus_fn(b, &mem_consensus);
         });
     }
@@ -310,8 +310,7 @@ fn bench_all_consensus<BenchConsensusFn>(
             .block_on(PostgresConsensus::open(config))
             .expect("failed to create postgres consensus");
         let postgres_consensus = Arc::new(postgres_consensus);
-        let consensus: Arc<dyn Consensus + Send + Sync> =
-            Arc::<PostgresConsensus>::clone(&postgres_consensus);
+        let consensus: Arc<dyn Consensus> = Arc::<PostgresConsensus>::clone(&postgres_consensus);
         g.bench_function(BenchmarkId::new("postgres", data.goodput_pretty()), |b| {
             runtime
                 .block_on(postgres_consensus.drop_and_recreate())

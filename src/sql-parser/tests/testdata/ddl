@@ -2404,11 +2404,11 @@ CREATE SOURCE lg FROM LOAD GENERATOR KEY VALUE (KEYS = 1, PARTITIONS = 2, TICK I
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: KeyValue, options: [LoadGeneratorOption { name: Keys, value: Some(Value(Number("1"))) }, LoadGeneratorOption { name: Partitions, value: Some(Value(Number("2"))) }, LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1m"))) }, LoadGeneratorOption { name: BatchSize, value: Some(Value(Number("100"))) }, LoadGeneratorOption { name: Seed, value: Some(Value(Number("200"))) }, LoadGeneratorOption { name: ValueSize, value: Some(Value(Number("150"))) }, LoadGeneratorOption { name: SnapshotRounds, value: Some(Value(Number("3"))) }, LoadGeneratorOption { name: TransactionalSnapshot, value: Some(Value(Boolean(false))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s', SCALE FACTOR 1, MAX CARDINALITY 100)
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s', SCALE FACTOR 1, MAX CARDINALITY 100, UP TO 5, AS OF 5)
 ----
-CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL = '1s', SCALE FACTOR = 1, MAX CARDINALITY = 100)
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL = '1s', SCALE FACTOR = 1, MAX CARDINALITY = 100, UP TO = 5, AS OF = 5)
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1s"))) }, LoadGeneratorOption { name: ScaleFactor, value: Some(Value(Number("1"))) }, LoadGeneratorOption { name: MaxCardinality, value: Some(Value(Number("100"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1s"))) }, LoadGeneratorOption { name: ScaleFactor, value: Some(Value(Number("1"))) }, LoadGeneratorOption { name: MaxCardinality, value: Some(Value(Number("100"))) }, LoadGeneratorOption { name: UpTo, value: Some(Value(Number("5"))) }, LoadGeneratorOption { name: AsOf, value: Some(Value(Number("5"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE SOURCE lg FROM LOAD GENERATOR MARKETING

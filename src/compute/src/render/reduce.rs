@@ -22,7 +22,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::cursor::MyTrait;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
-use differential_dataflow::Collection;
+use differential_dataflow::{Collection, Diff as _};
 use mz_compute_types::plan::reduce::{
     reduction_type, AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan,
     MonotonicPlan, ReducePlan, ReductionType,
@@ -932,6 +932,12 @@ where
     /// Note that this implementation currently ignores the distinct bit because we
     /// currently only perform min / max hierarchically and the reduction tree
     /// efficiently suppresses non-distinct updates.
+    ///
+    /// `buckets` indicates the number of buckets in this stage. We do some non-obvious
+    /// trickery here to limit the memory usage per layer by internally
+    /// holding only the elements that were rejected by this stage. However, the
+    /// output collection maintains the `((key, bucket), (passing value)` for this
+    /// stage.
     fn build_bucketed<S>(
         &self,
         input: Collection<S, (Row, Row), Diff>,
@@ -950,6 +956,9 @@ where
         let arranged_output = input.scope().region_named("ReduceHierarchical", |inner| {
             let input = input.enter(inner);
 
+            // The first mod to apply to the hash.
+            let first_mod = buckets.get(0).copied().unwrap_or(1);
+
             // Gather the relevant keys with their hashes along with values ordered by aggregation_index.
             let mut stage = input.map(move |(key, row)| {
                 let binding = SharedRow::get();
@@ -961,66 +970,40 @@ where
                 }
                 let values = row_builder.clone();
 
-                row_packer = row_builder.packer();
-                row_packer.push(Datum::UInt64(values.hashed()));
-                row_packer.extend(&key);
-                (row_builder.clone(), values)
+                // Apply the initial mod here.
+                let hash = values.hashed() % first_mod;
+                let hash_key =
+                    row_builder.pack_using(std::iter::once(Datum::from(hash)).chain(&key));
+                (hash_key, values)
             });
 
             // Repeatedly apply hierarchical reduction with a progressively coarser key.
-            let pairer = Pairer::new(1);
-            for b in buckets.into_iter() {
-                let input = stage.map(move |(hash_key, values)| {
-                    let mut hash_key_iter = hash_key.iter();
-                    let hash = hash_key_iter.next().unwrap().unwrap_uint64() % b;
-                    let hash_key = pairer.merge(
-                        std::iter::once(Datum::from(hash)),
-                        hash_key_iter.take(key_arity),
-                    );
-                    (hash_key, values)
-                });
+            for (index, b) in buckets.into_iter().enumerate() {
+                // Apply subsequent bucket mods for all but the first round.
+                let input = if index == 0 {
+                    stage
+                } else {
+                    stage.map(move |(hash_key, values)| {
+                        let mut hash_key_iter = hash_key.iter();
+                        let hash = hash_key_iter.next().unwrap().unwrap_uint64() % b;
+                        // TODO: Convert the `chain(hash_key_iter...)` into a memcpy.
+                        let hash_key = SharedRow::pack(
+                            std::iter::once(Datum::from(hash)).chain(hash_key_iter.take(key_arity)),
+                        );
+                        (hash_key, values)
+                    })
+                };
 
                 // We only want the first stage to perform validation of whether invalid accumulations
                 // were observed in the input. Subsequently, we will either produce an error in the error
                 // stream or produce correct data in the output stream.
-                let negated_output = if err_output.is_none() {
-                    let (oks, errs) = self
-                        .build_bucketed_negated_output::<_,_,_, RowValSpine<Result<Row, Row>, _, _>>(
-                            &input,
-                            |v| v.into_owned(),
-                            aggr_funcs.clone(),
-                        )
-                        .as_collection(|k, v| (k.into_owned(), v.clone()))
-                        .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>("Checked Invalid Accumulations", |(hash_key, result)| {
-                            match result {
-                                Err(hash_key) => {
-                                    let mut hash_key_iter = hash_key.iter();
-                                    let _hash = hash_key_iter.next();
-                                    let key = SharedRow::pack(hash_key_iter);
-                                    let message = format!(
-                                        "Invalid data in source, saw non-positive accumulation \
-                                         for key {key:?} in hierarchical mins-maxes aggregate"
-                                    );
-                                    Err(EvalError::Internal(message).into())
-                                }
-                                Ok(values) => Ok((hash_key, values)),
-                            }
-                        });
-                    err_output = Some(errs.leave_region());
-                    oks
-                } else {
-                    self.build_bucketed_negated_output::<_,_,_, RowRowSpine<_, _>>(
-                        &input,
-                        |v| v.into_owned(),
-                        aggr_funcs.clone(),
-                    )
-                    .as_collection(|k, v| (k.into_owned(), v.into_owned()) )
-                };
+                let validating = err_output.is_none();
 
-                stage = negated_output
-                    .negate()
-                    .concat(&input)
-                    .consolidate_named::<KeyBatcher<_, _, _>>("Consolidated MinsMaxesHierarchical");
+                let (oks, errs) = self.build_bucketed_stage(&aggr_funcs, &input, validating);
+                if let Some(errs) = errs {
+                    err_output = Some(errs.leave_region());
+                }
+                stage = oks
             }
 
             // Discard the hash from the key and return to the format of the input data.
@@ -1049,7 +1032,7 @@ where
             let must_validate = err_output.is_none();
             if must_validate || mfp_after2.is_some() {
                 let errs = arranged
-                    .mz_reduce_abelian::<_,_,_, RowErrSpine<_, _>>(
+                    .mz_reduce_abelian::<_, _, _, RowErrSpine<_, _>>(
                         "ReduceMinsMaxes Error Check",
                         |v| v.into_owned(),
                         move |key, source, target| {
@@ -1103,9 +1086,9 @@ where
                 }
             }
             arranged
-                .mz_reduce_abelian::<_,_,_, RowRowSpine<_, _>>("ReduceMinsMaxes",
-                                                               |v| v.into_owned(),
-
+                .mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>(
+                    "ReduceMinsMaxes",
+                    |v| v.into_owned(),
                     move |key, source, target| {
                         let temp_storage = RowArena::new();
                         let datum_iter = key.to_datum_iter();
@@ -1131,7 +1114,7 @@ where
                         ) {
                             target.push((row, 1));
                         }
-                    }
+                    },
                 )
                 .leave_region()
         });
@@ -1141,23 +1124,80 @@ where
         )
     }
 
-    /// Build the dataflow for one stage of a reduction tree for multiple hierarchical
-    /// aggregates.
-    ///
-    /// `buckets` indicates the number of buckets in this stage. We do some non
-    /// obvious trickery here to limit the memory usage per layer by internally
-    /// holding only the elements that were rejected by this stage. However, the
-    /// output collection maintains the `((key, bucket), (passing value)` for this
-    /// stage.
+    /// Build a bucketed stage fragment that wraps [`Self::build_bucketed_negated_output`], and
+    /// adds validation if `validating` is true. It returns the consolidated inputs concatenated
+    /// with the negation of what's produced by the reduction.
     /// `validating` indicates whether we want this stage to perform error detection
     /// for invalid accumulations. Once a stage is clean of such errors, subsequent
     /// stages can skip validation.
+    fn build_bucketed_stage<S>(
+        &self,
+        aggr_funcs: &Vec<AggregateFunc>,
+        input: &Collection<S, (Row, Row), Diff>,
+        validating: bool,
+    ) -> (
+        Collection<S, (Row, Row), Diff>,
+        Option<Collection<S, DataflowError, Diff>>,
+    )
+    where
+        S: Scope<Timestamp = G::Timestamp>,
+    {
+        let (input, negated_output, errs) = if validating {
+            let (input, reduced) = self
+                .build_bucketed_negated_output::<_, _, _, RowValSpine<Result<Row, Row>, _, _>>(
+                    input,
+                    |v| v.into_owned(),
+                    aggr_funcs.clone(),
+                );
+            let (oks, errs) = reduced
+                .as_collection(|k, v| (k.into_owned(), v.clone()))
+                .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
+                "Checked Invalid Accumulations",
+                |(hash_key, result)| match result {
+                    Err(hash_key) => {
+                        let mut hash_key_iter = hash_key.iter();
+                        let _hash = hash_key_iter.next();
+                        let key = SharedRow::pack(hash_key_iter);
+                        let message = format!(
+                            "Invalid data in source, saw non-positive accumulation \
+                                         for key {key:?} in hierarchical mins-maxes aggregate"
+                        );
+                        Err(EvalError::Internal(message).into())
+                    }
+                    Ok(values) => Ok((hash_key, values)),
+                },
+            );
+            (input, oks, Some(errs))
+        } else {
+            let (input, reduced) = self
+                .build_bucketed_negated_output::<_, _, _, RowRowSpine<_, _>>(
+                    input,
+                    |v| v.into_owned(),
+                    aggr_funcs.clone(),
+                );
+            // TODO: Here is a good moment where we could apply the next `mod` calculation. Note
+            // that we need to apply the mod on both input and oks.
+            let oks = reduced.as_collection(|k, v| (k.into_owned(), v.into_owned()));
+            (input, oks, None)
+        };
+
+        let input = input.as_collection(|k, v| (k.into_owned(), v.into_owned()));
+        let oks = negated_output.concat(&input);
+        (oks, errs)
+    }
+
+    /// Build a dataflow fragment for one stage of a reduction tree for multiple hierarchical
+    /// aggregates to arrange and reduce the inputs. Returns the arranged input and the reduction,
+    /// with all diffs in the reduction's output negated.
     fn build_bucketed_negated_output<S, V, F, Tr>(
         &self,
         input: &Collection<S, (Row, Row), Diff>,
         from: F,
         aggrs: Vec<AggregateFunc>,
-    ) -> Arranged<S, TraceAgent<Tr>>
+    ) -> (
+        Arranged<S, TraceAgent<RowRowSpine<G::Timestamp, Diff>>>,
+        Arranged<S, TraceAgent<Tr>>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
         V: MaybeValidatingRow<Row, Row>,
@@ -1175,7 +1215,7 @@ where
         let arranged_input =
             input.mz_arrange::<RowRowSpine<_, _>>("Arranged MinsMaxesHierarchical input");
 
-        arranged_input.mz_reduce_abelian::<_, _, _, Tr>(
+        let reduced = arranged_input.mz_reduce_abelian::<_, _, _, Tr>(
             "Reduced Fallibly MinsMaxesHierarchical",
             from,
             move |key, source, target| {
@@ -1216,13 +1256,14 @@ where
                 // in the output.
                 target.reserve(source.len().saturating_add(1));
                 target.push((V::ok(row_builder.clone()), -1));
-                for (values, cnt) in source.iter() {
-                    row_packer = row_builder.packer();
-                    values.copy_into(&mut row_packer);
-                    target.push((V::ok(row_builder.clone()), *cnt));
-                }
+                target.extend(
+                    source
+                        .iter()
+                        .map(|(values, cnt)| (V::ok((*values).into_owned()), cnt.negate())),
+                );
             },
-        )
+        );
+        (arranged_input, reduced)
     }
 
     /// Build the dataflow to compute and arrange multiple hierarchical aggregations

@@ -155,7 +155,7 @@ impl ShardBlobUsage {
 #[derive(Clone, Debug)]
 pub struct StorageUsageClient {
     cfg: PersistConfig,
-    blob: Arc<dyn Blob + Send + Sync>,
+    blob: Arc<dyn Blob>,
     metrics: Arc<Metrics>,
     state_versions: Arc<StateVersions>,
 }

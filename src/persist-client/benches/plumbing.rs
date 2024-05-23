@@ -55,7 +55,7 @@ pub fn bench_consensus_compare_and_set(
 
 fn bench_consensus_compare_and_set_all_iters(
     runtime: &Runtime,
-    consensus: Arc<dyn Consensus + Send + Sync>,
+    consensus: Arc<dyn Consensus>,
     data: &Bytes,
     b: &mut Bencher,
     concurrency: usize,

@@ -23,7 +23,7 @@ use tracing::info;
 /// Returns a list of blobs that were not possible to restore.
 pub(crate) async fn restore_blob(
     versions: &StateVersions,
-    blob: &(dyn Blob + Send + Sync),
+    blob: &dyn Blob,
     build_version: &semver::Version,
     shard_id: ShardId,
 ) -> anyhow::Result<Vec<BlobKey>> {
