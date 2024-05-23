@@ -8,22 +8,22 @@
 # by the Apache License, Version 2.0.
 
 # The purpose of these tests is to dectect additions or changes of indexes
-# on the mz_introspection cluster, including changes to underlying
+# on the mz_catalog_server cluster, including changes to underlying
 # objects that are indexed.
 # Rewrite this file automatically via --rewrite-results when it fails.
 
 mode cockroach
 
 statement ok
-SET CLUSTER TO mz_introspection
+SET CLUSTER TO mz_catalog_server
 
-# Record all indexes on the mz_introspection cluster and their definition.
+# Record all indexes on the mz_catalog_server cluster and their definition.
 # That way we can detect new or modified indexes.
 query TT
 SELECT DISTINCT name, create_sql
 FROM mz_indexes
 WHERE cluster_id =
-  (SELECT id FROM mz_clusters WHERE name = 'mz_introspection')
+  (SELECT id FROM mz_clusters WHERE name = 'mz_catalog_server')
 ORDER BY 1, 2
 ----
 mz_active_peeks_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_active_peeks_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_active_peeks_per_worker"␠("id",␠"worker_id")
@@ -99,7 +99,7 @@ mz_sources_ind  CREATE␠INDEX␠"mz_sources_ind"␠IN␠CLUSTER␠[s2]␠ON␠"
 mz_webhook_sources_ind  CREATE␠INDEX␠"mz_webhook_sources_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_webhook_sources"␠("id")
 
 # Record all transitive dependencies (tables, sources, views, mvs) of indexes on
-# the mz_introspection cluster.
+# the mz_catalog_server cluster.
 # Include each column of each dependent object, so we can detect changes to
 # object definitions that may impact the memory utilization of the index.
 query TT
@@ -109,7 +109,7 @@ LEFT JOIN mz_internal.mz_object_transitive_dependencies d ON i.id = d.object_id
 LEFT JOIN mz_objects o ON o.id = d.referenced_object_id
 JOIN mz_columns co on co.id = o.id
 WHERE cluster_id =
-  (SELECT id FROM mz_clusters WHERE name = 'mz_introspection')
+  (SELECT id FROM mz_clusters WHERE name = 'mz_catalog_server')
 ORDER BY 1, 2
 ----
 mz_active_peeks_per_worker  id

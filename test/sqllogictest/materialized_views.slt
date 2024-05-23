@@ -374,7 +374,7 @@ materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"
 
 # Test: SHOW CREATE MATERIALIZED VIEW as mz_support
 
-simple conn=mz_introspection,user=mz_support
+simple conn=mz_catalog_server,user=mz_support
 SHOW CREATE MATERIALIZED VIEW mv
 ----
 materialize.public.mv,CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "quickstart" WITH (REFRESH = ON COMMIT) AS SELECT 1
@@ -1547,7 +1547,7 @@ c_schedule_3  on-refresh  00:00:00
 c_schedule_4  manual  NULL
 c_schedule_5  manual  NULL
 c_schedule_rehydration_time_estimate  on-refresh  00:16:35
-mz_introspection  manual  NULL
+mz_catalog_server  manual  NULL
 mz_probe  manual  NULL
 mz_support  manual  NULL
 mz_system  manual  NULL

@@ -329,7 +329,7 @@ With
       Constant
         - ()
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -606,7 +606,7 @@ With Mutually Recursive
         Map (7)
           Get l1
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -632,7 +632,7 @@ With Mutually Recursive [recursion_limit=5]
         Map (7)
           Get l1
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -658,6 +658,6 @@ With Mutually Recursive [recursion_limit=5, return_at_limit]
         Map (7)
           Get l1
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF

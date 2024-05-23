@@ -32,7 +32,7 @@ Explained Query (fast path):
   Constant
     - ("a")
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "type": ["int", "null"]} , {"name": "f2", "type": ["int", "null"]}] }
 

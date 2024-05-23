@@ -19,7 +19,7 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 $ postgres-execute connection=mz_system
 > SELECT name FROM (SHOW CLUSTERS)
 mz_system
-mz_introspection
+mz_catalog_server
 quickstart
 mz_probe
 mz_support
@@ -37,8 +37,8 @@ ALTER SYSTEM SET enable_rbac_checks TO false
 ! DROP CLUSTER mz_system CASCADE
 contains:must be owner of CLUSTER mz_system
 
-! DROP CLUSTER mz_introspection CASCADE
-contains:must be owner of CLUSTER mz_introspection
+! DROP CLUSTER mz_catalog_server CASCADE
+contains:must be owner of CLUSTER mz_catalog_server
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_rbac_checks TO true
@@ -66,17 +66,17 @@ ALTER SYSTEM SET enable_rbac_checks TO true
 
 > CREATE MATERIALIZED VIEW mv AS SELECT AVG(50)
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO mz_catalog_server
 
 > SHOW MATERIALIZED VIEWS
 mv quickstart
 
 #! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
-#contains:system cluster 'mz_introspection' cannot be modified
+#contains:system cluster 'mz_catalog_server' cannot be modified
 
 > SET CLUSTER TO mz_system
 
-# Query gets automatically run on mz_introspection, despite mz_system being set
+# Query gets automatically run on mz_catalog_server, despite mz_system being set
 > SHOW MATERIALIZED VIEWS
 mv quickstart
 

@@ -76,9 +76,9 @@ public              mz_support=U/mz_system
 query TT rowsort
 SELECT * FROM cluster_privileges ORDER BY name, privilege
 ----
-mz_introspection  =U/mz_system
-mz_introspection  mz_support=UC/mz_system
-mz_introspection  mz_system=UC/mz_system
+mz_catalog_server  =U/mz_system
+mz_catalog_server  mz_support=UC/mz_system
+mz_catalog_server  mz_system=UC/mz_system
 mz_probe  mz_monitor=U/mz_system
 mz_probe  mz_support=U/mz_system
 mz_probe  mz_system=UC/mz_system
@@ -2374,9 +2374,9 @@ GRANT CREATE ON CLUSTER mz_system TO joe
 db error: ERROR: system cluster 'mz_system' cannot be modified
 
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER mz_introspection TO joe
+GRANT CREATE ON CLUSTER mz_catalog_server TO joe
 ----
-db error: ERROR: system cluster 'mz_introspection' cannot be modified
+db error: ERROR: system cluster 'mz_catalog_server' cannot be modified
 
 simple conn=mz_system,user=mz_system
 REVOKE USAGE ON CLUSTER mz_system FROM joe
@@ -2384,9 +2384,9 @@ REVOKE USAGE ON CLUSTER mz_system FROM joe
 db error: ERROR: system cluster 'mz_system' cannot be modified
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE ON CLUSTER mz_introspection FROM joe
+REVOKE USAGE ON CLUSTER mz_catalog_server FROM joe
 ----
-db error: ERROR: system cluster 'mz_introspection' cannot be modified
+db error: ERROR: system cluster 'mz_catalog_server' cannot be modified
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA pg_catalog TO joe
@@ -2549,9 +2549,9 @@ mz_system=RBN/mz_system
 ## Test system objects
 
 simple conn=mz_system,user=mz_system
-GRANT SELECT on v1 TO mz_introspection
+GRANT SELECT on v1 TO mz_catalog_server
 ----
-db error: ERROR: unknown role 'mz_introspection'
+db error: ERROR: unknown role 'mz_catalog_server'
 
 simple conn=mz_system,user=mz_system
 GRANT SELECT on v1 TO mz_support
@@ -2581,9 +2581,9 @@ GRANT USAGE on CLUSTER mz_system TO JOE
 db error: ERROR: system cluster 'mz_system' cannot be modified
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE on CLUSTER mz_introspection FROM PUBLIC
+REVOKE USAGE on CLUSTER mz_catalog_server FROM PUBLIC
 ----
-db error: ERROR: system cluster 'mz_introspection' cannot be modified
+db error: ERROR: system cluster 'mz_catalog_server' cannot be modified
 
 # Test has_X_privilege error and misc scenarios.
 

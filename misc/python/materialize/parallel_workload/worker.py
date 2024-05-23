@@ -77,7 +77,7 @@ class Worker:
         ws_conn_id, ws_secret_key = ws_connect(ws, host, http_port, user)
         self.exe = Executor(self.rng, cur, ws, database)
         self.exe.set_isolation("SERIALIZABLE")
-        cur.execute("SET auto_route_introspection_queries TO false")
+        cur.execute("SET auto_route_catalog_queries TO false")
         if self.exe.use_ws:
             self.exe.pg_pid = ws_conn_id
         else:

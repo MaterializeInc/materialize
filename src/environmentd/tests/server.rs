@@ -1509,7 +1509,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
 fn test_default_cluster_sizes() {
     let server = test_util::TestHarness::default()
         .with_builtin_system_cluster_replica_size("1".to_string())
-        .with_builtin_introspection_cluster_replica_size("1".to_string())
+        .with_builtin_catalog_server_cluster_replica_size("1".to_string())
         .with_default_cluster_replica_size("2".to_string())
         .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();

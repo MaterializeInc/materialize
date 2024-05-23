@@ -40,7 +40,7 @@ ALTER SYSTEM SET enable_rbac_checks = false
 
 # Now the real test begins
 
-# This will be executed on `mz_introspection`, due to auto-routing of "simple" queries.
+# This will be executed on `mz_catalog_server`, due to auto-routing of "simple" queries.
 > SELECT 'beginning real test!'
 "beginning real test!"
 
@@ -93,7 +93,7 @@ contains: column "f_nonexistent" does not exist
 
 > DROP CLUSTER c
 
-# This will be executed on mz_introspection, due to auto-routing of introspection queries.
+# This will be executed on mz_catalog_server, due to auto-routing of catalog queries.
 > SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics
 true
 
@@ -142,9 +142,9 @@ quickstart quickstart my_app 1 {} success <null> <null> <null> true "FETCH c" "s
 quickstart quickstart my_app 1 {} success <null> <null> <null> true "INSERT INTO t VALUES (1)" "strict serializable" <null>
 quickstart quickstart my_app 1 {} success <null> <null> <null> true "PREPARE p AS values ($1)" "strict serializable" <null>
 quickstart quickstart my_app 1 {} success <null> <null> <null> true "SET cluster TO c" "strict serializable" <null>
-mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'beginning real test!'" "strict serializable" <null>
-mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'serializable'" serializable <null>
-mz_introspection mz_introspection my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable" true
+mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 constant true "SELECT 'beginning real test!'" "strict serializable" <null>
+mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 constant true "SELECT 'serializable'" serializable <null>
+mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable" true
 
 > WITH all_stmts AS (SELECT mseh.id, mseh.began_at, mst.sql FROM mz_internal.mz_statement_execution_history mseh JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)

@@ -38,7 +38,7 @@ Explained Query:
   Constant // { types: "(integer)" }
     - (1)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -51,7 +51,7 @@ Explained Query:
   Constant // { types: "(text?)" }
     - (null)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 

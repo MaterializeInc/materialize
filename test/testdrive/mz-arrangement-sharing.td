@@ -699,8 +699,8 @@ ReduceMinsMaxes
 
 > DROP TABLE t CASCADE
 
-# Check mz_introspection
-> SET CLUSTER TO mz_introspection
+# Check mz_catalog_server
+> SET CLUSTER TO mz_catalog_server
 
 > SELECT name, count(*) FROM (SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name) GROUP BY name;
 "AccumulableErrorCheck"                       3
