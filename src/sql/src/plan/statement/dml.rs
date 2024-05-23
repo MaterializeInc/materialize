@@ -252,13 +252,11 @@ fn plan_select_inner(
 
 pub fn describe_explain_plan(
     scx: &StatementContext,
-    ExplainPlanStatement {
-        stage, explainee, ..
-    }: ExplainPlanStatement<Aug>,
+    explain: ExplainPlanStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let mut relation_desc = RelationDesc::empty();
 
-    match stage {
+    match explain.stage() {
         ExplainStage::RawPlan => {
             let name = "Raw Plan";
             relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
@@ -292,7 +290,7 @@ pub fn describe_explain_plan(
     };
 
     Ok(
-        StatementDesc::new(Some(relation_desc)).with_params(match explainee {
+        StatementDesc::new(Some(relation_desc)).with_params(match explain.explainee {
             Explainee::Select(select, _) => describe_select(scx, *select)?.param_types,
             _ => vec![],
         }),
@@ -535,23 +533,19 @@ fn plan_explainee(
 
 pub fn plan_explain_plan(
     scx: &StatementContext,
-    ExplainPlanStatement {
-        stage,
-        with_options,
-        format,
-        explainee,
-    }: ExplainPlanStatement<Aug>,
+    explain: ExplainPlanStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    let format = match format {
+    let format = match explain.format() {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
     };
+    let stage = explain.stage();
 
     // Plan ExplainConfig.
     let config = {
-        let mut with_options = ExplainPlanOptionExtracted::try_from(with_options)?;
+        let mut with_options = ExplainPlanOptionExtracted::try_from(explain.with_options)?;
 
         if with_options.filter_pushdown {
             // If filtering is disabled, explain plans should not include pushdown info.
@@ -561,7 +555,7 @@ pub fn plan_explain_plan(
         ExplainConfig::try_from(with_options)?
     };
 
-    let explainee = plan_explainee(scx, explainee, params)?;
+    let explainee = plan_explainee(scx, explain.explainee, params)?;
 
     Ok(Plan::ExplainPlan(ExplainPlanPlan {
         stage,
@@ -577,6 +571,8 @@ pub fn plan_explain_schema(
 ) -> Result<Plan, PlanError> {
     let ExplainSinkSchemaStatement {
         schema_for,
+        // Parser limits to JSON.
+        format: _,
         mut statement,
     } = explain_schema;
 
@@ -633,10 +629,10 @@ pub fn plan_explain_pushdown(
 
 pub fn plan_explain_timestamp(
     scx: &StatementContext,
-    ExplainTimestampStatement { format, select }: ExplainTimestampStatement<Aug>,
+    explain: ExplainTimestampStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    let format = match format {
+    let format = match explain.format() {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
@@ -648,12 +644,12 @@ pub fn plan_explain_timestamp(
             desc: _,
             finishing: _,
             scope: _,
-        } = query::plan_root_query(scx, select.query, QueryLifetime::OneShot)?;
+        } = query::plan_root_query(scx, explain.select.query, QueryLifetime::OneShot)?;
         raw_plan.bind_parameters(params)?;
 
         raw_plan
     };
-    let when = query::plan_as_of(scx, select.as_of)?;
+    let when = query::plan_as_of(scx, explain.select.as_of)?;
 
     Ok(Plan::ExplainTimestamp(ExplainTimestampPlan {
         format,

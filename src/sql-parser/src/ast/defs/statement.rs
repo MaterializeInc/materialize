@@ -2649,17 +2649,25 @@ impl_display!(DropObjectsStatement);
 pub struct DropOwnedStatement<T: AstInfo> {
     /// The roles whose owned objects are being dropped.
     pub role_names: Vec<T::RoleName>,
-    /// Whether `CASCADE` was specified. This will be `false` when
-    /// `RESTRICT` or no drop behavior at all was specified.
-    pub cascade: bool,
+    /// Whether `CASCADE` was specified. `false` for `RESTRICT` and `None` if no drop behavior at
+    /// all was specified.
+    pub cascade: Option<bool>,
+}
+
+impl<T: AstInfo> DropOwnedStatement<T> {
+    pub fn cascade(&self) -> bool {
+        self.cascade == Some(true)
+    }
 }
 
 impl<T: AstInfo> AstDisplay for DropOwnedStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP OWNED BY ");
         f.write_node(&display::comma_separated(&self.role_names));
-        if self.cascade {
+        if let Some(true) = self.cascade {
             f.write_str(" CASCADE");
+        } else if let Some(false) = self.cascade {
+            f.write_str(" RESTRICT");
         }
     }
 }
@@ -3197,24 +3205,42 @@ impl_display_t!(SubscribeRelation);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainPlanStatement<T: AstInfo> {
-    pub stage: ExplainStage,
+    pub stage: Option<ExplainStage>,
     pub with_options: Vec<ExplainPlanOption<T>>,
-    pub format: ExplainFormat,
+    pub format: Option<ExplainFormat>,
     pub explainee: Explainee<T>,
+}
+
+impl<T: AstInfo> ExplainPlanStatement<T> {
+    pub fn stage(&self) -> ExplainStage {
+        self.stage.unwrap_or(ExplainStage::GlobalPlan)
+    }
+
+    pub fn format(&self) -> ExplainFormat {
+        self.format.unwrap_or(ExplainFormat::Text)
+    }
 }
 
 impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("EXPLAIN ");
-        f.write_node(&self.stage);
+        f.write_str("EXPLAIN");
+        if let Some(stage) = &self.stage {
+            f.write_str(" ");
+            f.write_node(stage);
+        }
         if !self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
-        f.write_str(" AS ");
-        f.write_node(&self.format);
-        f.write_str(" FOR ");
+        if let Some(format) = &self.format {
+            f.write_str(" AS ");
+            f.write_node(format);
+        }
+        if self.stage.is_some() {
+            f.write_str(" FOR");
+        }
+        f.write_str(" ");
         f.write_node(&self.explainee);
     }
 }
@@ -3301,6 +3327,7 @@ pub enum ExplainSinkSchemaFor {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainSinkSchemaStatement<T: AstInfo> {
     pub schema_for: ExplainSinkSchemaFor,
+    pub format: Option<ExplainFormat>,
     pub statement: CreateSinkStatement<T>,
 }
 
@@ -3311,7 +3338,12 @@ impl<T: AstInfo> AstDisplay for ExplainSinkSchemaStatement<T> {
             ExplainSinkSchemaFor::Key => f.write_str("KEY"),
             ExplainSinkSchemaFor::Value => f.write_str("VALUE"),
         }
-        f.write_str(" SCHEMA AS JSON FOR ");
+        f.write_str(" SCHEMA");
+        if let Some(format) = &self.format {
+            f.write_str(" AS ");
+            f.write_node(format);
+        }
+        f.write_str(" FOR ");
         f.write_node(&self.statement);
     }
 }
@@ -3332,14 +3364,23 @@ impl_display_t!(ExplainPushdownStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainTimestampStatement<T: AstInfo> {
-    pub format: ExplainFormat,
+    pub format: Option<ExplainFormat>,
     pub select: SelectStatement<T>,
+}
+
+impl<T: AstInfo> ExplainTimestampStatement<T> {
+    pub fn format(&self) -> ExplainFormat {
+        self.format.unwrap_or(ExplainFormat::Text)
+    }
 }
 
 impl<T: AstInfo> AstDisplay for ExplainTimestampStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("EXPLAIN TIMESTAMP AS ");
-        f.write_node(&self.format);
+        f.write_str("EXPLAIN TIMESTAMP");
+        if let Some(format) = &self.format {
+            f.write_str(" AS ");
+            f.write_node(format);
+        }
         f.write_str(" FOR ");
         f.write_node(&self.select);
     }
@@ -3941,7 +3982,7 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
 }
 impl_display_t!(Explainee);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum ExplainFormat {
     /// Human readable display format
     Text,

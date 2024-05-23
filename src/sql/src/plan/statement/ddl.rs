@@ -4246,12 +4246,10 @@ pub fn describe_drop_owned(
 
 pub fn plan_drop_owned(
     scx: &StatementContext,
-    DropOwnedStatement {
-        role_names,
-        cascade,
-    }: DropOwnedStatement<Aug>,
+    drop: DropOwnedStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let role_ids: BTreeSet<_> = role_names.into_iter().map(|role| role.id).collect();
+    let cascade = drop.cascade();
+    let role_ids: BTreeSet<_> = drop.role_names.into_iter().map(|role| role.id).collect();
     let mut drop_ids = Vec::new();
     let mut privilege_revokes = Vec::new();
     let mut default_privilege_revokes = Vec::new();
