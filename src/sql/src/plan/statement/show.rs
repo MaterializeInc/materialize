@@ -927,7 +927,7 @@ fn humanize_sql_for_show_create(
             //
             // TODO(#24843): this structure will need to change because we will
             // have multiple references to the same upstream table.
-            let curr_references: BTreeMap<_, _> = catalog
+            let mut curr_references: BTreeMap<_, _> = catalog
                 .get_item(&id)
                 .used_by()
                 .into_iter()
@@ -1007,6 +1007,13 @@ fn humanize_sql_for_show_create(
                             ),
                         }
                     });
+                }
+                CreateSourceConnection::LoadGenerator { .. } if !curr_references.is_empty() => {
+                    // Load generator sources with any references only support
+                    // `FOR ALL TABLES`. However, this would change if #26765
+                    // landed.
+                    curr_references.clear();
+                    stmt.referenced_subsources = Some(ReferencedSubsources::All);
                 }
                 CreateSourceConnection::Kafka { .. }
                 | CreateSourceConnection::LoadGenerator { .. } => {}
