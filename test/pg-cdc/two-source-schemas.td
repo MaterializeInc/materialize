@@ -52,7 +52,7 @@ contains:multiple subsources would be named t1
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (t1);
-contains:table t1 is ambiguous, consider specifying the schema
+contains:reference to t1 is ambiguous, consider specifying an additional layer of qualification
 
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')

@@ -18,8 +18,8 @@ use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
     IdentError, WithOptionValue,
 };
+use mz_storage_types::sources::SubsourceResolver;
 
-use crate::catalog::SubsourceCatalog;
 use crate::names::Aug;
 use crate::plan::{PlanError, StatementContext};
 use crate::pure::{MySqlConfigOptionName, MySqlSourcePurificationError};
@@ -41,7 +41,7 @@ pub(super) fn mysql_upstream_name(
 }
 
 /// Reverses the `mysql_upstream_name` function.
-fn upstream_name_to_table(
+pub(super) fn upstream_name_to_table(
     name: &UnresolvedItemName,
 ) -> Result<QualifiedTableRef, MySqlSourcePurificationError> {
     if name.0.len() != 2 {
@@ -51,24 +51,6 @@ fn upstream_name_to_table(
         schema_name: name.0[0].as_str(),
         table_name: name.0[1].as_str(),
     })
-}
-
-pub(super) fn derive_catalog_from_tables<'a>(
-    tables: &'a [MySqlTableDesc],
-) -> Result<SubsourceCatalog<&'a MySqlTableDesc>, PlanError> {
-    // An index from table name -> schema name -> MySqlTableDesc
-    let mut tables_by_name = BTreeMap::new();
-    for table in tables.iter() {
-        tables_by_name
-            .entry(table.name.clone())
-            .or_insert_with(BTreeMap::new)
-            .entry(table.schema_name.clone())
-            .or_insert_with(BTreeMap::new)
-            .entry(MYSQL_DATABASE_FAKE_NAME.to_string())
-            .or_insert(table);
-    }
-
-    Ok(SubsourceCatalog(tables_by_name))
 }
 
 pub(super) fn generate_targeted_subsources(
@@ -184,14 +166,18 @@ pub(super) fn map_column_refs<'a>(
 /// Normalize column references to a sorted, deduplicated options list of column names.
 pub(super) fn normalize_column_refs<'a>(
     cols: Vec<UnresolvedItemName>,
-    catalog: &'a SubsourceCatalog<&'a MySqlTableDesc>,
+    subsource_resolver: &SubsourceResolver,
+    tables: &[MySqlTableDesc],
 ) -> Result<Vec<WithOptionValue<Aug>>, MySqlSourcePurificationError> {
     let (seq, unknown): (Vec<_>, Vec<_>) = cols.into_iter().partition(|name| {
         let (column_name, qual) = name.0.split_last().expect("non-empty");
-        match catalog.resolve(UnresolvedItemName::qualified(qual)) {
+        match subsource_resolver.resolve_idx(qual) {
             // TODO: this needs to also introduce the maximum qualification on
             // the columns, i.e. ensure they have the schema name.
-            Ok((_, desc)) => desc.columns.iter().any(|n| &n.name == column_name.as_str()),
+            Ok(idx) => tables[idx]
+                .columns
+                .iter()
+                .any(|n| &n.name == column_name.as_str()),
             Err(_) => false,
         }
     });
