@@ -569,24 +569,24 @@ where
         Self::delete_all(
             machine.applier.state_versions.blob.borrow(),
             batch_parts.iter().map(|k| k.complete(&shard_id)),
-            &machine.applier.metrics.retries.external.rollup_delete,
-            debug_span!("rollup::delete"),
-            &delete_semaphore,
-        )
-        .await;
-        *batch_parts = PartDeletes::default();
-        timer(&machine.applier.metrics.gc.steps.delete_rollup_seconds);
-
-        Self::delete_all(
-            machine.applier.state_versions.blob.borrow(),
-            rollups.iter().map(|k| k.complete(&shard_id)),
             &machine.applier.metrics.retries.external.batch_delete,
             debug_span!("batch::delete"),
             &delete_semaphore,
         )
         .await;
-        rollups.clear();
+        *batch_parts = PartDeletes::default();
         timer(&machine.applier.metrics.gc.steps.delete_batch_part_seconds);
+
+        Self::delete_all(
+            machine.applier.state_versions.blob.borrow(),
+            rollups.iter().map(|k| k.complete(&shard_id)),
+            &machine.applier.metrics.retries.external.rollup_delete,
+            debug_span!("rollup::delete"),
+            &delete_semaphore,
+        )
+        .await;
+        rollups.clear();
+        timer(&machine.applier.metrics.gc.steps.delete_rollup_seconds);
 
         machine
             .applier
