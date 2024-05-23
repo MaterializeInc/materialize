@@ -398,6 +398,11 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 version = "2.0.0+26.1"
 
+[[audits.protobuf-src]]
+who = "Petros Angelatos <petrosagg@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.0.1+26.1"
+
 [[audits.quanta]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
