@@ -2389,13 +2389,6 @@ impl Coordinator {
                     }
                 };
 
-                if return_if_err!(plan.values.contains_temporal(), ctx) {
-                    ctx.retire(Err(AdapterError::Unsupported(
-                        "calls to mz_now in write statements",
-                    )));
-                    return;
-                }
-
                 let finishing = RowSetFinishing {
                     order_by: vec![],
                     limit: None,
@@ -2463,44 +2456,72 @@ impl Coordinator {
             }
         };
 
-        // Ensure all objects `selection` depends on are valid for
-        // `ReadThenWrite` operations, i.e. they do not refer to any objects
-        // whose notion of time moves differently than that of user tables.
-        // `true` indicates they're all valid; `false` there are > 0 invalid
-        // dependencies.
+        // Disallow mz_now in any position because read time and write time differ.
+        let contains_temporal = return_if_err!(selection.contains_temporal(), ctx)
+            || assignments.values().any(|e| e.contains_temporal())
+            || returning.iter().any(|e| e.contains_temporal());
+        if contains_temporal {
+            ctx.retire(Err(AdapterError::Unsupported(
+                "calls to mz_now in write statements",
+            )));
+            return;
+        }
+
+        // Ensure all objects `selection` depends on are valid for `ReadThenWrite` operations:
         //
-        // This limitation is meant to ensure no writes occur between this read
-        // and the subsequent write.
-        fn validate_read_dependencies(catalog: &Catalog, id: &GlobalId) -> bool {
+        // - They do not refer to any objects whose notion of time moves differently than that of
+        // user tables. This limitation is meant to ensure no writes occur between this read and the
+        // subsequent write.
+        // - They do not use mz_now(), whose time produced during read will differ from the write
+        //   timestamp.
+        fn validate_read_dependencies(
+            catalog: &Catalog,
+            id: &GlobalId,
+        ) -> Result<(), AdapterError> {
+            use mz_catalog::memory::objects;
             use CatalogItemType::*;
-            match catalog.try_get_entry(id) {
-                Some(entry) => match entry.item().typ() {
-                    typ @ (Func | View | MaterializedView) => {
-                        let valid_id = id.is_user() || matches!(typ, Func);
-                        valid_id
-                            && (
-                                // empty `uses` indicates either system func or
-                                // view created from constants
-                                entry.uses().is_empty()
-                                    || entry
-                                        .uses()
-                                        .iter()
-                                        .all(|id| validate_read_dependencies(catalog, id))
-                            )
+            let mut ids_to_check = Vec::new();
+            let valid = match catalog.try_get_entry(id) {
+                Some(entry) => {
+                    if let CatalogItem::View(objects::View { optimized_expr, .. })
+                    | CatalogItem::MaterializedView(objects::MaterializedView {
+                        optimized_expr,
+                        ..
+                    }) = entry.item()
+                    {
+                        if optimized_expr.contains_temporal() {
+                            return Err(AdapterError::Unsupported(
+                                "calls to mz_now in write statements",
+                            ));
+                        }
                     }
-                    Source | Secret | Connection => false,
-                    // Cannot select from sinks or indexes
-                    Sink | Index => unreachable!(),
-                    Table => id.is_user(),
-                    Type => true,
-                },
+                    match entry.item().typ() {
+                        typ @ (Func | View | MaterializedView) => {
+                            ids_to_check.extend(entry.uses());
+                            let valid_id = id.is_user() || matches!(typ, Func);
+                            valid_id
+                        }
+                        Source | Secret | Connection => false,
+                        // Cannot select from sinks or indexes
+                        Sink | Index => unreachable!(),
+                        Table => id.is_user(),
+                        Type => true,
+                    }
+                }
                 None => false,
+            };
+            if !valid {
+                return Err(AdapterError::InvalidTableMutationSelection);
             }
+            for id in ids_to_check {
+                validate_read_dependencies(catalog, &id)?;
+            }
+            Ok(())
         }
 
         for id in selection.depends_on() {
-            if !validate_read_dependencies(self.catalog(), &id) {
-                ctx.retire(Err(AdapterError::InvalidTableMutationSelection));
+            if let Err(err) = validate_read_dependencies(self.catalog(), &id) {
+                ctx.retire(Err(err));
                 return;
             }
         }
