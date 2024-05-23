@@ -343,7 +343,7 @@ Issue a SQL query to get started. Need help?
 
     /// Executes a single SQL statement that returns rows as the
     /// `mz_support` user.
-    pub async fn introspection_execute_one(
+    pub async fn support_execute_one(
         &self,
         sql: &str,
     ) -> Result<Box<dyn RowIterator>, anyhow::Error> {

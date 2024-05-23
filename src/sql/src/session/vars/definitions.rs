@@ -1356,10 +1356,10 @@ pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: VarDefinition = VarDefinition:
 )
 .with_constraint(&NUMERIC_BOUNDED_0_1_INCLUSIVE);
 
-pub static AUTO_ROUTE_INTROSPECTION_QUERIES: VarDefinition = VarDefinition::new(
-    "auto_route_introspection_queries",
+pub static AUTO_ROUTE_CATALOG_QUERIES: VarDefinition = VarDefinition::new(
+    "auto_route_catalog_queries",
     value!(bool; true),
-    "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
+    "Whether to force queries that depend only on system tables, to run on the mz_catalog_server cluster (Materialize).",
     false,
 );
 

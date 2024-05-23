@@ -58,8 +58,8 @@ pub struct StateConfig {
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Builtin system cluster replica size.
     pub builtin_system_cluster_replica_size: String,
-    /// Builtin introspection cluster replica size.
-    pub builtin_introspection_cluster_replica_size: String,
+    /// Builtin catalog server cluster replica size.
+    pub builtin_catalog_server_cluster_replica_size: String,
     /// Builtin probe cluster replica size.
     pub builtin_probe_cluster_replica_size: String,
     /// Builtin support cluster replica size.

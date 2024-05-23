@@ -111,7 +111,7 @@ pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_notices_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_NOTICES_IND_OID,
-    sql: "IN CLUSTER mz_introspection ON mz_internal.mz_notices(id)",
+    sql: "IN CLUSTER mz_catalog_server ON mz_internal.mz_notices(id)",
     is_retained_metrics_object: false,
 };
 

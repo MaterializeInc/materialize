@@ -382,7 +382,7 @@ impl SessionVars {
             &EMIT_PLAN_INSIGHTS_NOTICE,
             &EMIT_TIMESTAMP_NOTICE,
             &EMIT_TRACE_ID_NOTICE,
-            &AUTO_ROUTE_INTROSPECTION_QUERIES,
+            &AUTO_ROUTE_CATALOG_QUERIES,
             &ENABLE_SESSION_RBAC_CHECKS,
             &ENABLE_SESSION_CARDINALITY_ESTIMATES,
             &MAX_IDENTIFIER_LENGTH,
@@ -761,9 +761,9 @@ impl SessionVars {
         *self.expect_value(&EMIT_TRACE_ID_NOTICE)
     }
 
-    /// Returns the value of `auto_route_introspection_queries` configuration parameter.
-    pub fn auto_route_introspection_queries(&self) -> bool {
-        *self.expect_value(&AUTO_ROUTE_INTROSPECTION_QUERIES)
+    /// Returns the value of `auto_route_catalog_queries` configuration parameter.
+    pub fn auto_route_catalog_queries(&self) -> bool {
+        *self.expect_value(&AUTO_ROUTE_CATALOG_QUERIES)
     }
 
     /// Returns the value of `enable_session_rbac_checks` configuration parameter.

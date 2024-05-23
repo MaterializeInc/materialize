@@ -37,7 +37,7 @@ use tracing::{event, Instrument, Level, Span};
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::{introspection, Coordinator, Message, TargetCluster};
+use crate::coord::{catalog_serving, Coordinator, Message, TargetCluster};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
@@ -84,7 +84,11 @@ impl Coordinator {
                 // If there isn't a current cluster set for a transaction, then try to auto route.
                 None => {
                     let session_catalog = self.catalog.for_session(ctx.session());
-                    introspection::auto_run_on_introspection(&session_catalog, ctx.session(), &plan)
+                    catalog_serving::auto_run_on_catalog_server(
+                        &session_catalog,
+                        ctx.session(),
+                        &plan,
+                    )
                 }
             };
             let (target_cluster_id, target_cluster_name) = match self
@@ -104,9 +108,11 @@ impl Coordinator {
             let session_catalog = self.catalog.for_session(ctx.session());
 
             if let Some(cluster_name) = &target_cluster_name {
-                if let Err(e) =
-                    introspection::check_cluster_restrictions(cluster_name, &session_catalog, &plan)
-                {
+                if let Err(e) = catalog_serving::check_cluster_restrictions(
+                    cluster_name,
+                    &session_catalog,
+                    &plan,
+                ) {
                     return ctx.retire(Err(e));
                 }
             }

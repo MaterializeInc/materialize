@@ -61,7 +61,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use tracing::debug;
 
-use crate::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER};
+use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -170,7 +170,7 @@ impl Cluster {
         // them without talking to the cloud or observability groups.
         if self.name == MZ_SYSTEM_CLUSTER.name {
             ClusterRole::SystemCritical
-        } else if self.name == MZ_INTROSPECTION_CLUSTER.name {
+        } else if self.name == MZ_CATALOG_SERVER_CLUSTER.name {
             ClusterRole::System
         } else {
             ClusterRole::User

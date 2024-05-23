@@ -777,7 +777,7 @@ impl<'a> Runner<'a> {
             .system_client
             .batch_execute(
                 "ROLLBACK;
-                 SET cluster = mz_introspection;
+                 SET cluster = mz_catalog_server;
                  RESET cluster_replica;",
             )
             .await?;
@@ -1053,7 +1053,7 @@ impl<'a> RunnerInner<'a> {
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: config.replicas.to_string(),
             bootstrap_builtin_system_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_introspection_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_builtin_catalog_server_cluster_replica_size: config.replicas.to_string(),
             bootstrap_builtin_probe_cluster_replica_size: config.replicas.to_string(),
             bootstrap_builtin_support_cluster_replica_size: config.replicas.to_string(),
             system_parameter_defaults: {

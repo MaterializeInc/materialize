@@ -7,16 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Special cases related to the "introspection" of Materialize
+//! Special cases related to the "catalog serving" of Materialize
 //!
-//! Every Materialize deployment has a pre-installed [`mz_introspection`] cluster, which
-//! has several indexes to speed up common introspection queries. We also have a special
+//! Every Materialize deployment has a pre-installed [`mz_catalog_server`] cluster, which
+//! has several indexes to speed up common catalog queries. We also have a special
 //! `mz_support` role, which can be used by support teams to diagnose a deployment.
 //! For each of these use cases, we have some special restrictions we want to apply. The
 //! logic around these restrictions is defined here.
 //!
 //!
-//! [`mz_introspection`]: https://materialize.com/docs/sql/show-clusters/#mz_introspection-system-cluster
+//! [`mz_catalog_server`]: https://materialize.com/docs/sql/show-clusters/#mz_catalog_server-system-cluster
 
 use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
@@ -31,11 +31,11 @@ use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
 use crate::AdapterError;
-use mz_catalog::builtin::MZ_INTROSPECTION_CLUSTER;
+use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 
-/// Checks whether or not we should automatically run a query on the `mz_introspection`
+/// Checks whether or not we should automatically run a query on the `mz_catalog_server`
 /// cluster, as opposed to whatever the current default cluster is.
-pub fn auto_run_on_introspection<'a, 's, 'p>(
+pub fn auto_run_on_catalog_server<'a, 's, 'p>(
     catalog: &'a ConnCatalog<'a>,
     session: &'s Session,
     plan: &'p Plan,
@@ -142,7 +142,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     };
 
     // Bail if the user has disabled it via the SessionVar.
-    if !session.vars().auto_route_introspection_queries() {
+    if !session.vars().auto_route_catalog_queries() {
         return TargetCluster::Active;
     }
 
@@ -172,28 +172,28 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     {
         let intros_cluster = catalog
             .state()
-            .resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
-        tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
+            .resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER);
+        tracing::debug!("Running on '{}' cluster", MZ_CATALOG_SERVER_CLUSTER.name);
 
         // If we're running on a different cluster than the active one, notify the user.
         if intros_cluster.name != session.vars().cluster() {
-            session.add_notice(AdapterNotice::AutoRunOnIntrospectionCluster);
+            session.add_notice(AdapterNotice::AutoRunOnCatalogServerCluster);
         }
-        TargetCluster::Introspection
+        TargetCluster::CatalogServer
     } else {
         TargetCluster::Active
     }
 }
 
-/// Checks if we're currently running on the [`MZ_INTROSPECTION_CLUSTER`], and if so, do
+/// Checks if we're currently running on the [`MZ_CATALOG_SERVER_CLUSTER`], and if so, do
 /// we depend on any objects that we're not allowed to query from the cluster.
 pub fn check_cluster_restrictions(
     cluster: &str,
     catalog: &impl SessionCatalog,
     plan: &Plan,
 ) -> Result<(), AdapterError> {
-    // We only impose restrictions if the current cluster is the introspection cluster.
-    if cluster != MZ_INTROSPECTION_CLUSTER.name {
+    // We only impose restrictions if the current cluster is the catalog server cluster.
+    if cluster != MZ_CATALOG_SERVER_CLUSTER.name {
         return Ok(());
     }
 
@@ -203,7 +203,7 @@ pub fn check_cluster_restrictions(
     // that we actually know what objects we'll need to reference.
     //
     // Note: Creating other objects like Materialized Views is prevented elsewhere. We define the
-    // 'mz_introspection' cluster to be "read-only", which restricts these actions.
+    // 'mz_catalog_server' cluster to be "read-only", which restricts these actions.
     let depends_on: Box<dyn Iterator<Item = GlobalId>> = match plan {
         Plan::ReadThenWrite(plan) => Box::new(plan.selection.depends_on().into_iter()),
         Plan::Subscribe(plan) => match plan.from {
@@ -214,7 +214,7 @@ pub fn check_cluster_restrictions(
         _ => return Ok(()),
     };
 
-    // Collect any items that are not allowed to be run on the introspection cluster.
+    // Collect any items that are not allowed to be run on the catalog server cluster.
     let unallowed_dependents: SmallVec<[String; 2]> = depends_on
         .filter_map(|id| {
             let item = catalog.get_item(&id);
@@ -232,7 +232,7 @@ pub fn check_cluster_restrictions(
     if !unallowed_dependents.is_empty() {
         Err(AdapterError::UnallowedOnCluster {
             depends_on: unallowed_dependents,
-            cluster: MZ_INTROSPECTION_CLUSTER.name.to_string(),
+            cluster: MZ_CATALOG_SERVER_CLUSTER.name.to_string(),
         })
     } else {
         Ok(())

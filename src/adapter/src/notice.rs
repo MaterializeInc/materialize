@@ -104,7 +104,7 @@ pub enum AdapterNotice {
         role_name: String,
         member_name: String,
     },
-    AutoRunOnIntrospectionCluster,
+    AutoRunOnCatalogServerCluster,
     AlterIndexOwner {
         name: String,
     },
@@ -181,7 +181,7 @@ impl AdapterNotice {
             AdapterNotice::RbacUserDisabled => Severity::Notice,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
-            AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
+            AdapterNotice::AutoRunOnCatalogServerCluster => Severity::Debug,
             AdapterNotice::AlterIndexOwner { .. } => Severity::Warning,
             AdapterNotice::CannotRevoke { .. } => Severity::Warning,
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
@@ -276,7 +276,7 @@ impl AdapterNotice {
             AdapterNotice::RbacUserDisabled => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => SqlState::WARNING,
-            AdapterNotice::AutoRunOnIntrospectionCluster => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::AutoRunOnCatalogServerCluster => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::AlterIndexOwner { .. } => SqlState::WARNING,
             AdapterNotice::CannotRevoke { .. } => SqlState::WARNING_PRIVILEGE_NOT_REVOKED,
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => SqlState::SUCCESSFUL_COMPLETION,
@@ -409,9 +409,9 @@ impl fmt::Display for AdapterNotice {
                 f,
                 "role \"{member_name}\" is not a member of role \"{role_name}\""
             ),
-            AdapterNotice::AutoRunOnIntrospectionCluster => write!(
+            AdapterNotice::AutoRunOnCatalogServerCluster => write!(
                 f,
-                "query was automatically run on the \"mz_introspection\" cluster"
+                "query was automatically run on the \"mz_catalog_server\" cluster"
             ),
             AdapterNotice::AlterIndexOwner { name } => {
                 write!(f, "cannot change owner of {}", name.quoted())

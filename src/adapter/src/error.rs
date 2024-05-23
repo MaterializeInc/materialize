@@ -14,7 +14,7 @@ use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
 use itertools::Itertools;
-use mz_catalog::builtin::MZ_INTROSPECTION_CLUSTER;
+use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
 use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
@@ -316,7 +316,7 @@ impl AdapterError {
                     earliest_possible,
                 ))
             }
-            AdapterError::UnallowedOnCluster { cluster, .. } => (cluster == MZ_INTROSPECTION_CLUSTER.name).then(||
+            AdapterError::UnallowedOnCluster { cluster, .. } => (cluster == MZ_CATALOG_SERVER_CLUSTER.name).then(||
                 format!("The transaction is executing on the {cluster} cluster, maybe having been routed there by the first statement in the transaction.")
             ),
             AdapterError::InputNotReadableAtRefreshAtTime(oracle_read_ts, least_valid_read) => {
@@ -383,7 +383,7 @@ impl AdapterError {
             ),
             AdapterError::PlanError(e) => e.hint(),
             AdapterError::UnallowedOnCluster { cluster, .. } => {
-                (cluster != MZ_INTROSPECTION_CLUSTER.name).then(||
+                (cluster != MZ_CATALOG_SERVER_CLUSTER.name).then(||
                     "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
                     .to_string()
                 )

@@ -255,7 +255,7 @@ impl Catalog {
                 if !is_read_only {
                     let cluster_sizes = BuiltinBootstrapClusterSizes {
                         system_cluster: config.builtin_system_cluster_replica_size,
-                        introspection_cluster: config.builtin_introspection_cluster_replica_size,
+                        catalog_server_cluster: config.builtin_catalog_server_cluster_replica_size,
                         probe_cluster: config.builtin_probe_cluster_replica_size,
                         support_cluster: config.builtin_support_cluster_replica_size,
                     };
@@ -1258,8 +1258,8 @@ fn default_logging_config() -> ReplicaLogging {
 pub struct BuiltinBootstrapClusterSizes {
     /// Size to default system_cluster on bootstrap
     pub system_cluster: String,
-    /// Size to default introspection_cluster on bootstrap
-    pub introspection_cluster: String,
+    /// Size to default catalog_server_cluster on bootstrap
+    pub catalog_server_cluster: String,
     /// Size to default probe_cluster on bootstrap
     pub probe_cluster: String,
     /// Size to default support_cluster on bootstrap
@@ -1271,8 +1271,8 @@ impl BuiltinBootstrapClusterSizes {
     fn get_size(&self, cluster_name: &str) -> Result<String, mz_catalog::durable::CatalogError> {
         if cluster_name == mz_catalog::builtin::MZ_SYSTEM_CLUSTER.name {
             Ok(self.system_cluster.clone())
-        } else if cluster_name == mz_catalog::builtin::MZ_INTROSPECTION_CLUSTER.name {
-            Ok(self.introspection_cluster.clone())
+        } else if cluster_name == mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER.name {
+            Ok(self.catalog_server_cluster.clone())
         } else if cluster_name == mz_catalog::builtin::MZ_PROBE_CLUSTER.name {
             Ok(self.probe_cluster.clone())
         } else if cluster_name == mz_catalog::builtin::MZ_SUPPORT_CLUSTER.name {

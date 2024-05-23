@@ -135,7 +135,7 @@ async fn report_loop(
                     .active_subscribes
                     .with_label_values(&["user"])
                     .get();
-                let mut rows = adapter_client.introspection_execute_one(&format!("
+                let mut rows = adapter_client.support_execute_one(&format!("
                     SELECT jsonb_build_object(
                         'active_aws_privatelink_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'aws-privatelink')::int4,
                         'active_clusters', (SELECT count(*) FROM mz_clusters WHERE id LIKE 'u%')::int4,
