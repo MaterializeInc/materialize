@@ -60,6 +60,9 @@ def print_annotation_match(
     )
     print(f"URL: {with_formatting(web_url, COLOR_CYAN)}")
 
+    if annotation.title is not None:
+        print(f"Annotation: {with_formatting(annotation.title, COLOR_CYAN)}")
+
     if not short_result_presentation:
         print(SHORT_SEPARATOR)
         print(matched_snippet)
