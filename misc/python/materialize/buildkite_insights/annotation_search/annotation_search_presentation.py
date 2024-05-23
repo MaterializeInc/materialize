@@ -11,6 +11,9 @@
 
 from typing import Any
 
+from materialize.buildkite_insights.annotation_search.annotation_match import (
+    AnnotationMatch,
+)
 from materialize.buildkite_insights.util.search_utility import (
     highlight_match,
     trim_match,
@@ -35,13 +38,13 @@ def print_annotation_match(
     build_pipeline: str,
     branch: str,
     web_url: str,
-    annotation_text: str,
+    annotation: AnnotationMatch,
     search_value: str,
     use_regex: bool,
     short_result_presentation: bool,
 ) -> None:
     matched_snippet = trim_match(
-        input=annotation_text, search_value=search_value, use_regex=use_regex
+        input=annotation.title_and_text, search_value=search_value, use_regex=use_regex
     )
     matched_snippet = highlight_match(
         input=matched_snippet,

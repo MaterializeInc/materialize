@@ -13,6 +13,9 @@ import argparse
 import re
 from typing import Any
 
+from materialize.buildkite_insights.annotation_search.annotation_match import (
+    AnnotationMatch,
+)
 from materialize.buildkite_insights.annotation_search.annotation_search_presentation import (
     print_annotation_match,
     print_before_search_results,
@@ -92,7 +95,7 @@ def search_annotations(
     annotations: list[Any],
     search_value: str,
     use_regex: bool,
-) -> list[str]:
+) -> list[AnnotationMatch]:
     matched_annotations = []
 
     search_pattern = _search_value_to_pattern(search_value, use_regex)
@@ -101,13 +104,37 @@ def search_annotations(
         annotation_text = clean_annotation_text(annotation_html)
 
         if search_pattern.search(annotation_text) is not None:
-            matched_annotations.append(annotation_text)
+            annotation_title = try_extracting_title_from_annotation_html(
+                annotation_html
+            )
+            matched_annotations.append(
+                AnnotationMatch(annotation_title, annotation_text)
+            )
 
     return matched_annotations
 
 
 def clean_annotation_text(annotation_html: str) -> str:
     return re.sub(r"<[^>]+>", "", annotation_html)
+
+
+def try_extracting_title_from_annotation_html(annotation_html: str) -> str | None:
+    # match <p>...</p> header
+    header_paragraph_match = re.search("<p>(.*?)</p>", annotation_html)
+
+    if header_paragraph_match is None:
+        return None
+
+    header_paragraph = header_paragraph_match.group(1)
+
+    build_step_name_match = re.search(
+        "<a href=.*?>(.*?)</a> (failed|succeeded)", header_paragraph
+    )
+
+    if build_step_name_match:
+        return build_step_name_match.group(1)
+    else:
+        return clean_annotation_text(header_paragraph)
 
 
 def filter_builds(
