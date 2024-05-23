@@ -31,7 +31,8 @@ class StringDataType(DataType):
     def resolve_return_type_spec(
         self, characteristics: set[ExpressionCharacteristics]
     ) -> ReturnTypeSpec:
-        return StringReturnTypeSpec()
+        is_text_type = self.internal_identifier == TEXT_TYPE_IDENTIFIER
+        return StringReturnTypeSpec(is_text_type=is_text_type)
 
 
 TEXT_DATA_TYPE = StringDataType(TEXT_TYPE_IDENTIFIER, "TEXT")

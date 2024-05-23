@@ -86,7 +86,7 @@ MAP_OPERATION_TYPES.append(
 MAP_OPERATION_TYPES.append(
     DbOperation(
         "MAP[$ => $]",
-        [StringOperationParam(), AnyOperationParam()],
+        [StringOperationParam(only_type_text=True), AnyOperationParam()],
         MapReturnTypeSpec(),
         comment="using arbitrary text values as keys",
         since_mz_version=MzVersion.parse_mz("v0.100.0"),
@@ -104,7 +104,7 @@ MAP_OPERATION_TYPES.append(
 MAP_OPERATION_TYPES.append(
     DbFunction(
         "map_agg",
-        [StringOperationParam(), AnyOperationParam()],
+        [StringOperationParam(only_type_text=True), AnyOperationParam()],
         MapReturnTypeSpec(),
     )
 )

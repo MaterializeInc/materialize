@@ -12,7 +12,6 @@ from materialize.output_consistency.operation.return_type_spec import ReturnType
 
 
 class StringReturnTypeSpec(ReturnTypeSpec):
-    def __init__(
-        self,
-    ) -> None:
+    def __init__(self, is_text_type: bool = True) -> None:
         super().__init__(DataTypeCategory.STRING)
+        self.is_text_type = is_text_type
