@@ -7699,16 +7699,20 @@ impl<'a> Parser<'a> {
 
         self.expect_keyword(SCHEMA)?;
 
-        if self.parse_keyword(AS) {
+        let format = if self.parse_keyword(AS) {
             // only json format is supported
             self.expect_keyword(JSON)?;
-        }
+            Some(ExplainFormat::Json)
+        } else {
+            None
+        };
 
         self.expect_keywords(&[FOR, CREATE])?;
 
         if let Statement::CreateSink(statement) = self.parse_create_sink()? {
             Ok(Statement::ExplainSinkSchema(ExplainSinkSchemaStatement {
                 schema_for,
+                format,
                 statement,
             }))
         } else {

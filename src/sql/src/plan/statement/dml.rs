@@ -571,6 +571,8 @@ pub fn plan_explain_schema(
 ) -> Result<Plan, PlanError> {
     let ExplainSinkSchemaStatement {
         schema_for,
+        // Parser limits to JSON.
+        format: _,
         mut statement,
     } = explain_schema;
 
