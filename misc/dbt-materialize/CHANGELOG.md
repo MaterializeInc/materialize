@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.8.0 - 2024-05-23
 
 * Update base adapter references as part of
   [decoupling migration from dbt-core](https://github.com/dbt-labs/dbt-adapters/discussions/87)
