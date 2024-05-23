@@ -72,7 +72,9 @@ class DateTimeOperationParam(OperationParam):
         if isinstance(return_type_spec, DateTimeReturnTypeSpec):
             return return_type_spec.type_identifier in self.supported_type_identifiers
 
-        return True
+        return super().might_support_type_as_input_assuming_category_matches(
+            return_type_spec
+        )
 
 
 class TimeIntervalOperationParam(OperationParam):

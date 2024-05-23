@@ -89,7 +89,9 @@ class NumericOperationParam(OperationParam):
             if self.no_floating_point_type and return_type_spec.always_floating_type:
                 return False
 
-        return True
+        return super().might_support_type_as_input_assuming_category_matches(
+            return_type_spec
+        )
 
 
 class MaxSignedInt4OperationParam(NumericOperationParam):
