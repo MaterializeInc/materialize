@@ -288,7 +288,7 @@ where
 
     async fn compact_and_apply(
         cfg: PersistConfig,
-        blob: Arc<dyn Blob + Send + Sync>,
+        blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
         req: CompactReq<T>,
@@ -433,7 +433,7 @@ where
     ///    number of outstanding parts we can keep in-flight to Blob.
     pub async fn compact(
         cfg: CompactConfig,
-        blob: Arc<dyn Blob + Send + Sync>,
+        blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
@@ -663,7 +663,7 @@ where
         shard_id: &'a ShardId,
         desc: &'a Description<T>,
         runs: Vec<(&'a Description<T>, &'a [BatchPart<T>])>,
-        blob: Arc<dyn Blob + Send + Sync>,
+        blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         isolated_runtime: Arc<IsolatedRuntime>,

@@ -55,8 +55,8 @@ pub struct PersistClientCache {
     /// The tunable knobs for persist.
     pub cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
-    blob_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Blob + Send + Sync>)>>,
-    consensus_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Consensus + Send + Sync>)>>,
+    blob_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Blob>)>>,
+    consensus_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Consensus>)>>,
     isolated_runtime: Arc<IsolatedRuntime>,
     pub(crate) state_cache: Arc<StateCache>,
     pubsub_sender: Arc<dyn PubSubSender>,
@@ -159,7 +159,7 @@ impl PersistClientCache {
     async fn open_consensus(
         &self,
         consensus_uri: String,
-    ) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
+    ) -> Result<Arc<dyn Consensus>, ExternalError> {
         let mut consensus_by_uri = self.consensus_by_uri.lock().await;
         let consensus = match consensus_by_uri.entry(consensus_uri) {
             Entry::Occupied(x) => Arc::clone(&x.get().1),
@@ -194,10 +194,7 @@ impl PersistClientCache {
         Ok(consensus)
     }
 
-    async fn open_blob(
-        &self,
-        blob_uri: String,
-    ) -> Result<Arc<dyn Blob + Send + Sync>, ExternalError> {
+    async fn open_blob(&self, blob_uri: String) -> Result<Arc<dyn Blob>, ExternalError> {
         let mut blob_by_uri = self.blob_by_uri.lock().await;
         let blob = match blob_by_uri.entry(blob_uri) {
             Entry::Occupied(x) => Arc::clone(&x.get().1),

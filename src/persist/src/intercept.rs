@@ -65,12 +65,12 @@ impl InterceptHandle {
 #[derive(Debug)]
 pub struct InterceptBlob {
     handle: InterceptHandle,
-    blob: Arc<dyn Blob + Send + Sync>,
+    blob: Arc<dyn Blob>,
 }
 
 impl InterceptBlob {
     /// Returns a new [InterceptBlob].
-    pub fn new(blob: Arc<dyn Blob + Send + Sync>, handle: InterceptHandle) -> Self {
+    pub fn new(blob: Arc<dyn Blob>, handle: InterceptHandle) -> Self {
         InterceptBlob { handle, blob }
     }
 }

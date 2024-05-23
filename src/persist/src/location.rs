@@ -345,7 +345,7 @@ pub type ResultStream<'a, T> = Pin<Box<dyn Stream<Item = Result<T, ExternalError
 /// storage easier, sequence numbers used with [Consensus] need to be restricted to the
 /// range [0, i64::MAX].
 #[async_trait]
-pub trait Consensus: std::fmt::Debug {
+pub trait Consensus: std::fmt::Debug + Send + Sync {
     /// Returns all the keys ever created in the consensus store.
     fn list_keys(&self) -> ResultStream<String>;
 
@@ -392,7 +392,7 @@ pub trait Consensus: std::fmt::Debug {
 }
 
 #[async_trait]
-impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
+impl<A: Consensus + 'static> Consensus for Tasked<A> {
     fn list_keys(&self) -> ResultStream<String> {
         // Similarly to Blob::list_keys_and_metadata, this is difficult to make into a task.
         // (If we use an unbounded channel between the task and the caller, we can buffer forever;
@@ -478,7 +478,7 @@ pub const BLOB_GET_LIVENESS_KEY: &str = "LIVENESS";
 /// been deleted". Another tricky problem is the same but for a deletion when
 /// the first attempt timed out.
 #[async_trait]
-pub trait Blob: std::fmt::Debug {
+pub trait Blob: std::fmt::Debug + Send + Sync {
     /// Returns a reference to the value corresponding to the key.
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError>;
 
@@ -517,7 +517,7 @@ pub trait Blob: std::fmt::Debug {
 }
 
 #[async_trait]
-impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
+impl<A: Blob + 'static> Blob for Tasked<A> {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();

@@ -513,7 +513,7 @@ where
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
-    pub(crate) blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) blob: Arc<dyn Blob>,
     pub(crate) reader_id: LeasedReaderId,
     pub(crate) schemas: Schemas<K, V>,
 
@@ -543,7 +543,7 @@ where
         metrics: Arc<Metrics>,
         machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
-        blob: Arc<dyn Blob + Send + Sync>,
+        blob: Arc<dyn Blob>,
         reader_id: LeasedReaderId,
         schemas: Schemas<K, V>,
         since: Antichain<T>,

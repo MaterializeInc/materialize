@@ -95,8 +95,8 @@ use crate::{Metrics, PersistConfig, ShardId};
 #[derive(Debug)]
 pub struct StateVersions {
     pub(crate) cfg: PersistConfig,
-    pub(crate) consensus: Arc<dyn Consensus + Send + Sync>,
-    pub(crate) blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) consensus: Arc<dyn Consensus>,
+    pub(crate) blob: Arc<dyn Blob>,
     pub(crate) metrics: Arc<Metrics>,
 }
 
@@ -127,8 +127,8 @@ impl EncodedRollup {
 impl StateVersions {
     pub fn new(
         cfg: PersistConfig,
-        consensus: Arc<dyn Consensus + Send + Sync>,
-        blob: Arc<dyn Blob + Send + Sync>,
+        consensus: Arc<dyn Consensus>,
+        blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
     ) -> Self {
         StateVersions {

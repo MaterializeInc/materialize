@@ -114,7 +114,7 @@ impl TraceBatchMeta {
     /// Assert that all of the [BlobTraceBatchPart]'s obey the required invariants.
     pub async fn validate_data(
         &self,
-        blob: &(dyn Blob + Send + Sync),
+        blob: &dyn Blob,
         metrics: &ColumnarMetrics,
     ) -> Result<(), Error> {
         let mut batches = vec![];
@@ -522,7 +522,7 @@ mod tests {
     }
 
     async fn expect_set_trace_batch<T: Timestamp + Codec64>(
-        blob: &(dyn Blob + Send + Sync),
+        blob: &dyn Blob,
         key: &str,
         batch: &BlobTraceBatchPart<T>,
     ) -> u64 {

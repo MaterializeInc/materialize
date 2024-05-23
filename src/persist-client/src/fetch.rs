@@ -77,7 +77,7 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    pub(crate) blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) blob: Arc<dyn Blob>,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_metrics: Arc<ShardMetrics>,
     pub(crate) shard_id: ShardId,
@@ -269,7 +269,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoFetchBatchFilter> for FetchBatchFilte
 /// returned value.
 pub(crate) async fn fetch_leased_part<K, V, T, D>(
     part: &LeasedBatchPart<T>,
-    blob: &(dyn Blob + Send + Sync),
+    blob: &dyn Blob,
     metrics: Arc<Metrics>,
     read_metrics: &ReadMetrics,
     shard_metrics: &ShardMetrics,
@@ -315,7 +315,7 @@ where
 
 pub(crate) async fn fetch_batch_part_blob<T>(
     shard_id: &ShardId,
-    blob: &(dyn Blob + Send + Sync),
+    blob: &dyn Blob,
     metrics: &Metrics,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
@@ -371,7 +371,7 @@ where
 
 pub(crate) async fn fetch_batch_part<T>(
     shard_id: &ShardId,
-    blob: &(dyn Blob + Send + Sync),
+    blob: &dyn Blob,
     metrics: &Metrics,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
@@ -829,7 +829,7 @@ where
 {
     pub async fn fetch(
         shard_id: &ShardId,
-        blob: &(dyn Blob + Send + Sync),
+        blob: &dyn Blob,
         metrics: &Metrics,
         shard_metrics: &ShardMetrics,
         read_metrics: &ReadMetrics,

@@ -193,8 +193,8 @@ impl Diagnostics {
 #[derive(Debug, Clone)]
 pub struct PersistClient {
     cfg: PersistConfig,
-    blob: Arc<dyn Blob + Send + Sync>,
-    consensus: Arc<dyn Consensus + Send + Sync>,
+    blob: Arc<dyn Blob>,
+    consensus: Arc<dyn Consensus>,
     metrics: Arc<Metrics>,
     isolated_runtime: Arc<IsolatedRuntime>,
     shared_states: Arc<StateCache>,
@@ -209,8 +209,8 @@ impl PersistClient {
     /// [crate::cache::PersistClientCache::open].
     pub fn new(
         cfg: PersistConfig,
-        blob: Arc<dyn Blob + Send + Sync>,
-        consensus: Arc<dyn Consensus + Send + Sync>,
+        blob: Arc<dyn Blob>,
+        consensus: Arc<dyn Consensus>,
         metrics: Arc<Metrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
         shared_states: Arc<StateCache>,
@@ -742,7 +742,7 @@ mod tests {
     }
 
     pub async fn expect_fetch_part<K, V, T, D>(
-        blob: &(dyn Blob + Send + Sync),
+        blob: &dyn Blob,
         key: &BlobKey,
         metrics: &Metrics,
     ) -> (
