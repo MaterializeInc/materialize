@@ -992,7 +992,11 @@ where
 
         let mut consolidator = Consolidator::new(
             format!("{}[as_of={:?}]", self.shard_id(), as_of.elements()),
+            self.shard_id(),
+            Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
+            Arc::clone(&self.machine.applier.shard_metrics),
+            self.metrics.read.snapshot.clone(),
             FetchBatchFilter::Snapshot {
                 as_of: as_of.clone(),
             },
@@ -1004,11 +1008,6 @@ where
         for batch in batches {
             for run in batch.runs() {
                 consolidator.enqueue_run(
-                    self.shard_id(),
-                    &self.blob,
-                    &self.metrics,
-                    |m| &m.snapshot,
-                    &self.machine.applier.shard_metrics,
                     &batch.desc,
                     run.into_iter()
                         .filter(|p| should_fetch_part(p.stats()))

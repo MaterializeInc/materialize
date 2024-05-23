@@ -32,7 +32,7 @@ use timely::progress::Timestamp;
 use tracing::{debug_span, Instrument};
 
 use crate::fetch::{Cursor, EncodedPart, FetchBatchFilter};
-use crate::internal::metrics::{BatchPartReadMetrics, ReadMetrics, ShardMetrics};
+use crate::internal::metrics::{ReadMetrics, ShardMetrics};
 use crate::internal::paths::WriterKey;
 use crate::internal::state::BatchPart;
 use crate::metrics::Metrics;
@@ -59,11 +59,6 @@ fn clone_tuple<T, D>((k, v, t, d): TupleRef<T, D>) -> Tuple<T, D> {
 #[derive(Debug)]
 pub(crate) enum FetchData<T> {
     Unfetched {
-        shard_id: ShardId,
-        blob: Arc<dyn Blob>,
-        metrics: Arc<Metrics>,
-        read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
-        shard_metrics: Arc<ShardMetrics>,
         part_desc: Description<T>,
         part: BatchPart<T>,
     },
@@ -92,23 +87,23 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         }
     }
 
-    async fn fetch(self) -> anyhow::Result<EncodedPart<T>> {
+    async fn fetch(
+        self,
+        shard_id: ShardId,
+        blob: &dyn Blob,
+        metrics: &Metrics,
+        shard_metrics: &ShardMetrics,
+        read_metrics: &ReadMetrics,
+    ) -> anyhow::Result<EncodedPart<T>> {
         match self {
             FetchData::Unfetched {
-                shard_id,
-                blob,
-                metrics,
-                read_metrics,
-                shard_metrics,
-                part_desc,
-                part,
-                ..
+                part_desc, part, ..
             } => EncodedPart::fetch(
                 &shard_id,
                 &*blob,
-                &metrics,
-                &shard_metrics,
-                read_metrics(&metrics.read),
+                metrics,
+                shard_metrics,
+                read_metrics,
                 &part_desc,
                 &part,
             )
@@ -222,7 +217,11 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
 #[derive(Debug)]
 pub(crate) struct Consolidator<T, D> {
     context: String,
+    shard_id: ShardId,
+    blob: Arc<dyn Blob>,
     metrics: Arc<Metrics>,
+    shard_metrics: Arc<ShardMetrics>,
+    read_metrics: Arc<ReadMetrics>,
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
@@ -255,7 +254,11 @@ where
     /// limit, but may burst above it if that's necessary to make progress.
     pub fn new(
         context: String,
+        shard_id: ShardId,
+        blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
+        read_metrics: ReadMetrics,
         filter: FetchBatchFilter<T>,
         prefetch_budget_bytes: usize,
         split_old_runs: bool,
@@ -263,6 +266,10 @@ where
         Self {
             context,
             metrics,
+            shard_id,
+            blob,
+            read_metrics: Arc::new(read_metrics),
+            shard_metrics,
             runs: vec![],
             filter,
             budget: prefetch_budget_bytes,
@@ -278,14 +285,8 @@ where
     /// returned from the iterator. At the moment, this invariant is not checked. The simplest way
     /// to ensure this is to enqueue every run before any calls to next.
     // TODO(bkirwi): enforce this invariant, either by forcing all runs to be pre-registered or with an assert.
-    // TODO(bkirwi): try moving some of these params into the constructor when the dust settles.
     pub fn enqueue_run(
         &mut self,
-        shard_id: ShardId,
-        blob: &Arc<dyn Blob>,
-        metrics: &Arc<Metrics>,
-        read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
-        shard_metrics: &Arc<ShardMetrics>,
         desc: &Description<T>,
         parts: impl IntoIterator<Item = BatchPart<T>>,
     ) {
@@ -299,8 +300,8 @@ where
                         ts_rewrite,
                     } => {
                         let part = EncodedPart::from_inline(
-                            metrics,
-                            read_metrics(&metrics.read).clone(),
+                            &*self.metrics,
+                            (*self.read_metrics).clone(),
                             desc.clone(),
                             &updates,
                             ts_rewrite.as_ref(),
@@ -309,11 +310,6 @@ where
                     }
                     part => ConsolidationPart::Queued {
                         data: FetchData::Unfetched {
-                            shard_id,
-                            blob: Arc::clone(blob),
-                            metrics: Arc::clone(metrics),
-                            read_metrics,
-                            shard_metrics: Arc::clone(shard_metrics),
                             part_desc: desc.clone(),
                             part,
                         },
@@ -439,7 +435,15 @@ where
                         self.metrics.consolidation.parts_fetched.inc();
                         let maybe_unconsolidated = data.maybe_unconsolidated();
                         *part = ConsolidationPart::from_encoded(
-                            data.take().fetch().await?,
+                            data.take()
+                                .fetch(
+                                    self.shard_id,
+                                    &*self.blob,
+                                    &*self.metrics,
+                                    &*self.shard_metrics,
+                                    &self.read_metrics,
+                                )
+                                .await?,
                             &self.filter,
                             maybe_unconsolidated,
                         );
@@ -547,10 +551,18 @@ where
                     let key_lower = data.key_lower().to_vec();
                     let maybe_unconsolidated = data.maybe_unconsolidated();
                     let span = debug_span!("compaction::prefetch");
-                    let handle = mz_ore::task::spawn(
-                        || "persist::compaction::prefetch",
-                        data.fetch().instrument(span),
-                    );
+                    let handle = mz_ore::task::spawn(|| "persist::compaction::prefetch", {
+                        let shard_id = self.shard_id;
+                        let blob = Arc::clone(&self.blob);
+                        let metrics = Arc::clone(&self.metrics);
+                        let shard_metrics = Arc::clone(&self.shard_metrics);
+                        let read_metrics = Arc::clone(&self.read_metrics);
+                        async move {
+                            data.fetch(shard_id, &*blob, &*metrics, &*shard_metrics, &*read_metrics)
+                                .instrument(span)
+                                .await
+                        }
+                    });
                     *c_part = ConsolidationPart::Prefetched {
                         handle,
                         maybe_unconsolidated,
@@ -903,7 +915,11 @@ mod tests {
                 // Toy compaction loop!
                 let mut consolidator = Consolidator {
                     context: "test".to_string(),
+                    shard_id: ShardId::new(),
+                    blob: Arc::new(MemBlob::open(MemBlobConfig::default())),
                     metrics: Arc::clone(metrics),
+                    shard_metrics: metrics.shards.shard(&ShardId::new(), "test"),
+                    read_metrics: Arc::new(metrics.read.snapshot.clone()),
                     // Generated runs of data that are sorted, but not necessarily consolidated.
                     // This is because timestamp-advancement may cause us to have duplicate KVTs,
                     // including those that span runs.
@@ -1001,7 +1017,11 @@ mod tests {
 
             let mut consolidator: Consolidator<u64, i64> = Consolidator::new(
                 "test".to_string(),
+                shard_id,
+                blob,
                 Arc::clone(&metrics),
+                shard_metrics,
+                metrics.read.batch_fetcher.clone(),
                 FetchBatchFilter::Compaction {
                     since: desc.since().clone(),
                 },
@@ -1025,15 +1045,7 @@ mod tests {
                         })
                     })
                     .collect();
-                consolidator.enqueue_run(
-                    shard_id,
-                    &blob,
-                    &metrics,
-                    |m| &m.batch_fetcher,
-                    &shard_metrics,
-                    &desc,
-                    parts,
-                )
+                consolidator.enqueue_run(&desc, parts)
             }
 
             // No matter what, the budget should be respected.

@@ -711,7 +711,11 @@ where
                 desc.lower().elements(),
                 desc.upper().elements()
             ),
+            *shard_id,
+            blob,
             Arc::clone(&metrics),
+            shard_metrics,
+            metrics.read.compaction.clone(),
             FetchBatchFilter::Compaction {
                 since: desc.since().clone(),
             },
@@ -720,15 +724,7 @@ where
         );
 
         for (desc, parts) in runs {
-            consolidator.enqueue_run(
-                *shard_id,
-                &blob,
-                &metrics,
-                |m| &m.compaction,
-                &shard_metrics,
-                desc,
-                parts.iter().cloned(),
-            );
+            consolidator.enqueue_run(desc, parts.iter().cloned());
         }
 
         let remaining_budget = consolidator.start_prefetches();
