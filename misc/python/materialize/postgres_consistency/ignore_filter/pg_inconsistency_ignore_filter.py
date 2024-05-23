@@ -69,6 +69,10 @@ from materialize.output_consistency.input_data.types.number_types_provider impor
     DOUBLE_TYPE_IDENTIFIER,
     REAL_TYPE_IDENTIFIER,
 )
+from materialize.output_consistency.input_data.types.string_type_provider import (
+    BPCHAR_8_TYPE_IDENTIFIER,
+    CHAR_8_TYPE_IDENTIFIER,
+)
 from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperation,
@@ -132,7 +136,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         self,
         expression: ExpressionWithArgs,
         operation: DbOperationOrFunction,
-        _all_involved_characteristics: set[ExpressionCharacteristics],
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         if matches_float_comparison(expression):
             return YesIgnore("#22022: real with decimal comparison")
@@ -151,8 +155,24 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#25228: date format that cannot be parsed")
 
+        if (
+            expression.matches(
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers={
+                        BPCHAR_8_TYPE_IDENTIFIER,
+                        CHAR_8_TYPE_IDENTIFIER,
+                    },
+                ),
+                True,
+            )
+            and ExpressionCharacteristics.STRING_WITH_SPECIAL_SPACE_CHARS
+            in all_involved_characteristics
+        ):
+            return YesIgnore("#27253: bpchar and char trim newline")
+
         return super()._matches_problematic_operation_or_function_invocation(
-            expression, operation, _all_involved_characteristics
+            expression, operation, all_involved_characteristics
         )
 
     def _matches_problematic_function_invocation(
@@ -502,6 +522,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             # Postgres returns regtype which can be cast to numbers while mz returns a string
             return YesIgnore("regtype of postgres can be cast")
+
+        if "array_agg on character not yet supported" in mz_error_msg:
+            return YesIgnore("#27252: array_agg on character")
 
         return NoIgnore()
 
