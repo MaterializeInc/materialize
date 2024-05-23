@@ -40,7 +40,7 @@ production, use the `warn-if-unreleased` shortcode to indicate in what version
 the feature will become available:
 
 ```
-{{< warn-if-unreleased v0.86 >}}
+{{< warn-if-unreleased "v0.86" >}}
 ```
 
 This will add a large warning that indicates to users that the change is not
@@ -55,7 +55,7 @@ You can use the `warn-if-unreleased-inline` shortcode for a smaller warning that
 can appear inline in a paragraph, table, or list:
 
 ```
-{{< warn-if-unreleased-inline v0.86 >}}
+{{< warn-if-unreleased-inline "v0.86" >}}
 ```
 
 For new SQL functions, add a `version-added` field to the function's definition:

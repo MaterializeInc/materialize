@@ -26,6 +26,8 @@ message ProtoLoadGeneratorSourceConnection {
         ProtoKeyValueLoadGenerator key_value = 8;
     }
     optional uint64 tick_micros = 2;
+    uint64 as_of = 9;
+    uint64 up_to = 10;
 }
 
 message ProtoCounterLoadGenerator {
