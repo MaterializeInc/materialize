@@ -65,7 +65,7 @@ pub trait BlobKnobs: std::fmt::Debug + Send + Sync {
 
 impl BlobConfig {
     /// Opens the associated implementation of [Blob].
-    pub async fn open(self) -> Result<Arc<dyn Blob + Send + Sync>, ExternalError> {
+    pub async fn open(self) -> Result<Arc<dyn Blob>, ExternalError> {
         match self {
             BlobConfig::File(config) => Ok(Arc::new(FileBlob::open(config).await?)),
             BlobConfig::S3(config) => Ok(Arc::new(S3Blob::open(config).await?)),
@@ -176,7 +176,7 @@ pub enum ConsensusConfig {
 
 impl ConsensusConfig {
     /// Opens the associated implementation of [Consensus].
-    pub async fn open(self) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
+    pub async fn open(self) -> Result<Arc<dyn Consensus>, ExternalError> {
         match self {
             ConsensusConfig::Postgres(config) => {
                 Ok(Arc::new(PostgresConsensus::open(config).await?))

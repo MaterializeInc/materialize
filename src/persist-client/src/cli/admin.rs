@@ -501,8 +501,8 @@ where
 
 async fn make_machine(
     cfg: &PersistConfig,
-    consensus: Arc<dyn Consensus + Send + Sync>,
-    blob: Arc<dyn Blob + Send + Sync>,
+    consensus: Arc<dyn Consensus>,
+    blob: Arc<dyn Blob>,
     metrics: Arc<Metrics>,
     shard_id: ShardId,
     commit: bool,
@@ -515,8 +515,8 @@ async fn make_machine(
 
 async fn make_typed_machine<K, V, T, D>(
     cfg: &PersistConfig,
-    consensus: Arc<dyn Consensus + Send + Sync>,
-    blob: Arc<dyn Blob + Send + Sync>,
+    consensus: Arc<dyn Consensus>,
+    blob: Arc<dyn Blob>,
     metrics: Arc<Metrics>,
     shard_id: ShardId,
     commit: bool,

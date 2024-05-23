@@ -80,7 +80,7 @@ where
     pub(crate) batch: HollowBatch<T>,
 
     /// Handle to the [Blob] that the blobs of this batch were uploaded to.
-    pub(crate) blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) blob: Arc<dyn Blob>,
 
     // These provide a bit more safety against appending a batch with the wrong
     // type to a shard.
@@ -116,7 +116,7 @@ where
     pub(crate) fn new(
         batch_delete_enabled: bool,
         metrics: Arc<Metrics>,
-        blob: Arc<dyn Blob + Send + Sync>,
+        blob: Arc<dyn Blob>,
         shard_metrics: Arc<ShardMetrics>,
         version: Version,
         batch: HollowBatch<T>,
@@ -502,7 +502,7 @@ where
 
     shard_id: ShardId,
     version: Version,
-    blob: Arc<dyn Blob + Send + Sync>,
+    blob: Arc<dyn Blob>,
     metrics: Arc<Metrics>,
     _schemas: Schemas<K, V>,
     consolidate: bool,
@@ -538,7 +538,7 @@ where
         schemas: Schemas<K, V>,
         batch_write_metrics: BatchWriteMetrics,
         lower: Antichain<T>,
-        blob: Arc<dyn Blob + Send + Sync>,
+        blob: Arc<dyn Blob>,
         isolated_runtime: Arc<IsolatedRuntime>,
         shard_id: ShardId,
         version: Version,
@@ -893,7 +893,7 @@ pub(crate) struct BatchParts<T> {
     shard_metrics: Arc<ShardMetrics>,
     shard_id: ShardId,
     lower: Antichain<T>,
-    blob: Arc<dyn Blob + Send + Sync>,
+    blob: Arc<dyn Blob>,
     isolated_runtime: Arc<IsolatedRuntime>,
     writing_parts: VecDeque<JoinHandle<BatchPart<T>>>,
     finished_parts: Vec<BatchPart<T>>,
@@ -907,7 +907,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         shard_metrics: Arc<ShardMetrics>,
         shard_id: ShardId,
         lower: Antichain<T>,
-        blob: Arc<dyn Blob + Send + Sync>,
+        blob: Arc<dyn Blob>,
         isolated_runtime: Arc<IsolatedRuntime>,
         batch_metrics: &BatchWriteMetrics,
     ) -> Self {
@@ -1004,7 +1004,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
     async fn write_hollow_part<K: Codec, V: Codec>(
         cfg: BatchBuilderConfig,
-        blob: Arc<dyn Blob + Send + Sync>,
+        blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         batch_metrics: BatchWriteMetrics,
@@ -1173,7 +1173,7 @@ impl PartDeletes {
 
     pub async fn delete(
         self,
-        blob: &Arc<dyn Blob + Send + Sync>,
+        blob: &Arc<dyn Blob>,
         shard_id: ShardId,
         metrics: &Arc<RetryMetrics>,
     ) {

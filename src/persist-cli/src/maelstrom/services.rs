@@ -60,7 +60,7 @@ pub struct MaelstromConsensus {
 }
 
 impl MaelstromConsensus {
-    pub fn new(handle: Handle) -> Arc<dyn Consensus + Send + Sync> {
+    pub fn new(handle: Handle) -> Arc<dyn Consensus> {
         Arc::new(MaelstromConsensus {
             handle,
             cache: Mutex::new(BTreeMap::new()),
@@ -178,7 +178,7 @@ pub struct MaelstromBlob {
 }
 
 impl MaelstromBlob {
-    pub fn new(handle: Handle) -> Arc<dyn Blob + Send + Sync> {
+    pub fn new(handle: Handle) -> Arc<dyn Blob> {
         Arc::new(MaelstromBlob { handle })
     }
 }
@@ -252,12 +252,12 @@ impl Blob for MaelstromBlob {
 /// that a blob gets fetched at least once (exercising those code paths).
 #[derive(Debug)]
 pub struct CachingBlob {
-    blob: Arc<dyn Blob + Send + Sync>,
+    blob: Arc<dyn Blob>,
     cache: Mutex<BTreeMap<String, SegmentedBytes>>,
 }
 
 impl CachingBlob {
-    pub fn new(blob: Arc<dyn Blob + Send + Sync>) -> Arc<dyn Blob + Send + Sync> {
+    pub fn new(blob: Arc<dyn Blob>) -> Arc<dyn Blob> {
         Arc::new(CachingBlob {
             blob,
             cache: Mutex::new(BTreeMap::new()),

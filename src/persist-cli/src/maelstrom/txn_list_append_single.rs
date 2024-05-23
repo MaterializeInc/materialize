@@ -632,8 +632,7 @@ impl Service for TransactorService {
             }
             None => MaelstromBlob::new(handle.clone()),
         };
-        let blob: Arc<dyn Blob + Send + Sync> =
-            Arc::new(UnreliableBlob::new(blob, unreliable.clone()));
+        let blob: Arc<dyn Blob> = Arc::new(UnreliableBlob::new(blob, unreliable.clone()));
         // Normal production persist usage (even including a real SQL txn impl)
         // isn't particularly benefitted by a cache, so we don't have one baked
         // into persist. In contrast, our Maelstrom transaction model
@@ -666,7 +665,7 @@ impl Service for TransactorService {
             }
             None => MaelstromConsensus::new(handle.clone()),
         };
-        let consensus: Arc<dyn Consensus + Send + Sync> =
+        let consensus: Arc<dyn Consensus> =
             Arc::new(UnreliableConsensus::new(consensus, unreliable));
 
         // Wire up the TransactorService.

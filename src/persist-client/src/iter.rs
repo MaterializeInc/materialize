@@ -61,7 +61,7 @@ fn clone_tuple<T, D>((k, v, t, d): TupleRef<T, D>) -> Tuple<T, D> {
 pub(crate) enum FetchData<T> {
     Unleased {
         shard_id: ShardId,
-        blob: Arc<dyn Blob + Send + Sync>,
+        blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: Arc<ShardMetrics>,
@@ -69,7 +69,7 @@ pub(crate) enum FetchData<T> {
         part: HollowBatchPart<T>,
     },
     Leased {
-        blob: Arc<dyn Blob + Send + Sync>,
+        blob: Arc<dyn Blob>,
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: Arc<ShardMetrics>,
         part: LeasedBatchPart<T>,
@@ -296,7 +296,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
     pub fn enqueue_run<'a>(
         &mut self,
         shard_id: ShardId,
-        blob: &Arc<dyn Blob + Send + Sync>,
+        blob: &Arc<dyn Blob>,
         metrics: &Arc<Metrics>,
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: &Arc<ShardMetrics>,
@@ -343,7 +343,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
     /// Add a leased run of data to be consolidated.
     pub fn enqueue_leased_run(
         &mut self,
-        blob: &Arc<dyn Blob + Send + Sync>,
+        blob: &Arc<dyn Blob>,
         read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
         shard_metrics: &Arc<ShardMetrics>,
         parts: impl IntoIterator<Item = LeasedBatchPart<T>>,
@@ -1004,8 +1004,7 @@ mod tests {
             let total_size: usize = runs.iter().flat_map(|run| run.iter().map(|p| *p)).sum();
 
             let shard_id = ShardId::new();
-            let blob: Arc<dyn Blob + Send + Sync> =
-                Arc::new(MemBlob::open(MemBlobConfig::default()));
+            let blob: Arc<dyn Blob> = Arc::new(MemBlob::open(MemBlobConfig::default()));
             let metrics = Arc::new(Metrics::new(
                 &PersistConfig::new_for_tests(),
                 &MetricsRegistry::new(),

@@ -129,12 +129,12 @@ impl UnreliableHandle {
 #[derive(Debug)]
 pub struct UnreliableBlob {
     handle: UnreliableHandle,
-    blob: Arc<dyn Blob + Send + Sync>,
+    blob: Arc<dyn Blob>,
 }
 
 impl UnreliableBlob {
     /// Returns a new [UnreliableBlob].
-    pub fn new(blob: Arc<dyn Blob + Send + Sync>, handle: UnreliableHandle) -> Self {
+    pub fn new(blob: Arc<dyn Blob>, handle: UnreliableHandle) -> Self {
         UnreliableBlob { handle, blob }
     }
 }
@@ -178,12 +178,12 @@ impl Blob for UnreliableBlob {
 #[derive(Debug)]
 pub struct UnreliableConsensus {
     handle: UnreliableHandle,
-    consensus: Arc<dyn Consensus + Send + Sync>,
+    consensus: Arc<dyn Consensus>,
 }
 
 impl UnreliableConsensus {
     /// Returns a new [UnreliableConsensus].
-    pub fn new(consensus: Arc<dyn Consensus + Send + Sync>, handle: UnreliableHandle) -> Self {
+    pub fn new(consensus: Arc<dyn Consensus>, handle: UnreliableHandle) -> Self {
         UnreliableConsensus { consensus, handle }
     }
 }

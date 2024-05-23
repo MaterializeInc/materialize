@@ -601,7 +601,7 @@ where
     //
     // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
     async fn delete_all(
-        blob: &(dyn Blob + Send + Sync),
+        blob: &dyn Blob,
         keys: impl Iterator<Item = BlobKey>,
         metrics: &RetryMetrics,
         span: Span,

@@ -125,7 +125,7 @@ pub(super) async fn make_consensus(
     consensus_uri: &str,
     commit: bool,
     metrics: Arc<Metrics>,
-) -> anyhow::Result<Arc<dyn Consensus + Send + Sync>> {
+) -> anyhow::Result<Arc<dyn Consensus>> {
     let consensus = ConsensusConfig::try_from(
         consensus_uri,
         Box::new(cfg.clone()),
@@ -147,7 +147,7 @@ pub(super) async fn make_blob(
     blob_uri: &str,
     commit: bool,
     metrics: Arc<Metrics>,
-) -> anyhow::Result<Arc<dyn Blob + Send + Sync>> {
+) -> anyhow::Result<Arc<dyn Blob>> {
     let blob = BlobConfig::try_from(
         blob_uri,
         Box::new(cfg.clone()),
@@ -194,7 +194,7 @@ impl<T> ReadOnly<T> {
 }
 
 #[async_trait]
-impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
+impl Blob for ReadOnly<Arc<dyn Blob>> {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         if self.ignored_write() {
             warn!("potentially-invalid get({key}) after ignored write");
@@ -233,7 +233,7 @@ impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
 }
 
 #[async_trait]
-impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
+impl Consensus for ReadOnly<Arc<dyn Consensus>> {
     fn list_keys(&self) -> ResultStream<String> {
         if self.ignored_write() {
             warn!("potentially-invalid list_keys() after ignored write");
