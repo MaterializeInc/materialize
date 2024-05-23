@@ -64,7 +64,7 @@ REGEX_FLAG_PARAM = EnumConstantOperationParam(
     ["i", "g"], add_quotes=True, optional=True
 )
 
-TEXT_TRIM_SPEC_PARAM = EnumConstantOperationParam(
+STRING_TRIM_SPEC_PARAM = EnumConstantOperationParam(
     ["BOTH ", "LEADING", "TRAILING"],
     add_quotes=False,
 )
@@ -80,9 +80,9 @@ PRECISION_PARAM = EnumConstantOperationParam(
     ["0", "1", "2", "3", "6", "9"], add_quotes=False
 )
 
-TEXT_ENCODING_PARAM = EnumConstantOperationParam(["utf8"], add_quotes=True)
+STRING_ENCODING_PARAM = EnumConstantOperationParam(["utf8"], add_quotes=True)
 
-TEXT_FORMAT_PARAM = EnumConstantOperationParam(
+STRING_FORMAT_PARAM = EnumConstantOperationParam(
     ["base64", "escape", "hex"], add_quotes=True
 )
 

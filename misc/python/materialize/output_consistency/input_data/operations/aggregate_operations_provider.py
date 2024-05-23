@@ -16,8 +16,8 @@ from materialize.output_consistency.input_data.params.boolean_operation_param im
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
 )
-from materialize.output_consistency.input_data.params.text_operation_param import (
-    TextOperationParam,
+from materialize.output_consistency.input_data.params.string_operation_param import (
+    StringOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
@@ -28,8 +28,8 @@ from materialize.output_consistency.input_data.return_specs.dynamic_return_spec 
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
-from materialize.output_consistency.input_data.return_specs.text_return_spec import (
-    TextReturnTypeSpec,
+from materialize.output_consistency.input_data.return_specs.string_return_spec import (
+    StringReturnTypeSpec,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -145,8 +145,8 @@ AGGREGATE_OPERATION_TYPES.append(
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "string_agg",
-        [TextOperationParam(), TextOperationParam()],
-        TextReturnTypeSpec(),
+        [StringOperationParam(), StringOperationParam()],
+        StringReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
         comment="without ordering",
@@ -157,8 +157,8 @@ AGGREGATE_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "string_agg",
         {2: "string_agg($, $ ORDER BY row_index)"},
-        [TextOperationParam(), TextOperationParam()],
-        TextReturnTypeSpec(),
+        [StringOperationParam(), StringOperationParam()],
+        StringReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
         comment="with ordering",

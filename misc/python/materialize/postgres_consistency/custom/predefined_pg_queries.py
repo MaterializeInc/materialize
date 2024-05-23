@@ -29,10 +29,10 @@ from materialize.output_consistency.input_data.operations.boolean_operations_pro
 from materialize.output_consistency.input_data.operations.set_operations_provider import (
     create_in_operation,
 )
-from materialize.output_consistency.input_data.operations.text_operations_provider import (
+from materialize.output_consistency.input_data.operations.string_operations_provider import (
     LOWER_OPERATION,
     REGEXP_REPLACE,
-    TEXT_NOT_LIKE_OPERATION,
+    STRING_NOT_LIKE_OPERATION,
 )
 from materialize.output_consistency.input_data.types.boolean_type_provider import (
     BOOLEAN_DATA_TYPE,
@@ -40,7 +40,7 @@ from materialize.output_consistency.input_data.types.boolean_type_provider impor
 from materialize.output_consistency.input_data.types.date_time_types_provider import (
     INTERVAL_TYPE,
 )
-from materialize.output_consistency.input_data.types.text_type_provider import (
+from materialize.output_consistency.input_data.types.string_type_provider import (
     TEXT_DATA_TYPE,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
@@ -85,7 +85,7 @@ def create_pg_timezone_names_query() -> QueryTemplate:
     ]
 
     no_posix_timezones = ExpressionWithArgs(
-        operation=TEXT_NOT_LIKE_OPERATION,
+        operation=STRING_NOT_LIKE_OPERATION,
         args=[
             pg_timezone_name_col_expr,
             StringConstant("posix/%"),

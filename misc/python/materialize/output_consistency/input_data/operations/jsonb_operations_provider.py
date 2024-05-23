@@ -24,8 +24,8 @@ from materialize.output_consistency.input_data.return_specs.jsonb_return_spec im
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
-from materialize.output_consistency.input_data.return_specs.text_return_spec import (
-    TextReturnTypeSpec,
+from materialize.output_consistency.input_data.return_specs.string_return_spec import (
+    StringReturnTypeSpec,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -55,7 +55,7 @@ JSONB_OPERATION_TYPES.append(
     DbOperation(
         "$ ->> $",
         [JsonbOperationParam(), JSON_FIELD_NAME_PARAM],
-        TextReturnTypeSpec(),
+        StringReturnTypeSpec(),
         tags={TAG_JSONB_TO_TEXT},
     )
 )
@@ -63,7 +63,7 @@ JSONB_OPERATION_TYPES.append(
     DbOperation(
         "$ ->> $",
         [JsonbOperationParam(), JSON_FIELD_INDEX_PARAM],
-        TextReturnTypeSpec(),
+        StringReturnTypeSpec(),
         tags={TAG_JSONB_TO_TEXT},
     )
 )
@@ -78,7 +78,7 @@ JSONB_OPERATION_TYPES.append(
     DbOperation(
         "$ #>> $",
         [JsonbOperationParam(), JSON_PATH_PARAM],
-        TextReturnTypeSpec(),
+        StringReturnTypeSpec(),
         tags={TAG_JSONB_TO_TEXT},
     )
 )
@@ -130,7 +130,7 @@ JSONB_OPERATION_TYPES.append(
     DbFunction(
         "jsonb_pretty",
         [JsonbOperationParam()],
-        TextReturnTypeSpec(),
+        StringReturnTypeSpec(),
         tags={TAG_JSONB_TO_TEXT},
     )
 )
@@ -139,7 +139,7 @@ JSONB_OPERATION_TYPES.append(
     DbFunction(
         "jsonb_typeof",
         [JsonbOperationParam()],
-        TextReturnTypeSpec(),
+        StringReturnTypeSpec(),
     )
 )
 

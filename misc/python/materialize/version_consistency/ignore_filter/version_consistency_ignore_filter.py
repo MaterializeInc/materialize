@@ -32,7 +32,7 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
 from materialize.output_consistency.ignore_filter.internal_output_inconsistency_ignore_filter import (
     IgnoreVerdict,
 )
-from materialize.output_consistency.input_data.operations.text_operations_provider import (
+from materialize.output_consistency.input_data.operations.string_operations_provider import (
     TAG_REGEX,
 )
 from materialize.output_consistency.selection.selection import DataRowSelection

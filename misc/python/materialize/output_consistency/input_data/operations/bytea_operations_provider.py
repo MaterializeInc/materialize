@@ -15,14 +15,14 @@ from materialize.output_consistency.input_data.params.bytea_operation_param impo
     ByteaOperationParam,
 )
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
-    TEXT_ENCODING_PARAM,
-    TEXT_FORMAT_PARAM,
+    STRING_ENCODING_PARAM,
+    STRING_FORMAT_PARAM,
 )
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
 )
-from materialize.output_consistency.input_data.params.text_operation_param import (
-    TextOperationParam,
+from materialize.output_consistency.input_data.params.string_operation_param import (
+    StringOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
@@ -33,8 +33,8 @@ from materialize.output_consistency.input_data.return_specs.bytea_return_spec im
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
-from materialize.output_consistency.input_data.return_specs.text_return_spec import (
-    TextReturnTypeSpec,
+from materialize.output_consistency.input_data.return_specs.string_return_spec import (
+    StringReturnTypeSpec,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -46,8 +46,8 @@ BYTEA_OPERATION_TYPES: list[DbOperationOrFunction] = []
 BYTEA_OPERATION_TYPES.append(
     DbFunction(
         "convert_from",
-        [ByteaOperationParam(), TEXT_ENCODING_PARAM],
-        TextReturnTypeSpec(),
+        [ByteaOperationParam(), STRING_ENCODING_PARAM],
+        StringReturnTypeSpec(),
     )
 )
 
@@ -70,22 +70,22 @@ BYTEA_OPERATION_TYPES.append(
 BYTEA_OPERATION_TYPES.append(
     DbFunction(
         "decode",
-        [TextOperationParam(), TEXT_FORMAT_PARAM],
+        [StringOperationParam(), STRING_FORMAT_PARAM],
         ByteaReturnTypeSpec(),
     )
 )
 
 encode_function = DbFunction(
     "encode",
-    [ByteaOperationParam(), TEXT_FORMAT_PARAM],
-    TextReturnTypeSpec(),
+    [ByteaOperationParam(), STRING_FORMAT_PARAM],
+    StringReturnTypeSpec(),
 )
 # encode may introduce new lines and backslashes
 encode_function.added_characteristics.add(
-    ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS
+    ExpressionCharacteristics.STRING_WITH_SPECIAL_SPACE_CHARS
 )
 encode_function.added_characteristics.add(
-    ExpressionCharacteristics.TEXT_WITH_BACKSLASH_CHAR
+    ExpressionCharacteristics.STRING_WITH_BACKSLASH_CHAR
 )
 BYTEA_OPERATION_TYPES.append(encode_function)
 

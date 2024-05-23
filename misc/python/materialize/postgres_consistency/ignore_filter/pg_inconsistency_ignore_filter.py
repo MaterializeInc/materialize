@@ -53,7 +53,7 @@ from materialize.output_consistency.input_data.operations.generic_operations_pro
 from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
     TAG_JSONB_TO_TEXT,
 )
-from materialize.output_consistency.input_data.operations.text_operations_provider import (
+from materialize.output_consistency.input_data.operations.string_operations_provider import (
     TAG_REGEX,
 )
 from materialize.output_consistency.input_data.return_specs.jsonb_return_spec import (
@@ -62,8 +62,8 @@ from materialize.output_consistency.input_data.return_specs.jsonb_return_spec im
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
-from materialize.output_consistency.input_data.return_specs.text_return_spec import (
-    TextReturnTypeSpec,
+from materialize.output_consistency.input_data.return_specs.string_return_spec import (
+    StringReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.types.number_types_provider import (
     DOUBLE_TYPE_IDENTIFIER,
@@ -187,7 +187,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
 
         if db_function.function_name_in_lower_case in {"min", "max"}:
             return_type_spec = expression.args[0].resolve_return_type_spec()
-            if isinstance(return_type_spec, TextReturnTypeSpec):
+            if isinstance(return_type_spec, StringReturnTypeSpec):
                 return YesIgnore("#22002: ordering on text different (min/max)")
 
         if db_function.function_name_in_lower_case == "replace":
@@ -197,7 +197,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
 
         if db_function.function_name_in_lower_case == "regexp_replace":
             if expression.args[2].has_any_characteristic(
-                {ExpressionCharacteristics.TEXT_WITH_BACKSLASH_CHAR}
+                {ExpressionCharacteristics.STRING_WITH_BACKSLASH_CHAR}
             ):
                 return YesIgnore("#23605: regexp with backslash")
             if expression.count_args() == 4:
@@ -221,7 +221,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         if db_function.function_name_in_lower_case == "decode" and expression.args[
             0
         ].has_any_characteristic(
-            {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS}
+            {ExpressionCharacteristics.STRING_WITH_SPECIAL_SPACE_CHARS}
         ):
             return YesIgnore("#25937 (base64 decode with new line and tab)")
 
@@ -300,7 +300,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
 
         if db_operation.is_tagged(TAG_EQUALITY_ORDERING):
             return_type_spec = expression.args[0].resolve_return_type_spec()
-            if isinstance(return_type_spec, TextReturnTypeSpec):
+            if isinstance(return_type_spec, StringReturnTypeSpec):
                 return YesIgnore("#22002: ordering on text different (<, <=, ...)")
             if isinstance(return_type_spec, JsonbReturnTypeSpec):
                 return YesIgnore("#26309: ordering on JSON different")
@@ -638,7 +638,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
             lambda expression: expression.has_any_characteristic(
-                {ExpressionCharacteristics.TEXT_WITH_ESZETT},
+                {ExpressionCharacteristics.STRING_WITH_ESZETT},
             ),
             True,
         ) and query_template.matches_specific_select_or_filter_expression(
