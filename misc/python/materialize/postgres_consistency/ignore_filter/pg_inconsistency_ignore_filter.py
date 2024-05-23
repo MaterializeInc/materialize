@@ -71,7 +71,7 @@ from materialize.output_consistency.input_data.types.number_types_provider impor
 )
 from materialize.output_consistency.input_data.types.string_type_provider import (
     BPCHAR_8_TYPE_IDENTIFIER,
-    CHAR_8_TYPE_IDENTIFIER,
+    CHAR_6_TYPE_IDENTIFIER,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -161,7 +161,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                     is_known_to_involve_exact_data_types,
                     internal_data_type_identifiers={
                         BPCHAR_8_TYPE_IDENTIFIER,
-                        CHAR_8_TYPE_IDENTIFIER,
+                        CHAR_6_TYPE_IDENTIFIER,
                     },
                 ),
                 True,

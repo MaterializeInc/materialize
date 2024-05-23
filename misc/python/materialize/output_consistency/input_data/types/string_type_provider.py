@@ -19,7 +19,7 @@ from materialize.output_consistency.operation.return_type_spec import ReturnType
 
 TEXT_TYPE_IDENTIFIER = "TEXT"
 VARCHAR_8_TYPE_IDENTIFIER = "VARCHAR_8"
-CHAR_8_TYPE_IDENTIFIER = "CHAR_8"
+CHAR_6_TYPE_IDENTIFIER = "CHAR_6"
 BPCHAR_8_TYPE_IDENTIFIER = "BPCHAR_8"
 
 
@@ -43,8 +43,8 @@ class StringDataType(DataType):
 
 TEXT_DATA_TYPE = StringDataType(TEXT_TYPE_IDENTIFIER, "TEXT")
 VARCHAR_8_DATA_TYPE = StringDataType(VARCHAR_8_TYPE_IDENTIFIER, "VARCHAR(8)")
-CHAR_8_DATA_TYPE = StringDataType(
-    CHAR_8_TYPE_IDENTIFIER, "CHAR(8)", only_few_values=True
+CHAR_6_DATA_TYPE = StringDataType(
+    CHAR_6_TYPE_IDENTIFIER, "CHAR(6)", only_few_values=True
 )
 BPCHAR_8_DATA_TYPE = StringDataType(
     BPCHAR_8_TYPE_IDENTIFIER, "BPCHAR(8)", only_few_values=True
@@ -54,6 +54,6 @@ BPCHAR_8_DATA_TYPE = StringDataType(
 STRING_DATA_TYPES: list[StringDataType] = [
     TEXT_DATA_TYPE,
     VARCHAR_8_DATA_TYPE,
-    CHAR_8_DATA_TYPE,
+    CHAR_6_DATA_TYPE,
     BPCHAR_8_DATA_TYPE,
 ]
