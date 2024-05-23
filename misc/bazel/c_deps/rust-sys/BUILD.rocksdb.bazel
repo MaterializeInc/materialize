@@ -137,10 +137,7 @@ cmake(
         "-DWITH_TOOLS=OFF",
         "-DUSE_RTTI=1",
         "-DROCKSDB_BUILD_SHARED=OFF",
-    ] + select({
-         "@platforms//os:macos": ["-DCMAKE_CXX_FLAGS=-Wno-error=uninitialized"],
-         "//conditions:default": ["-DCMAKE_CXX_FLAGS=-Wno-error=maybe-uninitialized"],
-    }),
+    ],
     lib_source = ":rocksdb_srcs",
     targets = ["rocksdb"],
     out_static_libs = ["librocksdb.a"],
