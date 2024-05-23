@@ -121,19 +121,63 @@ impl LinearJoinSpec {
             (Materialize, Some(work_limit), Some(time_limit)) => {
                 let yield_fn =
                     move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, ConsolidatingContainerBuilder<_>>(
+                    arranged1,
+                    arranged2,
+                    shutdown_token,
+                    move |k, v1, v2, c| {
+                        for datum in result(k, v1, v2, c) {
+                            c.give(datum);
+                        }
+                    },
+                    yield_fn,
+                )
+                .as_collection()
             }
             (Materialize, Some(work_limit), None) => {
                 let yield_fn = move |_start, work| work >= work_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, ConsolidatingContainerBuilder<_>>(
+                    arranged1,
+                    arranged2,
+                    shutdown_token,
+                    move |k, v1, v2, c| {
+                        for datum in result(k, v1, v2, c) {
+                            c.give(datum);
+                        }
+                    },
+                    yield_fn,
+                )
+                .as_collection()
             }
             (Materialize, None, Some(time_limit)) => {
                 let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, ConsolidatingContainerBuilder<_>>(
+                    arranged1,
+                    arranged2,
+                    shutdown_token,
+                    move |k, v1, v2, c| {
+                        for datum in result(k, v1, v2, c) {
+                            c.give(datum);
+                        }
+                    },
+                    yield_fn,
+                )
+                .as_collection()
             }
             (Materialize, None, None) => {
                 let yield_fn = |_start, _work| false;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, ConsolidatingContainerBuilder<_>>(
+                    arranged1,
+                    arranged2,
+                    shutdown_token,
+                    move |k, v1, v2, c| {
+                        for datum in result(k, v1, v2, c) {
+                            c.give(datum);
+                        }
+                    },
+                    yield_fn,
+                )
+                .as_collection()
             }
         }
     }
