@@ -721,13 +721,6 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
-[[publisher.streaming-iterator]]
-version = "0.1.5"
-when = "2019-12-13"
-user-id = 539
-user-login = "cuviper"
-user-name = "Josh Stone"
-
 [[publisher.syn]]
 version = "1.0.107"
 when = "2022-12-18"
