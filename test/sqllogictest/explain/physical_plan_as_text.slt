@@ -128,7 +128,7 @@ Target cluster: mz_introspection
 
 EOF
 
-# FastPathPlan is show instead of PHYSICAL PLAN if present.
+# FastPathPlan is shown instead of PHYSICAL PLAN if present.
 query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT * FROM t where a = 5
@@ -1036,7 +1036,7 @@ EOF
 
 # Test Join::Differential (acyclic).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(non negative) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT b + d, c + e, a + e
 FROM t, u, v
 WHERE a = c AND d = e AND b + d > 42
@@ -1137,7 +1137,7 @@ CREATE INDEX v_e_idx ON V(e);
 
 # Test Join::Differential (cyclic).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(non negative) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c AND d = e AND f = a
@@ -1225,7 +1225,7 @@ EOF
 
 # Test Join::Delta (star).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(non negative) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and a = e
@@ -1302,7 +1302,8 @@ statement ok
 CREATE TABLE r(f0 INT, f1 INT, f2 INT, f3 INT, f4 INT, f5 INT, f6 INT, f7 INT, f8 INT, f9 INT, f10 INT, f11 INT, f12 INT, f13 INT, f14 INT, f15 INT, f16 INT);
 
 query T multiline
-EXPLAIN SELECT *
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+SELECT *
 FROM r AS r0, r AS r1
 WHERE
   r0.f0=r1.f0 AND
@@ -1320,15 +1321,31 @@ WHERE
 ----
 Explained Query:
   Return
-    Project (#0..=#16, #0, #18, #2..=#4, #22, #6, #24, #8, #9, #27, #11..=#13, #31, #15, #16)
-      Join on=(#0 = #17 AND #2 = #19 AND #3 = #20 AND #4 = #21 AND #6 = #23 AND #8 = #25 AND #9 = #26 AND #11 = #28 AND #12 = #29 AND #13 = #30 AND #15 = #32 AND #16 = #33) type=differential
-        Get l0
-        Get l0
+    Join::Linear
+      final_closure
+        project=(#0..=#16, #0, #17, #2..=#4, #18, #6, #19, #8, #9, #20, #11..=#13, #21, #15, #16)
+      linear_stage[0]
+        closure
+          project=(#0, #12, #1..=#3, #13, #4, #14, #5, #6, #15, #7..=#9, #16, #10, #11, #17..=#21)
+        lookup={ relation=1, key=[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16] }
+        stream={ key=[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16], thinning=(#1, #5, #7, #10, #14) }
+      source={ relation=0, key=[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16] }
+      Get::PassArrangements l0
+        raw=true
+        arrangements[0]={ key=[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16], permutation={#1: #12, #2: #1, #3: #2, #4: #3, #5: #13, #6: #4, #7: #14, #8: #5, #9: #6, #10: #15, #11: #7, #12: #8, #13: #9, #14: #16, #15: #10, #16: #11}, thinning=(#1, #5, #7, #10, #14) }
+        types=[integer, integer?, integer, integer, integer, integer?, integer, integer?, integer, integer, integer?, integer, integer, integer, integer?, integer, integer]
+      Get::PassArrangements l0
+        raw=true
+        arrangements[0]={ key=[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16], permutation={#1: #12, #2: #1, #3: #2, #4: #3, #5: #13, #6: #4, #7: #14, #8: #5, #9: #6, #10: #15, #11: #7, #12: #8, #13: #9, #14: #16, #15: #10, #16: #11}, thinning=(#1, #5, #7, #10, #14) }
+        types=[integer, integer?, integer, integer, integer, integer?, integer, integer?, integer, integer, integer?, integer, integer, integer, integer?, integer, integer]
   With
     cte l0 =
-      ArrangeBy keys=[[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16]]
-        Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL
-          ReadStorage materialize.public.r
+      ArrangeBy
+        raw=true
+        arrangements[0]={ key=[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16], permutation={#1: #12, #2: #1, #3: #2, #4: #3, #5: #13, #6: #4, #7: #14, #8: #5, #9: #6, #10: #15, #11: #7, #12: #8, #13: #9, #14: #16, #15: #10, #16: #11}, thinning=(#1, #5, #7, #10, #14) }
+        types=[integer, integer?, integer, integer, integer, integer?, integer, integer?, integer, integer, integer?, integer, integer, integer, integer?, integer, integer]
+        Get::Collection materialize.public.r
+          raw=true
 
 Source materialize.public.r
   filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)
@@ -1444,35 +1461,35 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
 SELECT x * 5 FROM cte WHERE x = 5
 ----
 Explained Query:
-  Mfp // { node_id: 9 }
+  Mfp // { mir_id: 13, lir_id: 9 }
     project=(#1)
     map=(25)
     input_key=#0
-    Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() } // { node_id: 8 }
-      ArrangeBy // { node_id: 7 }
+    Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() } // { mir_id: 11, lir_id: 8 }
+      ArrangeBy // { mir_id: 11, lir_id: 7 }
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
         types=[integer]
-        Union consolidate_output=true // { node_id: 6 }
-          Join::Linear // { node_id: 3 }
+        Union consolidate_output=true // { mir_id: 10, lir_id: 6 }
+          Join::Linear // { mir_id: 4, lir_id: 3 }
             linear_stage[0]
               closure
                 project=(#0)
               lookup={ relation=0, key=[#0] }
               stream={ key=[#0], thinning=() }
             source={ relation=1, key=[#0] }
-            Get::PassArrangements materialize.public.t // { node_id: 0 }
+            Get::PassArrangements materialize.public.t // { mir_id: 0, lir_id: 0 }
               raw=false
               arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
               types=[integer?, integer?]
-            ArrangeBy // { node_id: 2 }
+            ArrangeBy // { mir_id: 3, lir_id: 2 }
               raw=true
               arrangements[0]={ key=[#0], permutation=id, thinning=() }
               types=[integer]
-              Constant // { node_id: 1 }
+              Constant // { mir_id: 2, lir_id: 1 }
                 - (5)
-          Negate // { node_id: 5 }
-            Get::Collection materialize.public.mv // { node_id: 4 }
+          Negate // { mir_id: 9, lir_id: 5 }
+            Get::Collection materialize.public.mv // { mir_id: 6, lir_id: 4 }
               raw=true
 
 Source materialize.public.mv

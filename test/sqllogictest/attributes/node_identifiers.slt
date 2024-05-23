@@ -1,0 +1,770 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+CREATE TABLE t (
+  a int,
+  b int
+)
+
+statement ok
+CREATE TABLE u (
+  c int,
+  d int
+)
+
+statement ok
+CREATE TABLE v (
+  e int,
+  f int
+)
+
+statement ok
+CREATE INDEX t_a_idx ON T(a);
+
+statement ok
+CREATE INDEX t_b_idx ON T(b);
+
+statement ok
+CREATE VIEW ov AS SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
+
+statement ok
+CREATE INDEX ov_a_idx ON ov(a);
+
+statement ok
+CREATE INDEX ov_b_idx ON ov(b);
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS
+SELECT * FROM t WHERE a IS NOT NULL
+
+statement ok
+CREATE VIEW hierarchical_group_by AS
+SELECT
+  a,
+  MIN(b),
+  MAX(DISTINCT b)
+FROM t
+GROUP BY a
+
+statement ok
+CREATE MATERIALIZED VIEW hierarchical_group_by_mv AS
+SELECT * FROM hierarchical_group_by
+
+statement ok
+CREATE VIEW hierarchical_global AS
+SELECT
+  MIN(b),
+  MAX(DISTINCT b)
+FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW hierarchical_global_mv AS
+SELECT * FROM hierarchical_global
+
+statement ok
+CREATE VIEW collated_group_by AS
+SELECT
+  a,
+  COUNT(DISTINCT b),
+  STRING_AGG(b::text || '1',  ',') AS b1,
+  MIN(b),
+  MAX(DISTINCT b),
+  SUM(b),
+  STRING_AGG(b::text || '2',  ',') AS b2
+FROM t
+GROUP BY a
+
+statement ok
+CREATE MATERIALIZED VIEW collated_group_by_mv AS
+SELECT * FROM collated_group_by
+
+statement ok
+CREATE VIEW collated_global AS
+SELECT
+  COUNT(DISTINCT b),
+  STRING_AGG(b::text || '1',  ',') AS b1,
+  MIN(b),
+  MAX(DISTINCT b),
+  SUM(b),
+  STRING_AGG(b::text || '2',  ',') AS b2
+FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW collated_global_mv AS
+SELECT * FROM collated_global
+
+mode cockroach
+
+# Test constant.
+# --------------
+
+# OPTIMIZED PLAN
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(node identifiers, no fast path) AS TEXT FOR
+(SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
+----
+Explained Query:
+  Constant // { mir_id: 0 }
+    - ((1, 2) x 2)
+    - (3, 4)
+
+Target cluster: mz_introspection
+
+EOF
+
+# PHYSICAL PLAN
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(node identifiers, no fast path) AS TEXT FOR
+(SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
+----
+Explained Query:
+  Constant // { mir_id: 0, lir_id: 0 }
+    - ((1, 2) x 2)
+    - (3, 4)
+
+Target cluster: mz_introspection
+
+EOF
+
+# Test basic linear chains.
+# -------------------------
+
+# OPTIMIZED PLAN: linear transform of an arranged input.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(node identifiers, no fast path) AS TEXT FOR
+SELECT a + b, 1 FROM t
+----
+Explained Query:
+  Project (#2, #3) // { mir_id: 2 }
+    Map ((#0 + #1), 1) // { mir_id: 1 }
+      ReadIndex on=t t_a_idx=[*** full scan ***] // { mir_id: 0 }
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# PHYSICAL PLAN: linear transform of an arranged input.
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(node identifiers, no fast path) AS TEXT FOR
+SELECT a + b, 1 FROM t
+----
+Explained Query:
+  Get::Arrangement materialize.public.t // { mir_id: 0, lir_id: 0 }
+    project=(#2, #3)
+    map=((#0 + #1), 1)
+    key=#0
+    raw=false
+    arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    types=[integer?, integer?]
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# OPTIMIZED PLAN: linear transform of a raw input.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(node identifiers, no fast path) AS TEXT FOR
+SELECT c + d, 1 FROM u
+----
+Explained Query:
+  Project (#2, #3) // { mir_id: 2 }
+    Map ((#0 + #1), 1) // { mir_id: 1 }
+      ReadStorage materialize.public.u // { mir_id: 0 }
+
+Target cluster: quickstart
+
+EOF
+
+# PHYSICAL PLAN: linear transform of a raw input.
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(node identifiers, no fast path) AS TEXT FOR
+SELECT c + d, 1 FROM u
+----
+Explained Query:
+  Get::Collection materialize.public.u // { mir_id: 0, lir_id: 0 }
+    raw=true
+
+Source materialize.public.u
+  project=(#2, #3)
+  map=((#0 + #1), 1)
+
+Target cluster: quickstart
+
+EOF
+
+# Test FlatMap.
+# -------------
+
+# OPTIMIZED PLAN: FlatMap.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(node identifiers) AS TEXT FOR
+SELECT (x + 5) * (x + 5) FROM t, generate_series(a, b) as r(x) WHERE (x + 5) > 7
+----
+Explained Query:
+  Project (#4) // { mir_id: 4 }
+    Filter (#3 > 7) // { mir_id: 3 }
+      Map ((#2 + 5), (#3 * #3)) // { mir_id: 2 }
+        FlatMap generate_series(#0, #1, 1) // { mir_id: 1 }
+          ReadIndex on=t t_a_idx=[*** full scan ***] // { mir_id: 0 }
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# OPTIMIZED PLAN: FlatMap.
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(node identifiers) AS TEXT FOR
+SELECT (x + 5) * (x + 5) FROM t, generate_series(a, b) as r(x) WHERE (x + 5) > 7
+----
+Explained Query:
+  FlatMap generate_series(#0, #1, 1) // { mir_id: 1, lir_id: 1 }
+    mfp_after
+      project=(#4)
+      filter=((#3 > 7))
+      map=((#2 + 5), (#3 * #3))
+    input_key=#0
+    Get::PassArrangements materialize.public.t // { mir_id: 0, lir_id: 0 }
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# TopK plans.
+# -----------
+
+# OPTIMIZED PLAN: TopK.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(node identifiers) AS TEXT FOR
+INDEX ov_a_idx
+----
+materialize.public.ov_a_idx:
+  ArrangeBy keys=[[#0]] // { mir_id: 1 }
+    ReadGlobalFromSameDataflow materialize.public.ov // { mir_id: 0 }
+
+materialize.public.ov:
+  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 // { mir_id: 1 }
+    ReadIndex on=t t_a_idx=[*** full scan ***] // { mir_id: 0 }
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# PHYSICAL PLAN: TopKBasic (with an extra ArrangeBy underneath)..
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(node identifiers) AS TEXT FOR
+INDEX ov_a_idx
+----
+materialize.public.ov_a_idx:
+  ArrangeBy // { mir_id: 1, lir_id: 4 }
+    raw=true
+    arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    types=[integer?, integer?]
+    Get::PassArrangements materialize.public.ov // { mir_id: 0, lir_id: 3 }
+      raw=true
+
+materialize.public.ov:
+  TopK::Basic order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 // { mir_id: 1, lir_id: 2 }
+    ArrangeBy // { mir_id: 1, lir_id: 1 }
+      input_key=[#0]
+      raw=true
+      Get::PassArrangements materialize.public.t // { mir_id: 0, lir_id: 0 }
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# OPTIMIZED PLAN: TopK.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(node identifiers, no fast path) AS TEXT FOR
+SELECT * FROM (SELECT * FROM t ORDER BY b asc, a desc LIMIT 5)
+----
+Explained Query:
+  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 // { mir_id: 1 }
+    ReadIndex on=t t_a_idx=[*** full scan ***] // { mir_id: 0 }
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# PHYSICAL PLAN: MonotonicTopK (with an extra ArrangeBy underneath).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(node identifiers, no fast path) AS TEXT FOR
+SELECT * FROM (SELECT * FROM t ORDER BY b asc, a desc LIMIT 5)
+----
+Explained Query:
+  TopK::MonotonicTopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 must_consolidate // { mir_id: 1, lir_id: 2 }
+    ArrangeBy // { mir_id: 1, lir_id: 1 }
+      input_key=[#0]
+      raw=true
+      Get::PassArrangements materialize.public.t // { mir_id: 0, lir_id: 0 }
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Reduce.
+# -------
+
+# OPTIMIZED PLAN: Test Reduce (with GROUP BY, without index).
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(node identifiers) AS TEXT FOR
+SELECT
+  a,
+  SUM(b),
+  COUNT(DISTINCT b)
+FROM mv
+GROUP BY a
+----
+Explained Query:
+  Reduce group_by=[#0] aggregates=[sum(#1), count(distinct #1)] // { mir_id: 1 }
+    ReadStorage materialize.public.mv // { mir_id: 0 }
+
+Target cluster: quickstart
+
+EOF
+
+# PHYSICAL PLAN: Test Reduce::Accumulable (with GROUP BY, without index).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(node identifiers) AS TEXT FOR
+SELECT
+  a,
+  SUM(b),
+  COUNT(DISTINCT b)
+FROM mv
+GROUP BY a
+----
+Explained Query:
+  Reduce::Accumulable // { mir_id: 1, lir_id: 1 }
+    simple_aggrs[0]=(0, 0, sum(#1))
+    distinct_aggrs[0]=(1, 1, count(distinct #1))
+    val_plan
+      project=(#1, #1)
+    key_plan
+      project=(#0)
+    Get::PassArrangements materialize.public.mv // { mir_id: 0, lir_id: 0 }
+      raw=true
+
+Target cluster: quickstart
+
+EOF
+
+# OPTIMIZED PLAN: Test Reduce (with GROUP BY, with index).
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(node identifiers) AS TEXT FOR
+SELECT
+  a,
+  SUM(b),
+  COUNT(DISTINCT b)
+FROM t
+GROUP BY a
+----
+Explained Query:
+  Reduce group_by=[#0] aggregates=[sum(#1), count(distinct #1)] // { mir_id: 1 }
+    ReadIndex on=t t_a_idx=[*** full scan ***] // { mir_id: 0 }
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# PHYSICAL PLAN: Test Reduce::Accumulable (with GROUP BY, with index).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(node identifiers) AS TEXT FOR
+SELECT
+  a,
+  SUM(b),
+  COUNT(DISTINCT b)
+FROM t
+GROUP BY a
+----
+Explained Query:
+  Reduce::Accumulable // { mir_id: 1, lir_id: 1 }
+    simple_aggrs[0]=(0, 0, sum(#1))
+    distinct_aggrs[0]=(1, 1, count(distinct #1))
+    val_plan
+      project=(#1, #1)
+    key_plan
+      project=(#0)
+    input_key=#0
+    Get::PassArrangements materialize.public.t // { mir_id: 0, lir_id: 0 }
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test Threshold, Union, Distinct, Negate.
+# ----------------------------------------
+
+# OPTIMIZED PLAN: Threshold.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(node identifiers) AS TEXT FOR
+SELECT a FROM t EXCEPT ALL SELECT b FROM mv
+----
+Explained Query:
+  Threshold // { mir_id: 6 }
+    Union // { mir_id: 5 }
+      Project (#0) // { mir_id: 1 }
+        ReadIndex on=t t_a_idx=[*** full scan ***] // { mir_id: 0 }
+      Negate // { mir_id: 4 }
+        Project (#1) // { mir_id: 3 }
+          ReadStorage materialize.public.mv // { mir_id: 2 }
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# PHYSICAL PLAN: Threshold::Basic (with an extra ArrangeBy underneath).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(node identifiers) AS TEXT FOR
+SELECT a FROM t EXCEPT ALL SELECT b FROM mv
+----
+Explained Query:
+  Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() } // { mir_id: 6, lir_id: 5 }
+    ArrangeBy // { mir_id: 6, lir_id: 4 }
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer?]
+      Union consolidate_output=true // { mir_id: 5, lir_id: 3 }
+        Get::Arrangement materialize.public.t // { mir_id: 0, lir_id: 0 }
+          project=(#0)
+          key=#0
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer?, integer?]
+        Negate // { mir_id: 4, lir_id: 2 }
+          Get::Collection materialize.public.mv // { mir_id: 2, lir_id: 1 }
+            raw=true
+
+Source materialize.public.mv
+  project=(#1)
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test Mfp, Distinct, ReadIndex.
+# ------------------------------
+
+# OPTIMIZED PLAN
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(node identifiers) AS TEXT FOR
+WITH cte(x, y) as (SELECT a, b FROM t UNION SELECT b, a FROM mv)
+SELECT y * 5 FROM cte WHERE x = 5
+----
+Explained Query:
+  Project (#1) // { mir_id: 12 }
+    Map ((#0 * 5)) // { mir_id: 11 }
+      Distinct project=[#0] // { mir_id: 10 }
+        Union // { mir_id: 9 }
+          Project (#1) // { mir_id: 5 }
+            ReadIndex on=materialize.public.t t_a_idx=[lookup value=(5)] // { mir_id: 4 }
+          Project (#0) // { mir_id: 8 }
+            Filter (#1 = 5) // { mir_id: 7 }
+              ReadStorage materialize.public.mv // { mir_id: 6 }
+
+Source materialize.public.mv
+  filter=((#1 = 5))
+
+Used Indexes:
+  - materialize.public.t_a_idx (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# PHYSICAL PLAN
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(node identifiers) AS TEXT FOR
+WITH cte(x, y) as (SELECT a, b FROM t UNION SELECT b, a FROM mv)
+SELECT y * 5 FROM cte WHERE x = 5
+----
+Explained Query:
+  Mfp // { mir_id: 12, lir_id: 7 }
+    project=(#1)
+    map=((#0 * 5))
+    input_key=#0
+    Reduce::Distinct // { mir_id: 10, lir_id: 6 }
+      val_plan
+        project=()
+      key_plan=id
+      Union // { mir_id: 9, lir_id: 5 }
+        Join::Linear // { mir_id: 4, lir_id: 3 }
+          linear_stage[0]
+            closure
+              project=(#1)
+            lookup={ relation=0, key=[#0] }
+            stream={ key=[#0], thinning=() }
+          source={ relation=1, key=[#0] }
+          Get::PassArrangements materialize.public.t // { mir_id: 0, lir_id: 0 }
+            raw=false
+            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+            types=[integer?, integer?]
+          ArrangeBy // { mir_id: 3, lir_id: 2 }
+            raw=true
+            arrangements[0]={ key=[#0], permutation=id, thinning=() }
+            types=[integer]
+            Constant // { mir_id: 2, lir_id: 1 }
+              - (5)
+        Get::Collection materialize.public.mv // { mir_id: 6, lir_id: 4 }
+          raw=true
+
+Source materialize.public.mv
+  project=(#0)
+  filter=((#1 = 5))
+
+Used Indexes:
+  - materialize.public.t_a_idx (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Differential Join.
+# ------------------
+
+# OPTIMIZED PLAN.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(node identifiers) AS TEXT FOR
+SELECT a + c, b + d
+FROM t, u
+WHERE a = c AND b + d > 42
+----
+Explained Query:
+  Project (#5, #4) // { mir_id: 8 }
+    Filter (#4 > 42) AND (#0) IS NOT NULL // { mir_id: 7 }
+      Map ((#1 + #3), (#0 + #0)) // { mir_id: 6 }
+        Join on=(#0 = #2) type=differential // { mir_id: 5 }
+          ArrangeBy keys=[[#0]] // { mir_id: 1 }
+            ReadIndex on=t t_a_idx=[differential join] // { mir_id: 0 }
+          ArrangeBy keys=[[#0]] // { mir_id: 4 }
+            Filter (#0) IS NOT NULL // { mir_id: 3 }
+              ReadStorage materialize.public.u // { mir_id: 2 }
+
+Source materialize.public.u
+  filter=((#0) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.t_a_idx (differential join)
+
+Target cluster: quickstart
+
+EOF
+
+# PHYSICAL PLAN.
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(node identifiers) AS TEXT FOR
+SELECT a + c, b + d
+FROM t, u
+WHERE a = c AND b + d > 42
+----
+Explained Query:
+  Join::Linear // { mir_id: 5, lir_id: 3 }
+    linear_stage[0]
+      closure
+        project=(#4, #3)
+        filter=((#0) IS NOT NULL AND (#3 > 42))
+        map=((#1 + #2), (#0 + #0))
+      lookup={ relation=1, key=[#0] }
+      stream={ key=[#0], thinning=(#1) }
+    source={ relation=0, key=[#0] }
+    Get::PassArrangements materialize.public.t // { mir_id: 0, lir_id: 0 }
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
+    ArrangeBy // { mir_id: 4, lir_id: 2 }
+      raw=true
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer, integer?]
+      Get::Collection materialize.public.u // { mir_id: 2, lir_id: 1 }
+        raw=true
+
+Source materialize.public.u
+  filter=((#0) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.t_a_idx (differential join)
+
+Target cluster: quickstart
+
+EOF
+
+# Delta Join.
+# ------------------
+
+# OPTIMIZED PLAN.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(node identifiers) AS TEXT FOR
+SELECT b + d, c + e, a + e
+FROM t, u, v
+WHERE a = c AND d = e AND b + d > 42
+----
+Explained Query:
+  Project (#5, #6, #6) // { mir_id: 12 }
+    Filter (#5 > 42) AND (#0) IS NOT NULL // { mir_id: 11 }
+      Map ((#1 + #3), (#0 + #3)) // { mir_id: 10 }
+        Join on=(#0 = #2 AND #3 = #4) type=delta // { mir_id: 9 }
+          ArrangeBy keys=[[#0]] // { mir_id: 1 }
+            ReadIndex on=t t_a_idx=[delta join 1st input (full scan)] // { mir_id: 0 }
+          ArrangeBy keys=[[#0], [#1]] // { mir_id: 4 }
+            Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { mir_id: 3 }
+              ReadStorage materialize.public.u // { mir_id: 2 }
+          ArrangeBy keys=[[#0]] // { mir_id: 8 }
+            Project (#0) // { mir_id: 7 }
+              Filter (#0) IS NOT NULL // { mir_id: 6 }
+                ReadStorage materialize.public.v // { mir_id: 5 }
+
+Source materialize.public.u
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+Source materialize.public.v
+  filter=((#0) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.t_a_idx (delta join 1st input (full scan))
+
+Target cluster: quickstart
+
+EOF
+
+# PHYSICAL PLAN.
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(node identifiers) AS TEXT FOR
+SELECT b + d, c + e, a + e
+FROM t, u, v
+WHERE a = c AND d = e AND b + d > 42
+----
+Explained Query:
+  Join::Delta // { mir_id: 9, lir_id: 5 }
+    plan_path[0]
+      final_closure
+        project=(#0, #1, #1)
+      delta_stage[1]
+        closure
+          project=(#1, #2)
+        lookup={ relation=2, key=[#0] }
+        stream={ key=[#0], thinning=(#1, #2) }
+      delta_stage[0]
+        closure
+          project=(#2..=#4)
+          filter=((#3 > 42))
+          map=((#1 + #2), (#0 + #2))
+        lookup={ relation=1, key=[#0] }
+        stream={ key=[#0], thinning=(#1) }
+      initial_closure
+        filter=((#0) IS NOT NULL)
+      source={ relation=0, key=[#0] }
+    plan_path[1]
+      final_closure
+        project=(#0, #1, #1)
+      delta_stage[1]
+        closure
+          project=(#1, #2)
+        lookup={ relation=2, key=[#0] }
+        stream={ key=[#0], thinning=(#1, #2) }
+      delta_stage[0]
+        closure
+          project=(#1, #3, #4)
+          filter=((#0) IS NOT NULL AND (#3 > 42))
+          map=((#2 + #1), (#0 + #1))
+        lookup={ relation=0, key=[#0] }
+        stream={ key=[#0], thinning=(#1) }
+      source={ relation=1, key=[#0] }
+    plan_path[2]
+      final_closure
+        project=(#0, #1, #1)
+      delta_stage[1]
+        closure
+          project=(#3, #4)
+          filter=((#0) IS NOT NULL AND (#3 > 42))
+          map=((#2 + #1), (#0 + #1))
+        lookup={ relation=0, key=[#0] }
+        stream={ key=[#0], thinning=(#1) }
+      delta_stage[0]
+        closure
+          project=(#1, #0)
+        lookup={ relation=1, key=[#1] }
+        stream={ key=[#0], thinning=() }
+      source={ relation=2, key=[#0] }
+    Get::PassArrangements materialize.public.t // { mir_id: 0, lir_id: 0 }
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
+    ArrangeBy // { mir_id: 4, lir_id: 2 }
+      raw=true
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      arrangements[1]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      types=[integer, integer]
+      Get::Collection materialize.public.u // { mir_id: 2, lir_id: 1 }
+        raw=true
+    ArrangeBy // { mir_id: 8, lir_id: 4 }
+      raw=true
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer]
+      Get::Collection materialize.public.v // { mir_id: 5, lir_id: 3 }
+        raw=true
+
+Source materialize.public.u
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+Source materialize.public.v
+  project=(#0)
+  filter=((#0) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.t_a_idx (delta join 1st input (full scan))
+
+Target cluster: quickstart
+
+EOF

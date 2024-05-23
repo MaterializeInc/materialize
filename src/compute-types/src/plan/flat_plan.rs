@@ -318,7 +318,11 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
 
         while let Some(plan) = todo.pop() {
             match plan {
-                Plan::Constant { rows, lir_id } => {
+                Plan::Constant {
+                    rows,
+                    lir_id,
+                    mir_id: _,
+                } => {
                     let node = Constant { rows };
                     insert_node(lir_id, node);
                 }
@@ -327,6 +331,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     keys,
                     plan,
                     lir_id,
+                    mir_id: _,
                 } => {
                     // If this `Get` references another node directly, remove it. If it contains an
                     // MFP, leave an `Mfp` node in its place.
@@ -365,6 +370,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     value,
                     body,
                     lir_id,
+                    mir_id: _,
                 } => {
                     // Insert a binding for the value and replace the `Let` node with the body.
                     bindings.insert(id, value.lir_id());
@@ -378,6 +384,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     limits,
                     body,
                     lir_id,
+                    mir_id: _,
                 } => {
                     let node = LetRec {
                         ids,
@@ -395,6 +402,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     mfp,
                     input_key_val,
                     lir_id,
+                    mir_id: _,
                 } => {
                     let node = Mfp {
                         input: input.lir_id(),
@@ -412,6 +420,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     mfp_after,
                     input_key,
                     lir_id,
+                    mir_id: _,
                 } => {
                     let node = FlatMap {
                         input: input.lir_id(),
@@ -428,6 +437,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     inputs,
                     plan,
                     lir_id,
+                    mir_id: _,
                 } => {
                     let node = Join {
                         inputs: inputs.iter().map(|i| i.lir_id()).collect(),
@@ -444,6 +454,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     input_key,
                     mfp_after,
                     lir_id,
+                    mir_id: _,
                 } => {
                     let node = Reduce {
                         input: input.lir_id(),
@@ -460,6 +471,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     input,
                     top_k_plan,
                     lir_id,
+                    mir_id: _,
                 } => {
                     let node = TopK {
                         input: input.lir_id(),
@@ -469,7 +481,11 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
 
                     todo.push(*input);
                 }
-                Plan::Negate { input, lir_id } => {
+                Plan::Negate {
+                    input,
+                    lir_id,
+                    mir_id: _,
+                } => {
                     let node = Negate {
                         input: input.lir_id(),
                     };
@@ -481,6 +497,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     input,
                     threshold_plan,
                     lir_id,
+                    mir_id: _,
                 } => {
                     let node = Threshold {
                         input: input.lir_id(),
@@ -494,6 +511,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     inputs,
                     consolidate_output,
                     lir_id,
+                    mir_id: _,
                 } => {
                     let node = Union {
                         inputs: inputs.iter().map(|i| i.lir_id()).collect(),
@@ -509,6 +527,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     input_key,
                     input_mfp,
                     lir_id,
+                    mir_id: _,
                 } => {
                     let node = ArrangeBy {
                         input: input.lir_id(),

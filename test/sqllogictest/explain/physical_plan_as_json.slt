@@ -113,6 +113,7 @@ SELECT 1 / 0
           "rows": {
             "Err": "DivisionByZero"
           },
+          "mir_id": 0,
           "lir_id": 0
         }
       }
@@ -161,6 +162,7 @@ EXPLAIN PHYSICAL PLAN WITH(no fast path) AS JSON FOR
               ]
             ]
           },
+          "mir_id": 0,
           "lir_id": 0
         }
       }
@@ -219,6 +221,7 @@ SELECT * FROM t
             ]
           },
           "plan": "PassArrangements",
+          "mir_id": 0,
           "lir_id": 0
         }
       }
@@ -250,6 +253,7 @@ SELECT * FROM u
             "types": null
           },
           "plan": "PassArrangements",
+          "mir_id": 0,
           "lir_id": 0
         }
       }
@@ -351,6 +355,7 @@ SELECT a + b, 1 FROM t
               }
             ]
           },
+          "mir_id": 0,
           "lir_id": 0
         }
       }
@@ -392,6 +397,7 @@ SELECT c + d, 1 FROM u
               "input_arity": 2
             }
           },
+          "mir_id": 0,
           "lir_id": 0
         }
       }
@@ -494,6 +500,7 @@ SELECT * FROM ov
                     ]
                   },
                   "plan": "PassArrangements",
+                  "mir_id": 0,
                   "lir_id": 0
                 }
               },
@@ -516,6 +523,7 @@ SELECT * FROM ov
                 ],
                 "input_arity": 2
               },
+              "mir_id": 1,
               "lir_id": 1
             }
           },
@@ -554,6 +562,7 @@ SELECT * FROM ov
               "must_consolidate": true
             }
           },
+          "mir_id": 1,
           "lir_id": 2
         }
       }
@@ -633,6 +642,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                             }
                           ]
                         },
+                        "mir_id": 0,
                         "lir_id": 0
                       }
                     },
@@ -660,14 +670,17 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                 "input_arity": 1
                               }
                             },
+                            "mir_id": 2,
                             "lir_id": 1
                           }
                         },
+                        "mir_id": 4,
                         "lir_id": 2
                       }
                     }
                   ],
                   "consolidate_output": true,
+                  "mir_id": 5,
                   "lir_id": 3
                 }
               },
@@ -702,6 +715,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                 ],
                 "input_arity": 1
               },
+              "mir_id": 6,
               "lir_id": 4
             }
           },
@@ -720,6 +734,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
               ]
             }
           },
+          "mir_id": 6,
           "lir_id": 5
         }
       }
@@ -792,6 +807,7 @@ SELECT * FROM ov
                     ]
                   },
                   "plan": "PassArrangements",
+                  "mir_id": 0,
                   "lir_id": 0
                 }
               },
@@ -814,6 +830,7 @@ SELECT * FROM ov
                 ],
                 "input_arity": 2
               },
+              "mir_id": 1,
               "lir_id": 1
             }
           },
@@ -852,6 +869,7 @@ SELECT * FROM ov
               "must_consolidate": true
             }
           },
+          "mir_id": 1,
           "lir_id": 2
         }
       }
@@ -935,6 +953,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                 }
                               ]
                             },
+                            "mir_id": 0,
                             "lir_id": 0
                           }
                         },
@@ -962,14 +981,17 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     "input_arity": 1
                                   }
                                 },
+                                "mir_id": 2,
                                 "lir_id": 1
                               }
                             },
+                            "mir_id": 4,
                             "lir_id": 2
                           }
                         }
                       ],
                       "consolidate_output": true,
+                      "mir_id": 5,
                       "lir_id": 3
                     }
                   },
@@ -1004,6 +1026,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                     ],
                     "input_arity": 1
                   },
+                  "mir_id": 6,
                   "lir_id": 4
                 }
               },
@@ -1022,6 +1045,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                   ]
                 }
               },
+              "mir_id": 6,
               "lir_id": 5
             }
           },
@@ -1098,6 +1122,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                         }
                       ]
                     },
+                    "mir_id": 7,
                     "lir_id": 6
                   }
                 },
@@ -1171,14 +1196,17 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                         }
                       ]
                     },
+                    "mir_id": 10,
                     "lir_id": 7
                   }
                 }
               ],
               "consolidate_output": false,
+              "mir_id": 13,
               "lir_id": 8
             }
           },
+          "mir_id": 14,
           "lir_id": 9
         }
       }
@@ -1261,6 +1289,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                     ]
                                   },
                                   "plan": "PassArrangements",
+                                  "mir_id": 0,
                                   "lir_id": 0
                                 }
                               },
@@ -1282,6 +1311,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                           ]
                                         ]
                                       },
+                                      "mir_id": 2,
                                       "lir_id": 1
                                     }
                                   },
@@ -1316,6 +1346,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                     ],
                                     "input_arity": 1
                                   },
+                                  "mir_id": 3,
                                   "lir_id": 2
                                 }
                               }
@@ -1361,6 +1392,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                 "final_closure": null
                               }
                             },
+                            "mir_id": 4,
                             "lir_id": 3
                           }
                         },
@@ -1388,14 +1420,17 @@ SELECT x * 5 FROM cte WHERE x = 5
                                     "input_arity": 1
                                   }
                                 },
+                                "mir_id": 6,
                                 "lir_id": 4
                               }
                             },
+                            "mir_id": 9,
                             "lir_id": 5
                           }
                         }
                       ],
                       "consolidate_output": true,
+                      "mir_id": 10,
                       "lir_id": 6
                     }
                   },
@@ -1430,6 +1465,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                     ],
                     "input_arity": 1
                   },
+                  "mir_id": 11,
                   "lir_id": 7
                 }
               },
@@ -1448,6 +1484,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                   ]
                 }
               },
+              "mir_id": 11,
               "lir_id": 8
             }
           },
@@ -1484,6 +1521,7 @@ SELECT x * 5 FROM cte WHERE x = 5
             ],
             null
           ],
+          "mir_id": 13,
           "lir_id": 9
         }
       }
@@ -1583,6 +1621,7 @@ SELECT generate_series(a, b) from t
                 ]
               },
               "plan": "PassArrangements",
+              "mir_id": 0,
               "lir_id": 0
             }
           },
@@ -1624,6 +1663,7 @@ SELECT generate_series(a, b) from t
               "Column": 0
             }
           ],
+          "mir_id": 1,
           "lir_id": 1
         }
       }
@@ -1681,6 +1721,7 @@ SELECT DISTINCT a, b FROM t
                 ]
               },
               "plan": "PassArrangements",
+              "mir_id": 0,
               "lir_id": 0
             }
           },
@@ -1720,6 +1761,7 @@ SELECT DISTINCT a, b FROM t
             ],
             "input_arity": 2
           },
+          "mir_id": 1,
           "lir_id": 1
         }
       }
@@ -1782,6 +1824,7 @@ GROUP BY a
                 ]
               },
               "plan": "PassArrangements",
+              "mir_id": 0,
               "lir_id": 0
             }
           },
@@ -1869,6 +1912,7 @@ GROUP BY a
             ],
             "input_arity": 3
           },
+          "mir_id": 1,
           "lir_id": 1
         }
       }
@@ -1949,6 +1993,7 @@ FROM t
                       }
                     ]
                   },
+                  "mir_id": 0,
                   "lir_id": 0
                 }
               },
@@ -2029,6 +2074,7 @@ FROM t
                 ],
                 "input_arity": 2
               },
+              "mir_id": 2,
               "lir_id": 1
             }
           },
@@ -2060,6 +2106,7 @@ FROM t
                           "types": null
                         },
                         "plan": "PassArrangements",
+                        "mir_id": 3,
                         "lir_id": 2
                       }
                     },
@@ -2078,6 +2125,7 @@ FROM t
                       ],
                       "input_arity": 2
                     },
+                    "mir_id": 10,
                     "lir_id": 8
                   }
                 },
@@ -2122,9 +2170,11 @@ FROM t
                                       }
                                     ]
                                   },
+                                  "mir_id": 4,
                                   "lir_id": 3
                                 }
                               },
+                              "mir_id": 6,
                               "lir_id": 4
                             }
                           },
@@ -2141,11 +2191,13 @@ FROM t
                                   ]
                                 ]
                               },
+                              "mir_id": 7,
                               "lir_id": 5
                             }
                           }
                         ],
                         "consolidate_output": true,
+                        "mir_id": 8,
                         "lir_id": 6
                       }
                     },
@@ -2190,14 +2242,17 @@ FROM t
                       "input_arity": 0
                     },
                     "input_key_val": null,
+                    "mir_id": 9,
                     "lir_id": 7
                   }
                 }
               ],
               "consolidate_output": false,
+              "mir_id": 10,
               "lir_id": 9
             }
           },
+          "mir_id": 11,
           "lir_id": 10
         }
       }
@@ -2255,6 +2310,7 @@ SELECT * FROM hierarchical_group_by
                 ]
               },
               "plan": "PassArrangements",
+              "mir_id": 0,
               "lir_id": 0
             }
           },
@@ -2311,6 +2367,7 @@ SELECT * FROM hierarchical_group_by
             ],
             "input_arity": 3
           },
+          "mir_id": 1,
           "lir_id": 1
         }
       }
@@ -2388,6 +2445,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                       }
                     ]
                   },
+                  "mir_id": 0,
                   "lir_id": 0
                 }
               },
@@ -2445,6 +2503,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                 ],
                 "input_arity": 2
               },
+              "mir_id": 2,
               "lir_id": 1
             }
           },
@@ -2476,6 +2535,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                           "types": null
                         },
                         "plan": "PassArrangements",
+                        "mir_id": 3,
                         "lir_id": 2
                       }
                     },
@@ -2494,6 +2554,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                       ],
                       "input_arity": 2
                     },
+                    "mir_id": 10,
                     "lir_id": 8
                   }
                 },
@@ -2538,9 +2599,11 @@ MATERIALIZED VIEW hierarchical_global_mv
                                       }
                                     ]
                                   },
+                                  "mir_id": 4,
                                   "lir_id": 3
                                 }
                               },
+                              "mir_id": 6,
                               "lir_id": 4
                             }
                           },
@@ -2557,11 +2620,13 @@ MATERIALIZED VIEW hierarchical_global_mv
                                   ]
                                 ]
                               },
+                              "mir_id": 7,
                               "lir_id": 5
                             }
                           }
                         ],
                         "consolidate_output": true,
+                        "mir_id": 8,
                         "lir_id": 6
                       }
                     },
@@ -2606,14 +2671,17 @@ MATERIALIZED VIEW hierarchical_global_mv
                       "input_arity": 0
                     },
                     "input_key_val": null,
+                    "mir_id": 9,
                     "lir_id": 7
                   }
                 }
               ],
               "consolidate_output": false,
+              "mir_id": 10,
               "lir_id": 9
             }
           },
+          "mir_id": 11,
           "lir_id": 10
         }
       }
@@ -2691,6 +2759,7 @@ SELECT * FROM hierarchical_global
                       }
                     ]
                   },
+                  "mir_id": 0,
                   "lir_id": 0
                 }
               },
@@ -2740,6 +2809,7 @@ SELECT * FROM hierarchical_global
                 ],
                 "input_arity": 2
               },
+              "mir_id": 2,
               "lir_id": 1
             }
           },
@@ -2771,6 +2841,7 @@ SELECT * FROM hierarchical_global
                           "types": null
                         },
                         "plan": "PassArrangements",
+                        "mir_id": 3,
                         "lir_id": 2
                       }
                     },
@@ -2789,6 +2860,7 @@ SELECT * FROM hierarchical_global
                       ],
                       "input_arity": 2
                     },
+                    "mir_id": 10,
                     "lir_id": 8
                   }
                 },
@@ -2833,9 +2905,11 @@ SELECT * FROM hierarchical_global
                                       }
                                     ]
                                   },
+                                  "mir_id": 4,
                                   "lir_id": 3
                                 }
                               },
+                              "mir_id": 6,
                               "lir_id": 4
                             }
                           },
@@ -2852,11 +2926,13 @@ SELECT * FROM hierarchical_global
                                   ]
                                 ]
                               },
+                              "mir_id": 7,
                               "lir_id": 5
                             }
                           }
                         ],
                         "consolidate_output": true,
+                        "mir_id": 8,
                         "lir_id": 6
                       }
                     },
@@ -2901,14 +2977,17 @@ SELECT * FROM hierarchical_global
                       "input_arity": 0
                     },
                     "input_key_val": null,
+                    "mir_id": 9,
                     "lir_id": 7
                   }
                 }
               ],
               "consolidate_output": false,
+              "mir_id": 10,
               "lir_id": 9
             }
           },
+          "mir_id": 11,
           "lir_id": 10
         }
       }
@@ -2971,6 +3050,7 @@ GROUP BY a
                 ]
               },
               "plan": "PassArrangements",
+              "mir_id": 0,
               "lir_id": 0
             }
           },
@@ -3341,6 +3421,7 @@ GROUP BY a
             ],
             "input_arity": 3
           },
+          "mir_id": 1,
           "lir_id": 1
         }
       }
@@ -3421,6 +3502,7 @@ FROM t
                       }
                     ]
                   },
+                  "mir_id": 0,
                   "lir_id": 0
                 }
               },
@@ -3784,6 +3866,7 @@ FROM t
                 ],
                 "input_arity": 2
               },
+              "mir_id": 2,
               "lir_id": 1
             }
           },
@@ -3815,6 +3898,7 @@ FROM t
                           "types": null
                         },
                         "plan": "PassArrangements",
+                        "mir_id": 3,
                         "lir_id": 2
                       }
                     },
@@ -3833,6 +3917,7 @@ FROM t
                       ],
                       "input_arity": 2
                     },
+                    "mir_id": 10,
                     "lir_id": 8
                   }
                 },
@@ -3877,9 +3962,11 @@ FROM t
                                       }
                                     ]
                                   },
+                                  "mir_id": 4,
                                   "lir_id": 3
                                 }
                               },
+                              "mir_id": 6,
                               "lir_id": 4
                             }
                           },
@@ -3896,11 +3983,13 @@ FROM t
                                   ]
                                 ]
                               },
+                              "mir_id": 7,
                               "lir_id": 5
                             }
                           }
                         ],
                         "consolidate_output": true,
+                        "mir_id": 8,
                         "lir_id": 6
                       }
                     },
@@ -3945,14 +4034,17 @@ FROM t
                       "input_arity": 0
                     },
                     "input_key_val": null,
+                    "mir_id": 9,
                     "lir_id": 7
                   }
                 }
               ],
               "consolidate_output": false,
+              "mir_id": 10,
               "lir_id": 9
             }
           },
+          "mir_id": 11,
           "lir_id": 10
         }
       }
@@ -4010,6 +4102,7 @@ MATERIALIZED VIEW collated_group_by_mv
                 ]
               },
               "plan": "PassArrangements",
+              "mir_id": 0,
               "lir_id": 0
             }
           },
@@ -4463,6 +4556,7 @@ MATERIALIZED VIEW collated_group_by_mv
             ],
             "input_arity": 7
           },
+          "mir_id": 1,
           "lir_id": 1
         }
       }
@@ -4520,6 +4614,7 @@ SELECT * FROM collated_group_by
                 ]
               },
               "plan": "PassArrangements",
+              "mir_id": 0,
               "lir_id": 0
             }
           },
@@ -4965,6 +5060,7 @@ SELECT * FROM collated_group_by
             ],
             "input_arity": 7
           },
+          "mir_id": 1,
           "lir_id": 1
         }
       }
@@ -5042,6 +5138,7 @@ MATERIALIZED VIEW collated_global_mv
                       }
                     ]
                   },
+                  "mir_id": 0,
                   "lir_id": 0
                 }
               },
@@ -5488,6 +5585,7 @@ MATERIALIZED VIEW collated_global_mv
                 ],
                 "input_arity": 6
               },
+              "mir_id": 2,
               "lir_id": 1
             }
           },
@@ -5527,6 +5625,7 @@ MATERIALIZED VIEW collated_global_mv
                           "types": null
                         },
                         "plan": "PassArrangements",
+                        "mir_id": 3,
                         "lir_id": 2
                       }
                     },
@@ -5549,6 +5648,7 @@ MATERIALIZED VIEW collated_global_mv
                       ],
                       "input_arity": 6
                     },
+                    "mir_id": 10,
                     "lir_id": 8
                   }
                 },
@@ -5601,9 +5701,11 @@ MATERIALIZED VIEW collated_global_mv
                                       }
                                     ]
                                   },
+                                  "mir_id": 4,
                                   "lir_id": 3
                                 }
                               },
+                              "mir_id": 6,
                               "lir_id": 4
                             }
                           },
@@ -5620,11 +5722,13 @@ MATERIALIZED VIEW collated_global_mv
                                   ]
                                 ]
                               },
+                              "mir_id": 7,
                               "lir_id": 5
                             }
                           }
                         ],
                         "consolidate_output": true,
+                        "mir_id": 8,
                         "lir_id": 6
                       }
                     },
@@ -5733,14 +5837,17 @@ MATERIALIZED VIEW collated_global_mv
                       "input_arity": 0
                     },
                     "input_key_val": null,
+                    "mir_id": 9,
                     "lir_id": 7
                   }
                 }
               ],
               "consolidate_output": false,
+              "mir_id": 10,
               "lir_id": 9
             }
           },
+          "mir_id": 11,
           "lir_id": 10
         }
       }
@@ -5818,6 +5925,7 @@ SELECT * FROM collated_global
                       }
                     ]
                   },
+                  "mir_id": 0,
                   "lir_id": 0
                 }
               },
@@ -6256,6 +6364,7 @@ SELECT * FROM collated_global
                 ],
                 "input_arity": 6
               },
+              "mir_id": 2,
               "lir_id": 1
             }
           },
@@ -6295,6 +6404,7 @@ SELECT * FROM collated_global
                           "types": null
                         },
                         "plan": "PassArrangements",
+                        "mir_id": 3,
                         "lir_id": 2
                       }
                     },
@@ -6317,6 +6427,7 @@ SELECT * FROM collated_global
                       ],
                       "input_arity": 6
                     },
+                    "mir_id": 10,
                     "lir_id": 8
                   }
                 },
@@ -6369,9 +6480,11 @@ SELECT * FROM collated_global
                                       }
                                     ]
                                   },
+                                  "mir_id": 4,
                                   "lir_id": 3
                                 }
                               },
+                              "mir_id": 6,
                               "lir_id": 4
                             }
                           },
@@ -6388,11 +6501,13 @@ SELECT * FROM collated_global
                                   ]
                                 ]
                               },
+                              "mir_id": 7,
                               "lir_id": 5
                             }
                           }
                         ],
                         "consolidate_output": true,
+                        "mir_id": 8,
                         "lir_id": 6
                       }
                     },
@@ -6501,14 +6616,17 @@ SELECT * FROM collated_global
                       "input_arity": 0
                     },
                     "input_key_val": null,
+                    "mir_id": 9,
                     "lir_id": 7
                   }
                 }
               ],
               "consolidate_output": false,
+              "mir_id": 10,
               "lir_id": 9
             }
           },
+          "mir_id": 11,
           "lir_id": 10
         }
       }
@@ -6569,6 +6687,7 @@ WHERE a = c AND d = e AND b + d > 42
                   ]
                 },
                 "plan": "PassArrangements",
+                "mir_id": 0,
                 "lir_id": 0
               }
             },
@@ -6597,6 +6716,7 @@ WHERE a = c AND d = e AND b + d > 42
                         "input_arity": 2
                       }
                     },
+                    "mir_id": 2,
                     "lir_id": 1
                   }
                 },
@@ -6653,6 +6773,7 @@ WHERE a = c AND d = e AND b + d > 42
                   ],
                   "input_arity": 2
                 },
+                "mir_id": 4,
                 "lir_id": 2
               }
             },
@@ -6680,6 +6801,7 @@ WHERE a = c AND d = e AND b + d > 42
                         "input_arity": 1
                       }
                     },
+                    "mir_id": 5,
                     "lir_id": 3
                   }
                 },
@@ -6714,6 +6836,7 @@ WHERE a = c AND d = e AND b + d > 42
                   ],
                   "input_arity": 1
                 },
+                "mir_id": 8,
                 "lir_id": 4
               }
             }
@@ -7236,6 +7359,7 @@ WHERE a = c AND d = e AND b + d > 42
               ]
             }
           },
+          "mir_id": 9,
           "lir_id": 5
         }
       }
@@ -7397,6 +7521,7 @@ WHERE a = c AND d = e AND f = a
                   ]
                 },
                 "plan": "PassArrangements",
+                "mir_id": 0,
                 "lir_id": 0
               }
             },
@@ -7498,6 +7623,7 @@ WHERE a = c AND d = e AND f = a
                         }
                       ]
                     },
+                    "mir_id": 2,
                     "lir_id": 1
                   }
                 },
@@ -7555,6 +7681,7 @@ WHERE a = c AND d = e AND f = a
                   ],
                   "input_arity": 2
                 },
+                "mir_id": 4,
                 "lir_id": 2
               }
             },
@@ -7656,6 +7783,7 @@ WHERE a = c AND d = e AND f = a
                         }
                       ]
                     },
+                    "mir_id": 5,
                     "lir_id": 3
                   }
                 },
@@ -7699,6 +7827,7 @@ WHERE a = c AND d = e AND f = a
                   ],
                   "input_arity": 2
                 },
+                "mir_id": 7,
                 "lir_id": 4
               }
             }
@@ -8099,6 +8228,7 @@ WHERE a = c AND d = e AND f = a
               ]
             }
           },
+          "mir_id": 8,
           "lir_id": 5
         }
       }
@@ -8159,6 +8289,7 @@ WHERE a = c and a = e
                   ]
                 },
                 "plan": "PassArrangements",
+                "mir_id": 0,
                 "lir_id": 0
               }
             },
@@ -8199,6 +8330,7 @@ WHERE a = c and a = e
                   ]
                 },
                 "plan": "PassArrangements",
+                "mir_id": 2,
                 "lir_id": 1
               }
             },
@@ -8239,6 +8371,7 @@ WHERE a = c and a = e
                   ]
                 },
                 "plan": "PassArrangements",
+                "mir_id": 4,
                 "lir_id": 2
               }
             }
@@ -8634,6 +8767,7 @@ WHERE a = c and a = e
               ]
             }
           },
+          "mir_id": 6,
           "lir_id": 3
         }
       }

@@ -26,7 +26,7 @@ use std::ops::Deref;
 
 use itertools::{izip, Itertools};
 use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
-use mz_expr::{Id, MirScalarExpr};
+use mz_expr::{Id, MirId, MirScalarExpr};
 use mz_ore::str::{separated, IndentLike, StrExt};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
@@ -51,7 +51,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
         let annotations = PlanAnnotations::new(ctx.config.clone(), self);
 
         match &self {
-            Constant { rows, lir_id: _ } => match rows {
+            Constant {
+                rows,
+                mir_id: _,
+                lir_id: _,
+            } => match rows {
                 Ok(rows) => {
                     if !rows.is_empty() {
                         writeln!(f, "{}Constant{}", ctx.indent, annotations)?;
@@ -85,6 +89,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 id,
                 keys,
                 plan,
+                mir_id: _,
                 lir_id: _,
             } => {
                 ctx.indent.set(); // mark the current indent level
@@ -138,6 +143,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 id,
                 value,
                 body,
+                mir_id: _,
                 lir_id: _,
             } => {
                 let mut bindings = vec![(id, value.as_ref())];
@@ -149,6 +155,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     id,
                     value,
                     body,
+                    mir_id: _,
                     lir_id: _,
                 } = head
                 {
@@ -172,6 +179,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 values,
                 limits,
                 body,
+                mir_id: _,
                 lir_id: _,
             } => {
                 let bindings = izip!(ids.iter(), values, limits).collect_vec();
@@ -196,6 +204,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 input,
                 mfp,
                 input_key_val,
+                mir_id: _,
                 lir_id: _,
             } => {
                 writeln!(f, "{}Mfp{}", ctx.indent, annotations)?;
@@ -221,6 +230,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 exprs,
                 mfp_after,
                 input_key,
+                mir_id: _,
                 lir_id: _,
             } => {
                 let exprs = mode.seq(exprs, None);
@@ -246,6 +256,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
             Join {
                 inputs,
                 plan,
+                mir_id: _,
                 lir_id: _,
             } => {
                 use crate::plan::join::JoinPlan;
@@ -272,6 +283,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 plan,
                 input_key,
                 mfp_after,
+                mir_id: _,
                 lir_id: _,
             } => {
                 use crate::plan::reduce::ReducePlan;
@@ -331,6 +343,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
             TopK {
                 input,
                 top_k_plan,
+                mir_id: _,
                 lir_id: _,
             } => {
                 use crate::plan::top_k::TopKPlan;
@@ -395,13 +408,18 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 writeln!(f, "{}", annotations)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
-            Negate { input, lir_id: _ } => {
+            Negate {
+                input,
+                mir_id: _,
+                lir_id: _,
+            } => {
                 writeln!(f, "{}Negate{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Threshold {
                 input,
                 threshold_plan,
+                mir_id: _,
                 lir_id: _,
             } => {
                 use crate::plan::threshold::ThresholdPlan;
@@ -419,6 +437,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
             Union {
                 inputs,
                 consolidate_output,
+                mir_id: _,
                 lir_id: _,
             } => {
                 if *consolidate_output {
@@ -442,6 +461,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 forms,
                 input_key,
                 input_mfp,
+                mir_id: _,
                 lir_id: _,
             } => {
                 writeln!(f, "{}ArrangeBy{}", ctx.indent, annotations)?;
@@ -870,7 +890,8 @@ impl<'a> fmt::Display for Permutation<'a> {
 /// Annotations for physical plans.
 struct PlanAnnotations {
     config: ExplainConfig,
-    node_id: LirId,
+    mir_id: MirId,
+    lir_id: LirId,
 }
 
 // The current implementation deviates from the `AnnotatedPlan` used in `Mir~`-based plans. This is
@@ -880,8 +901,13 @@ struct PlanAnnotations {
 // `AnnotatedPlan` here as well.
 impl PlanAnnotations {
     fn new(config: ExplainConfig, plan: &Plan) -> Self {
-        let node_id = plan.lir_id();
-        Self { config, node_id }
+        let mir_id = plan.mir_id();
+        let lir_id = plan.lir_id();
+        Self {
+            config,
+            mir_id,
+            lir_id,
+        }
     }
 }
 
@@ -889,7 +915,8 @@ impl fmt::Display for PlanAnnotations {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.config.node_ids {
             f.debug_struct(" //")
-                .field("node_id", &self.node_id)
+                .field("mir_id", &self.mir_id)
+                .field("lir_id", &self.lir_id)
                 .finish()
         } else {
             // No physical plan annotations enabled.
