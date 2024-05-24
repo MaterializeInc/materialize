@@ -126,7 +126,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     else:
                         raise
                 except FailedTestExecutionError as e:
-                    assert len(e.errors) > 0, "Exception contains not errors"
+                    assert len(e.errors) > 0, "Exception contains no errors"
                     for error in e.errors:
                         print(
                             f"Test failure occurred ({error.message}), collecting it, and continuing."
@@ -224,13 +224,14 @@ def perform_test(
     current_time = time.time()
     update_data(c, i)
 
+    validate_updated_data(c, i)
     validate_cursor_on_table(cursor_on_table, current_time, i)
     validate_cursor_on_mv(cursor_on_mv, current_time, i)
 
     # Token can run out, so refresh it occasionally
     token = fetch_token(user_name, password)
 
-    validate_data(
+    validate_data_through_http_connection(
         host,
         token,
         i,
@@ -245,7 +246,15 @@ def update_data(c: Composition, i: int) -> None:
                 1
 
                 > INSERT INTO qa_canary_environment.public_table.table VALUES {", ".join(f"({i*100+j})" for j in range(100))}
+            """
+        )
+    )
 
+
+def validate_updated_data(c: Composition, i: int) -> None:
+    c.testdrive(
+        dedent(
+            f"""
                 > SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0
                 0
 
@@ -308,7 +317,7 @@ def validate_cursor_on_mv(
     assert int(r[-1][2]) == (i + 1) * 100 - 1, f"Unexpected results: {r}"
 
 
-def validate_data(
+def validate_data_through_http_connection(
     host: str,
     token: str,
     i: int,
