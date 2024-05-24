@@ -377,9 +377,9 @@ impl Catalog {
                 .chain(builtin_index_updates.into_iter())
                 .collect();
 
-            state.apply_updates_for_bootstrap(pre_view_updates)?;
+            state.apply_updates_for_bootstrap(pre_view_updates);
             Self::parse_views(&mut state, builtin_views).await;
-            state.apply_updates_for_bootstrap(post_view_updates)?;
+            state.apply_updates_for_bootstrap(post_view_updates);
 
             let last_seen_version = txn
                 .get_catalog_content_version()
@@ -400,12 +400,12 @@ impl Catalog {
                 // Throw the existing item updates away because they may have been re-written in
                 // the migration.
                 let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), diff: 1}).collect();
-                state.apply_updates_for_bootstrap(item_updates)?;
+                state.apply_updates_for_bootstrap(item_updates);
             } else {
-                state.apply_updates_for_bootstrap(item_updates)?;
+                state.apply_updates_for_bootstrap(item_updates);
             }
 
-            state.apply_updates_for_bootstrap(post_item_updates)?;
+            state.apply_updates_for_bootstrap(post_item_updates);
 
             // Migrate builtin items.
             let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()

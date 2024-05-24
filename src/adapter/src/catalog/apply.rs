@@ -10,7 +10,7 @@
 //! Logic related to applying updates from a [`mz_catalog::durable::DurableCatalogState`] to a
 //! [`CatalogState`].
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
 use mz_catalog::builtin::{Builtin, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP};
@@ -55,20 +55,14 @@ impl CatalogState {
     // look at the existing bootstrap code for ways of doing this. For now we rely on the caller
     // providing objects in dependency order.
     #[instrument]
-    pub(crate) fn apply_updates_for_bootstrap(
-        &mut self,
-        updates: Vec<StateUpdate>,
-    ) -> Result<(), Error> {
-        let mut updates: VecDeque<_> = updates.into_iter().collect();
-        while let Some(StateUpdate { kind, diff }) = updates.pop_front() {
+    pub(crate) fn apply_updates_for_bootstrap(&mut self, updates: Vec<StateUpdate>) {
+        for StateUpdate { kind, diff } in updates {
             assert_eq!(
                 diff, 1,
                 "initial catalog updates should be consolidated: ({kind:?}, {diff:?})"
             );
             self.apply_update(kind, diff);
         }
-
-        Ok(())
     }
 
     #[instrument(level = "debug")]
