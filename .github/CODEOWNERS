@@ -19,7 +19,7 @@
 /doc/developer/reference/compute    @MaterializeInc/compute
 /doc/developer/reference/storage    @MaterializeInc/storage
 /misc/bazel                         @parkmycar @guswynn @maddyblue
-/misc/dbt-materialize               @morsapaes
+/misc/dbt-materialize               @morsapaes @MaterializeInc/integrations
 /misc/python/materialize/benches    @MaterializeInc/testing
 /misc/python/materialize/buildkite_insights @MaterializeInc/testing
 /misc/python/materialize/checks     @MaterializeInc/testing
