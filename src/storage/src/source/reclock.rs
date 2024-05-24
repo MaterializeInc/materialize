@@ -630,7 +630,6 @@ mod tests {
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
-    use mz_persist_client::critical::CriticalReaderId;
     use mz_persist_client::rpc::PubSubClientConnection;
     use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
