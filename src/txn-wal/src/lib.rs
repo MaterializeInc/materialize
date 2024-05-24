@@ -760,6 +760,7 @@ pub mod tests {
                 .snapshot_and_fetch(&mut data_read)
                 .await
                 .expect("snapshot shouldn't panic");
+            data_read.expire().await;
             let snapshot: Vec<_> = snapshot
                 .into_iter()
                 .map(|((k, v), t, d)| {
