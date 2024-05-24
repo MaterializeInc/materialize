@@ -16,6 +16,8 @@ from materialize.output_consistency.input_data.types.all_types_provider import (
     DATA_TYPES,
 )
 
+TAG_DATA_TYPE_ENUM = "data_type"
+
 TIME_ZONE_PARAM = EnumConstantOperationParam(
     ["UTC", "CET", "+8", "America/New_York"], add_quotes=True
 )
@@ -130,5 +132,8 @@ def all_data_types_enum_constant_operation_param(
         if data_type.is_pg_compatible or not must_be_pg_compatible
     ]
     return EnumConstantOperationParam(
-        all_type_names, add_quotes=False, add_invalid_value=False
+        all_type_names,
+        add_quotes=False,
+        add_invalid_value=False,
+        tags={TAG_DATA_TYPE_ENUM},
     )

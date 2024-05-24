@@ -30,13 +30,16 @@ for string_data_type in STRING_DATA_TYPES:
         {ExpressionCharacteristics.STRING_EMPTY},
     )
     values_of_type.add_raw_value("'a'", "VAL_1", set())
-    values_of_type.add_raw_value("'abc'", "VAL_2", set())
-    values_of_type.add_raw_value("'xAAx'", "VAL_3", set())
-    values_of_type.add_raw_value("'0*a*B_c-dE.$=#(%)?!'", "VAL_4", set())
+
+    if not string_data_type.only_few_values:
+        values_of_type.add_raw_value("'abc'", "VAL_2", set())
+        values_of_type.add_raw_value("'xAAx'", "VAL_3", set())
+        values_of_type.add_raw_value("'0*a*B_c-dE.$=#(%)?!'", "VAL_4", set())
+        values_of_type.add_raw_value("'ff00aa'", "HEX_VAL", set())
+
     values_of_type.add_raw_value(
         "'äÖüß'", "VAL_5", {ExpressionCharacteristics.STRING_WITH_ESZETT}
     )
-    values_of_type.add_raw_value("'ff00aa'", "HEX_VAL", set())
     values_of_type.add_raw_value(
         "' mAA m\n\t '",
         "VAL_W_SPACES",

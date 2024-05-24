@@ -11,6 +11,7 @@ from collections.abc import Callable
 from functools import partial
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.enum.enum_constant import EnumConstant
 from materialize.output_consistency.expression.expression import (
     Expression,
     LeafExpression,
@@ -20,6 +21,12 @@ from materialize.output_consistency.expression.expression_with_args import (
 )
 from materialize.output_consistency.input_data.operations.date_time_operations_provider import (
     DATE_TIME_OPERATION_TYPES,
+)
+from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
+    TAG_DATA_TYPE_ENUM,
+)
+from materialize.output_consistency.input_data.types.all_types_provider import (
+    internal_type_identifiers_to_data_type_names,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -128,6 +135,15 @@ def involves_data_type_category(
 def is_known_to_involve_exact_data_types(
     expression: Expression, internal_data_type_identifiers: set[str]
 ):
+    if isinstance(expression, EnumConstant) and expression.is_tagged(
+        TAG_DATA_TYPE_ENUM
+    ):
+        type_names = internal_type_identifiers_to_data_type_names(
+            internal_data_type_identifiers
+        )
+        if expression.value in type_names:
+            return True
+
     exact_data_type = expression.try_resolve_exact_data_type()
 
     if exact_data_type is None:

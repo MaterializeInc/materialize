@@ -29,6 +29,7 @@ class EnumConstantOperationParam(OperationParam):
         add_null_value: bool = True,
         optional: bool = False,
         invalid_value: str = "invalid_value_123",
+        tags: set[str] | None = None,
     ):
         super().__init__(
             DataTypeCategory.ENUM,
@@ -57,6 +58,7 @@ class EnumConstantOperationParam(OperationParam):
         self.characteristics_per_index: list[set[ExpressionCharacteristics]] = [
             set() for _ in self.values
         ]
+        self.tags = tags
 
     def supports_type(
         self, data_type: DataType, previous_args: list[Expression]
@@ -74,7 +76,7 @@ class EnumConstantOperationParam(OperationParam):
         if self.add_null_value and index == 0:
             quote_value = False
 
-        return EnumConstant(value, quote_value, characteristics)
+        return EnumConstant(value, quote_value, characteristics, self.tags)
 
     def get_valid_values(self) -> list[str]:
         return [

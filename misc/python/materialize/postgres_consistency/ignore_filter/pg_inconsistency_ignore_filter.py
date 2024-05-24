@@ -69,6 +69,10 @@ from materialize.output_consistency.input_data.types.number_types_provider impor
     DOUBLE_TYPE_IDENTIFIER,
     REAL_TYPE_IDENTIFIER,
 )
+from materialize.output_consistency.input_data.types.string_type_provider import (
+    BPCHAR_8_TYPE_IDENTIFIER,
+    CHAR_6_TYPE_IDENTIFIER,
+)
 from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperation,
@@ -132,12 +136,14 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         self,
         expression: ExpressionWithArgs,
         operation: DbOperationOrFunction,
-        _all_involved_characteristics: set[ExpressionCharacteristics],
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         if matches_float_comparison(expression):
             return YesIgnore("#22022: real with decimal comparison")
 
-        if operation.is_tagged(TAG_JSONB_TO_TEXT) and expression.matches(
+        if (
+            operation.is_tagged(TAG_JSONB_TO_TEXT) or operation.is_tagged(TAG_CASTING)
+        ) and expression.matches(
             partial(
                 involves_data_type_category, data_type_category=DataTypeCategory.JSONB
             ),
@@ -151,8 +157,24 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#25228: date format that cannot be parsed")
 
+        if (
+            expression.matches(
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers={
+                        BPCHAR_8_TYPE_IDENTIFIER,
+                        CHAR_6_TYPE_IDENTIFIER,
+                    },
+                ),
+                True,
+            )
+            and ExpressionCharacteristics.STRING_WITH_SPECIAL_SPACE_CHARS
+            in all_involved_characteristics
+        ):
+            return YesIgnore("#27253: bpchar and char trim newline")
+
         return super()._matches_problematic_operation_or_function_invocation(
-            expression, operation, _all_involved_characteristics
+            expression, operation, all_involved_characteristics
         )
 
     def _matches_problematic_function_invocation(
@@ -224,6 +246,22 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             {ExpressionCharacteristics.STRING_WITH_SPECIAL_SPACE_CHARS}
         ):
             return YesIgnore("#25937 (base64 decode with new line and tab)")
+
+        if (
+            db_function.function_name_in_lower_case == "coalesce"
+            and expression.matches(
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers={
+                        BPCHAR_8_TYPE_IDENTIFIER,
+                        CHAR_6_TYPE_IDENTIFIER,
+                    },
+                ),
+                True,
+            )
+        ):
+            # do not explicitly require the TEXT type to be included because it can appear by applying || to two char values
+            return YesIgnore("#27278: bpchar and char with coalesce")
 
         return NoIgnore()
 
@@ -304,6 +342,18 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 return YesIgnore("#22002: ordering on text different (<, <=, ...)")
             if isinstance(return_type_spec, JsonbReturnTypeSpec):
                 return YesIgnore("#26309: ordering on JSON different")
+
+        if db_operation.pattern == "CAST ($ AS $)" and expression.matches(
+            partial(
+                is_known_to_involve_exact_data_types,
+                internal_data_type_identifiers={
+                    BPCHAR_8_TYPE_IDENTIFIER,
+                    CHAR_6_TYPE_IDENTIFIER,
+                },
+            ),
+            True,
+        ):
+            return YesIgnore("#27282: casting bpchar or char")
 
         return NoIgnore()
 
@@ -502,6 +552,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             # Postgres returns regtype which can be cast to numbers while mz returns a string
             return YesIgnore("regtype of postgres can be cast")
+
+        if "array_agg on character not yet supported" in mz_error_msg:
+            return YesIgnore("#27252: array_agg on character")
 
         return NoIgnore()
 
