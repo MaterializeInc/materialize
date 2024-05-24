@@ -38,6 +38,7 @@ def print_annotation_match(
     annotation_text: str,
     search_value: str,
     use_regex: bool,
+    short_result_presentation: bool,
 ) -> None:
     matched_snippet = trim_match(
         input=annotation_text, search_value=search_value, use_regex=use_regex
@@ -55,8 +56,11 @@ def print_annotation_match(
         )
     )
     print(f"URL: {with_formatting(web_url, COLOR_CYAN)}")
-    print(SHORT_SEPARATOR)
-    print(matched_snippet)
+
+    if not short_result_presentation:
+        print(SHORT_SEPARATOR)
+        print(matched_snippet)
+
     print(LONG_SEPARATOR)
 
 
