@@ -310,7 +310,7 @@ impl Catalog {
                     | StateUpdateKind::IntrospectionSourceIndex(_)
                     | StateUpdateKind::ClusterReplica(_) => cluster_updates.push(update),
                     StateUpdateKind::SystemObjectMapping(system_object_mapping) => builtin_item_updates.push((system_object_mapping, update.diff)),
-                    StateUpdateKind::Item(_) => item_updates.push(update),
+                    StateUpdateKind::Item(item) => item_updates.push((item, update.diff)),
                     StateUpdateKind::Comment(_)
                     | StateUpdateKind::AuditLog(_)
                     | StateUpdateKind::StorageUsage(_)
@@ -357,6 +357,9 @@ impl Catalog {
                 }
             }
 
+            // Sort item updates by GlobalId.
+            let item_updates: Vec<_> = item_updates.into_iter().sorted_by_key(|(item, _diff)| item.id).map(|(item, diff)| StateUpdate {kind: StateUpdateKind::Item(item), diff}).collect();
+
             let pre_view_updates = iter::empty()
                 .chain(pre_cluster_updates.into_iter())
                 .chain(builtin_type_updates.into_iter())
@@ -374,9 +377,9 @@ impl Catalog {
                 .chain(builtin_index_updates.into_iter())
                 .collect();
 
-            state.apply_updates_for_bootstrap(pre_view_updates)?;
+            state.apply_updates_for_bootstrap(pre_view_updates);
             Self::parse_views(&mut state, builtin_views).await;
-            state.apply_updates_for_bootstrap(post_view_updates)?;
+            state.apply_updates_for_bootstrap(post_view_updates);
 
             let last_seen_version = txn
                 .get_catalog_content_version()
@@ -397,12 +400,12 @@ impl Catalog {
                 // Throw the existing item updates away because they may have been re-written in
                 // the migration.
                 let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), diff: 1}).collect();
-                state.apply_updates_for_bootstrap(item_updates)?;
+                state.apply_updates_for_bootstrap(item_updates);
             } else {
-                state.apply_updates_for_bootstrap(item_updates)?;
+                state.apply_updates_for_bootstrap(item_updates);
             }
 
-            state.apply_updates_for_bootstrap(post_item_updates)?;
+            state.apply_updates_for_bootstrap(post_item_updates);
 
             // Migrate builtin items.
             let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
