@@ -370,8 +370,8 @@ WHERE
 ----
 Explained Query (fast path):
   Project (#4, #5, #3)
-    Filter (#0{f1} = 1) AND (7 = (#2 + #2)) AND ((#2 * 2) < (#2 + 2))
-      Map ((#1{f2} + #0{f1}), (#1{f2} + 1), 1, 2)
+    Filter (#0{f2} = 1) AND (7 = (#2 + #2)) AND ((#2 * 2) < (#2 + 2))
+      Map ((#1{f1} + #0{f2}), (#1{f1} + 1), 1, 2)
         ReadIndex on=materialize.public.t1 t1i2=[*** full scan ***]
 
 Used Indexes:
