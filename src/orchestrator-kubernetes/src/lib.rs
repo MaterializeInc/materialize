@@ -636,10 +636,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                                 Some(DiskLimit(disk_limit)),
                             ) => {
                                 let disk_capacity = if disk_limit.0 < disk_capacity {
-                                    // We issue an informational message instead
+                                    // We issue a debug message instead
                                     // of a warning or error because all the
                                     // above cases are relatively common.
-                                    tracing::info!(
+                                    tracing::debug!(
                                         "disk capacity {} is larger than the disk limit {}; \
                                         disk usage will indicate 100% full before the disk is truly full; \
                                         as long as the delta is small this is not a cause for concern",
