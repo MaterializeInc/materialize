@@ -245,6 +245,22 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#25937 (base64 decode with new line and tab)")
 
+        if (
+            db_function.function_name_in_lower_case == "coalesce"
+            and expression.matches(
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers={
+                        BPCHAR_8_TYPE_IDENTIFIER,
+                        CHAR_6_TYPE_IDENTIFIER,
+                    },
+                ),
+                True,
+            )
+        ):
+            # do not explicitly require the TEXT type to be included because it can appear by applying || to two char values
+            return YesIgnore("#27278: bpchar and char with coalesce")
+
         return NoIgnore()
 
     def _matches_problematic_operation_invocation(
@@ -324,6 +340,18 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 return YesIgnore("#22002: ordering on text different (<, <=, ...)")
             if isinstance(return_type_spec, JsonbReturnTypeSpec):
                 return YesIgnore("#26309: ordering on JSON different")
+
+        if db_operation.pattern == "CAST ($ AS $)" and expression.matches(
+            partial(
+                is_known_to_involve_exact_data_types,
+                internal_data_type_identifiers={
+                    BPCHAR_8_TYPE_IDENTIFIER,
+                    CHAR_6_TYPE_IDENTIFIER,
+                },
+            ),
+            True,
+        ):
+            return YesIgnore("#27282: casting bpchar or char")
 
         return NoIgnore()
 
