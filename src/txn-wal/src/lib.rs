@@ -551,13 +551,12 @@ pub(crate) async fn cads<T, O, C>(
 
 #[cfg(test)]
 pub mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
     use std::sync::Mutex;
 
     use crossbeam_channel::{Receiver, Sender, TryRecvError};
     use differential_dataflow::consolidation::consolidate_updates;
-    use itertools::Itertools;
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{Diagnostics, PersistClient, ShardId};
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
@@ -772,8 +771,8 @@ pub mod tests {
             // Check that a subscribe would produce the same result.
             let subscribe = self.subscribe(data_id, as_of, as_of + 1).await;
             assert_eq!(
-                snapshot.iter().sorted().collect::<Vec<_>>(),
-                subscribe.output().into_iter().sorted().collect::<Vec<_>>()
+                snapshot.iter().collect::<BTreeSet<_>>(),
+                subscribe.output().into_iter().collect::<BTreeSet<_>>()
             );
 
             // Check that the result is correct.
