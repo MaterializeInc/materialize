@@ -1708,62 +1708,201 @@ impl<'a> Transaction<'a> {
                 .map(kind_fn)
         }
 
+        let Transaction {
+            durable_catalog: _,
+            databases,
+            schemas,
+            items,
+            comments,
+            roles,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator: _,
+            configs: _,
+            settings: _,
+            system_gid_mapping,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+            storage_collection_metadata,
+            unfinalized_shards,
+            txn_wal_shard: _,
+            audit_log_updates: _,
+            storage_usage_updates: _,
+            op_id: _,
+        } = &self;
+
         std::iter::empty()
-            .chain(get_collection_updates(&self.roles, StateUpdateKind::Role))
+            .chain(get_collection_updates(roles, StateUpdateKind::Role))
+            .chain(get_collection_updates(databases, StateUpdateKind::Database))
+            .chain(get_collection_updates(schemas, StateUpdateKind::Schema))
             .chain(get_collection_updates(
-                &self.databases,
-                StateUpdateKind::Database,
-            ))
-            .chain(get_collection_updates(
-                &self.schemas,
-                StateUpdateKind::Schema,
-            ))
-            .chain(get_collection_updates(
-                &self.default_privileges,
+                default_privileges,
                 StateUpdateKind::DefaultPrivilege,
             ))
             .chain(get_collection_updates(
-                &self.system_privileges,
+                system_privileges,
                 StateUpdateKind::SystemPrivilege,
             ))
             .chain(get_collection_updates(
-                &self.system_configurations,
+                system_configurations,
                 StateUpdateKind::SystemConfiguration,
             ))
+            .chain(get_collection_updates(clusters, StateUpdateKind::Cluster))
             .chain(get_collection_updates(
-                &self.clusters,
-                StateUpdateKind::Cluster,
-            ))
-            .chain(get_collection_updates(
-                &self.introspection_sources,
+                introspection_sources,
                 StateUpdateKind::IntrospectionSourceIndex,
             ))
             .chain(get_collection_updates(
-                &self.cluster_replicas,
+                cluster_replicas,
                 StateUpdateKind::ClusterReplica,
             ))
             .chain(get_collection_updates(
-                &self.system_gid_mapping,
+                system_gid_mapping,
                 StateUpdateKind::SystemObjectMapping,
             ))
-            .chain(get_collection_updates(&self.items, StateUpdateKind::Item))
+            .chain(get_collection_updates(items, StateUpdateKind::Item))
+            .chain(get_collection_updates(comments, StateUpdateKind::Comment))
             .chain(get_collection_updates(
-                &self.comments,
-                StateUpdateKind::Comment,
-            ))
-            .chain(get_collection_updates(
-                &self.storage_collection_metadata,
+                storage_collection_metadata,
                 StateUpdateKind::StorageCollectionMetadata,
             ))
             .chain(get_collection_updates(
-                &self.unfinalized_shards,
+                unfinalized_shards,
                 StateUpdateKind::UnfinalizedShard,
             ))
             .map(|kind| StateUpdate {
                 kind,
                 // TODO(jkosh44)
-                ts: Timestamp::new(0),
+                ts: mz_repr::Timestamp::new(0),
                 diff: 1,
+            })
+    }
+
+    pub fn get_op_updates(&self) -> impl Iterator<Item = StateUpdate> + '_ {
+        fn get_collection_updates<'a, K, V, T>(
+            table_txn: &'a TableTransaction<K, V>,
+            kind_fn: impl Fn(T) -> StateUpdateKind + 'a,
+            op: Timestamp,
+        ) -> impl Iterator<Item = (StateUpdateKind, Diff)> + 'a
+        where
+            K: Ord + Eq + Clone + Debug,
+            V: Ord + Clone + Debug,
+            T: DurableType<K, V>,
+        {
+            table_txn
+                .pending
+                .iter()
+                .flat_map(|(k, vs)| vs.into_iter().map(move |v| (k, v)))
+                .filter(move |(_k, v)| v.ts == op)
+                .map(|(k, v)| (k.clone(), v.value.clone(), v.diff.clone()))
+                .map(|(k, v, diff)| (DurableType::from_key_value(k, v), diff))
+                .map(move |(update, diff)| (kind_fn(update), diff))
+        }
+
+        let Transaction {
+            durable_catalog: _,
+            databases,
+            schemas,
+            items,
+            comments,
+            roles,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator: _,
+            configs: _,
+            settings: _,
+            system_gid_mapping,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+            storage_collection_metadata,
+            unfinalized_shards,
+            // TODO(jkosh44) Hmmm, why do we ignore these...?
+            txn_wal_shard: _,
+            audit_log_updates: _,
+            storage_usage_updates: _,
+            op_id: _,
+        } = &self;
+
+        std::iter::empty()
+            .chain(get_collection_updates(
+                roles,
+                StateUpdateKind::Role,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                databases,
+                StateUpdateKind::Database,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                schemas,
+                StateUpdateKind::Schema,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                default_privileges,
+                StateUpdateKind::DefaultPrivilege,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                system_privileges,
+                StateUpdateKind::SystemPrivilege,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                system_configurations,
+                StateUpdateKind::SystemConfiguration,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                clusters,
+                StateUpdateKind::Cluster,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                introspection_sources,
+                StateUpdateKind::IntrospectionSourceIndex,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                cluster_replicas,
+                StateUpdateKind::ClusterReplica,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                system_gid_mapping,
+                StateUpdateKind::SystemObjectMapping,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                items,
+                StateUpdateKind::Item,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                comments,
+                StateUpdateKind::Comment,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                storage_collection_metadata,
+                StateUpdateKind::StorageCollectionMetadata,
+                self.op_id,
+            ))
+            .chain(get_collection_updates(
+                unfinalized_shards,
+                StateUpdateKind::UnfinalizedShard,
+                self.op_id,
+            ))
+            .map(|(kind, diff)| StateUpdate {
+                kind,
+                // TODO(jkosh44)
+                ts: mz_repr::Timestamp::new(0),
+                diff,
             })
     }
 
@@ -1805,6 +1944,7 @@ impl<'a> Transaction<'a> {
     /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
     /// must be fatal to the calling process. We do not panic/halt inside this function itself so
     /// that errors can bubble up during initialization.
+    /// TODO(jkosh44) Not true, it also returns READONLY errors.
     #[mz_ore::instrument(level = "debug")]
     pub async fn commit(self) -> Result<(), CatalogError> {
         let (mut txn_batch, durable_catalog) = self.into_parts();

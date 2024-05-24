@@ -13,7 +13,6 @@ use std::str::FromStr;
 use futures::future::BoxFuture;
 use maplit::btreeset;
 use mz_catalog::durable::{Item, Transaction};
-use mz_catalog::memory::objects::{StateUpdate, StateUpdateKind};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp};

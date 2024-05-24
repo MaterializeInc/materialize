@@ -532,7 +532,6 @@ impl CatalogState {
         system_object_mapping: mz_catalog::durable::SystemObjectMapping,
         diff: Diff,
     ) {
-        assert_eq!(diff, 1, "TODO(jkosh44) should get fenced");
         let builtin = BUILTIN_LOOKUP
             .get(&system_object_mapping.description)
             .expect("missing builtin")

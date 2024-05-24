@@ -3289,6 +3289,11 @@ pub static MZ_OBJECTS: Lazy<BuiltinView> = Lazy::new(|| {
 UNION ALL
     SELECT id, oid, schema_id, name, 'sink', owner_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_sinks
 UNION ALL
+
+
+
+
+
     SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, NULL::mz_catalog.mz_aclitem[]
     FROM mz_catalog.mz_indexes
     JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
