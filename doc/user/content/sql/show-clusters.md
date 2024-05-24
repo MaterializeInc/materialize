@@ -70,8 +70,6 @@ The following characteristics apply to the `mz_system` cluster:
 
 ### `mz_probe` system cluster
 
-{{< warn-if-unreleased "v0.95" >}}
-
 A system cluster named `mz_probe` will be pre-installed in every environment.
 This cluster is used for uptiming monitoring.
 
@@ -83,8 +81,6 @@ The following characteristics apply to the `mz_probe` cluster:
   * You cannot run `SELECT` or `SUBSCRIBE` on this cluster.
 
 ### `mz_support` system cluster
-
-{{< warn-if-unreleased "v0.95" >}}
 
 A system cluster named `mz_support` will be pre-installed in every environment.
 This cluster is used for support to perform one-off debugging and validation.

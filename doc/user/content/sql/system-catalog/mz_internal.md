@@ -342,7 +342,6 @@ At this time, we do not make any guarantees about the freshness of these numbers
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_global_frontiers -->
 
 ### `mz_history_retention_strategies`
-{{< warn-if-unreleased v0.99 >}}
 
 The `mz_history_retention_strategies` describes the history retention strategies
 for tables, sources, indexes, materialized views that are configured with a
@@ -904,11 +903,11 @@ The `mz_source_statistics` view contains statistics about each source.
 | `records_indexed`         | [`uint8`]    | The number of individual records indexed in the source envelope state.                                                                                                                                                                                                              |
 | `bytes_indexed`           | [`uint8`]    | The number of bytes indexed in the source envelope state.                                                                                                                                                                                                                           |
 | `rehydration_latency`     | [`interval`] | The amount of time it took for the worker to rehydrate the source envelope state.                                                                                                                                                                                                   |
-| `snapshot_records_known`  | [`uint8`]    | {{< warn-if-unreleased v0.87 >}} The size of the source's snapshot. See above for its unit. |
-| `snapshot_records_staged` | [`uint8`]    | {{< warn-if-unreleased v0.87 >}} The amount of the source's snapshot Materialize has read. See above for its unit. |
+| `snapshot_records_known`  | [`uint8`]    | The size of the source's snapshot. See above for its unit. |
+| `snapshot_records_staged` | [`uint8`]    | The amount of the source's snapshot Materialize has read. See above for its unit. |
 | `snapshot_committed`      | [`boolean`]  | Whether the worker has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
-| `offset_known`            | [`uint8`]    | {{< warn-if-unreleased v0.87 >}} The offset of the most recent data in the source's upstream service that Materialize knows about. See above for its unit. |
-| `offset_committed`        | [`uint8`]    | {{< warn-if-unreleased v0.87 >}} The offset of the source's upstream service Materialize has fully committed. See above for its unit. |
+| `offset_known`            | [`uint8`]    | The offset of the most recent data in the source's upstream service that Materialize knows about. See above for its unit. |
+| `offset_committed`        | [`uint8`]    | The offset of the source's upstream service Materialize has fully committed. See above for its unit. |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_with_history -->
 

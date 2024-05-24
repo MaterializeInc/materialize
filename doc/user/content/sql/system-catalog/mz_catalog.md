@@ -66,7 +66,7 @@ Field          | Type       | Meaning
 `id`           | [`text`]   | The ID of the type.
 
 ### `mz_cluster_replica_sizes`
-{{< warn-if-unreleased v0.99 >}}
+
 The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
 (e.g. `100cc`) to physical sizes (number of processes, and CPU and memory allocations per process).
 
