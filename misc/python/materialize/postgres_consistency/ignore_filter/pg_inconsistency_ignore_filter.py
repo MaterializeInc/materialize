@@ -141,7 +141,9 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         if matches_float_comparison(expression):
             return YesIgnore("#22022: real with decimal comparison")
 
-        if operation.is_tagged(TAG_JSONB_TO_TEXT) and expression.matches(
+        if (
+            operation.is_tagged(TAG_JSONB_TO_TEXT) or operation.is_tagged(TAG_CASTING)
+        ) and expression.matches(
             partial(
                 involves_data_type_category, data_type_category=DataTypeCategory.JSONB
             ),
