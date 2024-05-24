@@ -26,6 +26,7 @@ use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64};
 use prometheus::proto::{MetricFamily, MetricType};
+use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use tracing::info;
 
@@ -54,6 +55,13 @@ pub struct AdminArgs {
     /// Whether to commit any modifications (defaults to dry run).
     #[clap(long)]
     pub(crate) commit: bool,
+
+    /// !!DANGER ZONE!! - Has the posibility of breaking production!
+    ///
+    /// Allows specifying an expected `applier_version` of the shard we're operating on, so we can
+    /// modify old/leaked shards.
+    #[clap(long)]
+    pub(crate) expected_version: Option<String>,
 }
 
 /// Individual subcommands of admin
@@ -127,6 +135,11 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                     .set_compaction_memory_bound_bytes(args.compaction_memory_bound_bytes);
             }
             let metrics_registry = MetricsRegistry::new();
+            let expected_version = command
+                .expected_version
+                .as_ref()
+                .map(|v| Version::parse(v))
+                .transpose()?;
             let () = force_compaction::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>(
                 cfg,
                 &metrics_registry,
@@ -136,6 +149,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                 Arc::new(TodoSchema::default()),
                 Arc::new(TodoSchema::default()),
                 command.commit,
+                expected_version,
             )
             .await?;
             info_log_non_zero_metrics(&metrics_registry.gather());
@@ -146,6 +160,11 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             // TODO: Fetch the latest values of these configs from Launch Darkly.
             let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), configs);
             let metrics_registry = MetricsRegistry::new();
+            let expected_version = command
+                .expected_version
+                .as_ref()
+                .map(|v| Version::parse(v))
+                .transpose()?;
             // We don't actually care about the return value here, but we do need to prevent
             // the shard metrics from being dropped before they're reported below.
             let _machine = force_gc(
@@ -155,6 +174,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                 &args.state.consensus_uri,
                 &args.state.blob_uri,
                 command.commit,
+                expected_version,
             )
             .await?;
             info_log_non_zero_metrics(&metrics_registry.gather());
@@ -172,6 +192,11 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             } = args;
             let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
             let commit = command.commit;
+            let expected_version = command
+                .expected_version
+                .as_ref()
+                .map(|v| Version::parse(v))
+                .transpose()?;
 
             let configs = all_dyncfgs(ConfigSet::default());
             // TODO: Fetch the latest values of these configs from Launch Darkly.
@@ -191,6 +216,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                 Arc::clone(&metrics),
                 shard_id,
                 commit,
+                expected_version,
             )
             .await?;
 
@@ -392,6 +418,7 @@ pub async fn force_compaction<K, V, T, D>(
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     commit: bool,
+    expected_version: Option<Version>,
 ) -> Result<(), anyhow::Error>
 where
     K: Debug + Codec,
@@ -410,6 +437,7 @@ where
         Arc::clone(&metrics),
         shard_id,
         commit,
+        expected_version,
     )
     .await?;
 
@@ -506,9 +534,16 @@ async fn make_machine(
     metrics: Arc<Metrics>,
     shard_id: ShardId,
     commit: bool,
+    expected_version: Option<Version>,
 ) -> anyhow::Result<Machine<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>> {
     make_typed_machine::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>(
-        cfg, consensus, blob, metrics, shard_id, commit,
+        cfg,
+        consensus,
+        blob,
+        metrics,
+        shard_id,
+        commit,
+        expected_version,
     )
     .await
 }
@@ -520,6 +555,7 @@ async fn make_typed_machine<K, V, T, D>(
     metrics: Arc<Metrics>,
     shard_id: ShardId,
     commit: bool,
+    expected_version: Option<Version>,
 ) -> anyhow::Result<Machine<K, V, T, D>>
 where
     K: Debug + Codec,
@@ -555,11 +591,22 @@ where
         // This isn't the perfect place to put this check, the ideal would be in
         // the apply_unbatched_cmd loop, but I don't want to pollute the prod
         // code with this logic.
-        let safe_version_change = if commit {
-            cfg.build_version == state.applier_version
-        } else {
+        let safe_version_change = match (commit, expected_version) {
             // We never actually write out state changes, so increasing the version is okay.
-            cfg.build_version >= state.applier_version
+            (false, _) => cfg.build_version >= state.applier_version,
+            // If the versions match that's okay because any commits won't change it.
+            (true, None) => cfg.build_version == state.applier_version,
+            // !!DANGER ZONE!!
+            (true, Some(expected)) => {
+                // If we're not _extremely_ careful, the persistcli could make shards unreadable by
+                // production. But there are times when we want to operate on a leaked shard with a
+                // newer version of the build.
+                //
+                // We only allow a mismatch in version if we provided the expected version to the
+                // command, and the expected version is less than the current build, which
+                // indicates this is an old shard.
+                state.applier_version == expected && expected <= cfg.build_version
+            }
         };
         if !safe_version_change {
             // We could add a flag to override this check, if that comes up.
@@ -590,11 +637,21 @@ async fn force_gc(
     consensus_uri: &str,
     blob_uri: &str,
     commit: bool,
+    expected_version: Option<Version>,
 ) -> anyhow::Result<Box<dyn Any>> {
     let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
     let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
-    let mut machine = make_machine(&cfg, consensus, blob, metrics, shard_id, commit).await?;
+    let mut machine = make_machine(
+        &cfg,
+        consensus,
+        blob,
+        metrics,
+        shard_id,
+        commit,
+        expected_version,
+    )
+    .await?;
     let gc_req = GcReq {
         shard_id,
         new_seqno_since: machine.applier.seqno_since(),

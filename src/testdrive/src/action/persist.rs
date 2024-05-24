@@ -54,6 +54,7 @@ pub async fn run_force_compaction(
         Arc::new(relation_desc),
         Arc::new(UnitSchema),
         true,
+        None,
     )
     .await?;
 
