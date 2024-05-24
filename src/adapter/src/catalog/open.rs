@@ -73,34 +73,33 @@ use crate::AdapterError;
 pub struct BuiltinMigrationMetadata {
     // Used to drop objects on STORAGE nodes
     pub previous_storage_collection_ids: BTreeSet<GlobalId>,
-    // Used to update in memory catalog state
-    pub all_drop_ops: Vec<GlobalId>,
-    pub all_create_ops: Vec<(
-        GlobalId,
-        u32,
-        QualifiedItemName,
-        RoleId,
-        PrivilegeMap,
-        CatalogItemRebuilder,
-    )>,
-    pub introspection_source_index_updates:
-        BTreeMap<ClusterId, Vec<(LogVariant, String, GlobalId, u32)>>,
     // Used to update persisted on disk catalog state
     pub migrated_system_object_mappings: BTreeMap<GlobalId, SystemObjectMapping>,
-    pub user_drop_ops: Vec<GlobalId>,
-    pub user_create_ops: Vec<(GlobalId, SchemaId, u32, String)>,
+    pub introspection_source_index_updates:
+        BTreeMap<ClusterId, Vec<(LogVariant, String, GlobalId, u32)>>,
+    pub user_item_drop_ops: Vec<GlobalId>,
+    pub user_item_create_ops: Vec<CreateOp>,
+}
+
+#[derive(Debug)]
+pub struct CreateOp {
+    id: GlobalId,
+    oid: u32,
+    schema_id: SchemaId,
+    name: String,
+    owner_id: RoleId,
+    privileges: PrivilegeMap,
+    item_rebuilder: CatalogItemRebuilder,
 }
 
 impl BuiltinMigrationMetadata {
     fn new() -> BuiltinMigrationMetadata {
         BuiltinMigrationMetadata {
             previous_storage_collection_ids: BTreeSet::new(),
-            all_drop_ops: Vec::new(),
-            all_create_ops: Vec::new(),
-            introspection_source_index_updates: BTreeMap::new(),
             migrated_system_object_mappings: BTreeMap::new(),
-            user_drop_ops: Vec::new(),
-            user_create_ops: Vec::new(),
+            introspection_source_index_updates: BTreeMap::new(),
+            user_item_drop_ops: Vec::new(),
+            user_item_create_ops: Vec::new(),
         }
     }
 }
@@ -355,15 +354,11 @@ impl Catalog {
                 migrated_builtins,
                 id_fingerprint_map,
             )?;
-            Catalog::apply_in_memory_builtin_migration(
+            Catalog::apply_builtin_migration(
                 &mut state,
-                &mut builtin_migration_metadata,
-            )?;
-            Catalog::apply_persisted_builtin_migration(
-                &state,
                 &mut txn,
                 &mut builtin_migration_metadata,
-            )?;
+            ).await?;
 
             txn.commit().await?;
             Ok((
@@ -807,35 +802,28 @@ impl Catalog {
                 ),
             }
             if id.is_user() {
-                migration_metadata.user_drop_ops.push(id);
+                migration_metadata.user_item_drop_ops.push(id);
             }
-            migration_metadata.all_drop_ops.push(id);
 
             // Push create commands.
             let name = entry.name().clone();
             if id.is_user() {
                 let schema_id = name.qualifiers.schema_spec.clone().into();
-                migration_metadata.user_create_ops.push((
-                    new_id,
+                let item_rebuilder = CatalogItemRebuilder::new(entry, new_id, &ancestor_ids);
+                migration_metadata.user_item_create_ops.push(CreateOp {
+                    id: new_id,
+                    oid: entry.oid(),
                     schema_id,
-                    entry.oid(),
-                    name.item.clone(),
-                ));
+                    name: name.item.clone(),
+                    owner_id: entry.owner_id().clone(),
+                    privileges: entry.privileges().clone(),
+                    item_rebuilder,
+                });
             }
-            let item_rebuilder = CatalogItemRebuilder::new(entry, new_id, &ancestor_ids);
-            migration_metadata.all_create_ops.push((
-                new_id,
-                entry.oid(),
-                name,
-                entry.owner_id().clone(),
-                entry.privileges().clone(),
-                item_rebuilder,
-            ));
         }
 
         // Reverse drop commands.
-        migration_metadata.all_drop_ops.reverse();
-        migration_metadata.user_drop_ops.reverse();
+        migration_metadata.user_item_drop_ops.reverse();
 
         Ok(migration_metadata)
     }
@@ -859,60 +847,14 @@ impl Catalog {
         sorted_entries
     }
 
-    fn apply_in_memory_builtin_migration(
-        state: &mut CatalogState,
-        migration_metadata: &mut BuiltinMigrationMetadata,
-    ) -> Result<(), Error> {
-        assert_eq!(
-            migration_metadata.all_drop_ops.len(),
-            migration_metadata.all_create_ops.len(),
-            "we should be re-creating every dropped object"
-        );
-        for id in migration_metadata.all_drop_ops.drain(..) {
-            state.drop_item(id);
-        }
-        for (id, oid, name, owner_id, privileges, item_rebuilder) in
-            migration_metadata.all_create_ops.drain(..)
-        {
-            let item = item_rebuilder.build(state);
-            state.insert_item(id, oid, name, item, owner_id, privileges);
-        }
-        for (cluster_id, updates) in &migration_metadata.introspection_source_index_updates {
-            let log_indexes = &mut state
-                .clusters_by_id
-                .get_mut(cluster_id)
-                .unwrap_or_else(|| panic!("invalid cluster {cluster_id}"))
-                .log_indexes;
-            for (variant, _name, new_id, _oid) in updates {
-                log_indexes.remove(variant);
-                log_indexes.insert(variant.clone(), new_id.clone());
-            }
-        }
-
-        Ok(())
-    }
-
     #[mz_ore::instrument]
-    fn apply_persisted_builtin_migration(
-        state: &CatalogState,
+    async fn apply_builtin_migration(
+        state: &mut CatalogState,
         txn: &mut Transaction<'_>,
         migration_metadata: &mut BuiltinMigrationMetadata,
     ) -> Result<(), Error> {
-        txn.remove_items(&migration_metadata.user_drop_ops.drain(..).collect())?;
-        for (id, schema_id, oid, name) in migration_metadata.user_create_ops.drain(..) {
-            let entry = state.get_entry(&id);
-            let item = entry.item();
-            let serialized_item = item.to_serialized();
-            txn.insert_item(
-                id,
-                oid,
-                schema_id,
-                &name,
-                serialized_item,
-                entry.owner_id().clone(),
-                entry.privileges().all_values_owned().collect(),
-            )?;
-        }
+        txn.commit_op();
+        txn.remove_items(&migration_metadata.user_item_drop_ops.drain(..).collect())?;
         txn.update_system_object_mappings(std::mem::take(
             &mut migration_metadata.migrated_system_object_mappings,
         ))?;
@@ -928,7 +870,34 @@ impl Catalog {
                     )
                 }),
         )?;
-
+        let updates = txn.get_op_updates().collect();
+        state.apply_updates_for_bootstrap(updates).await;
+        txn.commit_op();
+        for CreateOp {
+            id,
+            oid,
+            schema_id,
+            name,
+            owner_id,
+            privileges,
+            item_rebuilder,
+        } in migration_metadata.user_item_create_ops.drain(..)
+        {
+            let item = item_rebuilder.build(state);
+            let serialized_item = item.to_serialized();
+            txn.insert_item(
+                id,
+                oid,
+                schema_id,
+                &name,
+                serialized_item,
+                owner_id.clone(),
+                privileges.all_values_owned().collect(),
+            )?;
+            let updates = txn.get_op_updates().collect();
+            state.apply_updates_for_bootstrap(updates).await;
+            txn.commit_op();
+        }
         Ok(())
     }
 
@@ -1398,11 +1367,9 @@ mod builtin_migration_tests {
         initial_state: Vec<SimplifiedCatalogEntry>,
         migrated_names: Vec<String>,
         expected_previous_storage_collection_names: Vec<String>,
-        expected_all_drop_ops: Vec<String>,
-        expected_user_drop_ops: Vec<String>,
-        expected_all_create_ops: Vec<String>,
-        expected_user_create_ops: Vec<String>,
         expected_migrated_system_object_mappings: Vec<String>,
+        expected_user_item_drop_ops: Vec<String>,
+        expected_user_item_create_ops: Vec<String>,
     }
 
     async fn add_item(
@@ -1523,38 +1490,6 @@ mod builtin_migration_tests {
                 test_case.test_name
             );
             assert_eq!(
-                convert_ids_to_names(migration_metadata.all_drop_ops, &name_mapping),
-                test_case.expected_all_drop_ops.into_iter().collect(),
-                "{} test failed with wrong all drop ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_ids_to_names(migration_metadata.user_drop_ops, &name_mapping),
-                test_case.expected_user_drop_ops.into_iter().collect(),
-                "{} test failed with wrong user drop ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .all_create_ops
-                    .into_iter()
-                    .map(|(_, _, name, _, _, _)| name.item)
-                    .collect::<BTreeSet<_>>(),
-                test_case.expected_all_create_ops.into_iter().collect(),
-                "{} test failed with wrong all create ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .user_create_ops
-                    .into_iter()
-                    .map(|(_, _, _, name)| name)
-                    .collect::<BTreeSet<_>>(),
-                test_case.expected_user_create_ops.into_iter().collect(),
-                "{} test failed with wrong user create ops",
-                test_case.test_name
-            );
-            assert_eq!(
                 migration_metadata
                     .migrated_system_object_mappings
                     .values()
@@ -1565,6 +1500,25 @@ mod builtin_migration_tests {
                     .into_iter()
                     .collect(),
                 "{} test failed with wrong migrated system object mappings",
+                test_case.test_name
+            );
+            assert_eq!(
+                convert_ids_to_names(migration_metadata.user_item_drop_ops, &name_mapping),
+                test_case.expected_user_item_drop_ops.into_iter().collect(),
+                "{} test failed with wrong user drop ops",
+                test_case.test_name
+            );
+            assert_eq!(
+                migration_metadata
+                    .user_item_create_ops
+                    .into_iter()
+                    .map(|create_op| create_op.name)
+                    .collect::<BTreeSet<_>>(),
+                test_case
+                    .expected_user_item_create_ops
+                    .into_iter()
+                    .collect(),
+                "{} test failed with wrong user create ops",
                 test_case.test_name
             );
             catalog.expire().await;
@@ -1584,11 +1538,9 @@ mod builtin_migration_tests {
             }],
             migrated_names: vec![],
             expected_previous_storage_collection_names: vec![],
-            expected_all_drop_ops: vec![],
-            expected_user_drop_ops: vec![],
-            expected_all_create_ops: vec![],
-            expected_user_create_ops: vec![],
             expected_migrated_system_object_mappings: vec![],
+            expected_user_item_drop_ops: vec![],
+            expected_user_item_create_ops: vec![],
         };
         run_test_case(test_case).await;
     }
@@ -1605,11 +1557,9 @@ mod builtin_migration_tests {
             }],
             migrated_names: vec!["s1".to_string()],
             expected_previous_storage_collection_names: vec!["s1".to_string()],
-            expected_all_drop_ops: vec!["s1".to_string()],
-            expected_user_drop_ops: vec![],
-            expected_all_create_ops: vec!["s1".to_string()],
-            expected_user_create_ops: vec![],
             expected_migrated_system_object_mappings: vec!["s1".to_string()],
+            expected_user_item_drop_ops: vec![],
+            expected_user_item_create_ops: vec![],
         };
         run_test_case(test_case).await;
     }
@@ -1635,11 +1585,9 @@ mod builtin_migration_tests {
             ],
             migrated_names: vec!["s1".to_string()],
             expected_previous_storage_collection_names: vec!["u1".to_string(), "s1".to_string()],
-            expected_all_drop_ops: vec!["u1".to_string(), "s1".to_string()],
-            expected_user_drop_ops: vec!["u1".to_string()],
-            expected_all_create_ops: vec!["s1".to_string(), "u1".to_string()],
-            expected_user_create_ops: vec!["u1".to_string()],
             expected_migrated_system_object_mappings: vec!["s1".to_string()],
+            expected_user_item_drop_ops: vec!["u1".to_string()],
+            expected_user_item_create_ops: vec!["u1".to_string()],
         };
         run_test_case(test_case).await;
     }
@@ -1676,11 +1624,9 @@ mod builtin_migration_tests {
                 "u2".to_string(),
                 "s1".to_string(),
             ],
-            expected_all_drop_ops: vec!["u1".to_string(), "u2".to_string(), "s1".to_string()],
-            expected_user_drop_ops: vec!["u1".to_string(), "u2".to_string()],
-            expected_all_create_ops: vec!["s1".to_string(), "u2".to_string(), "u1".to_string()],
-            expected_user_create_ops: vec!["u2".to_string(), "u1".to_string()],
             expected_migrated_system_object_mappings: vec!["s1".to_string()],
+            expected_user_item_drop_ops: vec!["u1".to_string(), "u2".to_string()],
+            expected_user_item_create_ops: vec!["u2".to_string(), "u1".to_string()],
         };
         run_test_case(test_case).await;
     }
@@ -1723,21 +1669,9 @@ mod builtin_migration_tests {
                 "s1".to_string(),
                 "s2".to_string(),
             ],
-            expected_all_drop_ops: vec![
-                "u2".to_string(),
-                "s1".to_string(),
-                "u1".to_string(),
-                "s2".to_string(),
-            ],
-            expected_user_drop_ops: vec!["u2".to_string(), "u1".to_string()],
-            expected_all_create_ops: vec![
-                "s2".to_string(),
-                "u1".to_string(),
-                "s1".to_string(),
-                "u2".to_string(),
-            ],
-            expected_user_create_ops: vec!["u1".to_string(), "u2".to_string()],
             expected_migrated_system_object_mappings: vec!["s1".to_string(), "s2".to_string()],
+            expected_user_item_drop_ops: vec!["u2".to_string(), "u1".to_string()],
+            expected_user_item_create_ops: vec!["u1".to_string(), "u2".to_string()],
         };
         run_test_case(test_case).await;
     }
@@ -1901,48 +1835,6 @@ mod builtin_migration_tests {
                 "s317".to_string(),
                 "s322".to_string(),
             ],
-            expected_all_drop_ops: vec![
-                "s349".to_string(),
-                "s421".to_string(),
-                "s355".to_string(),
-                "s315".to_string(),
-                "s354".to_string(),
-                "s327".to_string(),
-                "s339".to_string(),
-                "s296".to_string(),
-                "s320".to_string(),
-                "s340".to_string(),
-                "s330".to_string(),
-                "s321".to_string(),
-                "s318".to_string(),
-                "s323".to_string(),
-                "s295".to_string(),
-                "s273".to_string(),
-                "s317".to_string(),
-                "s322".to_string(),
-            ],
-            expected_user_drop_ops: vec![],
-            expected_all_create_ops: vec![
-                "s322".to_string(),
-                "s317".to_string(),
-                "s273".to_string(),
-                "s295".to_string(),
-                "s323".to_string(),
-                "s318".to_string(),
-                "s321".to_string(),
-                "s330".to_string(),
-                "s340".to_string(),
-                "s320".to_string(),
-                "s296".to_string(),
-                "s339".to_string(),
-                "s327".to_string(),
-                "s354".to_string(),
-                "s315".to_string(),
-                "s355".to_string(),
-                "s421".to_string(),
-                "s349".to_string(),
-            ],
-            expected_user_create_ops: vec![],
             expected_migrated_system_object_mappings: vec![
                 "s322".to_string(),
                 "s317".to_string(),
@@ -1963,6 +1855,8 @@ mod builtin_migration_tests {
                 "s421".to_string(),
                 "s349".to_string(),
             ],
+            expected_user_item_drop_ops: vec![],
+            expected_user_item_create_ops: vec![],
         };
         run_test_case(test_case).await;
     }
@@ -1988,11 +1882,9 @@ mod builtin_migration_tests {
             ],
             migrated_names: vec!["s1".to_string()],
             expected_previous_storage_collection_names: vec!["s1".to_string()],
-            expected_all_drop_ops: vec!["s2".to_string(), "s1".to_string()],
-            expected_user_drop_ops: vec![],
-            expected_all_create_ops: vec!["s1".to_string(), "s2".to_string()],
-            expected_user_create_ops: vec![],
             expected_migrated_system_object_mappings: vec!["s1".to_string(), "s2".to_string()],
+            expected_user_item_drop_ops: vec![],
+            expected_user_item_create_ops: vec![],
         };
         run_test_case(test_case).await;
     }
