@@ -11,6 +11,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use itertools::Itertools;
+use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::Config;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -20,6 +22,7 @@ use mz_sql_parser::ast::{
     WithOptionValue,
 };
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
+use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::SubsourceResolver;
 use tokio_postgres::types::Oid;
 
@@ -123,7 +126,133 @@ pub(super) fn generate_text_columns(
         }
     }
 
+    // TODO: this only needs to normalize the text column references, so doesn't
+    // need to return it.
     Ok(text_cols_dict)
+}
+
+pub fn generate_create_subsource_stmts(
+    scx: &StatementContext,
+    source_name: ResolvedItemName,
+    subsource_resolver: &SubsourceResolver,
+    publication_tables: &[PostgresTableDesc],
+    requested_subsources: BTreeMap<UnresolvedItemName, UnresolvedItemName>,
+    table_casts: &BTreeMap<usize, Vec<(CastType, MirScalarExpr)>>,
+) -> Result<Vec<CreateSubsourceStatement<Aug>>, PlanError> {
+    let mut subsources = vec![];
+
+    // Aggregate all unrecognized types.
+    let mut unsupported_cols = vec![];
+
+    // Now that we have an explicit list of validated requested subsources we can create them
+    for (subsource_name, upstream_name) in requested_subsources {
+        let idx = subsource_resolver.resolve_idx(&upstream_name.0)?;
+        let table = &publication_tables[idx];
+        let casts = &table_casts[&idx];
+
+        // Figure out the schema of the subsource
+        let mut columns = vec![];
+        for ((cast, _), column) in casts.iter().zip_eq(table.columns.iter()) {
+            let name = Ident::new(column.name.clone())?;
+            let ty = match cast {
+                CastType::Text => mz_pgrepr::Type::Text,
+                CastType::Natural => {
+                    match mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod) {
+                        Ok(t) => t,
+                        Err(_) => {
+                            let mut full_name = upstream_name.0.clone();
+                            full_name.push(name);
+                            unsupported_cols.push((
+                                UnresolvedItemName(full_name).to_ast_string(),
+                                mz_repr::adt::system::Oid(column.type_oid),
+                            ));
+                            continue;
+                        }
+                    }
+                }
+            };
+
+            let data_type = scx.resolve_type(ty)?;
+            let mut options = vec![];
+
+            if !column.nullable {
+                options.push(mz_sql_parser::ast::ColumnOptionDef {
+                    name: None,
+                    option: mz_sql_parser::ast::ColumnOption::NotNull,
+                });
+            }
+
+            columns.push(ColumnDef {
+                name,
+                data_type,
+                collation: None,
+                options,
+            });
+        }
+
+        let mut constraints = vec![];
+        for key in table.keys.clone() {
+            let mut key_columns = vec![];
+
+            for col_num in key.cols {
+                let ident = Ident::new(
+                    table
+                        .columns
+                        .iter()
+                        .find(|col| col.col_num == col_num)
+                        .expect("key exists as column")
+                        .name
+                        .clone(),
+                )?;
+                key_columns.push(ident);
+            }
+
+            let constraint = mz_sql_parser::ast::TableConstraint::Unique {
+                name: Some(Ident::new(key.name)?),
+                columns: key_columns,
+                is_primary: key.is_primary,
+                nulls_not_distinct: key.nulls_not_distinct,
+            };
+
+            // We take the first constraint available to be the primary key.
+            if key.is_primary {
+                constraints.insert(0, constraint);
+            } else {
+                constraints.push(constraint);
+            }
+        }
+
+        // Create the subsource statement
+        let subsource = CreateSubsourceStatement {
+            name: subsource_name,
+            columns,
+            of_source: Some(source_name.clone()),
+            // TODO(petrosagg): nothing stops us from getting the constraints of the
+            // upstream tables and mirroring them here which will lead to more optimization
+            // opportunities if for example there is a primary key or an index.
+            //
+            // If we ever do that we must triple check that we will get notified *in the
+            // replication stream*, if our assumptions change. Failure to do that could
+            // mean that an upstream table that started with an index was then altered to
+            // one without and now we're producing garbage data.
+            constraints,
+            if_not_exists: false,
+            with_options: vec![CreateSubsourceOption {
+                name: CreateSubsourceOptionName::ExternalReference,
+                value: Some(WithOptionValue::UnresolvedItemName(upstream_name)),
+            }],
+        };
+        subsources.push(subsource);
+    }
+
+    if !unsupported_cols.is_empty() {
+        unsupported_cols.sort();
+        Err(PgSourcePurificationError::UnrecognizedTypes {
+            cols: unsupported_cols,
+        })?;
+    }
+
+    Ok(subsources)
 }
 
 pub(crate) fn generate_targeted_subsources(

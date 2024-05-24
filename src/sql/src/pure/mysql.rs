@@ -20,7 +20,7 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_types::sources::SubsourceResolver;
 
-use crate::names::Aug;
+use crate::names::{Aug, ResolvedItemName};
 use crate::plan::{PlanError, StatementContext};
 use crate::pure::{MySqlConfigOptionName, MySqlSourcePurificationError};
 
@@ -53,19 +53,19 @@ pub(super) fn upstream_name_to_table(
     })
 }
 
-pub(super) fn generate_targeted_subsources(
+pub fn generate_create_subsource_stmts(
     scx: &StatementContext,
-    validated_requested_subsources: Vec<RequestedSubsource<MySqlTableDesc>>,
+    source_name: ResolvedItemName,
+    subsource_resolver: &SubsourceResolver,
+    tables: &[MySqlTableDesc],
+    requested_subsources: BTreeMap<UnresolvedItemName, UnresolvedItemName>,
 ) -> Result<Vec<CreateSubsourceStatement<Aug>>, PlanError> {
-    let mut subsources = vec![];
+    let mut subsources = Vec::with_capacity(requested_subsources.len());
 
-    // Now that we have an explicit list of validated requested subsources we can create them
-    for RequestedSubsource {
-        upstream_name,
-        subsource_name,
-        table,
-    } in validated_requested_subsources.into_iter()
-    {
+    for (subsource_name, upstream_name) in requested_subsources {
+        let idx = subsource_resolver.resolve_idx(&upstream_name.0)?;
+        let table = &tables[idx];
+
         // Figure out the schema of the subsource
         let mut columns = vec![];
         for c in table.columns.iter() {
@@ -120,9 +120,7 @@ pub(super) fn generate_targeted_subsources(
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
             columns,
-            // We don't know the primary source's `GlobalId` yet; fill it in
-            // once we generate it.
-            of_source: None,
+            of_source: Some(source_name.clone()),
             constraints,
             if_not_exists: false,
             with_options: vec![CreateSubsourceOption {

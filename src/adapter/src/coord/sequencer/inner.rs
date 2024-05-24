@@ -33,7 +33,10 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExplainFormat, ExprHumanizer};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowArena, RowIterator, Timestamp};
-use mz_sql::ast::{CreateSubsourceStatement, Ident, UnresolvedItemName, Value};
+use mz_sql::ast::{
+    CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
+    UnresolvedItemName, Value,
+};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
@@ -43,9 +46,11 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
+use mz_sql::plan::StatementContext;
 use mz_storage_types::sources::postgres::{
     PostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetails,
 };
+use mz_storage_types::sources::SourceConnection;
 use prost::Message as _;
 use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -76,6 +81,7 @@ use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::sources::GenericSourceConnection;
 use mz_storage_types::AlterCompatible;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::EmptyStatisticsOracle;
@@ -328,9 +334,9 @@ impl Coordinator {
         params: Params,
         progress_stmt: CreateSubsourceStatement<Aug>,
         mut source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
-        subsource_stmts: Vec<CreateSubsourceStatement<Aug>>,
+        subsources: BTreeMap<UnresolvedItemName, UnresolvedItemName>,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        let mut create_source_plans = Vec::with_capacity(subsource_stmts.len() + 2);
+        let mut create_source_plans = Vec::with_capacity(subsources.len() + 2);
 
         // 1. First plan the progress subsource.
         //
@@ -382,6 +388,83 @@ impl Coordinator {
             print_id: true,
         };
 
+        let conn_catalog = self.catalog().for_system_session();
+        let pcx = plan::PlanContext::zero();
+        let scx = StatementContext::new(Some(&pcx), &conn_catalog);
+
+        let subsources_stmts = match &source_plan.source.data_source {
+            mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
+                let subsource_resolver = ingestion.desc.connection.get_subsource_resolver();
+
+                match &ingestion.desc.connection {
+                    GenericSourceConnection::Postgres(pg) => {
+                        mz_sql::pure::postgres::generate_create_subsource_stmts(
+                            &scx,
+                            of_source,
+                            &subsource_resolver,
+                            &pg.publication_details.tables,
+                            subsources,
+                            &pg.table_casts,
+                        )?
+                    }
+                    GenericSourceConnection::MySql(mysql) => {
+                        mz_sql::pure::mysql::generate_create_subsource_stmts(
+                            &scx,
+                            of_source,
+                            &subsource_resolver,
+                            &mysql.details.tables,
+                            subsources,
+                        )?
+                    }
+                    GenericSourceConnection::LoadGenerator(lg) => {
+                        let views = lg.load_generator.views();
+
+                        let mut subsource_stmts = Vec::with_capacity(views.len());
+                        for (subsource_name, upstream_name) in subsources {
+                            let idx = subsource_resolver
+                                .resolve_idx(&upstream_name.0)
+                                .expect("validated during purification");
+                            let (_, desc) = &views[idx];
+
+                            let (columns, table_constraints) =
+                                scx.relation_desc_into_table_defs(desc)?;
+
+                            // Create the subsource statement
+                            let subsource = CreateSubsourceStatement {
+                                name: subsource_name,
+                                columns,
+                                of_source: Some(of_source.clone()),
+                                // unlike sources that come from an external upstream, we
+                                // have more leniency to introduce different constraints
+                                // every time the load generator is run; i.e. we are not as
+                                // worried about introducing junk data.
+                                constraints: table_constraints,
+                                if_not_exists: false,
+                                with_options: vec![CreateSubsourceOption {
+                                    name: CreateSubsourceOptionName::ExternalReference,
+                                    value: Some(WithOptionValue::UnresolvedItemName(upstream_name)),
+                                }],
+                            };
+                            subsource_stmts.push(subsource);
+                        }
+
+                        subsource_stmts
+                    }
+                    GenericSourceConnection::Kafka(_) => {
+                        // TODO: as part of #20208, Kafka sources will begin
+                        // producing data––we'll need to understand the schema
+                        // of the output here.
+                        assert!(
+                            subsources.is_empty(),
+                            "Kafka sources do not produce data-bearing subsources"
+                        );
+                        vec![]
+                    }
+                }
+            }
+            _ => unreachable!("CREATE SOURCE statements must generate ingestions"),
+        };
+
         create_source_plans.push(CreateSourcePlanBundle {
             source_id,
             plan: source_plan,
@@ -389,8 +472,7 @@ impl Coordinator {
         });
 
         // 3. Finally, plan all the subsources
-        for mut stmt in subsource_stmts {
-            stmt.of_source = Some(of_source.clone());
+        for stmt in subsources_stmts {
             let plan = self.plan_subsource(ctx.session(), &params, stmt).await?;
             create_source_plans.push(plan);
         }
