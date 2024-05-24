@@ -10,22 +10,21 @@
 mode cockroach
 
 query T
-SELECT current_database()
+SELECT current_user()
 ----
 materialize
 
 query T
-SELECT current_catalog() = current_database()
+SELECT current_user = current_user()
 ----
 true
 
-statement ok
-CREATE DATABASE otherdb
-
-statement ok
-SET database TO otherdb
+query T
+SELECT current_role() = current_user()
+----
+true
 
 query T
-SELECT current_database()
+SELECT user() = current_user()
 ----
-otherdb
+true

@@ -837,14 +837,25 @@
     description: |
       Returns the name of the current database.
     unmaterializable: true
-  - signature: 'current_role() -> text'
+  - signature: 'current_catalog() -> text'
     description: |
-      Alias for `current_user`.
+      Alias for `current_database`.
     unmaterializable: true
+    version-added: v0.102
   - signature: 'current_user() -> text'
     description: |
       Returns the name of the user who executed the containing query.
     unmaterializable: true
+  - signature: 'current_role() -> text'
+    description: |
+      Alias for `current_user`.
+    unmaterializable: true
+    version-added: v0.102
+  - signature: 'user() -> text'
+    description: |
+      Alias for `current_user`.
+    unmaterializable: true
+    version-added: v0.102
   - signature: 'session_user() -> text'
     description: |
       Returns the name of the user who initiated the database connection.
