@@ -10,8 +10,8 @@
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{
-    CreateClusterReplicaV2, EventDetails, EventType, EventV1, IdNameV1, StorageUsageV1,
-    VersionedEvent, VersionedStorageUsage,
+    EventDetails, EventType, EventV1, IdNameV1, StorageUsageV1, VersionedEvent,
+    VersionedStorageUsage,
 };
 use mz_catalog::durable::objects::{DurableType, IdAlloc};
 use mz_catalog::durable::{
@@ -181,7 +181,7 @@ async fn test_audit_logs(openable_state: Box<dyn OpenableDurableCatalogState>) {
             id: 100,
             event_type: EventType::Create,
             object_type: mz_audit_log::ObjectType::ClusterReplica,
-            details: EventDetails::CreateClusterReplicaV2(CreateClusterReplicaV2 {
+            details: EventDetails::CreateClusterReplicaV2(mz_audit_log::CreateClusterReplicaV2 {
                 cluster_id: "1".to_string(),
                 cluster_name: "foo".to_string(),
                 replica_id: Some("1".to_string()),
@@ -190,13 +190,14 @@ async fn test_audit_logs(openable_state: Box<dyn OpenableDurableCatalogState>) {
                 disk: false,
                 billed_as: None,
                 internal: false,
-                scheduling_decision_reasons: Some(vec![
-                    mz_audit_log::SchedulingDecisionReason::RefreshTurnOn(
-                        mz_audit_log::RefreshTurnOn {
-                            mvs_needing_refresh: vec!["u42".to_string(), "u90".to_string()],
-                        },
-                    ),
-                ]),
+                reason: mz_audit_log::CreateOrDropClusterReplicaReasonV1::Schedule,
+                scheduling_policies: Some(mz_audit_log::SchedulingDecisionsWithReasonsV1 {
+                    on_refresh: mz_audit_log::RefreshDecisionWithReasonV1 {
+                        decision: mz_audit_log::SchedulingDecisionV1::On,
+                        objects_needing_refresh: vec!["u42".to_string(), "u90".to_string()],
+                        rehydration_time_estimate: "1000s".to_string(),
+                    },
+                }),
             }),
             user: Some("joe".to_string()),
             occurred_at: 100,

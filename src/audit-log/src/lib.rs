@@ -236,11 +236,11 @@ pub struct DropClusterReplicaV1 {
 pub struct DropClusterReplicaV2 {
     pub cluster_id: String,
     pub cluster_name: String,
-    // Events that predate v0.32.0 will not have this field set.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub replica_id: Option<String>,
     pub replica_name: String,
-    pub scheduling_decision_reasons: Option<Vec<SchedulingDecisionReason>>,
+    pub reason: CreateOrDropClusterReplicaReasonV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV1>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -261,29 +261,58 @@ pub struct CreateClusterReplicaV1 {
 pub struct CreateClusterReplicaV2 {
     pub cluster_id: String,
     pub cluster_name: String,
-    // Events that predate v0.32.0 will not have this field set.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub replica_id: Option<String>,
     pub replica_name: String,
     pub logical_size: String,
     pub disk: bool,
     pub billed_as: Option<String>,
     pub internal: bool,
-    pub scheduling_decision_reasons: Option<Vec<SchedulingDecisionReason>>,
-}
-
-/// A policy's reason for making a certain scheduling decision for a certain cluster.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
-pub enum SchedulingDecisionReason {
-    /// The reason for the refresh policy for turning on a cluster.
-    RefreshTurnOn(RefreshTurnOn),
-    RefreshTurnOff,
+    pub reason: CreateOrDropClusterReplicaReasonV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV1>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
-pub struct RefreshTurnOn {
-    /// Materialized views that need refresh on this cluster.
-    pub mvs_needing_refresh: Vec<String>,
+#[serde(rename_all = "kebab-case")]
+pub enum CreateOrDropClusterReplicaReasonV1 {
+    Manual,
+    Schedule,
+    System,
+}
+
+/// The reason for the automated cluster scheduling to turn a cluster On or Off. Each existing
+/// policy's On/Off opinion should be recorded, along with their reasons. (Among the reasons there
+/// can be settings of the policy as well as other information about the state of the system.)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct SchedulingDecisionsWithReasonsV1 {
+    /// The reason for the refresh policy for wanting to turn a cluster On or Off.
+    pub on_refresh: RefreshDecisionWithReasonV1,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct RefreshDecisionWithReasonV1 {
+    pub decision: SchedulingDecisionV1,
+    /// Objects that currently need a refresh on the cluster (taking into account the rehydration
+    /// time estimate).
+    pub objects_needing_refresh: Vec<String>,
+    /// The REHYDRATION TIME ESTIMATE setting of the cluster.
+    pub rehydration_time_estimate: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[serde(rename_all = "kebab-case")]
+pub enum SchedulingDecisionV1 {
+    On,
+    Off,
+}
+
+impl From<bool> for SchedulingDecisionV1 {
+    fn from(value: bool) -> Self {
+        match value {
+            true => SchedulingDecisionV1::On,
+            false => SchedulingDecisionV1::Off,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]

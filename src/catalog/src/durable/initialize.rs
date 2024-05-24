@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use itertools::max;
-use mz_audit_log::{EventV1, VersionedEvent};
+use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, EventV1, VersionedEvent};
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{is_cluster_size_v2, ClusterId, ReplicaId};
 use mz_ore::now::EpochMillis;
@@ -561,7 +561,8 @@ pub(crate) async fn initialize(
             disk: is_cluster_size_v2(&options.default_cluster_replica_size),
             billed_as: None,
             internal: false,
-            scheduling_decision_reasons: None,
+            reason: CreateOrDropClusterReplicaReasonV1::System,
+            scheduling_policies: None,
         }),
     ));
 

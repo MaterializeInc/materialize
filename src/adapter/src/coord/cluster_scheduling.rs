@@ -11,53 +11,72 @@ use crate::coord::{Coordinator, Message};
 use itertools::Itertools;
 use mz_catalog::memory::objects::{CatalogItem, ClusterVariant, ClusterVariantManaged};
 use mz_controller_types::ClusterId;
+use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::ClusterSchedule;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 const POLICIES: &[&str] = &[REFRESH_POLICY_NAME];
 
 const REFRESH_POLICY_NAME: &str = "refresh";
 
+/// A policy's decision for whether it wants a certain cluster to be On, along with its reason.
+/// (Among the reasons there can be settings of the policy as well as other information about the
+/// state of the system.)
 #[derive(Clone, Debug)]
-pub struct SchedulingDecision {
+pub enum SchedulingDecision {
+    /// The reason for the refresh policy for wanting to turn a cluster On or Off.
+    Refresh(RefreshDecision),
+}
+
+impl SchedulingDecision {
+    /// Extract the On/Off decision from the policy-specific structs.
+    pub fn on_off(&self) -> bool {
+        match &self {
+            SchedulingDecision::Refresh(RefreshDecision { on_off, .. }) => on_off.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RefreshDecision {
+    /// Whether the ON REFRESH policy wants a certain cluster to be On.
     on_off: bool,
-    reason: SchedulingDecisionReason,
+    /// Objects that currently need a refresh on the cluster (taking into account the rehydration
+    /// time estimate).
+    objects_needing_refresh: Vec<GlobalId>,
+    /// The REHYDRATION TIME ESTIMATE setting of the cluster.
+    rehydration_time_estimate: Duration,
 }
 
-/// A policy's reason for making a certain scheduling decision for a certain cluster.
-#[derive(Clone, Debug)]
-pub enum SchedulingDecisionReason {
-    /// The reason for the refresh policy for turning on a cluster.
-    RefreshTurnOn(RefreshTurnOn),
-    RefreshTurnOff,
-}
-
-#[derive(Clone, Debug)]
-pub struct RefreshTurnOn {
-    /// Materialized views that need refresh on this cluster.
-    mvs_needing_refresh: Vec<GlobalId>,
-}
-
-impl SchedulingDecisionReason {
-    pub fn to_audit_log(&self) -> mz_audit_log::SchedulingDecisionReason {
-        match self {
-            SchedulingDecisionReason::RefreshTurnOn(RefreshTurnOn {
-                mvs_needing_refresh,
-            }) => {
-                mz_audit_log::SchedulingDecisionReason::RefreshTurnOn(mz_audit_log::RefreshTurnOn {
-                    mvs_needing_refresh: mvs_needing_refresh
-                        .iter()
-                        .map(|id| id.to_string())
-                        .collect(),
+impl SchedulingDecision {
+    pub fn reasons_to_audit_log_reasons<'a, I>(
+        reasons: I,
+    ) -> mz_audit_log::SchedulingDecisionsWithReasonsV1
+    where
+        I: IntoIterator<Item = &'a SchedulingDecision>,
+    {
+        mz_audit_log::SchedulingDecisionsWithReasonsV1 {
+            on_refresh: reasons
+                .into_iter()
+                .filter_map(|r| match r {
+                    SchedulingDecision::Refresh(RefreshDecision {
+                        on_off,
+                        objects_needing_refresh: mvs_needing_refresh,
+                        rehydration_time_estimate,
+                    }) => Some(mz_audit_log::RefreshDecisionWithReasonV1 {
+                        decision: (*on_off).into(),
+                        objects_needing_refresh: mvs_needing_refresh
+                            .iter()
+                            .map(|id| id.to_string())
+                            .collect(),
+                        rehydration_time_estimate: format!("{:?}", rehydration_time_estimate),
+                    }),
                 })
-            }
-            SchedulingDecisionReason::RefreshTurnOff => {
-                mz_audit_log::SchedulingDecisionReason::RefreshTurnOff
-            }
+                .into_element(), // Each policy should exactly one opinion on a cluster.
         }
     }
 }
@@ -154,14 +173,14 @@ impl Coordinator {
                             })
                             .collect_vec();
                         let on_off = !mvs_needing_refresh.is_empty();
-                        let reason = if on_off {
-                            SchedulingDecisionReason::RefreshTurnOn(RefreshTurnOn {
-                                mvs_needing_refresh,
-                            })
-                        } else {
-                            SchedulingDecisionReason::RefreshTurnOff
-                        };
-                        (cluster_id, SchedulingDecision { on_off, reason })
+                        (
+                            cluster_id,
+                            SchedulingDecision::Refresh(RefreshDecision {
+                                on_off,
+                                objects_needing_refresh: mvs_needing_refresh,
+                                rehydration_time_estimate,
+                            }),
+                        )
                     },
                 )
                 .collect();
@@ -253,7 +272,7 @@ impl Coordinator {
                 // If any policy says On, then we need a replica.
                 let needs_replica = decisions
                     .values()
-                    .map(|decision| decision.on_off)
+                    .map(|decision| decision.on_off())
                     .contains(&true);
                 let cluster_config = self
                     .get_managed_cluster_config(cluster_id)
@@ -264,17 +283,15 @@ impl Coordinator {
                     altered_a_cluster = true;
                     let mut new_config = cluster_config.clone();
                     new_config.replication_factor = if needs_replica { 1 } else { 0 };
-                    let reasons = decisions
-                        .values()
-                        .map(|decision| decision.reason.clone())
-                        .collect_vec();
                     if let Err(e) = self
                         .sequence_alter_cluster_managed_to_managed(
                             None,
                             cluster_id,
                             &cluster_config,
                             new_config.clone(),
-                            Some(reasons),
+                            Some(SchedulingDecision::reasons_to_audit_log_reasons(
+                                decisions.values(),
+                            )),
                         )
                         .await
                     {

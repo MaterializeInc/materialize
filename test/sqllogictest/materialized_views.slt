@@ -1582,26 +1582,28 @@ mvi1  true  true
 mvi2  true  true
 mvi3  true  NULL
 
-query TTTT
+query TTTTBT
 SELECT DISTINCT
   event_type,
   object_type,
   (details->'cluster_name')::text,
-  regexp_replace((details->'scheduling_decision_reasons')::text, '"u.*"', 'uXXX')
+  (details->'reason')::text,
+  (details->'scheduling_policies') IS NULL,
+  regexp_replace((details->'scheduling_policies'->'on_refresh')::text, '\["u.*"\]', '["uXXX"]')
 FROM mz_audit_events
 WHERE
   event_type IN ('create', 'drop') AND
   object_type = 'cluster-replica' AND
   ((details->'cluster_name')::text LIKE '"c_schedule_%"' OR (details->'cluster_name')::text = '"other"');
 ----
-drop  cluster-replica  "other"  null
-create  cluster-replica  "other"  null
-drop  cluster-replica  "c_schedule_4"  null
-create  cluster-replica  "c_schedule_1"  null
-create  cluster-replica  "c_schedule_2"  null
-create  cluster-replica  "c_schedule_5"  null
-drop  cluster-replica  "c_schedule_1"  ["RefreshTurnOff"]
-drop  cluster-replica  "c_schedule_3"  ["RefreshTurnOff"]
-create  cluster-replica  "c_schedule_1"  [{"RefreshTurnOn":{"mvs_needing_refresh":[uXXX]}}]
-create  cluster-replica  "c_schedule_3"  [{"RefreshTurnOn":{"mvs_needing_refresh":[uXXX]}}]
-create  cluster-replica  "c_schedule_4"  [{"RefreshTurnOn":{"mvs_needing_refresh":[uXXX]}}]
+drop  cluster-replica  "other"  "manual"  true  NULL
+create  cluster-replica  "other"  "manual"  true  NULL
+drop  cluster-replica  "c_schedule_4"  "manual"  true  NULL
+create  cluster-replica  "c_schedule_1"  "manual"  true  NULL
+create  cluster-replica  "c_schedule_2"  "manual"  true  NULL
+create  cluster-replica  "c_schedule_5"  "manual"  true  NULL
+drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","objects_needing_refresh":[],"rehydration_time_estimate":"0ns"}
+drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","objects_needing_refresh":[],"rehydration_time_estimate":"0ns"}
+create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"0ns"}
+create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"0ns"}
+create  cluster-replica  "c_schedule_4"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"0ns"}

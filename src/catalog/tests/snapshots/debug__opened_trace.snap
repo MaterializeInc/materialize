@@ -345,8 +345,16 @@ Trace {
                                                 disk: false,
                                                 billed_as: None,
                                                 internal: false,
-                                                scheduling_decision_reasons: [],
-                                                has_scheduling_decision_reasons: false,
+                                                reason: Some(
+                                                    CreateOrDropClusterReplicaReasonV1 {
+                                                        reason: Some(
+                                                            System(
+                                                                Empty,
+                                                            ),
+                                                        ),
+                                                    },
+                                                ),
+                                                scheduling_policies: None,
                                             },
                                         ),
                                     ),

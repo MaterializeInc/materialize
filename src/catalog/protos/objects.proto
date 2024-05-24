@@ -561,8 +561,8 @@ message AuditLogEventV1 {
     bool disk = 6;
     optional string billed_as = 7;
     bool internal = 8;
-    repeated SchedulingDecisionReason scheduling_decision_reasons = 9;
-    bool has_scheduling_decision_reasons = 10;
+    CreateOrDropClusterReplicaReasonV1 reason = 9;
+    SchedulingDecisionsWithReasonsV1 scheduling_policies = 10;
   }
 
   message DropClusterReplicaV1 {
@@ -577,19 +577,29 @@ message AuditLogEventV1 {
     string cluster_name = 2;
     StringWrapper replica_id = 3;
     string replica_name = 4;
-    repeated SchedulingDecisionReason scheduling_decision_reasons = 9;
-    bool has_scheduling_decision_reasons = 10;
+    CreateOrDropClusterReplicaReasonV1 reason = 5;
+    SchedulingDecisionsWithReasonsV1 scheduling_policies = 6;
   }
 
-  message SchedulingDecisionReason {
-    oneof value {
-      RefreshTurnOn refresh_turn_on = 1;
-      Empty refresh_turn_off = 2;
+  message CreateOrDropClusterReplicaReasonV1 {
+    oneof reason {
+      Empty Manual = 1;
+      Empty Schedule = 2;
+      Empty System = 3;
     }
   }
 
-  message RefreshTurnOn {
-    repeated string mvs_needing_refresh = 1;
+  message SchedulingDecisionsWithReasonsV1 {
+    RefreshDecisionWithReasonV1 on_refresh = 1;
+  }
+
+  message RefreshDecisionWithReasonV1 {
+    oneof decision {
+      Empty On = 1;
+      Empty Off = 2;
+    }
+    repeated string objects_needing_refresh = 3;
+    string rehydration_time_estimate = 4;
   }
 
   message CreateSourceSinkV1 {

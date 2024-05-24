@@ -33,7 +33,6 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 
 use crate::catalog::Op;
-use crate::coord::cluster_scheduling::SchedulingDecisionReason;
 use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
@@ -176,7 +175,7 @@ impl Coordinator {
         azs: Option<&[String]>,
         disk: bool,
         owner_id: RoleId,
-        scheduling_decision_reasons: Option<Vec<SchedulingDecisionReason>>,
+        scheduling_decision_reasons: Option<mz_audit_log::SchedulingDecisionsWithReasonsV1>,
     ) -> Result<(), AdapterError> {
         let location = mz_catalog::durable::ReplicaLocation::Managed {
             availability_zone: None,
@@ -212,7 +211,7 @@ impl Coordinator {
             name,
             config,
             owner_id,
-            scheduling_decision_reasons,
+            scheduling_decisions_with_reasons: scheduling_decision_reasons,
         });
         Ok(())
     }
@@ -344,7 +343,7 @@ impl Coordinator {
                 name: replica_name.clone(),
                 config,
                 owner_id: *session.current_role_id(),
-                scheduling_decision_reasons: None,
+                scheduling_decisions_with_reasons: None,
             });
         }
 
@@ -500,7 +499,7 @@ impl Coordinator {
             name: name.clone(),
             config,
             owner_id,
-            scheduling_decision_reasons: None,
+            scheduling_decisions_with_reasons: None,
         };
 
         self.catalog_transact(Some(session), vec![op]).await?;
@@ -700,7 +699,7 @@ impl Coordinator {
         cluster_id: ClusterId,
         config: &ClusterVariantManaged,
         new_config: ClusterVariantManaged,
-        scheduling_decision_reasons: Option<Vec<SchedulingDecisionReason>>,
+        scheduling_decision_reasons: Option<mz_audit_log::SchedulingDecisionsWithReasonsV1>,
     ) -> Result<(), AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
         let name = cluster.name().to_string();
@@ -767,7 +766,7 @@ impl Coordinator {
             self.ensure_valid_azs(new_availability_zones.iter())?;
 
             // tear down all replicas, create new ones
-            let replica_ids = (0..*replication_factor)
+            let replica_ids_and_reasons = (0..*replication_factor)
                 .map(managed_cluster_replica_name)
                 .filter_map(|name| cluster.replica_id(&name))
                 .map(|replica_id| {
@@ -777,7 +776,7 @@ impl Coordinator {
                     )
                 })
                 .collect();
-            ops.push(catalog::Op::DropObjects(replica_ids));
+            ops.push(catalog::Op::DropObjects(replica_ids_and_reasons));
 
             for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
                 let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;

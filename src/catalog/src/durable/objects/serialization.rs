@@ -11,12 +11,13 @@
 
 use mz_audit_log::{
     AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
-    CreateClusterReplicaV1, CreateClusterReplicaV2, CreateSourceSinkV1, CreateSourceSinkV2,
-    CreateSourceSinkV3, DropClusterReplicaV1, DropClusterReplicaV2, EventDetails, EventType,
-    EventV1, FromPreviousIdV1, FullNameV1, GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1,
-    RefreshTurnOn, RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1,
-    RevokeRoleV1, RevokeRoleV2, SchedulingDecisionReason, SchemaV1, SchemaV2, StorageUsageV1,
-    ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
+    CreateClusterReplicaV1, CreateClusterReplicaV2, CreateOrDropClusterReplicaReasonV1,
+    CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3, DropClusterReplicaV1,
+    DropClusterReplicaV2, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
+    GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, RefreshDecisionWithReasonV1,
+    RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
+    RevokeRoleV2, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1, SchemaV1, SchemaV2,
+    StorageUsageV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
     VersionedStorageUsage,
 };
 use mz_compute_client::controller::ComputeReplicaLogging;
@@ -35,7 +36,6 @@ use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_types::instances::StorageInstanceId;
 use std::time::Duration;
 
-use crate::durable::objects::serialization::proto::audit_log_event_v1::scheduling_decision_reason;
 use crate::durable::objects::serialization::proto::{
     cluster_schedule, ClusterScheduleRefreshOptions, Empty,
 };
@@ -1677,12 +1677,8 @@ impl RustType<proto::audit_log_event_v1::DropClusterReplicaV2> for DropClusterRe
                 inner: id.to_string(),
             }),
             replica_name: self.replica_name.to_string(),
-            scheduling_decision_reasons: self
-                .scheduling_decision_reasons
-                .clone()
-                .unwrap_or(Vec::new())
-                .into_proto(),
-            has_scheduling_decision_reasons: self.scheduling_decision_reasons.is_some(),
+            reason: Some(self.reason.into_proto()),
+            scheduling_policies: self.scheduling_policies.into_proto(),
         }
     }
 
@@ -1694,11 +1690,10 @@ impl RustType<proto::audit_log_event_v1::DropClusterReplicaV2> for DropClusterRe
             cluster_name: proto.cluster_name,
             replica_id: proto.replica_id.map(|s| s.inner),
             replica_name: proto.replica_name,
-            scheduling_decision_reasons: if proto.has_scheduling_decision_reasons {
-                Some(proto.scheduling_decision_reasons.into_rust()?)
-            } else {
-                None
-            },
+            reason: proto
+                .reason
+                .into_rust_if_some("DropClusterReplicaV2::reason")?,
+            scheduling_policies: proto.scheduling_policies.into_rust()?,
         })
     }
 }
@@ -1748,12 +1743,8 @@ impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV2> for CreateClust
             disk: self.disk,
             billed_as: self.billed_as.clone(),
             internal: self.internal,
-            scheduling_decision_reasons: self
-                .scheduling_decision_reasons
-                .clone()
-                .unwrap_or(Vec::new())
-                .into_proto(),
-            has_scheduling_decision_reasons: self.scheduling_decision_reasons.is_some(),
+            reason: Some(self.reason.into_proto()),
+            scheduling_policies: self.scheduling_policies.into_proto(),
         }
     }
 
@@ -1769,62 +1760,102 @@ impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV2> for CreateClust
             disk: proto.disk,
             billed_as: proto.billed_as,
             internal: proto.internal,
-            scheduling_decision_reasons: if proto.has_scheduling_decision_reasons {
-                Some(proto.scheduling_decision_reasons.into_rust()?)
-            } else {
-                None
-            },
+            reason: proto
+                .reason
+                .into_rust_if_some("DropClusterReplicaV2::reason")?,
+            scheduling_policies: proto.scheduling_policies.into_rust()?,
         })
     }
 }
 
-impl RustType<proto::audit_log_event_v1::SchedulingDecisionReason> for SchedulingDecisionReason {
-    fn into_proto(&self) -> proto::audit_log_event_v1::SchedulingDecisionReason {
+impl RustType<proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1>
+    for CreateOrDropClusterReplicaReasonV1
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
         match self {
-            SchedulingDecisionReason::RefreshTurnOn(refresh_turn_on) => {
-                proto::audit_log_event_v1::SchedulingDecisionReason {
-                    value: Some(scheduling_decision_reason::Value::RefreshTurnOn(
-                        refresh_turn_on.into_proto(),
-                    )),
-                }
-            }
-            SchedulingDecisionReason::RefreshTurnOff => {
-                proto::audit_log_event_v1::SchedulingDecisionReason {
-                    value: Some(scheduling_decision_reason::Value::RefreshTurnOff(Empty {})),
-                }
-            }
+            CreateOrDropClusterReplicaReasonV1::Manual => proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
+                reason: Some(proto::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::Manual(Empty {}))
+            },
+            CreateOrDropClusterReplicaReasonV1::Schedule => proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
+                reason: Some(proto::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::Schedule(Empty {}))
+            },
+            CreateOrDropClusterReplicaReasonV1::System => proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
+                reason: Some(proto::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::System(Empty {}))
+            },
         }
     }
 
     fn from_proto(
-        proto: proto::audit_log_event_v1::SchedulingDecisionReason,
+        proto: proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1,
     ) -> Result<Self, TryFromProtoError> {
-        match proto.value {
-            None => Err(TryFromProtoError::missing_field(
-                "SchedulingDecisionReason::value",
-            )),
-            Some(scheduling_decision_reason::Value::RefreshTurnOn(refresh_turn_on)) => Ok(
-                SchedulingDecisionReason::RefreshTurnOn(refresh_turn_on.into_rust()?),
-            ),
-            Some(scheduling_decision_reason::Value::RefreshTurnOff(_empty)) => {
-                Ok(SchedulingDecisionReason::RefreshTurnOff)
-            }
+        match proto.reason {
+            None => Err(TryFromProtoError::missing_field("CreateOrDropClusterReplicaReasonV1::reason")),
+            Some(proto::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::Manual(Empty {})) => Ok(CreateOrDropClusterReplicaReasonV1::Manual),
+            Some(proto::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::Schedule(Empty {})) => Ok(CreateOrDropClusterReplicaReasonV1::Schedule),
+            Some(proto::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::System(Empty {})) => Ok(CreateOrDropClusterReplicaReasonV1::System),
         }
     }
 }
 
-impl RustType<proto::audit_log_event_v1::RefreshTurnOn> for RefreshTurnOn {
-    fn into_proto(&self) -> proto::audit_log_event_v1::RefreshTurnOn {
-        proto::audit_log_event_v1::RefreshTurnOn {
-            mvs_needing_refresh: self.mvs_needing_refresh.into_proto(),
+impl RustType<proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV1>
+    for SchedulingDecisionsWithReasonsV1
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV1 {
+        proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV1 {
+            on_refresh: Some(self.on_refresh.into_proto()),
         }
     }
 
     fn from_proto(
-        proto: proto::audit_log_event_v1::RefreshTurnOn,
+        proto: proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV1,
     ) -> Result<Self, TryFromProtoError> {
-        Ok(RefreshTurnOn {
-            mvs_needing_refresh: proto.mvs_needing_refresh.into_rust()?,
+        Ok(SchedulingDecisionsWithReasonsV1 {
+            on_refresh: proto
+                .on_refresh
+                .into_rust_if_some("SchedulingDecisionsWithReasonsV1::on_refresh")?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RefreshDecisionWithReasonV1>
+    for RefreshDecisionWithReasonV1
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::RefreshDecisionWithReasonV1 {
+        let decision = match &self.decision {
+            SchedulingDecisionV1::On => {
+                proto::audit_log_event_v1::refresh_decision_with_reason_v1::Decision::On(Empty {})
+            }
+            SchedulingDecisionV1::Off => {
+                proto::audit_log_event_v1::refresh_decision_with_reason_v1::Decision::Off(Empty {})
+            }
+        };
+        proto::audit_log_event_v1::RefreshDecisionWithReasonV1 {
+            decision: Some(decision),
+            objects_needing_refresh: self.objects_needing_refresh.clone(),
+            rehydration_time_estimate: self.rehydration_time_estimate.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RefreshDecisionWithReasonV1,
+    ) -> Result<Self, TryFromProtoError> {
+        let decision = match proto.decision {
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "CreateOrDropClusterReplicaReasonV1::reason",
+                ));
+            }
+            Some(proto::audit_log_event_v1::refresh_decision_with_reason_v1::Decision::On(
+                Empty {},
+            )) => SchedulingDecisionV1::On,
+            Some(proto::audit_log_event_v1::refresh_decision_with_reason_v1::Decision::Off(
+                Empty {},
+            )) => SchedulingDecisionV1::Off,
+        };
+        Ok(RefreshDecisionWithReasonV1 {
+            decision,
+            objects_needing_refresh: proto.objects_needing_refresh,
+            rehydration_time_estimate: proto.rehydration_time_estimate,
         })
     }
 }
