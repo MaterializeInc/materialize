@@ -310,7 +310,7 @@ impl Catalog {
                     | StateUpdateKind::IntrospectionSourceIndex(_)
                     | StateUpdateKind::ClusterReplica(_) => cluster_updates.push(update),
                     StateUpdateKind::SystemObjectMapping(system_object_mapping) => builtin_item_updates.push((system_object_mapping, update.diff)),
-                    StateUpdateKind::Item(_) => item_updates.push(update),
+                    StateUpdateKind::Item(item) => item_updates.push((item, update.diff)),
                     StateUpdateKind::Comment(_)
                     | StateUpdateKind::AuditLog(_)
                     | StateUpdateKind::StorageUsage(_)
@@ -356,6 +356,9 @@ impl Catalog {
                     }),
                 }
             }
+
+            // Sort item updates by GlobalId.
+            let item_updates: Vec<_> = item_updates.into_iter().sorted_by_key(|(item, _diff)| item.id).map(|(item, diff)| StateUpdate {kind: StateUpdateKind::Item(item), diff}).collect();
 
             let pre_view_updates = iter::empty()
                 .chain(pre_cluster_updates.into_iter())
