@@ -38,11 +38,13 @@ class EnumConstant(Expression):
         value: str,
         add_quotes: bool,
         characteristics: set[ExpressionCharacteristics],
+        tags: set[str] | None = None,
     ):
         super().__init__(characteristics, ValueStorageLayout.ANY, False, False)
         self.value = value
         self.add_quotes = add_quotes
         self.data_type = EnumDataType()
+        self.tags = tags
 
     def resolve_return_type_category(self) -> DataTypeCategory:
         return DataTypeCategory.ENUM
@@ -76,6 +78,12 @@ class EnumConstant(Expression):
 
     def collect_leaves(self) -> list[LeafExpression]:
         return []
+
+    def is_tagged(self, tag: str) -> bool:
+        if self.tags is None:
+            return False
+
+        return tag in self.tags
 
 
 class StringConstant(EnumConstant):
