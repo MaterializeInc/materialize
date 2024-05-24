@@ -21,17 +21,13 @@ use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_persist_client::critical::SinceHandle;
-use mz_persist_client::read::Since;
-use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
-use mz_storage_client::client::{StorageResponse, TimestamplessUpdate, Update};
+use mz_storage_client::client::{TimestamplessUpdate, Update};
 use mz_storage_types::controller::{InvalidUpper, TxnWalTablesImpl, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
-use mz_txn_wal::txn_read::DataSnapshot;
 use mz_txn_wal::txns::{Tidy, TxnsHandle};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -40,234 +36,6 @@ use tokio::sync::oneshot;
 use tracing::{debug, info_span, Instrument, Span};
 
 use crate::{PersistEpoch, StorageError};
-
-/// A wrapper that holds on to backing persist shards/collections that the
-/// storage controller is aware of. The handles hold back the since frontier and
-/// we need to downgrade them when the read capabilities change.
-///
-/// Internally, this has an async task and the methods for registering a handle
-/// and downgrading sinces add commands to a queue that this task is working
-/// off. This makes the methods non-blocking and moves the work outside the main
-/// coordinator task, meaning the coordinator is spending less time waiting on
-/// persist calls.
-#[derive(Debug)]
-pub struct PersistReadWorker<T: Timestamp + Lattice + Codec64> {
-    tx: UnboundedSender<(tracing::Span, PersistReadWorkerCmd<T>)>,
-}
-
-#[derive(Debug)]
-pub(crate) enum SnapshotStatsAsOf<T: Timestamp + Lattice + Codec64> {
-    /// Stats for a shard with an "eager" upper (one that continually advances
-    /// as time passes, even if no writes are coming in).
-    Direct(Antichain<T>),
-    /// Stats for a shard with a "lazy" upper (one that only physically advances
-    /// in response to writes).
-    Txns(DataSnapshot<T>),
-}
-
-/// Commands for [PersistReadWorker].
-#[derive(Debug)]
-enum PersistReadWorkerCmd<T: Timestamp + Lattice + Codec64> {
-    Register(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
-    Update(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
-    Downgrade(BTreeMap<GlobalId, (Antichain<T>, oneshot::Sender<Result<(), ()>>)>),
-    SnapshotStats(
-        GlobalId,
-        SnapshotStatsAsOf<T>,
-        oneshot::Sender<SnapshotStatsRes<T>>,
-    ),
-}
-
-/// A newtype wrapper to hang a Debug impl off of.
-pub(crate) struct SnapshotStatsRes<T>(BoxFuture<'static, Result<SnapshotStats, StorageError<T>>>);
-
-impl<T> Debug for SnapshotStatsRes<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SnapshotStatsRes").finish_non_exhaustive()
-    }
-}
-
-impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
-    pub(crate) fn new() -> Self {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
-
-        mz_ore::task::spawn(|| "PersistWorker", async move {
-            let mut since_handles = BTreeMap::new();
-
-            while let Some(cmd) = rx.recv().await {
-                // Peel off all available commands.
-                // This allows us to catch up if we fall behind on downgrade commands.
-                let mut commands = vec![cmd];
-                while let Ok(cmd) = rx.try_recv() {
-                    commands.push(cmd);
-                }
-                // Collect all downgrade requests and apply them last.
-                let mut downgrades = BTreeMap::default();
-
-                for (span, command) in commands {
-                    match command {
-                        PersistReadWorkerCmd::Register(id, since_handle) => {
-                            let previous = since_handles.insert(id, since_handle);
-                            if previous.is_some() {
-                                panic!("already registered a SinceHandle for collection {id}");
-                            }
-                        }
-                        PersistReadWorkerCmd::Update(id, since_handle) => {
-                            since_handles.insert(id, since_handle).expect("PersistReadWorkerCmd::Update only valid for updating extant since handles");
-                        }
-                        PersistReadWorkerCmd::Downgrade(since_frontiers) => {
-                            for (id, frontier_and_notif) in since_frontiers {
-                                downgrades.insert(id, (span.clone(), frontier_and_notif));
-                            }
-                        }
-                        PersistReadWorkerCmd::SnapshotStats(id, as_of, tx) => {
-                            // NB: The requested as_of could be arbitrarily far in the future. So,
-                            // in order to avoid blocking the PersistReadWorker loop until it's
-                            // available and the `snapshot_stats` call resolves, instead return the
-                            // future to the caller and await it there.
-                            let res = match since_handles.get(&id) {
-                                Some(x) => {
-                                    let fut: BoxFuture<
-                                        'static,
-                                        Result<SnapshotStats, StorageError<T>>,
-                                    > = match as_of {
-                                        SnapshotStatsAsOf::Direct(as_of) => {
-                                            Box::pin(x.snapshot_stats(Some(as_of)).map(move |x| {
-                                                x.map_err(|_: Since<T>| {
-                                                    StorageError::ReadBeforeSince(id)
-                                                })
-                                            }))
-                                        }
-                                        SnapshotStatsAsOf::Txns(data_snapshot) => Box::pin(
-                                            data_snapshot.snapshot_stats(x).map(move |x| {
-                                                x.map_err(|_| StorageError::ReadBeforeSince(id))
-                                            }),
-                                        ),
-                                    };
-                                    SnapshotStatsRes(fut)
-                                }
-                                None => SnapshotStatsRes(Box::pin(futures::future::ready(Err(
-                                    StorageError::IdentifierMissing(id),
-                                )))),
-                            };
-                            // It's fine if the listener hung up.
-                            let _ = tx.send(res);
-                        }
-                    }
-                }
-
-                let mut futs = FuturesUnordered::new();
-
-                for (id, (span, (since, tx))) in downgrades {
-                    let Some(mut since_handle) = since_handles.remove(&id) else {
-                        panic!("downgrade command for absent collection {id}");
-                    };
-
-                    futs.push(async move {
-                        let epoch = since_handle.opaque().clone();
-
-                        let result = if since.is_empty() {
-                            // A shard's since reaching the empty frontier is a prereq for being
-                            // able to finalize a shard, so the final downgrade should never be
-                            // rate-limited.
-                            Some(
-                                since_handle
-                                    .compare_and_downgrade_since(&epoch, (&epoch, &since))
-                                    .instrument(span)
-                                    .await,
-                            )
-                        } else {
-                            since_handle
-                                .maybe_compare_and_downgrade_since(&epoch, (&epoch, &since))
-                                .instrument(span)
-                                .await
-                        };
-
-                        if let Some(Err(other_epoch)) = &result {
-                            mz_ore::halt!("fenced by envd @ {other_epoch:?}. ours = {epoch:?}");
-                        }
-
-                        // Notify listeners of the result of the downgrade.
-                        let notify_result = match result {
-                            None => Err(()),
-                            Some(Err(_)) => Err(()),
-                            Some(Ok(_)) => Ok(()),
-                        };
-                        let _ = tx.send(notify_result);
-
-                        // If we're not done we put the handle back
-                        if !since.is_empty() {
-                            Some((id, (since_handle)))
-                        } else {
-                            None
-                        }
-                    });
-                }
-
-                while let Some(entry) = futs.next().await {
-                    since_handles.extend(entry);
-                }
-            }
-            tracing::trace!("shutting down persist since downgrade task");
-        });
-
-        Self { tx }
-    }
-
-    pub(crate) fn register(
-        &self,
-        id: GlobalId,
-        since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
-    ) {
-        self.send(PersistReadWorkerCmd::Register(id, since_handle))
-    }
-
-    /// Update the existing since handle associated with `id` to `since_handle`.
-    ///
-    /// Note that this should only be called when updating a since handle; to
-    /// initially associate an `id` to a since handle, use [`Self::register`].
-    ///
-    /// # Panics
-    /// - If `id` is not currently associated with any since handle.
-    #[allow(dead_code)]
-    pub(crate) fn update(
-        &self,
-        id: GlobalId,
-        since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
-    ) {
-        self.send(PersistReadWorkerCmd::Update(id, since_handle))
-    }
-
-    pub(crate) fn downgrade(
-        &self,
-        frontiers: BTreeMap<GlobalId, (Antichain<T>, oneshot::Sender<Result<(), ()>>)>,
-    ) {
-        self.send(PersistReadWorkerCmd::Downgrade(frontiers));
-    }
-
-    pub(crate) async fn snapshot_stats(
-        &self,
-        id: GlobalId,
-        as_of: SnapshotStatsAsOf<T>,
-    ) -> Result<SnapshotStats, StorageError<T>> {
-        // TODO: Pull this out of PersistReadWorker. Unlike the other methods,
-        // the caller of this one drives it to completion.
-        //
-        // We'd need to either share the critical handle somehow or maybe have
-        // two instances around, one in the worker and one in the controller.
-        let (tx, rx) = oneshot::channel();
-        self.send(PersistReadWorkerCmd::SnapshotStats(id, as_of, tx));
-        rx.await.expect("PersistReadWorker should be live").0.await
-    }
-
-    fn send(&self, cmd: PersistReadWorkerCmd<T>) {
-        let mut span = info_span!(parent: None, "PersistReadWorkerCmd::send");
-        OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
-        self.tx
-            .send((span, cmd))
-            .expect("persist worker exited while its handle was alive")
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct PersistTableWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
@@ -312,7 +80,6 @@ impl<T: Timestamp + Lattice + Codec64> PersistTableWriteCmd<T> {
 }
 
 async fn append_work<T2: Timestamp + Lattice + Codec64>(
-    frontier_responses: &tokio::sync::mpsc::UnboundedSender<StorageResponse<T2>>,
     write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T2, Diff>>,
     mut commands: BTreeMap<GlobalId, (tracing::Span, Vec<Update<T2>>, Antichain<T2>)>,
 ) -> Result<(), Vec<(GlobalId, Antichain<T2>)>> {
@@ -347,14 +114,11 @@ async fn append_work<T2: Timestamp + Lattice + Codec64>(
     }
 
     // Ensure all futures run to completion, and track status of each of them individually
-    let (new_uppers, failed_appends): (Vec<_>, Vec<_>) = futs
+    let (_new_uppers, failed_appends): (Vec<_>, Vec<_>) = futs
         .collect::<Vec<_>>()
         .await
         .into_iter()
         .partition_result();
-
-    // It is not strictly an error for the controller to hang up.
-    let _ = frontier_responses.send(StorageResponse::FrontierUppers(new_uppers));
 
     if failed_appends.is_empty() {
         Ok(())
@@ -365,7 +129,6 @@ async fn append_work<T2: Timestamp + Lattice + Codec64>(
 
 impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWriteWorker<T> {
     pub(crate) fn new_txns(
-        frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
         txn_wal_tables: TxnWalTablesImpl,
     ) -> Self {
@@ -374,7 +137,6 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
             let mut worker = TxnsTableWorker {
                 txn_wal_tables,
-                frontier_responses,
                 txns,
                 write_handles: BTreeMap::new(),
                 tidy: Tidy::default(),
@@ -450,7 +212,6 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 
 struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
     txn_wal_tables: TxnWalTablesImpl,
-    frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
@@ -515,15 +276,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
             }
         }
         // Registering also advances the logical upper of all shards in the txns set.
-        let new_uppers = ids_handles
-            .iter()
-            .map(|(id, _)| {
-                (
-                    *id,
-                    Antichain::from_elem(TimestampManipulation::step_forward(&register_ts)),
-                )
-            })
-            .collect();
+        let new_ids = ids_handles.iter().map(|(id, _)| *id).collect_vec();
         let handles = ids_handles.into_iter().map(|(_, handle)| handle);
         let res = self.txns.register(register_ts.clone(), handles).await;
         match res {
@@ -545,14 +298,11 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                     }
                     TxnWalTablesImpl::Lazy => {}
                 };
-                self.send_new_uppers(new_uppers);
             }
             Err(current) => {
                 panic!(
                     "cannot register {:?} at {:?} because txns is at {:?}",
-                    new_uppers.iter().map(|(id, _)| id).collect::<Vec<_>>(),
-                    register_ts,
-                    current
+                    new_ids, register_ts, current
                 );
             }
         }
@@ -645,16 +395,6 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                     TxnWalTablesImpl::Eager => apply.apply_eager(&mut self.txns).await,
                 };
                 self.tidy.merge(tidy);
-                // Committing a txn advances the logical upper of _every_ data
-                // shard in the txns set, not just the ones that were written
-                // to, so send new upper information for all registered data
-                // shards.
-                let new_uppers = self
-                    .write_handles
-                    .keys()
-                    .map(|id| (*id, Antichain::from_elem(advance_to.clone())))
-                    .collect();
-                self.send_new_uppers(new_uppers);
 
                 // We don't serve any reads out of this TxnsHandle, so go ahead
                 // and compact as aggressively as we can (i.e. to the time we
@@ -683,13 +423,6 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         };
         // It is not an error for the other end to hang up.
         let _ = tx.send(response);
-    }
-
-    fn send_new_uppers(&self, new_uppers: Vec<(GlobalId, Antichain<T>)>) {
-        // It is not strictly an error for the controller to hang up.
-        let _ = self
-            .frontier_responses
-            .send(StorageResponse::FrontierUppers(new_uppers));
     }
 }
 
@@ -772,9 +505,7 @@ enum PersistMonotonicWriteCmd<T: Timestamp + Lattice + Codec64> {
 }
 
 impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicWriteWorker<T> {
-    pub(crate) fn new(
-        frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
-    ) -> Self {
+    pub(crate) fn new() -> Self {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
         mz_ore::task::spawn(|| "PersistMonotonicWriteWorker", async move {
@@ -889,8 +620,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                     }
                 }
 
-                let result =
-                    append_work(&frontier_responses, &mut write_handles, all_updates).await;
+                let result = append_work(&mut write_handles, all_updates).await;
 
                 for (ids, response) in all_responses {
                     let result = match &result {
@@ -1035,108 +765,5 @@ where
                 tracing::trace!("could not forward command: {:?}", e);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use mz_build_info::DUMMY_BUILD_INFO;
-    use mz_ore::metrics::MetricsRegistry;
-    use mz_ore::now::SYSTEM_TIME;
-    use mz_persist_client::cache::PersistClientCache;
-    use mz_persist_client::cfg::PersistConfig;
-    use mz_persist_client::rpc::PubSubClientConnection;
-    use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
-    use mz_persist_types::codec_impls::UnitSchema;
-    use mz_repr::{RelationDesc, Row};
-
-    use super::*;
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr`
-    async fn snapshot_stats(&self) {
-        let client = PersistClientCache::new(
-            PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
-            &MetricsRegistry::new(),
-            |_, _| PubSubClientConnection::noop(),
-        )
-        .open(PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
-        })
-        .await
-        .unwrap();
-        let shard_id = ShardId::new();
-        let since_handle = client
-            .open_critical_since(
-                shard_id,
-                PersistClient::CONTROLLER_CRITICAL_SINCE,
-                Diagnostics::for_tests(),
-            )
-            .await
-            .unwrap();
-        let mut write_handle = client
-            .open_writer::<SourceData, (), u64, i64>(
-                shard_id,
-                Arc::new(RelationDesc::empty()),
-                Arc::new(UnitSchema),
-                Diagnostics::for_tests(),
-            )
-            .await
-            .unwrap();
-
-        let worker = PersistReadWorker::<u64>::new();
-        worker.register(GlobalId::User(1), since_handle);
-
-        // No stats for unknown GlobalId.
-        let stats = worker
-            .snapshot_stats(
-                GlobalId::User(2),
-                SnapshotStatsAsOf::Direct(Antichain::from_elem(0)),
-            )
-            .await;
-        assert!(stats.is_err());
-
-        // Stats don't resolve for as_of past the upper.
-        let stats_fut = worker.snapshot_stats(
-            GlobalId::User(1),
-            SnapshotStatsAsOf::Direct(Antichain::from_elem(1)),
-        );
-        assert!(stats_fut.now_or_never().is_none());
-        // Call it again because now_or_never consumed our future and it's not clone-able.
-        let stats_ts1_fut = worker.snapshot_stats(
-            GlobalId::User(1),
-            SnapshotStatsAsOf::Direct(Antichain::from_elem(1)),
-        );
-
-        // Write some data.
-        let data = ((SourceData(Ok(Row::default())), ()), 0u64, 1i64);
-        let () = write_handle
-            .compare_and_append(&[data], Antichain::from_elem(0), Antichain::from_elem(1))
-            .await
-            .unwrap()
-            .unwrap();
-
-        // Verify that we can resolve stats for ts 0 while the ts 1 stats call is outstanding.
-        let stats = worker
-            .snapshot_stats(
-                GlobalId::User(1),
-                SnapshotStatsAsOf::Direct(Antichain::from_elem(0)),
-            )
-            .await
-            .unwrap();
-        assert_eq!(stats.num_updates, 1);
-
-        // Write more data and unblock the ts 1 call
-        let data = ((SourceData(Ok(Row::default())), ()), 1u64, 1i64);
-        let () = write_handle
-            .compare_and_append(&[data], Antichain::from_elem(1), Antichain::from_elem(2))
-            .await
-            .unwrap()
-            .unwrap();
-        let stats = stats_ts1_fut.await.unwrap();
-        assert_eq!(stats.num_updates, 2);
     }
 }
