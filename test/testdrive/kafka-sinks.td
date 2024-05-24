@@ -284,7 +284,7 @@ $ kafka-create-topic topic=snk9 partitions=4
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
   WITH (SIZE = '2')
-contains:Expected one of SNAPSHOT, found SIZE
+contains:Expected one of SNAPSHOT or VERSION, found SIZE
 
 # create sink with SNAPSHOT set
 > CREATE CLUSTER sink_with_options_cluster SIZE '${arg.default-storage-size}';

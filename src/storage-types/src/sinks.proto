@@ -34,6 +34,7 @@ message ProtoStorageSinkDesc {
     optional string status_id = 7;
     mz_repr.antichain.ProtoU64Antichain as_of = 11;
     bool with_snapshot = 12;
+    uint64 version = 13;
 }
 
 message ProtoSinkEnvelope {

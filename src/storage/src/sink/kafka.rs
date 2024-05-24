@@ -111,7 +111,7 @@ use rdkafka::metadata::Metadata;
 use rdkafka::producer::{BaseProducer, BaseRecord, Producer};
 use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
@@ -179,7 +179,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
             sink_id,
             self.clone(),
             storage_state.storage_configuration.clone(),
-            sink.as_of.clone(),
+            sink,
             metrics,
             statistics,
             write_frontier,
@@ -207,6 +207,8 @@ struct TransactionalProducer {
     progress_topic: String,
     /// The key each progress record is associated with.
     progress_key: ProgressKey,
+    /// The version of this sink, used to fence out previous versions from writing.
+    sink_version: u64,
     /// The underlying Kafka producer.
     producer: BaseProducer<TunnelingClientContext<MzClientContext>>,
     /// A handle to the metrics associated with this sink.
@@ -233,6 +235,7 @@ impl TransactionalProducer {
         storage_configuration: &StorageConfiguration,
         metrics: Arc<KafkaSinkMetrics>,
         statistics: SinkStatistics,
+        sink_version: u64,
     ) -> Result<Self, ContextCreationError> {
         let client_id = connection.client_id(
             storage_configuration.config_set(),
@@ -299,6 +302,7 @@ impl TransactionalProducer {
                 .progress_topic(&storage_configuration.connection_context)
                 .into_owned(),
             progress_key,
+            sink_version,
             producer,
             statistics,
             staged_messages: 0,
@@ -417,6 +421,7 @@ impl TransactionalProducer {
     ) -> Result<(), ContextCreationError> {
         let progress = ProgressRecord {
             frontier: upper.into(),
+            version: self.sink_version,
         };
         let payload = serde_json::to_vec(&progress).expect("infallible");
         let record = BaseRecord::to(&self.progress_topic)
@@ -546,7 +551,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
-    as_of: Antichain<Timestamp>,
+    sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
     metrics: KafkaSinkMetrics,
     statistics: SinkStatistics,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
@@ -560,6 +565,8 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
 
     let mut input = builder.new_disconnected_input(&input.inner, Exchange::new(move |_| hashed_id));
 
+    let as_of = sink.as_of.clone();
+    let sink_version = sink.version;
     let (button, errors) = builder.build_fallible(move |_caps| {
         Box::pin(async move {
             if !is_active_worker {
@@ -579,11 +586,12 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                 &storage_configuration,
                 Arc::clone(&metrics),
                 statistics,
+                sink_version,
             )
             .await?;
             // Instantiating the transactional producer fences out all previous ones, making it
             // safe to determine the resume upper.
-            let resume_upper = determine_sink_resume_upper(
+            let progress = determine_sink_progress(
                 sink_id,
                 &connection,
                 &storage_configuration,
@@ -591,8 +599,17 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
             )
             .await?;
 
-            let resume_upper = match resume_upper {
-                Some(upper) => upper,
+            let resume_upper = match progress {
+                Some(progress) => {
+                    if sink_version < progress.version {
+                        return Err(ContextCreationError::Other(anyhow!(
+                            "Fenced off by newer version of the sink. ours={} theirs={}",
+                            sink_version,
+                            progress.version
+                        )));
+                    }
+                    progress.frontier
+                }
                 None => {
                     mz_storage_client::sink::ensure_kafka_topic(
                         &connection,
@@ -776,12 +793,12 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
 /// IMPORTANT: to achieve exactly once guarantees, the producer that will resume
 /// production at the returned timestamp *must* have called `init_transactions`
 /// prior to calling this method.
-async fn determine_sink_resume_upper(
+async fn determine_sink_progress(
     sink_id: GlobalId,
     connection: &KafkaSinkConnection,
     storage_configuration: &StorageConfiguration,
     metrics: Arc<KafkaSinkMetrics>,
-) -> Result<Option<Antichain<Timestamp>>, ContextCreationError> {
+) -> Result<Option<ProgressRecord>, ContextCreationError> {
     // ****************************** WARNING ******************************
     // Be VERY careful when editing the code in this function. It is very easy
     // to accidentally introduce a correctness or liveness bug when refactoring
@@ -1011,7 +1028,7 @@ async fn determine_sink_resume_upper(
         // returning an error) if we have positive proof of a position at or
         // beyond the high water mark. To make this invariant easy to check, do
         // not use `break` in the body of the loop.
-        let mut last_upper = None;
+        let mut last_progress: Option<ProgressRecord> = None;
         while get_position()? < hi {
             let message = match progress_client_read_committed.poll(progress_record_fetch_timeout) {
                 Some(Ok(message)) => message,
@@ -1039,23 +1056,24 @@ async fn determine_sink_resume_upper(
             let Some(payload) = message.payload() else {
                 continue
             };
-            let upper = parse_progress_record(payload)?;
+            let progress = parse_progress_record(payload)?;
 
-            match last_upper {
-                Some(last_upper) if !PartialOrder::less_equal(&last_upper, &upper) => {
+            match last_progress {
+                Some(last_progress) if !PartialOrder::less_equal(&last_progress.frontier, &progress.frontier) => {
                     bail!(
-                        "upper regressed in topic {progress_topic}:{partition} \
-                        from {last_upper:?} to {upper:?}"
+                        "upper regressed in topic {progress_topic}:{partition} from {:?} to {:?}",
+                        &last_progress.frontier,
+                        &progress.frontier,
                     );
                 }
-                _ => last_upper = Some(upper),
+                _ => last_progress = Some(progress),
             }
         }
 
         // If we get here, we are assured that we've read all messages up to
         // the high water mark, and therefore `last_timestamp` contains the
         // most recent timestamp for the sink under consideration.
-        Ok(last_upper)
+        Ok(last_progress)
     }).await.unwrap().check_ssh_status(&ctx);
     // Express interest to the computation until after we've received its result
     drop(parent_token);
@@ -1089,20 +1107,46 @@ where
 /// the batch committed. It is used to recover the frontier a sink needs to resume at.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProgressRecord {
-    pub frontier: Vec<Timestamp>,
+    #[serde(
+        deserialize_with = "deserialize_frontier",
+        serialize_with = "serialize_frontier"
+    )]
+    pub frontier: Antichain<Timestamp>,
+    #[serde(default)]
+    pub version: u64,
+}
+fn serialize_frontier<S>(frontier: &Antichain<Timestamp>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    Serialize::serialize(frontier.elements(), serializer)
 }
 
-fn parse_progress_record(payload: &[u8]) -> Result<Antichain<Timestamp>, anyhow::Error> {
+fn deserialize_frontier<'de, D>(deserializer: D) -> Result<Antichain<Timestamp>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let times: Vec<Timestamp> = Deserialize::deserialize(deserializer)?;
+    Ok(Antichain::from(times))
+}
+
+fn parse_progress_record(payload: &[u8]) -> Result<ProgressRecord, anyhow::Error> {
     Ok(match serde_json::from_slice::<ProgressRecord>(payload) {
-        Ok(progress) => Antichain::from(progress.frontier),
+        Ok(progress) => progress,
         // If we fail to deserialize we might be reading a legacy progress record
         Err(_) => match serde_json::from_slice::<LegacyProgressRecord>(payload) {
             Ok(LegacyProgressRecord {
                 timestamp: Some(Some(time)),
-            }) => Antichain::from_elem(time.step_forward()),
+            }) => ProgressRecord {
+                frontier: Antichain::from_elem(time.step_forward()),
+                version: 0,
+            },
             Ok(LegacyProgressRecord {
                 timestamp: Some(None),
-            }) => Antichain::new(),
+            }) => ProgressRecord {
+                frontier: Antichain::new(),
+                version: 0,
+            },
             _ => match std::str::from_utf8(payload) {
                 Ok(payload) => bail!("invalid progress record: {payload}"),
                 Err(_) => bail!("invalid progress record bytes: {payload:?}"),

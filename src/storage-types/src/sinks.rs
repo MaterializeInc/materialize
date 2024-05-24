@@ -41,6 +41,7 @@ pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> 
     pub from_desc: RelationDesc,
     pub connection: StorageSinkConnection,
     pub with_snapshot: bool,
+    pub version: u64,
     pub envelope: SinkEnvelope,
     pub as_of: Antichain<T>,
     pub status_id: Option<<S as StorageSinkDescFillState>::StatusId>,
@@ -70,6 +71,7 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
             from_desc,
             connection,
             envelope,
+            version: _,
             // The as of of the descriptions may differ.
             as_of: _,
             status_id,
@@ -142,6 +144,7 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
             any::<Option<ShardId>>(),
             any::<CollectionMetadata>(),
             any::<bool>(),
+            any::<u64>(),
         )
             .prop_map(
                 |(
@@ -153,12 +156,14 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
                     status_id,
                     from_storage_metadata,
                     with_snapshot,
+                    version,
                 )| {
                     StorageSinkDesc {
                         from,
                         from_desc,
                         connection,
                         envelope,
+                        version,
                         as_of: Antichain::from_iter(as_of),
                         status_id,
                         from_storage_metadata,
@@ -181,6 +186,7 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             status_id: self.status_id.into_proto(),
             from_storage_metadata: Some(self.from_storage_metadata.into_proto()),
             with_snapshot: self.with_snapshot,
+            version: self.version,
         }
     }
 
@@ -204,6 +210,7 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
                 .from_storage_metadata
                 .into_rust_if_some("ProtoStorageSinkDesc::from_storage_metadata")?,
             with_snapshot: proto.with_snapshot,
+            version: proto.version,
         })
     }
 }
