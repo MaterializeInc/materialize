@@ -1295,22 +1295,42 @@ mod test {
 
         assert_eq!(
             parse_progress_record(b"{\"timestamp\":1}").unwrap(),
-            Antichain::from_elem(2.into()),
+            ProgressRecord {
+                frontier: Antichain::from_elem(2.into()),
+                version: 0,
+            }
         );
 
         assert_eq!(
             parse_progress_record(b"{\"timestamp\":null}").unwrap(),
-            Antichain::new(),
+            ProgressRecord {
+                frontier: Antichain::new(),
+                version: 0,
+            }
         );
 
         assert_eq!(
             parse_progress_record(b"{\"frontier\":[1]}").unwrap(),
-            Antichain::from_elem(1.into()),
+            ProgressRecord {
+                frontier: Antichain::from_elem(1.into()),
+                version: 0,
+            }
         );
 
         assert_eq!(
             parse_progress_record(b"{\"frontier\":[]}").unwrap(),
-            Antichain::new(),
+            ProgressRecord {
+                frontier: Antichain::new(),
+                version: 0,
+            }
+        );
+
+        assert_eq!(
+            parse_progress_record(b"{\"frontier\":[], \"version\": 42}").unwrap(),
+            ProgressRecord {
+                frontier: Antichain::new(),
+                version: 42,
+            }
         );
 
         assert!(parse_progress_record(b"{\"frontier\":null}").is_err());
