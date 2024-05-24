@@ -922,6 +922,7 @@ impl Coordinator {
             from: sink.from,
             connection: sink.connection,
             envelope: sink.envelope,
+            version: sink.version,
             with_snapshot,
             resolved_ids,
             cluster_id: in_cluster,

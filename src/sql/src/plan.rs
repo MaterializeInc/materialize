@@ -1406,6 +1406,7 @@ pub struct Sink {
     pub connection: StorageSinkConnection<ReferencedConnection>,
     // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
+    pub version: u64,
 }
 
 #[derive(Clone, Debug)]

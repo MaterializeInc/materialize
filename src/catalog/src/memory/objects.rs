@@ -658,6 +658,7 @@ pub struct Sink {
     // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
+    pub version: u64,
     pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,
 }

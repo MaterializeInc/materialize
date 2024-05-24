@@ -457,6 +457,7 @@ Values
 Varchar
 Variadic
 Varying
+Version
 View
 Views
 Warning

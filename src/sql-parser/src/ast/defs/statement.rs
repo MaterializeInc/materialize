@@ -1172,6 +1172,7 @@ impl_display_t!(CreateSubsourceStatement);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateSinkOptionName {
     Snapshot,
+    Version,
 }
 
 impl AstDisplay for CreateSinkOptionName {
@@ -1179,6 +1180,9 @@ impl AstDisplay for CreateSinkOptionName {
         match self {
             CreateSinkOptionName::Snapshot => {
                 f.write_str("SNAPSHOT");
+            }
+            CreateSinkOptionName::Version => {
+                f.write_str("VERSION");
             }
         }
     }
@@ -1193,6 +1197,7 @@ impl WithOptionName for CreateSinkOptionName {
     fn redact_value(&self) -> bool {
         match self {
             CreateSinkOptionName::Snapshot => false,
+            CreateSinkOptionName::Version => false,
         }
     }
 }

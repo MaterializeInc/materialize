@@ -2547,7 +2547,7 @@ pub fn describe_create_sink(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(CreateSinkOption, (Snapshot, bool));
+generate_extracted_config!(CreateSinkOption, (Snapshot, bool), (Version, u64));
 
 pub fn plan_create_sink(
     scx: &StatementContext,
@@ -2564,7 +2564,10 @@ pub fn plan_create_sink(
         with_options,
     } = stmt.clone();
 
-    const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[CreateSinkOptionName::Snapshot];
+    const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[
+        CreateSinkOptionName::Snapshot,
+        CreateSinkOptionName::Version,
+    ];
 
     if let Some(op) = with_options
         .iter()
@@ -2739,10 +2742,16 @@ pub fn plan_create_sink(
         )?,
     };
 
-    let CreateSinkOptionExtracted { snapshot, seen: _ } = with_options.try_into()?;
+    let CreateSinkOptionExtracted {
+        snapshot,
+        version,
+        seen: _,
+    } = with_options.try_into()?;
 
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
+    // VERSION defaults to 0
+    let version = version.unwrap_or(0);
 
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
@@ -2757,6 +2766,7 @@ pub fn plan_create_sink(
             from: from.id(),
             connection: connection_builder,
             envelope,
+            version,
         },
         with_snapshot,
         if_not_exists,

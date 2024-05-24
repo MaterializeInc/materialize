@@ -59,6 +59,14 @@ goofus,gallant
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:Expected one of SNAPSHOT
 
+! CREATE SINK invalid_with_option
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM src
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  WITH (VERSION=1)
+contains:CREATE SINK...WITH (VERSION..) is not allowed
+
 > SHOW SINKS
 name               type   size  cluster
 ---------------------------------------
