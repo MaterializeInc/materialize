@@ -37,6 +37,7 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import PropagatingThread
 
 SERVICES = [
     Zookeeper(),
@@ -3077,22 +3078,6 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
         )
 
         c.run_testdrive_files("statement-logging/statement-logging.td")
-
-
-class PropagatingThread(Thread):
-    def run(self):
-        self.exc = None
-        try:
-            self.ret = self._target(*self._args, **self._kwargs)  # type: ignore
-        except BaseException as e:
-            self.exc = e
-
-    def join(self, timeout=None):
-        super().join(timeout)
-        if self.exc:
-            raise self.exc
-        if hasattr(self, "ret"):
-            return self.ret
 
 
 def workflow_blue_green_deployment(

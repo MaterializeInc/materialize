@@ -25,6 +25,7 @@ dec = "0.4.8"
 derivative = "2.2.0"
 differential-dataflow = "0.12.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
+futures = "0.3.25"
 itertools = { version = "0.10.5" }
 mysql_async = { version = "0.34.1", default-features = false, features = ["minimal", "native-tls-tls"] }
 mz-aws-util = { path = "../aws-util" }

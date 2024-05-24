@@ -637,7 +637,7 @@ mod tests {
     use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
     use mz_storage_client::util::remap_handle::RemapHandle;
     use mz_storage_types::controller::CollectionMetadata;
-    use mz_storage_types::sources::kafka::RangeBound;
+    use mz_storage_types::sources::kafka::{self, RangeBound};
     use mz_storage_types::sources::{MzOffset, SourceData};
     use mz_timely_util::order::Partitioned;
     use once_cell::sync::Lazy;
@@ -675,12 +675,12 @@ mod tests {
         as_of: Antichain<Timestamp>,
     ) -> (
         ReclockOperator<
-            Partitioned<RangeBound<i32>, MzOffset>,
+            kafka::KafkaTimestamp,
             Timestamp,
-            impl RemapHandle<FromTime = Partitioned<RangeBound<i32>, MzOffset>, IntoTime = Timestamp>,
+            impl RemapHandle<FromTime = kafka::KafkaTimestamp, IntoTime = Timestamp>,
             impl Stream<Item = (Timestamp, Antichain<Timestamp>)>,
         >,
-        ReclockFollower<Partitioned<RangeBound<i32>, MzOffset>, Timestamp>,
+        ReclockFollower<kafka::KafkaTimestamp, Timestamp>,
     ) {
         let metadata = CollectionMetadata {
             persist_location: PersistLocation {
@@ -737,10 +737,10 @@ mod tests {
         (operator, follower)
     }
 
-    /// Generates a `Partitioned<RangeBound<i32>, MzOffset>` antichain where all the provided
+    /// Generates a [`kafka::NativeFrontier`] antichain where all the provided
     /// partitions are at the specified offset and the gaps in between are filled with range
     /// timestamps at offset zero.
-    fn partitioned_frontier<I>(items: I) -> Antichain<Partitioned<RangeBound<i32>, MzOffset>>
+    fn partitioned_frontier<I>(items: I) -> Antichain<kafka::KafkaTimestamp>
     where
         I: IntoIterator<Item = (i32, MzOffset)>,
     {

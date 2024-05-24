@@ -218,6 +218,10 @@ pub enum AdapterError {
     SubsourceAlreadyReferredTo {
         name: UnresolvedItemName,
     },
+    /// A humanized version of [`StorageError::RtrTimeout`].
+    RtrTimeout(String),
+    /// A humanized version of [`StorageError::RtrDropFailure`].
+    RtrDropFailure(String),
 }
 
 impl AdapterError {
@@ -328,6 +332,8 @@ impl AdapterError {
                     }
                 ))
             }
+            AdapterError::RtrTimeout(name) => Some(format!("{name} failed to ingest data up to the real-time recency point")),
+            AdapterError::RtrDropFailure(name) => Some(format!("{name} dropped before ingesting data to the real-time recency point")),
             _ => None,
         }
     }
@@ -517,6 +523,8 @@ impl AdapterError {
             // Calling this `FEATURE_NOT_SUPPORTED` because we will eventually allow multiple
             // references to the same subsource (albeit with different schemas).
             AdapterError::SubsourceAlreadyReferredTo { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::RtrTimeout(_) => SqlState::QUERY_CANCELED,
+            AdapterError::RtrDropFailure(_) => SqlState::UNDEFINED_OBJECT,
         }
     }
 
@@ -735,6 +743,13 @@ impl fmt::Display for AdapterError {
             Self::SubsourceAlreadyReferredTo { name } => {
                 write!(f, "another subsource already refers to {}", name)
             }
+            AdapterError::RtrTimeout(_) => {
+                write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")
+            }
+            AdapterError::RtrDropFailure(_) => write!(
+                f,
+                "real-time source dropped before ingesting the upstream system's visible frontier"
+            ),
         }
     }
 }

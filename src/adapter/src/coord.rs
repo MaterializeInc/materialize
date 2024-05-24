@@ -125,7 +125,7 @@ use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourc
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::TxnWalTablesImpl;
+use mz_storage_types::controller::{StorageError, TxnWalTablesImpl};
 use mz_storage_types::sinks::S3SinkFormat;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
@@ -228,7 +228,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     StorageUsageUpdate(ShardsUsageReferenced),
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
-        real_time_recency_ts: Timestamp,
+        real_time_recency_ts: Result<Timestamp, StorageError<T>>,
         validity: PlanValidity,
     },
 

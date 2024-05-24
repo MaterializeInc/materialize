@@ -1205,6 +1205,16 @@ pub static REAL_TIME_RECENCY: VarDefinition = VarDefinition::new(
 )
 .with_feature_flag(&ALLOW_REAL_TIME_RECENCY);
 
+pub static REAL_TIME_RECENCY_TIMEOUT: VarDefinition = VarDefinition::new(
+    "real_time_recency_timeout",
+    value!(Duration; Duration::from_secs(10)),
+    "Sets the maximum allowed duration of SELECTs that actively use real-time \
+    recency, i.e. reach out to an external system to determine their most recencly exposed \
+    data (Materialize).",
+    false,
+)
+.with_feature_flag(&ALLOW_REAL_TIME_RECENCY);
+
 pub static EMIT_PLAN_INSIGHTS_NOTICE: VarDefinition = VarDefinition::new(
     "emit_plan_insights_notice",
     value!(bool; false),
