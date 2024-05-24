@@ -147,19 +147,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
 
-    /// Keep track of subsources of ingestions that we have dropped. With this,
-    /// we can synthesize `DroppedIds` messages when we see one for the "main"
-    /// ingestion. We do this because the cluster will not send one back by
-    /// itself.
-    ///
-    /// We populate this in `drop_sources_unvalidated` and take it out again in
-    /// `process`, when receiving a `DroppedIds` message for the "main"
-    /// ingestion.
-    ///
-    /// TODO: Make the cluster send back `DroppedIds` messages for subsources
-    /// and remove this.
-    dropped_ingestions: BTreeMap<GlobalId, Vec<GlobalId>>,
-
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
@@ -1470,14 +1457,7 @@ where
                         self.pending_compaction_commands
                             .push(pending_compaction_command);
                     }
-                    DataSource::Ingestion(ref ingestion) => {
-                        // Keep track of subsources, so that we can synthesize
-                        // `DroppedIds` messages for the remap shard.
-                        self.dropped_ingestions
-                            .entry(*id)
-                            .or_default()
-                            .push(ingestion.remap_collection_id);
-
+                    DataSource::Ingestion(_) => {
                         ingestions_to_drop.insert(id);
                     }
                     DataSource::IngestionExport { ingestion_id, .. } => {
@@ -1506,13 +1486,6 @@ where
                                     removed.is_some(),
                                     "dropped subsource {id} already removed from source exports"
                                 );
-
-                                // So that we can synthesize `DroppedIds` messages for
-                                // the sources exports (aka. subsources).
-                                self.dropped_ingestions
-                                    .entry(ingestion_id)
-                                    .or_default()
-                                    .push(*id);
                             }
                             _ => unreachable!("SourceExport must only refer to primary sources that already exist"),
                         };
@@ -1820,25 +1793,9 @@ where
                 for id in ids.iter() {
                     tracing::debug!("DroppedIds for collections {id}");
 
-                    if let Some(collection) = self.collections.remove(id) {
-                        match collection.data_source {
-                            DataSource::Ingestion(_ingestion) => {
-                                let dropped_subsources = self
-                                    .dropped_ingestions
-                                    .remove(id)
-                                    .expect("missing dropped subsources");
-
-                                // The cluster is not sending these, so we take
-                                // matters into our own hands!
-                                tracing::debug!(?dropped_subsources, "synthesizing DroppedIds messages for subsources and the remap shard");
-                                self.internal_response_sender
-                                    .send(StorageResponse::DroppedIds(
-                                        dropped_subsources.into_iter().collect(),
-                                    ))
-                                    .expect("we are still alive");
-                            }
-                            _ => (),
-                        }
+                    if let Some(_collection) = self.collections.remove(id) {
+                        // Nothing to do, we already dropped read holds in
+                        // `drop_sources_unvalidated`.
                     } else if let Some(export) = self.exports.get_mut(id) {
                         // TODO: Current main never drops export state, so we
                         // also don't do that, because it would be yet more
@@ -2592,7 +2549,6 @@ where
 
         Self {
             build_info,
-            dropped_ingestions: BTreeMap::new(),
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
             persist_table_worker,
