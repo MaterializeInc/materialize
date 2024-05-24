@@ -2497,6 +2497,18 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                      WHERE f.oid = $1)"
             ) => Bool, 2081;
         },
+        "pg_size_pretty" => Scalar {
+            params!(Numeric) => sql_impl_func("pg_pretty_size($1::pg_catalog.int64)") => String, 3166;
+            params!(Int64) => sql_impl_func("CASE
+                WHEN $1 IS NULL THEN NULL
+                WHEN abs($1) < 1024 * 10 THEN $1 || ' bytes'
+                WHEN abs($1) >> 9  < (1024 * 20) - 1 THEN (($1 >> 63) | 1) * floor(((abs($1) >> 9)  + 1) / 2) || ' kB'
+                WHEN abs($1) >> 19 < (1024 * 20) - 1 THEN (($1 >> 63) | 1) * floor(((abs($1) >> 19) + 1) / 2) || ' MB'
+                WHEN abs($1) >> 29 < (1024 * 20) - 1 THEN (($1 >> 63) | 1) * floor(((abs($1) >> 29) + 1) / 2) || ' GB'
+                WHEN abs($1) >> 39 < (1024 * 20) - 1 THEN (($1 >> 63) | 1) * floor(((abs($1) >> 39) + 1) / 2) || ' TB'
+                ELSE (($1 >> 63) | 1) * floor(((abs($1) >> 49) + 1) / 2) || ' PB'
+            END") => String, 2288;
+        },
         // pg_tablespace_location indicates what path in the filesystem that a given tablespace is
         // located in. This concept does not make sense though in Materialize which is a cloud
         // native database, so we just return the null value.
