@@ -1018,7 +1018,7 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM foo
 WHERE v = 'xxx';
 ----
 Explained Query (fast path):
-  Project (#1..=#4)
+  Project (#1..=#3, #0)
     ReadIndex on=materialize.public.foo idx_foo_v_cast=[lookup value=("xxx")]
 
 Used Indexes:

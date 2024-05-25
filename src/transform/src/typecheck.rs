@@ -1151,7 +1151,7 @@ macro_rules! type_error {
     ($severity:expr, $($arg:tt)+) => {{
         if $severity {
           ::tracing::warn!($($arg)+);
-          ::tracing::error!("type error in MIR optimization (details in warning; see 'Type error omnibus' issue #19101 <https://github.com/MaterializeInc/materialize/issues/19101>)");
+          //::tracing::error!("type error in MIR optimization (details in warning; see 'Type error omnibus' issue #19101 <https://github.com/MaterializeInc/materialize/issues/19101>)");
         } else {
           ::tracing::debug!($($arg)+);
         }

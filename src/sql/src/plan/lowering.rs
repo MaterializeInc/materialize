@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter::repeat;
 
 use itertools::Itertools;
-use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
+use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
@@ -927,17 +927,23 @@ impl HirScalarExpr {
                 Literal(row, typ) => SS::Literal(Ok(row), typ),
                 Parameter(_) => panic!("cannot decorrelate expression with unbound parameters"),
                 CallUnmaterializable(func) => SS::CallUnmaterializable(func),
-                CallUnary { func, expr } => SS::CallUnary {
-                    func,
-                    expr: Box::new(expr.applied_to(
-                        id_gen,
-                        col_map,
-                        cte_map,
-                        config,
-                        inner,
-                        subquery_map,
-                    )?),
-                },
+                CallUnary { func, expr } => {
+                    if !matches!(func, UnaryFunc::CastVarCharToString(..)) {
+                        SS::CallUnary {
+                            func,
+                            expr: Box::new(expr.applied_to(
+                                id_gen,
+                                col_map,
+                                cte_map,
+                                config,
+                                inner,
+                                subquery_map,
+                            )?),
+                        }
+                    } else {
+                        expr.applied_to(id_gen, col_map, cte_map, config, inner, subquery_map)?
+                    }
+                }
                 CallBinary { func, expr1, expr2 } => SS::CallBinary {
                     func,
                     expr1: Box::new(expr1.applied_to(
@@ -1588,10 +1594,16 @@ impl HirScalarExpr {
             Column(ColumnRef { level: 0, column }) => SS::Column(column),
             Literal(datum, typ) => SS::Literal(Ok(datum), typ),
             CallUnmaterializable(func) => SS::CallUnmaterializable(func),
-            CallUnary { func, expr } => SS::CallUnary {
-                func,
-                expr: Box::new(expr.lower_uncorrelated()?),
-            },
+            CallUnary { func, expr } => {
+                if !matches!(func, UnaryFunc::CastVarCharToString(..)) {
+                    SS::CallUnary {
+                        func,
+                        expr: Box::new(expr.lower_uncorrelated()?),
+                    }
+                } else {
+                    expr.lower_uncorrelated()?
+                }
+            }
             CallBinary { func, expr1, expr2 } => SS::CallBinary {
                 func,
                 expr1: Box::new(expr1.lower_uncorrelated()?),

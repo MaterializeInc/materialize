@@ -134,7 +134,7 @@ explain with(arity, join implementations) select b, c from foo where a = 5 and b
 ----
 Explained Query (fast path):
   Project (#1, #2)
-    Filter ("this" = varchar_to_text(#1))
+    Filter (#1 = "this")
       ReadIndex on=materialize.public.foo foo_idx=[lookup value=(5)]
 
 Used Indexes:

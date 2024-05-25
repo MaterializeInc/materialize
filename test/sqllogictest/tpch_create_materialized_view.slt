@@ -275,7 +275,7 @@ materialize.public.q02:
   With
     cte l4 =
       Project (#0, #2, #10, #11, #13..=#15, #19, #22) // { arity: 9 }
-        Filter (#5{p_size} = 15) AND (#26{r_name} = "EUROPE") AND (#0{p_partkey}) IS NOT NULL AND (#9{s_suppkey}) IS NOT NULL AND (#12{s_nationkey}) IS NOT NULL AND (#23{n_regionkey}) IS NOT NULL AND like["%BRASS"](varchar_to_text(#4{p_type})) // { arity: 28 }
+        Filter like["%BRASS"](#4{p_type}) AND (#5{p_size} = 15) AND (#26{r_name} = "EUROPE") AND (#0{p_partkey}) IS NOT NULL AND (#9{s_suppkey}) IS NOT NULL AND (#12{s_nationkey}) IS NOT NULL AND (#23{n_regionkey}) IS NOT NULL // { arity: 28 }
           Join on=(#0{p_partkey} = #16{ps_partkey} AND #9{s_suppkey} = #17{ps_suppkey} AND #12{s_nationkey} = #21{n_nationkey} AND #23{n_regionkey} = #25{r_regionkey}) type=delta // { arity: 28 }
             implementation
               %0:part » %2:l1[#0]KA » %1:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
@@ -678,7 +678,7 @@ materialize.public.q08:
     Map ((#1 / #2)) // { arity: 4 }
       Reduce group_by=[extract_year_d(#2{o_orderdate})] aggregates=[sum(case when (#3{n_name} = "BRAZIL") then (#0{l_extendedprice} * (1 - #1{l_discount})) else 0 end), sum((#0{l_extendedprice} * (1 - #1{l_discount})))] // { arity: 3 }
         Project (#21, #22, #36, #54) // { arity: 4 }
-          Filter (#58{r_name} = "AMERICA") AND (#36{o_orderdate} <= 1996-12-31) AND (#36{o_orderdate} >= 1995-01-01) AND (#0{p_partkey}) IS NOT NULL AND (#9{s_suppkey}) IS NOT NULL AND (#12{s_nationkey}) IS NOT NULL AND (#16{l_orderkey}) IS NOT NULL AND (#33{o_custkey}) IS NOT NULL AND (#44{c_nationkey}) IS NOT NULL AND (#51{n_regionkey}) IS NOT NULL AND ("ECONOMY ANODIZED STEEL" = varchar_to_text(#4{p_type})) // { arity: 60 }
+          Filter (#4{p_type} = "ECONOMY ANODIZED STEEL") AND (#58{r_name} = "AMERICA") AND (#36{o_orderdate} <= 1996-12-31) AND (#36{o_orderdate} >= 1995-01-01) AND (#0{p_partkey}) IS NOT NULL AND (#9{s_suppkey}) IS NOT NULL AND (#12{s_nationkey}) IS NOT NULL AND (#16{l_orderkey}) IS NOT NULL AND (#33{o_custkey}) IS NOT NULL AND (#44{c_nationkey}) IS NOT NULL AND (#51{n_regionkey}) IS NOT NULL // { arity: 60 }
             Join on=(#0{p_partkey} = #17{l_partkey} AND #9{s_suppkey} = #18{l_suppkey} AND #12{s_nationkey} = #53{n_nationkey} AND #16{l_orderkey} = #32{o_orderkey} AND #33{o_custkey} = #41{c_custkey} AND #44{c_nationkey} = #49{n_nationkey} AND #51{n_regionkey} = #57{r_regionkey}) type=delta // { arity: 60 }
               implementation
                 %0:part » %2:lineitem[#1]KA » %3:orders[#0]KAiif » %1:supplier[#0]KA » %4:customer[#0]KA » %5:nation[#0]KA » %7:region[#0]KAef » %6:nation[#0]KA
@@ -766,7 +766,7 @@ ORDER BY
 materialize.public.q09:
   Reduce group_by=[#5{n_name}, extract_year_d(#4{o_orderdate})] aggregates=[sum(((#1{l_extendedprice} * (1 - #2{l_discount})) - (#3{ps_supplycost} * #0{l_quantity})))] // { arity: 3 }
     Project (#20..=#22, #35, #41, #47) // { arity: 6 }
-      Filter (#0{p_partkey}) IS NOT NULL AND (#9{s_suppkey}) IS NOT NULL AND (#12{s_nationkey}) IS NOT NULL AND (#16{l_orderkey}) IS NOT NULL AND like["%green%"](varchar_to_text(#1{p_name})) // { arity: 50 }
+      Filter like["%green%"](#1{p_name}) AND (#0{p_partkey}) IS NOT NULL AND (#9{s_suppkey}) IS NOT NULL AND (#12{s_nationkey}) IS NOT NULL AND (#16{l_orderkey}) IS NOT NULL // { arity: 50 }
         Join on=(#0{p_partkey} = #17{l_partkey} = #32{ps_partkey} AND #9{s_suppkey} = #18{l_suppkey} = #33{ps_suppkey} AND #12{s_nationkey} = #46{n_nationkey} AND #16{l_orderkey} = #37{o_orderkey}) type=delta // { arity: 50 }
           implementation
             %0:part » %2:lineitem[#1]KA » %3:partsupp[#0, #1]KKA » %1:supplier[#0]KA » %4:orders[#0]KA » %5:nation[#0]KA
@@ -1051,7 +1051,7 @@ materialize.public.q13:
   With
     cte l1 =
       Project (#0, #8) // { arity: 2 }
-        Filter (#0{c_custkey}) IS NOT NULL AND NOT(like["%special%requests%"](varchar_to_text(#16{o_comment}))) // { arity: 17 }
+        Filter (#0{c_custkey}) IS NOT NULL AND NOT(like["%special%requests%"](#16{o_comment})) // { arity: 17 }
           Join on=(#0{c_custkey} = #9{o_custkey}) type=differential // { arity: 17 }
             implementation
               %1:orders[#1]KAf » %0:l0[#0]KAf
@@ -1104,7 +1104,7 @@ materialize.public.q14:
                 - ()
   With
     cte l0 =
-      Reduce aggregates=[sum(case when like["PROMO%"](varchar_to_text(#2{p_type})) then (#0{l_extendedprice} * (1 - #1{l_discount})) else 0 end), sum((#0{l_extendedprice} * (1 - #1{l_discount})))] // { arity: 2 }
+      Reduce aggregates=[sum(case when like["PROMO%"](#2{p_type}) then (#0{l_extendedprice} * (1 - #1{l_discount})) else 0 end), sum((#0{l_extendedprice} * (1 - #1{l_discount})))] // { arity: 2 }
         Project (#5, #6, #20) // { arity: 3 }
           Filter (#10{l_shipdate} >= 1995-09-01) AND (#1{l_partkey}) IS NOT NULL AND (date_to_timestamp(#10{l_shipdate}) < 1995-10-01 00:00:00) // { arity: 25 }
             Join on=(#1{l_partkey} = #16{p_partkey}) type=differential // { arity: 25 }
@@ -1254,7 +1254,7 @@ materialize.public.q16:
                           Get l1 // { arity: 1 }
                         ArrangeBy keys=[[]] // { arity: 1 }
                           Project (#0) // { arity: 1 }
-                            Filter like["%Customer%Complaints%"](varchar_to_text(#6{s_comment})) // { arity: 7 }
+                            Filter like["%Customer%Complaints%"](#6{s_comment}) // { arity: 7 }
                               ReadIndex on=supplier pk_supplier_suppkey=[*** full scan ***] // { arity: 7 }
               Get l1 // { arity: 1 }
   With
@@ -1264,7 +1264,7 @@ materialize.public.q16:
           Get l0 // { arity: 4 }
     cte l0 =
       Project (#1, #8..=#10) // { arity: 4 }
-        Filter (#8{p_brand} != "Brand#45") AND (#0{ps_partkey}) IS NOT NULL AND NOT(like["MEDIUM POLISHED%"](varchar_to_text(#9{p_type}))) AND ((#10{p_size} = 3) OR (#10{p_size} = 9) OR (#10{p_size} = 14) OR (#10{p_size} = 19) OR (#10{p_size} = 23) OR (#10{p_size} = 36) OR (#10{p_size} = 45) OR (#10{p_size} = 49)) // { arity: 14 }
+        Filter (#8{p_brand} != "Brand#45") AND (#0{ps_partkey}) IS NOT NULL AND NOT(like["MEDIUM POLISHED%"](#9{p_type})) AND ((#10{p_size} = 3) OR (#10{p_size} = 9) OR (#10{p_size} = 14) OR (#10{p_size} = 19) OR (#10{p_size} = 23) OR (#10{p_size} = 36) OR (#10{p_size} = 45) OR (#10{p_size} = 49)) // { arity: 14 }
           Join on=(#0{ps_partkey} = #5{p_partkey}) type=differential // { arity: 14 }
             implementation
               %1:part[#0]KAef » %0:partsupp[#0]KAef
@@ -1616,7 +1616,7 @@ materialize.public.q20:
           ArrangeBy keys=[[#0{p_partkey}]] // { arity: 1 }
             Distinct project=[#0{p_partkey}] // { arity: 1 }
               Project (#0) // { arity: 1 }
-                Filter (#0{p_partkey}) IS NOT NULL AND like["forest%"](varchar_to_text(#1{p_name})) // { arity: 9 }
+                Filter like["forest%"](#1{p_name}) AND (#0{p_partkey}) IS NOT NULL // { arity: 9 }
                   ReadIndex on=part pk_part_partkey=[*** full scan ***] // { arity: 9 }
     cte l0 =
       Project (#0..=#2) // { arity: 3 }

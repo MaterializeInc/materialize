@@ -2054,7 +2054,7 @@ Explained Query:
             ArrangeBy keys=[[#0{rootpostlanguage}]] // { arity: 1 }
               Distinct project=[#0{rootpostlanguage}] // { arity: 1 }
                 Project (#0) // { arity: 1 }
-                  Filter (#0{rootpostlanguage} = varchar_to_text(#1)) // { arity: 2 }
+                  Filter (#0{rootpostlanguage} = #1) // { arity: 2 }
                     FlatMap unnest_array({"es", "ta", "pt"}) // { arity: 2 }
                       Distinct project=[#0{rootpostlanguage}] // { arity: 1 }
                         Project (#13) // { arity: 1 }
