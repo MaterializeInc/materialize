@@ -77,19 +77,6 @@ impl Coordinator {
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
-            // Warn about users explicitly selecting the mz_introspection cluster. We are thinking
-            // about renaming this cluster, and this helps us gauge how much of a breaking change
-            // doing so would be.
-            // TODO(#26731): remove this warning again
-            let session = ctx.session();
-            if !session.user().is_internal() && session.vars().cluster() == "mz_introspection" {
-                tracing::warn!(
-                    github_26731 = true,
-                    user = session.user().name,
-                    "user manually selected `mz_introspection` cluster"
-                );
-            }
-
             // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
             let target_cluster = match ctx.session().transaction().cluster() {
                 // Use the current transaction's cluster.
