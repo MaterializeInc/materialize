@@ -222,7 +222,7 @@ impl Clone for SessionVar {
 }
 
 impl SessionVar {
-    pub fn new(var: VarDefinition) -> Self {
+    pub const fn new(var: VarDefinition) -> Self {
         SessionVar {
             definition: var,
             default_value: None,
@@ -478,6 +478,8 @@ impl SessionVars {
     /// example, `self.get("sql_safe_updates").value()` returns the string
     /// `"true"` or `"false"`, while `self.sql_safe_updates()` returns a bool.
     pub fn get(&self, system_vars: Option<&SystemVars>, name: &str) -> Result<&dyn Var, VarError> {
+        let name = compat_translate_name(name);
+
         let name = UncasedStr::new(name);
         if name == MZ_VERSION_NAME {
             Ok(self.build_info)
@@ -500,6 +502,8 @@ impl SessionVars {
     /// Note: If you're trying to determine the value of the variable with `name` you should
     /// instead use the named accessor, or [`SessionVars::get`].
     pub fn inspect(&self, name: &str) -> Result<&SessionVar, VarError> {
+        let name = compat_translate_name(name);
+
         self.vars
             .get(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
@@ -524,6 +528,8 @@ impl SessionVars {
         input: VarInput,
         local: bool,
     ) -> Result<(), VarError> {
+        let (name, input) = compat_translate(name, input);
+
         let name = UncasedStr::new(name);
         self.check_read_only(name)?;
 
@@ -540,6 +546,8 @@ impl SessionVars {
     /// Sets the default value for the parameter named `name` to the value
     /// represented by `value`.
     pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
+        let (name, input) = compat_translate(name, input);
+
         let name = UncasedStr::new(name);
         self.check_read_only(name)?;
 
@@ -570,6 +578,8 @@ impl SessionVars {
         name: &str,
         local: bool,
     ) -> Result<(), VarError> {
+        let name = compat_translate_name(name);
+
         let name = UncasedStr::new(name);
         self.check_read_only(name)?;
 
@@ -819,6 +829,48 @@ impl SessionVars {
     pub fn welcome_message(&self) -> bool {
         *self.expect_value(&WELCOME_MESSAGE)
     }
+}
+
+// TODO(#27285) remove together with `compat_translate`
+pub const OLD_CATALOG_SERVER_CLUSTER: &str = "mz_introspection";
+pub const OLD_AUTO_ROUTE_CATALOG_QUERIES: &str = "auto_route_introspection_queries";
+
+/// If the given variable name and/or input is deprecated, return a corresponding updated value,
+/// otherwise return the original.
+///
+/// This method was introduced to gracefully handle the rename of the `mz_introspection` cluster to
+/// `mz_cluster_server`. The plan is to remove it once all users have migrated to the new name. The
+/// debug logs will be helpful for checking this in production.
+// TODO(#27285) remove this after sufficient time has passed
+fn compat_translate<'a, 'b>(name: &'a str, input: VarInput<'b>) -> (&'a str, VarInput<'b>) {
+    if name == CLUSTER.name() {
+        if let Ok(value) = CLUSTER.parse(input) {
+            if value.format() == OLD_CATALOG_SERVER_CLUSTER {
+                tracing::debug!(
+                    github_27285 = true,
+                    "encountered deprecated `cluster` variable value: {}",
+                    OLD_CATALOG_SERVER_CLUSTER,
+                );
+                return (name, VarInput::Flat("mz_catalog_server"));
+            }
+        }
+    }
+
+    if name == OLD_AUTO_ROUTE_CATALOG_QUERIES {
+        tracing::debug!(
+            github_27285 = true,
+            "encountered deprecated `{}` variable name",
+            OLD_AUTO_ROUTE_CATALOG_QUERIES,
+        );
+        return (AUTO_ROUTE_CATALOG_QUERIES.name(), input);
+    }
+
+    (name, input)
+}
+
+fn compat_translate_name(name: &str) -> &str {
+    let (name, _) = compat_translate(name, VarInput::Flat(""));
+    name
 }
 
 /// A `SystemVar` is persisted on disk value for a configuration parameter. If unset,

@@ -134,6 +134,8 @@ pub enum AdapterNotice {
     },
     Welcome(String),
     PlanInsights(String),
+    IntrospectionClusterUsage,
+    AutoRouteIntrospectionQueriesUsage,
 }
 
 impl AdapterNotice {
@@ -197,6 +199,8 @@ impl AdapterNotice {
             AdapterNotice::VarDefaultUpdated { .. } => Severity::Notice,
             AdapterNotice::Welcome(_) => Severity::Notice,
             AdapterNotice::PlanInsights(_) => Severity::Notice,
+            AdapterNotice::IntrospectionClusterUsage => Severity::Warning,
+            AdapterNotice::AutoRouteIntrospectionQueriesUsage => Severity::Warning,
         }
     }
 
@@ -241,6 +245,8 @@ impl AdapterNotice {
             ),
             AdapterNotice::OptimizerNotice { notice: _, hint } => Some(hint.clone()),
             AdapterNotice::DroppedInUseIndex(..) => Some("To free up the resources used by the index, recreate all the above-mentioned objects.".into()),
+            AdapterNotice::IntrospectionClusterUsage => Some("Use the new name instead.".into()),
+            AdapterNotice::AutoRouteIntrospectionQueriesUsage => Some("Use the new name instead.".into()),
             _ => None
         }
     }
@@ -293,6 +299,8 @@ impl AdapterNotice {
             AdapterNotice::VarDefaultUpdated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::Welcome(_) => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
+            AdapterNotice::IntrospectionClusterUsage => SqlState::WARNING,
+            AdapterNotice::AutoRouteIntrospectionQueriesUsage => SqlState::WARNING,
         }
     }
 }
@@ -463,6 +471,14 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::Welcome(message) => message.fmt(f),
             AdapterNotice::PlanInsights(message) => message.fmt(f),
+            AdapterNotice::IntrospectionClusterUsage => write!(
+                f,
+                "The mz_introspection cluster has been renamed to mz_catalog_server."
+            ),
+            AdapterNotice::AutoRouteIntrospectionQueriesUsage => write!(
+                f,
+                "The auto_route_introspection_queries variable has been renamed to auto_route_catalog_queries."
+            ),
         }
     }
 }

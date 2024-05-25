@@ -18,6 +18,7 @@ from statistics import quantiles
 from textwrap import dedent
 from threading import Thread
 
+import psycopg
 import requests
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
@@ -4166,3 +4167,102 @@ def workflow_test_adhoc_system_indexes(
         """
     )
     assert not output, output
+
+
+def workflow_test_mz_introspection_cluster_compat(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests that usages of the `mz_introspection` cluster and the
+    `auto_route_introspection_queries` variable, which both have been renamed,
+    are automatically translated to the new names.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+
+        # Setting variables through `SET <variable>`.
+        c.testdrive(
+            dedent(
+                """
+                > SHOW cluster
+                quickstart
+
+                > SET cluster = mz_introspection
+                > SHOW cluster
+                mz_catalog_server
+
+                > SHOW auto_route_catalog_queries
+                on
+
+                > SET auto_route_introspection_queries = off
+                > SHOW auto_route_catalog_queries
+                off
+
+                > RESET cluster
+                > SHOW cluster
+                quickstart
+
+                > RESET auto_route_introspection_queries
+                > SHOW auto_route_catalog_queries
+                on
+                """
+            )
+        )
+
+        # Setting variables through `ALTER ROLE`.
+        c.sql(
+            """
+            ALTER ROLE materialize SET cluster = mz_introspection;
+            ALTER ROLE materialize SET auto_route_introspection_queries = off;
+            """
+        )
+        c.testdrive(
+            dedent(
+                """
+                > SHOW cluster
+                mz_catalog_server
+                > SHOW auto_route_catalog_queries
+                off
+                """
+            )
+        )
+        c.sql(
+            """
+            ALTER ROLE materialize RESET cluster;
+            ALTER ROLE materialize RESET auto_route_introspection_queries;
+            """
+        )
+        c.testdrive(
+            dedent(
+                """
+                > SHOW cluster
+                quickstart
+                > SHOW auto_route_catalog_queries
+                on
+                """
+            )
+        )
+
+        # Setting variables through the connection string.
+        port = c.default_port("materialized")
+        url = (
+            f"postgres://materialize@localhost:{port}?options="
+            "--cluster%3Dmz_introspection%20"
+            "--auto_route_introspection_queries%3Doff"
+        )
+        with psycopg.connect(url) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SHOW cluster")
+                row = cur.fetchone()
+                assert row == ("mz_catalog_server",), row
+
+                cur.execute("SHOW auto_route_catalog_queries")
+                row = cur.fetchone()
+                assert row == ("off",), row

@@ -1702,6 +1702,18 @@ impl Coordinator {
                     local,
                 )?;
 
+                let vars = session.vars();
+
+                // Emit a warning when deprecated variables are used.
+                // TODO(#27285) remove this after sufficient time has passed
+                if name == vars::OLD_AUTO_ROUTE_CATALOG_QUERIES {
+                    session.add_notice(AdapterNotice::AutoRouteIntrospectionQueriesUsage);
+                } else if name == vars::CLUSTER.name()
+                    && values[0] == vars::OLD_CATALOG_SERVER_CLUSTER
+                {
+                    session.add_notice(AdapterNotice::IntrospectionClusterUsage);
+                }
+
                 // Database or cluster value does not correspond to a catalog item.
                 if name.as_str() == vars::DATABASE.name()
                     && matches!(
@@ -3001,6 +3013,20 @@ impl Coordinator {
                 // Return early if it's not visible.
                 session_var.visible(session.user(), Some(catalog.system_vars()))?;
 
+                // Emit a warning when deprecated variables are used.
+                // TODO(#27285) remove this after sufficient time has passed
+                if variable.name() == vars::OLD_AUTO_ROUTE_CATALOG_QUERIES {
+                    notices.push(AdapterNotice::AutoRouteIntrospectionQueriesUsage);
+                } else if let PlannedRoleVariable::Set {
+                    name,
+                    value: VariableValue::Values(vals),
+                } = &variable
+                {
+                    if name == vars::CLUSTER.name() && vals[0] == vars::OLD_CATALOG_SERVER_CLUSTER {
+                        notices.push(AdapterNotice::IntrospectionClusterUsage);
+                    }
+                }
+
                 let var_name = match variable {
                     PlannedRoleVariable::Set { name, value } => {
                         // Update our persisted set.
@@ -3032,7 +3058,7 @@ impl Coordinator {
                 notices.push(AdapterNotice::VarDefaultUpdated {
                     role: Some(name.clone()),
                     var_name: Some(var_name),
-                })
+                });
             }
         }
 
