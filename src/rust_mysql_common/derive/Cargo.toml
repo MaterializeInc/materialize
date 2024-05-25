@@ -1,0 +1,34 @@
+[package]
+name = "mysql-common-derive"
+edition = "2021"
+description = "Derive macros for MySql common primitives"
+license = "MIT/Apache-2.0"
+homepage = "https://github.com/blackbeam/rust_mysql_common"
+documentation = "https://docs.rs/mysql-common-derive"
+repository = "https://github.com/blackbeam/rust_mysql_common"
+keywords = ["mysql", "database", "derive"]
+categories = ["database"]
+exclude = ["README.tpl"]
+
+# * Invoke `cargo readme > README.md` if relevant!
+version = "0.31.1"
+
+[lib]
+proc-macro = true
+bench = false
+
+[dependencies]
+darling = "0.20.1"
+heck = "0.4.0"
+num-bigint = "0.4.3"
+proc-macro-crate = "3"
+proc-macro-error = "1"
+proc-macro2 = "1.0.42"
+quote = "1.0.9"
+syn = { version = "2.0", features = ["full"] }
+termcolor = "1.1.3"
+thiserror = "1"
+
+[dev-dependencies]
+serde = { version = "1.0.93", features = ["derive"] }
+serde_json = "1.0.93"

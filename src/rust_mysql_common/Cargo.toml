@@ -1,0 +1,123 @@
+[workspace]
+members = ["derive"]
+
+[package]
+authors = ["blackbeam <aikorsky@gmail.com>"]
+name = "mysql_common"
+description = "MySql protocol primitives"
+license = "MIT/Apache-2.0"
+homepage = "https://github.com/blackbeam/rust_mysql_common"
+documentation = "https://docs.rs/mysql_common"
+repository = "https://github.com/blackbeam/rust_mysql_common"
+keywords = ["mysql", "database"]
+categories = ["database"]
+
+# * Invoke `cargo readme > README.md` if relevant!
+version = "0.32.3"
+
+edition = "2018"
+exclude = [
+    "/lib",
+    "/proptest-regressions",
+    "/test-data",
+    "/wrapper.cc",
+    "/wrapper.hh",
+    "README.tpl",
+    ".github",
+]
+
+[badges]
+travis-ci = { repository = "blackbeam/rust_mysql_common" }
+
+[dependencies]
+base64 = "0.21"
+bigdecimal02 = { package = "bigdecimal", version = "0.2", features = [
+    "serde",
+], optional = true }
+bigdecimal03 = { package = "bigdecimal", version = "0.3", optional = true }
+bigdecimal = { version = "0.4", optional = true }
+bitflags = "2.3"
+bitvec = { version = "1.0", optional = true }
+byteorder = "1"
+bytes = "1.0"
+chrono = { version = "0.4.20", default-features = false, features = [
+    "clock",
+    "serde",
+], optional = true }
+crc32fast = "1.2"
+flate2 = { version = "1.0", default-features = false }
+frunk = { version = "0.4", optional = true }
+lazy_static = "1"
+num-bigint = { version = "0.4" }
+num-traits = { version = "0.2", features = ["i128"] }
+rand = "0.8"
+regex = "1.5"
+rust_decimal = { version = "1.0", optional = true }
+sha1 = "0.10"
+sha2 = "0.10"
+smallvec = { version = "1.6.1", features = ["union", "write"] }
+thiserror = "1.0"
+time02 = { package = "time", version = "0.2", default-features = false, features = [
+    "std",
+], optional = true }
+time = { version = "0.3", default-features = false, features = [
+    "parsing",
+], optional = true }
+uuid = { version = "1" }
+saturating = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+mysql-common-derive = { path = "derive", version = "0.31.0", optional = true }
+btoi = "0.4.3"
+zstd = "0.13"
+
+[dev-dependencies]
+proptest = "1.0"
+unic-langid = { version = "0.9.4" }
+
+[build-dependencies]
+bindgen = { version = "0", default-features = false, features = ["runtime"] }
+cc = "1.0"
+cmake = "0.1"
+subprocess = "0.2"
+
+[profile.bench]
+debug = true
+
+[profile.features-subsets]
+inherits = "test"
+debug = false
+strip = "debuginfo"
+incremental = false
+
+[features]
+default = [
+    "flate2/zlib",
+    "bigdecimal",
+    "rust_decimal",
+    "time",
+    "frunk",
+    "derive",
+    "binlog",
+]
+test = ["derive"]
+derive = ["mysql-common-derive"]
+binlog = ["bitvec"]
+nightly = ["test"]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+no-default-features = true
+features = [
+    "flate2/zlib",
+    "time02",
+    "time",
+    "rust_decimal",
+    "chrono",
+    "bigdecimal02",
+    "bigdecimal03",
+    "bigdecimal",
+    "derive",
+    "binlog",
+]
