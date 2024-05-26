@@ -641,6 +641,8 @@ message ProtoBinaryFunc {
         google.protobuf.Empty constant_time_eq_bytes = 189;
         google.protobuf.Empty timezone_offset = 190;
         google.protobuf.Empty pretty_sql = 191;
+      google.protobuf.Empty sub_date_int32 = 192;
+      google.protobuf.Empty add_date_int32 = 193;
     }
 }
 
