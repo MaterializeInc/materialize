@@ -314,6 +314,11 @@ r3 <null>
 
 # Test that frontiers are removed when objects are dropped.
 
+> SELECT object_id, id, name, type, read_frontier, write_frontier
+  FROM mz_internal.mz_frontiers frontiers
+  LEFT JOIN mz_objects ON (id = object_id)
+  WHERE object_id LIKE 'u%'
+
 > DROP MATERIALIZED VIEW mv1
 > DROP MATERIALIZED VIEW mv2
 > DROP INDEX idx1
