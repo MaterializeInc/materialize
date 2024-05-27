@@ -125,9 +125,9 @@ impl LinearJoinSpec {
                     arranged1,
                     arranged2,
                     shutdown_token,
-                    move |k, v1, v2, c| {
-                        for datum in result(k, v1, v2, c) {
-                            c.give(datum);
+                    move |k, v1, v2, s| {
+                        for datum in result(k, v1, v2, s) {
+                            s.give(datum);
                         }
                     },
                     yield_fn,
