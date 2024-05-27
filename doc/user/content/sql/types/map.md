@@ -40,8 +40,6 @@ _value&lowbar;type_ | The [type](../../types) of the map's values.
 
 ### Construction
 
-{{< warn-if-unreleased v0.100 >}}
-
 You can construct maps using the `MAP` expression:
 
 ```sql
