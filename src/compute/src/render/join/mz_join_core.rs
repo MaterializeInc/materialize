@@ -641,16 +641,19 @@ where
                                     // Single element, single time
                                     (false, 1) => {
                                         let (time, diff) = buffer.pop().unwrap();
-                                        // TODO: get rid of temp
-                                        temp.push((first, time, diff));
+                                        session.builder().push((first, time, diff));
                                     }
                                     // Multiple elements or multiple times
                                     (_, _) => {
                                         for d in std::iter::once(first).chain(result) {
-                                            // TODO: get rid of temp
-                                            temp.extend(buffer.iter().map(|(time, diff)| {
-                                                (d.clone(), time.clone(), diff.clone())
-                                            }))
+                                            // TODO: adding push_iter to ContainerBuilder will be more efficient
+                                            buffer.iter().for_each(|(time, diff)| {
+                                                session.builder().push((
+                                                    d.clone(),
+                                                    time.clone(),
+                                                    diff.clone(),
+                                                ))
+                                            })
                                         }
                                     }
                                 }
