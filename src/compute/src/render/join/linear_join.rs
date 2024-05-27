@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
+use differential_dataflow::operators::join::JoinSession;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{Collection, Data};
 use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
@@ -27,7 +28,7 @@ use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
-use timely::container::{CapacityContainerBuilder, PushContainer};
+use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushContainer};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, ScopeParent, StreamCore};
 use timely::progress::timestamp::{Refines, Timestamp};
@@ -91,7 +92,7 @@ impl LinearJoinSpec {
     }
 
     /// Render a join operator according to this specification.
-    fn render<G, Tr1, Tr2, L, I, C>(
+    fn render<G, Tr1, Tr2, L, I, C, CB>(
         &self,
         arranged1: &Arranged<G, Tr1>,
         arranged2: &Arranged<G, Tr2>,
@@ -105,8 +106,14 @@ impl LinearJoinSpec {
         Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
             + Clone
             + 'static,
-        L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
+        L: FnMut(
+                Tr1::Key<'_>,
+                Tr1::Val<'_>,
+                Tr2::Val<'_>,
+                &mut JoinSession<Tr1::Time, CB, CB::Container>,
+            ) + 'static,
         C: PushContainer,
+        CB: ContainerBuilder + 'static,
         I: IntoIterator,
         I::Item: Data,
     {
