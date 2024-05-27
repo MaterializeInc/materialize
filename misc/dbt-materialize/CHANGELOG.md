@@ -1,5 +1,10 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Add support for overriding the `generate_cluster_name` macro to customize the
+  cluster name generation logic in user projects.
+
 ## 1.8.0 - 2024-05-23
 
 * Update base adapter references as part of
