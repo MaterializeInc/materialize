@@ -146,7 +146,16 @@ impl Interval {
         }
     }
 
-    pub fn from_duration(duration: Duration) -> Result<Interval, anyhow::Error> {
+    /// Converts a `Duration` to an `Interval`. The resulting `Interval` will only have
+    /// microseconds. Errors if
+    /// - the number of microseconds doesn't fit in i64, or
+    /// - the `Duration` involves fractional microseconds.
+    pub fn from_duration(duration: &Duration) -> Result<Interval, anyhow::Error> {
+        if duration.subsec_nanos() % 1000 != 0 {
+            return Err(anyhow!(
+                "cannot convert Duration to Interval due to fractional microseconds"
+            ));
+        }
         Ok(Interval {
             months: 0,
             days: 0,

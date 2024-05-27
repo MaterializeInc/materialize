@@ -3816,7 +3816,9 @@ fn plan_cluster_schedule(
                 sql_bail!("REHYDRATION TIME ESTIMATE must not involve units larger than days");
             }
             let duration = interval.duration()?;
-            if u64::try_from(duration.as_millis()).is_err() {
+            if u64::try_from(duration.as_millis()).is_err()
+                || Interval::from_duration(&duration).is_err()
+            {
                 sql_bail!("REHYDRATION TIME ESTIMATE too large");
             }
             ClusterSchedule::Refresh {

@@ -13,6 +13,7 @@ use mz_catalog::memory::objects::{CatalogItem, ClusterVariant, ClusterVariantMan
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
+use mz_repr::adt::interval::Interval;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::ClusterSchedule;
@@ -67,16 +68,25 @@ impl SchedulingDecision {
                         on_off,
                         objects_needing_refresh: mvs_needing_refresh,
                         rehydration_time_estimate,
-                    }) => Some(mz_audit_log::RefreshDecisionWithReasonV1 {
-                        decision: (*on_off).into(),
-                        objects_needing_refresh: mvs_needing_refresh
-                            .iter()
-                            .map(|id| id.to_string())
-                            .collect(),
-                        rehydration_time_estimate: format!("{:?}", rehydration_time_estimate),
-                    }),
+                    }) => {
+                        let mut rehydration_time_estimate_str = String::new();
+                        mz_repr::strconv::format_interval(
+                            &mut rehydration_time_estimate_str,
+                            Interval::from_duration(rehydration_time_estimate).expect(
+                                "planning ensured that this is convertible back to Interval",
+                            ),
+                        );
+                        Some(mz_audit_log::RefreshDecisionWithReasonV1 {
+                            decision: (*on_off).into(),
+                            objects_needing_refresh: mvs_needing_refresh
+                                .iter()
+                                .map(|id| id.to_string())
+                                .collect(),
+                            rehydration_time_estimate: rehydration_time_estimate_str,
+                        })
+                    }
                 })
-                .into_element(), // Each policy should exactly one opinion on a cluster.
+                .into_element(), // Each policy should have exactly one opinion on each cluster.
         }
     }
 }

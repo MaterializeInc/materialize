@@ -289,8 +289,8 @@ impl CatalogState {
                     Datum::String(&id.to_string()),
                     Datum::String("on-refresh"),
                     Datum::Interval(
-                        Interval::from_duration(rehydration_time_estimate)
-                            .expect("undoes planning"),
+                        Interval::from_duration(&rehydration_time_estimate)
+                            .expect("planning ensured that this is convertible back to Interval"),
                     ),
                 ]),
             };
@@ -1153,7 +1153,9 @@ impl CatalogState {
                         Datum::String(&id.to_string()),
                         Datum::String("every"),
                         Datum::Interval(
-                            Interval::from_duration(*interval).expect("undoes planning"),
+                            Interval::from_duration(interval).expect(
+                                "planning ensured that this is convertible back to Interval",
+                            ),
                         ),
                         Datum::TimestampTz(aligned_to_dt.try_into().expect("undoes planning")),
                         Datum::Null,
