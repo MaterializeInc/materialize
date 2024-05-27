@@ -5835,6 +5835,7 @@ dependencies = [
  "mz-secrets",
  "once_cell",
  "os_info",
+ "prometheus",
  "proptest",
  "proptest-derive",
  "prost",

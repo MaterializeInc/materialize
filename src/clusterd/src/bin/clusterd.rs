@@ -32,7 +32,7 @@ use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
 use mz_pid_file::PidFile;
 use mz_service::emit_boot_diagnostics;
-use mz_service::grpc::{GrpcServer, MAX_GRPC_MESSAGE_SIZE};
+use mz_service::grpc::{GrpcServer, GrpcServerMetrics, MAX_GRPC_MESSAGE_SIZE};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
@@ -288,6 +288,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         None,
     );
 
+    let grpc_server_metrics = GrpcServerMetrics::register_with(&metrics_registry);
+
     // Start storage server.
     let (_storage_server, storage_client) = mz_storage::serve(
         mz_cluster::server::ClusterConfig {
@@ -307,6 +309,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::task::spawn(
         || "storage_server",
         GrpcServer::serve(
+            &grpc_server_metrics,
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
             storage_client,
@@ -335,6 +338,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::task::spawn(
         || "compute_server",
         GrpcServer::serve(
+            &grpc_server_metrics,
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
             compute_client,

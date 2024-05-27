@@ -14,13 +14,18 @@ use async_trait::async_trait;
 use futures::future;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
 use http::uri::PathAndQuery;
+use mz_ore::metric;
+use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt, MetricsRegistry, UIntGaugeVec};
 use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
 use mz_proto::{ProtoType, RustType};
 use once_cell::sync::Lazy;
+use prometheus::core::AtomicU64;
 use semver::Version;
 use std::fmt::{self, Debug};
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 use tokio::net::UnixStream;
 use tokio::select;
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -236,6 +241,7 @@ pub struct GrpcServer<F> {
 struct GrpcServerState<F> {
     cancel_tx: Mutex<oneshot::Sender<()>>,
     client_builder: F,
+    metrics: PerGrpcServerMetrics,
 }
 
 impl<F, G> GrpcServer<F>
@@ -250,12 +256,13 @@ where
     /// [`Service`] that represents a gRPC server. This is always encapsulated
     /// by the tonic-generated `ProtoServer::new` method for a specific Protobuf
     /// service.
-    pub async fn serve<S, Fs>(
+    pub fn serve<S, Fs>(
+        metrics: &GrpcServerMetrics,
         listen_addr: SocketAddr,
         version: Version,
         client_builder: F,
         service_builder: Fs,
-    ) -> Result<(), anyhow::Error>
+    ) -> impl Future<Output = Result<(), anyhow::Error>>
     where
         S: Service<
                 http::Request<Body>,
@@ -272,6 +279,7 @@ where
         let state = GrpcServerState {
             cancel_tx: Mutex::new(cancel_tx),
             client_builder,
+            metrics: metrics.for_server(S::NAME),
         };
         let server = Self {
             state: Arc::new(state),
@@ -282,13 +290,16 @@ where
         );
 
         info!("Starting to listen on {}", listen_addr);
-        let listener = Listener::bind(listen_addr).await?;
 
-        Server::builder()
-            .add_service(service)
-            .serve_with_incoming(listener)
-            .await?;
-        Ok(())
+        async {
+            let listener = Listener::bind(listen_addr).await?;
+
+            Server::builder()
+                .add_service(service)
+                .serve_with_incoming(listener)
+                .await?;
+            Ok(())
+        }
     }
 
     /// Handles a bidirectional stream request by forwarding commands to and
@@ -337,6 +348,12 @@ where
                                 break;
                             }
                         };
+
+                        match UNIX_EPOCH.elapsed() {
+                            Ok(ts) => state.metrics.last_command_received.set(ts.as_secs()),
+                            Err(e) => error!("failed to get system time: {e}"),
+                        }
+
                         let command = match command.into_rust() {
                             Ok(command) => command,
                             Err(e) => {
@@ -344,6 +361,7 @@ where
                                 break;
                             }
                         };
+
                         if let Err(e) = client.send(command).await {
                             yield Err(Status::unknown(e.to_string()));
                         }
@@ -362,6 +380,38 @@ where
         };
         Ok(Response::new(Box::pin(response)))
     }
+}
+
+/// Metrics for a [`GrpcServer`].
+#[derive(Debug)]
+pub struct GrpcServerMetrics {
+    last_command_received: UIntGaugeVec,
+}
+
+impl GrpcServerMetrics {
+    /// Registers the GRPC server metrics into a `registry`.
+    pub fn register_with(registry: &MetricsRegistry) -> Self {
+        Self {
+            last_command_received: registry.register(metric!(
+                name: "mz_grpc_server_last_command_received",
+                help: "The time at which the server received its last command.",
+                var_labels: ["server_name"],
+            )),
+        }
+    }
+
+    fn for_server(&self, name: &'static str) -> PerGrpcServerMetrics {
+        PerGrpcServerMetrics {
+            last_command_received: self
+                .last_command_received
+                .get_delete_on_drop_gauge(vec![name]),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PerGrpcServerMetrics {
+    last_command_received: DeleteOnDropGauge<'static, AtomicU64, Vec<&'static str>>,
 }
 
 static VERSION_METADATA_KEY: Lazy<AsciiMetadataKey> =

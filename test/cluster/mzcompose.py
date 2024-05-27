@@ -2324,6 +2324,12 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
+    def get_last_command_received(self, server_name: str) -> float:
+        metrics = self.with_name("mz_grpc_server_last_command_received")
+        values = [v for k, v in metrics.items() if server_name in k]
+        assert len(values) == 1
+        return values[0]
+
 
 def workflow_test_replica_metrics(c: Composition) -> None:
     """Test metrics exposed by replicas."""
@@ -2343,6 +2349,15 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         port=6877,
         user="mz_system",
     )
+
+    metrics = fetch_metrics()
+
+    # The cluster should not report the time that the last command was received
+    # as 0 until environmentd connects.
+    assert metrics.get_last_command_received("compute") == 0
+    assert metrics.get_last_command_received("storage") == 0
+
+    before_connection_time = time.time()
 
     # Set up a cluster with a couple dataflows.
     c.sql(
@@ -2429,6 +2444,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
     assert (
         mv_correction_peak_cap > 0
     ), f"unexpected persist sink peak correction capacity: {mv_correction_peak_cap}"
+
+    assert metrics.get_last_command_received("compute") >= before_connection_time
 
 
 def workflow_test_compute_controller_metrics(c: Composition) -> None:
