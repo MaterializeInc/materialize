@@ -8,13 +8,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import hashlib
 from typing import Any
 
 from materialize.buildkite_insights.buildkite_api import builds_api
 from materialize.buildkite_insights.cache import generic_cache
 from materialize.buildkite_insights.cache.cache_constants import FetchMode
 from materialize.buildkite_insights.cache.generic_cache import CacheFilePath
+from materialize.util import compute_sha256_of_utf8_string
 
 
 def get_or_query_builds(
@@ -82,7 +82,7 @@ def _get_file_path_for_builds(
 ) -> CacheFilePath:
     max_entries = max_fetches * items_per_page
     meta_data = f"{meta_data}-{max_entries}-{first_page}"
-    hash_value = hashlib.sha256(bytes(meta_data, encoding="utf-8")).hexdigest()[:8]
+    hash_value = compute_sha256_of_utf8_string(meta_data)[:8]
     return CacheFilePath(
         cache_item_type="builds", pipeline_slug=pipeline_slug, params_hash=hash_value
     )
