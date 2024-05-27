@@ -20,7 +20,6 @@ use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::instrument;
 use mz_ore::task::AbortOnDropHandle;
-use mz_ore::vec::VecExt;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::{Cursor, LazyPartStats, ListenEvent, ReadHandle, Since, Subscribe};
@@ -635,11 +634,11 @@ where
 
                     self.cache.push_entries(entries.clone(), frontier.clone());
 
+                    self.data_subscriptions
+                        .retain(|subscription| !subscription.tx.is_closed());
                     for subscription in &mut self.data_subscriptions {
                         Self::update_subscription(subscription, &self.cache);
                     }
-                    self.data_subscriptions
-                        .drain_filter_swapping(|subscription| !subscription.tx.is_closed());
 
                     // The frontier has advanced, so respond to waits and retain
                     // those that still have to wait.
