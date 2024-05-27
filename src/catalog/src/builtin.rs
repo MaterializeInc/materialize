@@ -6606,6 +6606,7 @@ SELECT
     -- Counters
     SUM(messages_received)::uint8 AS messages_received,
     SUM(bytes_received)::uint8 AS bytes_received,
+    SUM(bytes_sent)::uint8 AS bytes_sent,
     SUM(updates_staged)::uint8 AS updates_staged,
     SUM(updates_committed)::uint8 AS updates_committed,
     -- Resetting Gauges
