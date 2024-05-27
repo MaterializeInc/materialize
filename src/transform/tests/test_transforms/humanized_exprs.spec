@@ -67,7 +67,7 @@ explain with=humanized_exprs
 Project (#1, #0, #1)
   Get t0
 ----
-Project (#1, #0, #1)
+Project (#1{c0}, #0{c1}, #1{c0})
   Get t0
 
 # Map

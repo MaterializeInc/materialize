@@ -478,9 +478,8 @@ impl MirRelationExpr {
             Project { outputs, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        // We deliberately don't print humanized indices because
-                        // in practice of our projection list are quite long.
-                        let outputs = Indices(outputs);
+                        let outputs = mode.seq(outputs, self.column_names(ctx));
+                        let outputs = CompactScalars(outputs);
                         write!(f, "{}Project ({})", ctx.indent, outputs)?;
                         self.fmt_attributes(f, ctx)
                     },

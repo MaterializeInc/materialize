@@ -87,7 +87,7 @@ FROM t6
 WHERE x=5 AND y=6;
 ----
 Explained Query (fast path):
-  Project (#0..=#3)
+  Project (#0{x}..=#3{w})
     ReadIndex on=materialize.public.t6 t6_idx_x_y=[lookup value=(5, 6)]
 
 Used Indexes:
@@ -105,7 +105,7 @@ FROM t6
 WHERE x=5 AND y=6 AND z=7;
 ----
 Explained Query (fast path):
-  Project (#0..=#3)
+  Project (#0{x}..=#3{w})
     ReadIndex on=materialize.public.t6 t6_idx_x_y_z=[lookup value=(█, █, █)]
 
 Used Indexes:
@@ -126,7 +126,7 @@ FROM t6
 WHERE x=5;
 ----
 Explained Query (fast path):
-  Project (#0..=#3)
+  Project (#0{x}..=#3{w})
     ReadIndex on=materialize.public.t6 t6_idx_x=[lookup value=(5)]
 
 Used Indexes:
@@ -168,7 +168,7 @@ FROM t6
 WHERE x=5 AND z=7;
 ----
 Explained Query (fast path):
-  Project (#0..=#3)
+  Project (#0{x}..=#3{w})
     Filter (#2{z} = 7)
       ReadIndex on=materialize.public.t6 t6_idx_x=[lookup value=(5)]
 

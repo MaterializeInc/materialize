@@ -1370,7 +1370,7 @@ Explained Query:
       map=(record_get[0](#1))
     input_key=
     Reduce::Basic
-      aggr=(0, lag[ignore_nulls=true, order_by=[]](row(row(row(#0, #1), row(#1, █, █)))))
+      aggr=(0, lead[ignore_nulls=true, order_by=[]](row(row(row(#0, #1), row(#1, █, █)))))
       val_plan
         project=(#2)
         map=(row(row(row(#0, #1), row(#1, █, █))))
