@@ -41,7 +41,7 @@ use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
-use tracing::{debug, error, info, info_span, Instrument};
+use tracing::{debug, info, info_span, Instrument};
 
 use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
 use crate::internal::paths::BlobKey;
@@ -1882,54 +1882,27 @@ impl SinkMetrics {
     }
 
     /// Updates our estimate of the aggregate peak for the correction buffer
-    /// length and capacity across workers and persist sink.
-    ///
-    /// This method assumes temporary quiescence on the correction buffer metrics,
-    /// i.e., there are no updates to these metrics taking place when the method
-    /// is called. This occurs, e.g., after a `step_or_park` call.
+    /// length and capacity across workers and persist sinks.
     pub fn update_sink_correction_peak_metrics(&self) {
-        // Correctness argument:
-        // 1. We always update insertions/increases prior to updating deletions/decreases
-        // in each worker. So upon quiescence, the net effect of these must result in a
-        // non-negative quantity.
-        // 2. Every worker will execute the instructions below and compute the same peak.
-        // This is because during quiescence, no changes happen to the previous peak nor
-        // other metrics, and the ones we look at are all shared across workers. So at least
-        // one worker will update the peak with its new value, if there is an increase, at
-        // the quiescence granularity.
-        // Note that we may miss the overall peak if between quiescence moments there are
-        // lots of insertions followed by lots of deletions to the correction buffer. We
-        // find this trade-off more attractive than adding explicity multi-metric synchronization
-        // among workers.
-        let aggregate_correction_len = self
-            .correction_insertions_total
-            .get()
-            .checked_sub(self.correction_deletions_total.get());
-        let Some(aggregate_correction_len) = aggregate_correction_len else {
-            error!(
-                aggregate_correction_len,
-                "Negative aggregate length for persist sink correction"
-            );
-            return;
-        };
-        if aggregate_correction_len > self.correction_peak_len_updates.get() {
-            self.correction_peak_len_updates
-                .set(aggregate_correction_len);
+        // We calculate peak values based on the current values of sink metrics that are shared
+        // between all workers. Note that while we fetch these values, other workers may
+        // concurrently update them, which means we must expect incorrect results. Produced peak
+        // values can be both under- and overestimated (negative values are ignored).
+
+        let insertions = self.correction_insertions_total.get();
+        let deletions = self.correction_deletions_total.get();
+        let cap_increases = self.correction_capacity_increases_total.get();
+        let cap_decreases = self.correction_capacity_decreases_total.get();
+
+        if let Some(correction_len) = insertions.checked_sub(deletions) {
+            if correction_len > self.correction_peak_len_updates.get() {
+                self.correction_peak_len_updates.set(correction_len);
+            }
         }
-        let aggregate_correction_cap = self
-            .correction_capacity_increases_total
-            .get()
-            .checked_sub(self.correction_capacity_decreases_total.get());
-        let Some(aggregate_correction_cap) = aggregate_correction_cap else {
-            error!(
-                aggregate_correction_cap,
-                "Negative aggregate capacity for persist sink correction"
-            );
-            return;
-        };
-        if aggregate_correction_cap > self.correction_peak_capacity_updates.get() {
-            self.correction_peak_capacity_updates
-                .set(aggregate_correction_cap);
+        if let Some(correction_cap) = cap_increases.checked_sub(cap_decreases) {
+            if correction_cap > self.correction_peak_capacity_updates.get() {
+                self.correction_peak_capacity_updates.set(correction_cap);
+            }
         }
     }
 }
