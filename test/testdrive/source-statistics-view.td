@@ -17,11 +17,13 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER;
 
+# TODO(bosconi) SUM(u.bytes_sent) > 0 once increment is implemented
 > SELECT
     s.name,
     -- Counters
     u.messages_received > 0,
     u.bytes_received > 0,
+    u.bytes_sent = 0,
     u.updates_staged > 0,
     u.updates_committed > 0,
     -- Resetting Gauges
@@ -37,6 +39,6 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('counter')
-counter true true true true true true true true true true true true
+counter true true true true true true true true true true true true true
 
 > DROP SOURCE counter CASCADE
