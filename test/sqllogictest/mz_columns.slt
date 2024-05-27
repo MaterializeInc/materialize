@@ -1,0 +1,48 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TYPE r AS (a int)
+
+statement ok
+CREATE TYPE l AS LIST (ELEMENT TYPE = int)
+
+statement ok
+CREATE TYPE m AS MAP (KEY TYPE = text, VALUE TYPE = int)
+
+statement ok
+CREATE VIEW v AS SELECT
+    row(1) AS ra,
+    row(1)::r AS rn,
+    list[]::int list AS la,
+    list[]::l AS ln,
+    map[]::map[text=>int] AS ma,
+    '{}'::m AS mn
+
+# We intentionally don't assert on the `c.type_oid` or `t.id` columns, as
+# IDs are not stable. Instead, we ensure that the `c.type_oid` column can be
+# used to look up the type in the `mz_types` table and that the ID is
+# as expected (system or user).
+query TTTIT
+SELECT
+    c.position, c.name, c.type, c.type_mod, left(t.id, 1)
+    FROM mz_columns c
+    JOIN mz_views v ON c.id = v.id
+    JOIN mz_types t ON c.type_oid = t.oid
+    WHERE v.name = 'v'
+    ORDER BY c.position
+----
+1  ra  record  -1  s
+2  rn  r       -1  u
+3  la  list    -1  s
+4  ln  l       -1  u
+5  ma  map     -1  s
+6  mn  m       -1  u
