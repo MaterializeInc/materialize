@@ -1368,6 +1368,7 @@ where
             );
 
             let collection_state = self.collections.get(id);
+
             if let Some(collection_state) = collection_state {
                 match collection_state.data_source {
                     // Webhooks and tables are dropped differently from
@@ -1727,7 +1728,6 @@ where
         storage_metadata: &StorageMetadata,
     ) -> Result<Option<Response<T>>, anyhow::Error> {
         let mut updated_frontiers = None;
-        let mut dropped_read_holds = Vec::new();
         match self.stashed_response.take() {
             None => (),
             Some(StorageResponse::FrontierUppers(updates)) => {
@@ -1736,6 +1736,8 @@ where
             }
             Some(StorageResponse::DroppedIds(ids)) => {
                 for id in ids.iter() {
+                    tracing::debug!("DroppedIds for collections {id}");
+
                     if let Some(collection) = self.collections.remove(id) {
                         match collection.data_source {
                             DataSource::Ingestion(_ingestion) => {
@@ -1754,19 +1756,6 @@ where
                                     .expect("we are still alive");
                             }
                             _ => (),
-                        }
-
-                        match collection.extra_state {
-                            CollectionStateExtra::Ingestion(mut ingestion) => {
-                                tracing::debug!(
-                                    "enqueueing read hold of ingestion (or ingestion export) {id} for release!"
-                                );
-                                dropped_read_holds.append(&mut ingestion.dependency_read_holds);
-                            }
-                            CollectionStateExtra::None => {
-                                // No read holds for other types of collections!
-                                tracing::debug!("DroppedIds for collection {id}");
-                            }
                         }
                     } else if let Some(export) = self.exports.get_mut(id) {
                         // TODO: Current main never drops export state, so we
@@ -1972,9 +1961,6 @@ where
         self.collection_status_manager
             .append_updates(dropped_sources, IntrospectionType::SourceStatusHistory)
             .await;
-
-        // Only now do we explicitly drop, which will let the other end know.
-        drop(dropped_read_holds);
 
         {
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
@@ -2795,28 +2781,22 @@ where
                     debug!(id = %key, ?frontier, "downgrading ingestion read holds!");
                 }
 
-                if !frontier.is_empty() {
-                    // SUBTLE: We don't downgrade to the empty frontier because
-                    // that would drop any hold we have on the collection. We
-                    // want to do that explicitly when we drop the hold.
+                let collection = self
+                    .collections
+                    .get_mut(&key)
+                    .expect("missing collection state");
 
-                    let collection = self
-                        .collections
-                        .get_mut(&key)
-                        .expect("missing collection state");
-
-                    let ingestion = match &mut collection.extra_state {
-                        CollectionStateExtra::Ingestion(ingestion) => ingestion,
-                        CollectionStateExtra::None => {
-                            panic!("trying to downgrade read holds for collection which is not an ingestion: {:?}", collection);
-                        }
-                    };
-
-                    for read_hold in ingestion.dependency_read_holds.iter_mut() {
-                        read_hold
-                            .try_downgrade(frontier.clone())
-                            .expect("we only advance the frontier");
+                let ingestion = match &mut collection.extra_state {
+                    CollectionStateExtra::Ingestion(ingestion) => ingestion,
+                    CollectionStateExtra::None => {
+                        panic!("trying to downgrade read holds for collection which is not an ingestion: {:?}", collection);
                     }
+                };
+
+                for read_hold in ingestion.dependency_read_holds.iter_mut() {
+                    read_hold
+                        .try_downgrade(frontier.clone())
+                        .expect("we only advance the frontier");
                 }
 
                 worker_compaction_commands.insert(key, (frontier.clone(), cluster_id));
