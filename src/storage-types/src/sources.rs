@@ -83,7 +83,9 @@ impl proptest::prelude::Arbitrary for ExportReference {
         // Generate a set of valid `Ident` strings.
         let string_strategy = string_regex("[a-zA-Z_][a-zA-Z0-9_$]{3,10}").unwrap();
 
-        vec(string_strategy, 0..100)
+        // We only ever expect between 1 and 3 elements of the reference. We
+        // could theoretically expect more, but we can never expect 0.
+        vec(string_strategy, 1..=3)
             .prop_map(|inner| {
                 ExportReference(inner.into_iter().map(|i| Ident::new(i).unwrap()).collect())
             })
