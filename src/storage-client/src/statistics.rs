@@ -114,6 +114,9 @@ pub static MZ_SINK_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         // A counter of the bytes we have committed.
         // Never resets.
         .with_column("bytes_committed", ScalarType::UInt64.nullable(false))
+        // A counter of the bytes received from upstream.
+        // Never resets.
+        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
 });
 
 // Types of statistics (counter and various types of gauges), that have different semantics
@@ -677,6 +680,7 @@ pub struct SinkStatisticsUpdate {
     pub messages_committed: Counter,
     pub bytes_staged: Counter,
     pub bytes_committed: Counter,
+    pub bytes_received: Counter,
 }
 
 impl SinkStatisticsUpdate {
@@ -686,6 +690,7 @@ impl SinkStatisticsUpdate {
             messages_committed,
             bytes_staged,
             bytes_committed,
+            bytes_received,
             ..
         } = self;
 
@@ -693,6 +698,7 @@ impl SinkStatisticsUpdate {
         messages_committed.incorporate(other.messages_committed, "messages_committed");
         bytes_staged.incorporate(other.bytes_staged, "bytes_staged");
         bytes_committed.incorporate(other.bytes_committed, "bytes_committed");
+        bytes_received.incorporate(other.bytes_received, "bytes_received");
     }
 
     pub fn summarize<'a, I, F>(values: F) -> Self
@@ -709,6 +715,7 @@ impl SinkStatisticsUpdate {
             ),
             bytes_staged: Counter::summarize(values().into_iter().map(|s| &s.bytes_staged)),
             bytes_committed: Counter::summarize(values().into_iter().map(|s| &s.bytes_committed)),
+            bytes_received: Counter::summarize(values().into_iter().map(|s| &s.bytes_received)),
         }
     }
 
@@ -718,6 +725,7 @@ impl SinkStatisticsUpdate {
         self.messages_committed.0 = 0;
         self.bytes_staged.0 = 0;
         self.bytes_committed.0 = 0;
+        self.bytes_received.0 = 0;
     }
 }
 
@@ -729,6 +737,7 @@ impl PackableStats for SinkStatisticsUpdate {
         packer.push(Datum::from(self.messages_committed.0));
         packer.push(Datum::from(self.bytes_staged.0));
         packer.push(Datum::from(self.bytes_committed.0));
+        packer.push(Datum::from(self.bytes_received.0));
     }
 
     fn unpack(row: Row, _metrics: &crate::metrics::StorageControllerMetrics) -> (GlobalId, Self) {
@@ -741,6 +750,7 @@ impl PackableStats for SinkStatisticsUpdate {
             messages_committed: iter.next().unwrap().unwrap_uint64().into(),
             bytes_staged: iter.next().unwrap().unwrap_uint64().into(),
             bytes_committed: iter.next().unwrap().unwrap_uint64().into(),
+            bytes_received: iter.next().unwrap().unwrap_uint64().into(),
         };
 
         (s.id, s)
@@ -756,6 +766,7 @@ impl RustType<ProtoSinkStatisticsUpdate> for SinkStatisticsUpdate {
             messages_committed: self.messages_committed.0,
             bytes_staged: self.bytes_staged.0,
             bytes_committed: self.bytes_committed.0,
+            bytes_received: self.bytes_received.0,
         }
     }
 
@@ -769,6 +780,7 @@ impl RustType<ProtoSinkStatisticsUpdate> for SinkStatisticsUpdate {
             messages_committed: Counter(proto.messages_committed),
             bytes_staged: Counter(proto.bytes_staged),
             bytes_committed: Counter(proto.bytes_committed),
+            bytes_received: Counter(proto.bytes_received),
         })
     }
 }

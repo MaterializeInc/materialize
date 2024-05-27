@@ -6669,7 +6669,8 @@ SELECT
     SUM(messages_staged)::uint8 AS messages_staged,
     SUM(messages_committed)::uint8 AS messages_committed,
     SUM(bytes_staged)::uint8 AS bytes_staged,
-    SUM(bytes_committed)::uint8 AS bytes_committed
+    SUM(bytes_committed)::uint8 AS bytes_committed,
+    SUM(bytes_received)::uint8 AS bytes_received
 FROM mz_internal.mz_sink_statistics_raw
 GROUP BY id",
     access: vec![PUBLIC_SELECT],

@@ -44,4 +44,5 @@ message ProtoSinkStatisticsUpdate {
     uint64 messages_committed = 3;
     uint64 bytes_staged = 4;
     uint64 bytes_committed = 5;
+    uint64 bytes_received = 6;
 }
