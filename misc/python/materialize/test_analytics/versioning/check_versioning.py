@@ -33,7 +33,7 @@ def main() -> None:
 def check_per_file_versioning(config: PerFileVersioningConfig) -> list[str]:
     errors = []
 
-    for file_path in config.directory.iterdir():
+    for file_path in sorted(config.directory.iterdir()):
         if file_path.is_dir():
             continue
 
