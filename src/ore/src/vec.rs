@@ -141,6 +141,7 @@ pub trait VecExt<T> {
     /// assert_eq!(evens, vec![2, 4, 14, 6, 8]);
     /// assert_eq!(odds, vec![1, 15, 3, 13, 5, 11, 9]);
     /// ```
+    #[must_use]
     fn drain_filter_swapping<F>(&mut self, filter: F) -> DrainFilterSwapping<'_, T, F>
     where
         F: FnMut(&mut T) -> bool;
