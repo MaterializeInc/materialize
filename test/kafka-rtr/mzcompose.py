@@ -63,6 +63,9 @@ def workflow_resumption(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
 
+    priv_cursor = c.sql_cursor(service="materialized", user="mz_system", port=6877)
+    priv_cursor.execute("ALTER SYSTEM SET allow_real_time_recency = true;")
+
     def verify():
         cursor = c.sql_cursor()
         cursor.execute("SET TRANSACTION_ISOLATION = 'STRICT SERIALIZABLE'")
