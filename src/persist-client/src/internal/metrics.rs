@@ -1879,11 +1879,10 @@ impl SinkMetrics {
             }
             UpdateDelta::Negative(delta) => self.correction_capacity_decreases_total.inc_by(delta),
         }
-    }
 
-    /// Updates our estimate of the aggregate peak for the correction buffer
-    /// length and capacity across workers and persist sinks.
-    pub fn update_sink_correction_peak_metrics(&self) {
+        // Update our estimate of the aggregate peak for the correction buffer length and capacity
+        // across workers and persist sinks.
+        //
         // We calculate peak values based on the current values of sink metrics that are shared
         // between all workers. Note that while we fetch these values, other workers may
         // concurrently update them, which means we must expect incorrect results. Produced peak
