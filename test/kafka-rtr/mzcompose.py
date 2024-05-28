@@ -40,14 +40,6 @@ def workflow_default(c: Composition) -> None:
             c.workflow(name)
 
 
-# TODO(@def): investigate getting `workflow_resumption` to work
-# https://github.com/MaterializeInc/materialize/pull/25566/commits/d65517d793f00fd1f520e2879c30e658538b0b8d#diff-f39755ef069f5edce6c30efcd534ae3788edb95ea7e6f69d8ba247b4e8b98846R63-R111
-#
-# The issue with the linked-to approach is that RTR uses the same connection as
-# the source, so injecting failures also prevents envd from determining the
-# upstream timestamp. We would need to manufacture an error only _after_ envd
-# determined the timestamp.
-
 #
 # Test that real-time recency works w/ slow ingest of upstream data.
 #
@@ -65,6 +57,57 @@ def workflow_simple(c: Composition) -> None:
         "simple/mz-setup.td",
         "simple/verify-rtr.td",
     )
+
+
+def workflow_resumption(c: Composition) -> None:
+    c.down(destroy_volumes=True)
+    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+
+    def verify():
+        cursor = c.sql_cursor()
+        cursor.execute("SET TRANSACTION_ISOLATION = 'STRICT SERIALIZABLE'")
+        cursor.execute("SET REAL_TIME_RECENCY TO TRUE")
+        cursor.execute("SET statement_timeout = '600s'")
+        cursor.execute(
+            """
+            SELECT sum(count)
+              FROM (
+                  SELECT count(*) FROM input_1
+                  UNION ALL SELECT count(*) FROM input_2
+                  UNION ALL SELECT count(*) FROM t
+              ) AS x;"""
+        )
+        result = cursor.fetchall()
+        assert result[0][0] == 2000204, f"Unexpected sum: {result[0][0]}"
+
+    seed = random.getrandbits(16)
+    for i, failure_mode in enumerate(
+        [
+            "toxiproxy-close-connection.td",
+            "toxiproxy-limit-connection.td",
+            "toxiproxy-timeout.td",
+            "toxiproxy-timeout-hold.td",
+        ]
+    ):
+        c.run_testdrive_files(
+            "--no-reset",
+            "--max-errors=1",
+            f"--seed={seed}{i}",
+            f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
+            "resumption/toxiproxy-setup.td",  # without toxify
+            "resumption/mz-setup.td",
+            f"resumption/{failure_mode}",
+            "resumption/ingest-data.td",
+        )
+        t = PropagatingThread(target=verify)
+        t.start()
+        time.sleep(10)
+        c.run_testdrive_files(
+            "--no-reset",
+            "--max-errors=1",
+            "resumption/toxiproxy-restore-connection.td",
+        )
+        t.join()
 
 
 def workflow_multithreaded(c: Composition) -> None:
