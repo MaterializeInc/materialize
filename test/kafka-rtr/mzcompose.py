@@ -12,6 +12,8 @@ import threading
 import time
 from textwrap import dedent
 
+from pg8000 import Cursor
+
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -66,7 +68,7 @@ def workflow_resumption(c: Composition) -> None:
     priv_cursor = c.sql_cursor(service="materialized", user="mz_system", port=6877)
     priv_cursor.execute("ALTER SYSTEM SET allow_real_time_recency = true;")
 
-    def verify():
+    def run_verification_query() -> Cursor:
         cursor = c.sql_cursor()
         cursor.execute("SET TRANSACTION_ISOLATION = 'STRICT SERIALIZABLE'")
         cursor.execute("SET REAL_TIME_RECENCY TO TRUE")
@@ -80,8 +82,21 @@ def workflow_resumption(c: Composition) -> None:
                   UNION ALL SELECT count(*) FROM t
               ) AS x;"""
         )
+        return cursor
+
+    def verify_ok():
+        cursor = run_verification_query()
         result = cursor.fetchall()
         assert result[0][0] == 2000204, f"Unexpected sum: {result[0][0]}"
+
+    def verify_broken():
+        try:
+            run_verification_query()
+        except Exception as e:
+            assert (
+                "timed out before ingesting the source's visible frontier when real-time-recency query issued"
+                in str(e)
+            )
 
     seed = random.getrandbits(16)
     for i, failure_mode in enumerate(
@@ -96,7 +111,6 @@ def workflow_resumption(c: Composition) -> None:
 
         c.run_testdrive_files(
             "--no-reset",
-            "--max-errors=1",
             f"--seed={seed}{i}",
             f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
             "resumption/toxiproxy-setup.td",  # without toxify
@@ -104,15 +118,19 @@ def workflow_resumption(c: Composition) -> None:
             f"resumption/{failure_mode}",
             "resumption/ingest-data.td",
         )
-        t = PropagatingThread(target=verify)
-        t.start()
+        t1 = PropagatingThread(target=verify_broken)
+        t1.start()
         time.sleep(10)
         c.run_testdrive_files(
             "--no-reset",
-            "--max-errors=1",
             "resumption/toxiproxy-restore-connection.td",
         )
-        t.join()
+        t1.join()
+
+        t2 = PropagatingThread(target=verify_ok)
+        t2.start()
+        time.sleep(10)
+        t2.join()
 
 
 def workflow_multithreaded(c: Composition) -> None:
