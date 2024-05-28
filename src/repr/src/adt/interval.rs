@@ -138,7 +138,7 @@ impl Interval {
     pub const EPOCH_DAYS_PER_YEAR: f64 = 365.25;
 
     /// Constructs a new `Interval` with the specified units of time.
-    pub fn new(months: i32, days: i32, micros: i64) -> Interval {
+    pub const fn new(months: i32, days: i32, micros: i64) -> Interval {
         Interval {
             months,
             days,
@@ -818,9 +818,88 @@ impl Arbitrary for Interval {
     }
 }
 
+/// An encoded packed variant of [`Interval`].
+///
+/// We uphold the variant that [`PackedInterval`] sorts the same as [`Interval`].
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PackedInterval([u8; Self::SIZE]);
+
+impl PackedInterval {
+    const SIZE: usize = 16;
+
+    /// Returns the encoded bytes of the [`PackedInterval`].
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0[..]
+    }
+
+    /// Creates a [`PackedInterval`] from a slice of bytes, returns an error if the size is
+    /// incorrect.
+    pub fn from_bytes(slice: &[u8]) -> Result<Self, String> {
+        if slice.len() != Self::SIZE {
+            return Err(format!(
+                "size for PackedInterval is incorrect, {}",
+                slice.len()
+            ));
+        }
+
+        let mut buf = [0u8; 16];
+        buf.copy_from_slice(&slice[..16]);
+
+        Ok(PackedInterval(buf))
+    }
+}
+
+// `as` conversions are okay here because we're doing bit level logic to make
+// sure the sort order of the packed binary is correct. This is implementation
+// is proptest-ed below.
+#[allow(clippy::as_conversions)]
+impl From<Interval> for PackedInterval {
+    #[inline]
+    fn from(value: Interval) -> Self {
+        let mut buf = [0u8; 16];
+
+        // Note: We XOR the values to get correct sorting of negative values.
+
+        let months = (value.months as u32) ^ (0x8000_0000u32);
+        let days = (value.days as u32) ^ (0x8000_0000u32);
+        let micros = (value.micros as u64) ^ (0x8000_0000_0000_0000u64);
+
+        buf[..4].copy_from_slice(&months.to_be_bytes());
+        buf[4..8].copy_from_slice(&days.to_be_bytes());
+        buf[8..].copy_from_slice(&micros.to_be_bytes());
+
+        PackedInterval(buf)
+    }
+}
+
+impl From<PackedInterval> for Interval {
+    fn from(value: PackedInterval) -> Self {
+        // Note: We XOR the values to get correct sorting of negative values.
+
+        let mut months = [0; 4];
+        months.copy_from_slice(&value.0[..4]);
+        let months = u32::from_be_bytes(months) ^ 0x8000_0000u32;
+
+        let mut days = [0; 4];
+        days.copy_from_slice(&value.0[4..8]);
+        let days = u32::from_be_bytes(days) ^ 0x8000_0000u32;
+
+        let mut micros = [0; 8];
+        micros.copy_from_slice(&value.0[8..]);
+        let micros = u64::from_be_bytes(micros) ^ 0x8000_0000_0000_0000u64;
+
+        Interval {
+            months: months as i32,
+            days: days as i32,
+            micros: micros as i64,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use proptest::prelude::*;
 
     #[mz_ore::test]
     fn interval_fmt() {
@@ -1314,5 +1393,37 @@ mod test {
             Some(360),
             Interval::convert_date_time_unit(DateTimeField::Year, DateTimeField::Day, 1)
         );
+    }
+
+    #[mz_ore::test]
+    fn proptest_packed_interval_roundtrips() {
+        fn roundtrip_interval(og: Interval) {
+            let packed = PackedInterval::from(og);
+            let rnd = Interval::from(packed);
+
+            assert_eq!(og, rnd);
+        }
+
+        proptest!(|(interval in any::<Interval>())| {
+            roundtrip_interval(interval);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_packed_interval_sorts() {
+        fn sort_intervals(mut og: Vec<Interval>) {
+            let mut packed: Vec<_> = og.iter().copied().map(PackedInterval::from).collect();
+
+            og.sort();
+            packed.sort();
+
+            let rnd: Vec<_> = packed.into_iter().map(Interval::from).collect();
+
+            assert_eq!(og, rnd);
+        }
+
+        proptest!(|(interval in any::<Vec<Interval>>())| {
+            sort_intervals(interval);
+        });
     }
 }

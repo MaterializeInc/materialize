@@ -17,6 +17,10 @@ harness = false
 name = "strconv"
 harness = false
 
+[[bench]]
+name = "packed"
+harness = false
+
 [dependencies]
 anyhow = "1.0.66"
 arrow = { version = "51.0.0", default-features = false }

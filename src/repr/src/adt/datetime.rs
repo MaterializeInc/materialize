@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::str::FromStr;
 
-use chrono::{NaiveDate, NaiveTime};
+use chrono::{NaiveDate, NaiveTime, Timelike};
 use mz_lowertest::MzReflect;
 use mz_pgtz::timezone::Timezone;
 use mz_proto::{RustType, TryFromProtoError};
@@ -1905,11 +1905,75 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
     }
 }
 
+/// An encoded packed variant of [`NaiveTime`].
+///
+/// We uphold the invariant that [`PackedNaiveTime`] sorts the same as
+/// [`NaiveTime`].
+#[derive(Copy, Clone, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub struct PackedNaiveTime([u8; Self::SIZE]);
+
+impl PackedNaiveTime {
+    pub const SIZE: usize = 8;
+
+    /// Returns a reference to the underlying bytes.
+    pub fn as_bytes(&self) -> &[u8; Self::SIZE] {
+        &self.0
+    }
+
+    /// Interprets a slice of bytes as a [`PackedNaiveTime`].
+    ///
+    /// Returns an error if the size of the slice is incorrect.
+    pub fn from_bytes(slice: &[u8]) -> Result<Self, String> {
+        if slice.len() != Self::SIZE {
+            let err = format!("expected {} bytes, got {}", Self::SIZE, slice.len());
+            return Err(err);
+        }
+
+        let mut buf = [0u8; Self::SIZE];
+        buf.copy_from_slice(slice);
+
+        Ok(PackedNaiveTime(buf))
+    }
+}
+
+impl From<NaiveTime> for PackedNaiveTime {
+    #[inline]
+    fn from(value: NaiveTime) -> Self {
+        let secs = value.num_seconds_from_midnight();
+        let nano = value.nanosecond();
+
+        let mut buf = [0u8; Self::SIZE];
+
+        (&mut buf[..4]).copy_from_slice(&secs.to_be_bytes());
+        (&mut buf[4..]).copy_from_slice(&nano.to_be_bytes());
+
+        PackedNaiveTime(buf)
+    }
+}
+
+impl From<PackedNaiveTime> for NaiveTime {
+    #[inline]
+    fn from(value: PackedNaiveTime) -> Self {
+        let mut secs = [0u8; 4];
+        secs.copy_from_slice(&value.0[..4]);
+        let secs = u32::from_be_bytes(secs);
+
+        let mut nano = [0u8; 4];
+        nano.copy_from_slice(&value.0[4..]);
+        let nano = u32::from_be_bytes(nano);
+
+        NaiveTime::from_num_seconds_from_midnight_opt(secs, nano)
+            .expect("NaiveTime roundtrips with PackedNaiveTime")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::any;
-    use proptest::proptest;
+    use proptest::{prop_assert_eq, proptest};
+
+    use crate::scalar::add_arb_duration;
 
     use super::*;
 
@@ -3507,6 +3571,33 @@ mod tests {
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
+    }
+
+    #[mz_ore::test]
+    fn proptest_packed_naive_time_roundtrips() {
+        let strat = add_arb_duration(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+        proptest!(|(time in strat)| {
+            let packed = PackedNaiveTime::from(time);
+            let rnd = NaiveTime::from(packed);
+            prop_assert_eq!(time, rnd);
+        });
+    }
+
+    #[mz_ore::test]
+    fn proptest_packed_naive_time_sort_order() {
+        let time = add_arb_duration(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+        let strat = proptest::collection::vec(time, 0..128);
+        proptest!(|(mut times in strat)| {
+            let mut packed: Vec<_> = times.iter().copied().map(PackedNaiveTime::from).collect();
+
+            times.sort();
+            packed.sort();
+
+            for (time, packed) in times.into_iter().zip(packed.into_iter()) {
+                let rnd = NaiveTime::from(packed);
+                prop_assert_eq!(time, rnd);
+            }
+        });
     }
 }
 
