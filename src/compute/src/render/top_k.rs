@@ -365,8 +365,6 @@ where
     ///     | \
     ///     |  reduce
     ///     |  |
-    ///     |  negate
-    ///     |  |
     ///     concat
     ///     |
     ///     | output
@@ -437,10 +435,8 @@ where
 
             (input, stage, None)
         };
-        // Turn input into collection.
         let input = input.as_collection(|k, v| (k.into_owned(), v.into_owned()));
-        // Negate oks and concatenate them with the input.
-        (oks.negate().concat(&input), errs)
+        (oks.concat(&input), errs)
     }
 
     fn render_top1_monotonic<S>(
@@ -543,7 +539,7 @@ where
     let mut datum_vec = mz_repr::DatumVec::new();
 
     // We only want to arrange parts of the input that are not part of the actual output
-    // such that `input.concat(&negated_output.negate())` yields the correct TopK
+    // such that `input.concat(&negated_output)` yields the correct TopK
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
     // built-in view mz_internal.mz_expected_group_size_advice.
     let arranged = input.mz_arrange::<RowRowSpine<_, _>>("Arranged TopK input");
@@ -577,7 +573,7 @@ where
                     if diff.is_positive() {
                         continue;
                     }
-                    target.push((err((*datums).into_owned()), -1));
+                    target.push((err((*datums).into_owned()), 1));
                     return;
                 }
             }
@@ -596,7 +592,7 @@ where
             // dependencies on the user-provided (potentially unbounded) limit.
             target.reserve(source.len());
             for (datums, diff) in source.iter() {
-                target.push((V::ok((*datums).into_owned()), diff.clone()));
+                target.push((V::ok((*datums).into_owned()), -diff));
             }
             // local copies that may count down to zero.
             let mut offset = offset;
@@ -644,7 +640,7 @@ where
                 if diff > 0 {
                     // Emit retractions for the elements actually part of
                     // the set of TopK elements.
-                    target.push((V::ok(datums.into_owned()), -diff));
+                    target.push((V::ok(datums.into_owned()), diff));
                 }
             }
         }
