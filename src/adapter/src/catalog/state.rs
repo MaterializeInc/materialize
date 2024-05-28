@@ -20,7 +20,6 @@ use anyhow::bail;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_catalog::durable::Transaction;
 use mz_sql::session::metadata::SessionMetadata;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -28,7 +27,7 @@ use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
@@ -36,19 +35,19 @@ use mz_catalog::builtin::{
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, CommentsMap, Connection,
-    DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, Role, Schema, Secret,
-    Sink, Source, Table, Type, View,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
+    Database, DefaultPrivileges, Index, MaterializedView, Role, Schema, Secret, Sink, Source,
+    Table, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
-    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaConfig,
-    ReplicaLocation, UnmanagedReplicaLocation,
+    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation,
+    UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::{EpochMillis, NOW_ZERO};
+use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
 use mz_pgrepr::oid::INVALID_OID;
@@ -87,7 +86,7 @@ use mz_storage_types::connections::inline::{
 use mz_storage_types::connections::ConnectionContext;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::catalog::{BuiltinTableUpdate, ConnCatalog};
+use crate::catalog::ConnCatalog;
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
@@ -685,17 +684,8 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("unknown cluster {cluster_id}"))
     }
 
-    pub(super) fn get_cluster_mut(&mut self, cluster_id: ClusterId) -> &mut Cluster {
-        self.try_get_cluster_mut(cluster_id)
-            .unwrap_or_else(|| panic!("unknown cluster {cluster_id}"))
-    }
-
     pub(super) fn try_get_cluster(&self, cluster_id: ClusterId) -> Option<&Cluster> {
         self.clusters_by_id.get(&cluster_id)
-    }
-
-    pub(super) fn try_get_cluster_mut(&mut self, cluster_id: ClusterId) -> Option<&mut Cluster> {
-        self.clusters_by_id.get_mut(&cluster_id)
     }
 
     pub(super) fn try_get_role(&self, id: &RoleId) -> Option<&Role> {
@@ -714,10 +704,6 @@ impl CatalogState {
         self.roles_by_name
             .get(role_name)
             .map(|id| &self.roles_by_id[id])
-    }
-
-    pub(super) fn get_role_mut(&mut self, id: &RoleId) -> &mut Role {
-        self.roles_by_id.get_mut(id).expect("catalog out of sync")
     }
 
     pub(crate) fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
@@ -1215,44 +1201,6 @@ impl CatalogState {
         &self.database_by_id[database_id]
     }
 
-    pub(super) fn get_database_mut(&mut self, database_id: &DatabaseId) -> &mut Database {
-        self.database_by_id
-            .get_mut(database_id)
-            .expect("catalog out of sync")
-    }
-
-    pub(super) fn insert_cluster(
-        &mut self,
-        id: ClusterId,
-        name: String,
-        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId, u32)>,
-        owner_id: RoleId,
-        privileges: PrivilegeMap,
-        config: ClusterConfig,
-    ) {
-        let mut log_indexes = BTreeMap::new();
-        for (log, index_id, oid) in introspection_source_indexes {
-            self.insert_introspection_source_index(id, log, index_id, oid);
-            log_indexes.insert(log.variant.clone(), index_id);
-        }
-
-        self.clusters_by_id.insert(
-            id,
-            Cluster {
-                name: name.clone(),
-                id,
-                bound_objects: BTreeSet::new(),
-                log_indexes,
-                replica_id_by_name_: BTreeMap::new(),
-                replicas_by_id_: BTreeMap::new(),
-                owner_id,
-                privileges,
-                config,
-            },
-        );
-        assert!(self.clusters_by_name.insert(name, id).is_none());
-    }
-
     pub(super) fn insert_introspection_source_index(
         &mut self,
         cluster_id: ClusterId,
@@ -1306,50 +1254,6 @@ impl CatalogState {
         );
     }
 
-    pub(super) fn rename_cluster(&mut self, id: ClusterId, to_name: String) {
-        let cluster = self.get_cluster_mut(id);
-        let old_name = std::mem::take(&mut cluster.name);
-        cluster.name.clone_from(&to_name);
-
-        assert!(self.clusters_by_name.remove(&old_name).is_some());
-        assert!(self.clusters_by_name.insert(to_name, id).is_none());
-    }
-
-    pub(super) fn insert_cluster_replica(
-        &mut self,
-        cluster_id: ClusterId,
-        replica_name: String,
-        replica_id: ReplicaId,
-        config: ReplicaConfig,
-        owner_id: RoleId,
-    ) {
-        let replica = ClusterReplica {
-            name: replica_name.clone(),
-            cluster_id,
-            replica_id,
-            config,
-            owner_id,
-        };
-        let cluster = self
-            .clusters_by_id
-            .get_mut(&cluster_id)
-            .expect("catalog out of sync");
-        cluster.insert_replica(replica);
-    }
-
-    /// Renames a cluster replica.
-    ///
-    /// Panics if the cluster or cluster replica does not exist.
-    pub(super) fn rename_cluster_replica(
-        &mut self,
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        to_name: String,
-    ) {
-        let cluster = self.get_cluster_mut(cluster_id);
-        cluster.rename_replica(replica_id, to_name);
-    }
-
     /// Gets a reference to the specified replica of the specified cluster.
     ///
     /// Returns `None` if either the cluster or the replica does not
@@ -1401,17 +1305,24 @@ impl CatalogState {
         Ok(self.system_configuration.set(name, value)?)
     }
 
+    /// Parse system configuration `name` with `value` int.
+    ///
+    /// Returns the parsed value as a string.
+    pub(super) fn parse_system_configuration(
+        &self,
+        name: &str,
+        value: VarInput,
+    ) -> Result<String, Error> {
+        let value = self.system_configuration.parse(name, value)?;
+        Ok(value.format())
+    }
+
     /// Reset system configuration `name`.
     ///
     /// Return a `bool` value indicating whether the configuration was modified
     /// by the call.
     pub(super) fn remove_system_configuration(&mut self, name: &str) -> Result<bool, Error> {
         Ok(self.system_configuration.reset(name)?)
-    }
-
-    /// Remove all system configurations.
-    pub(super) fn clear_system_configuration(&mut self) {
-        self.system_configuration.reset_all();
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -2205,13 +2116,12 @@ impl CatalogState {
     }
 
     // TODO(mjibson): Is there a way to make this a closure to avoid explicitly
-    // passing tx, session, and builtin_table_updates?
+    // passing tx, and session?
     pub(crate) fn add_to_audit_log(
-        &self,
+        system_configuration: &SystemVars,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         tx: &mut mz_catalog::durable::Transaction,
-        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         event_type: EventType,
         object_type: ObjectType,
@@ -2221,37 +2131,14 @@ impl CatalogState {
 
         // unsafe_mock_audit_event_timestamp can only be set to Some when running in unsafe mode.
 
-        let occurred_at = match self
-            .system_configuration
-            .unsafe_mock_audit_event_timestamp()
-        {
+        let occurred_at = match system_configuration.unsafe_mock_audit_event_timestamp() {
             Some(ts) => ts.into(),
             _ => oracle_write_ts.into(),
         };
         let id = tx.allocate_audit_log_id()?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
-        builtin_table_updates
-            .push(self.resolve_builtin_table_update(self.pack_audit_log_update(&event, 1)?));
         audit_events.push(event.clone());
         tx.insert_audit_log_event(event);
-        Ok(())
-    }
-
-    pub(super) fn add_to_storage_usage(
-        &self,
-        tx: &mut mz_catalog::durable::Transaction,
-        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
-        shard_id: Option<String>,
-        size_bytes: u64,
-        collection_timestamp: EpochMillis,
-    ) -> Result<(), Error> {
-        let id =
-            tx.get_and_increment_id(mz_catalog::durable::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
-
-        let details = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
-        builtin_table_updates
-            .push(self.resolve_builtin_table_update(self.pack_storage_usage_update(&details, 1)));
-        tx.insert_storage_usage_event(details);
         Ok(())
     }
 
@@ -2295,22 +2182,11 @@ impl CatalogState {
         }
     }
 
-    /// Synchronizes the local view of the [`StorageMetadata`] with the
-    /// [`Transaction`]'s.
-    ///
-    /// This must be called after any `Transaction` is given to the storage
-    /// controller, otherwise subsequent storage operations will have
-    /// inconsistent metadata.
-    pub(super) fn update_storage_metadata(&mut self, tx: &Transaction<'_>) {
-        use mz_storage_client::controller::StorageTxn;
-        self.storage_metadata.collection_metadata = tx.get_collection_metadata();
-        self.storage_metadata.unfinalized_shards = tx.get_unfinalized_shards();
-    }
-
     /// Returns a read-only view of the current [`StorageMetadata`].
     ///
-    /// To write to this struct, you must use a [`Transaction`], followed by a
-    /// call to `update_storage_metadata`.
+    /// To write to this struct, you must use a
+    /// [`mz_catalog::durable::transaction::Transaction`], followed by a call to
+    /// `update_storage_metadata`.
     pub fn storage_metadata(&self) -> &StorageMetadata {
         &self.storage_metadata
     }
