@@ -50,7 +50,7 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, ScalarType, Timestamp};
 use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
@@ -562,6 +562,40 @@ impl CatalogState {
                     .map(|d| Datum::String(d))
                     .unwrap_or(Datum::Null);
                 let pgtype = mz_pgrepr::Type::from(&column_type.scalar_type);
+                let (type_name, type_oid) = match &column_type.scalar_type {
+                    ScalarType::List {
+                        custom_id: Some(custom_id),
+                        ..
+                    }
+                    | ScalarType::Map {
+                        custom_id: Some(custom_id),
+                        ..
+                    }
+                    | ScalarType::Record {
+                        custom_id: Some(custom_id),
+                        ..
+                    } => {
+                        let entry = self.get_entry(custom_id);
+                        // NOTE(benesch): the `mz_columns.type text` field is
+                        // wrong. Types do not have a name that can be
+                        // represented as a single textual field. There can be
+                        // multiple types with the same name in different
+                        // schemas and databases. We should eventually deprecate
+                        // the `type` field in favor of a new `type_id` field
+                        // that can be joined against `mz_types`.
+                        //
+                        // For now, in the interest of pragmatism, we just use
+                        // the type's item name, and accept that there may be
+                        // ambiguity if the same type name is used in multiple
+                        // schemas. The ambiguity is mitigated by the OID, which
+                        // can be joined against `mz_types.oid` to resolve the
+                        // ambiguity.
+                        let name = &*entry.name().item;
+                        let oid = entry.oid();
+                        (name, oid)
+                    }
+                    _ => (pgtype.name(), pgtype.oid()),
+                };
                 updates.push(BuiltinTableUpdate {
                     id: self.resolve_builtin_table(&MZ_COLUMNS),
                     row: Row::pack_slice(&[
@@ -569,9 +603,9 @@ impl CatalogState {
                         Datum::String(column_name.as_str()),
                         Datum::UInt64(u64::cast_from(i + 1)),
                         Datum::from(column_type.nullable),
-                        Datum::String(pgtype.name()),
+                        Datum::String(type_name),
                         default,
-                        Datum::UInt32(pgtype.oid()),
+                        Datum::UInt32(type_oid),
                         Datum::Int32(pgtype.typmod()),
                     ]),
                     diff,
