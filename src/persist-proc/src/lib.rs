@@ -88,6 +88,12 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                     x.add_dynamic("persist_inline_writes_total_max_bytes", ::mz_dyncfg::ConfigVal::Usize(0));
                     x
                 },
+                {
+                    // Using DELTA_LENGTH_BYTE_ARRAY encoding for 'k' and 'v' columns.
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_use_parquet_delta_length_byte_array", ::mz_dyncfg::ConfigVal::Bool(true));
+                    x
+                }
             ];
 
             for (idx, dyncfgs) in dyncfgs.into_iter().enumerate() {

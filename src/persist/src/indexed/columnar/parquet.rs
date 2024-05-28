@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
 use differential_dataflow::trace::Description;
+use mz_dyncfg::Config;
 use mz_ore::bytes::SegmentedBytes;
 use mz_persist_types::Codec64;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder};
@@ -21,6 +22,7 @@ use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, Encoding};
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use parquet::schema::types::ColumnPath;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
@@ -36,17 +38,23 @@ use crate::metrics::ColumnarMetrics;
 
 const INLINE_METADATA_KEY: &str = "MZ:inline";
 
+pub(crate) const USE_PARQUET_DELTA_LENGTH_BYTE_ARRAY: Config<bool> = Config::new(
+    "persist_use_parquet_delta_length_byte_array",
+    false,
+    "'false' by default, when 'true' uses Parquet's `DELTA_LENGTH_BYTE_ARRAY` encoding for the 'k' and 'v' columns."
+);
+
 /// Encodes an BlobTraceBatchPart into the Parquet format.
 pub fn encode_trace_parquet<W: Write + Send, T: Timestamp + Codec64>(
     w: &mut W,
     batch: &BlobTraceBatchPart<T>,
-    _metrics: &ColumnarMetrics,
+    metrics: &ColumnarMetrics,
 ) -> Result<(), Error> {
     // Better to error now than write out an invalid batch.
     batch.validate()?;
 
     let inline_meta = encode_trace_inline_meta(batch, ProtoBatchFormat::ParquetKvtd);
-    encode_parquet_kvtd(w, inline_meta, &batch.updates)
+    encode_parquet_kvtd(w, inline_meta, &batch.updates, metrics)
 }
 
 /// Decodes a BlobTraceBatchPart from the Parquet format.
@@ -94,12 +102,13 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
     w: &mut W,
     inline_base64: String,
     iter: &[ColumnarRecords],
+    metrics: &ColumnarMetrics,
 ) -> Result<(), Error> {
     let metadata = KeyValue::new(INLINE_METADATA_KEY.to_string(), inline_base64);
 
     // We configure our writer to match the defaults from `arrow2` so our blobs
     // can roundtrip. Eventually we should tune these settings.
-    let properties = WriterProperties::builder()
+    let mut properties_builder = WriterProperties::builder()
         .set_dictionary_enabled(false)
         .set_encoding(Encoding::PLAIN)
         .set_statistics_enabled(EnabledStatistics::None)
@@ -107,8 +116,21 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(1024 * 1024)
         .set_max_row_group_size(usize::MAX)
-        .set_key_value_metadata(Some(vec![metadata]))
-        .build();
+        .set_key_value_metadata(Some(vec![metadata]));
+
+    if USE_PARQUET_DELTA_LENGTH_BYTE_ARRAY.get(&metrics.cfg) {
+        properties_builder = properties_builder
+            .set_column_encoding(
+                ColumnPath::new(vec!["k".to_string()]),
+                Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            )
+            .set_column_encoding(
+                ColumnPath::new(vec!["v".to_string()]),
+                Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            );
+    }
+
+    let properties = properties_builder.build();
 
     let mut writer = ArrowWriter::try_new(w, Arc::clone(&*SCHEMA_ARROW_RS_KVTD), Some(properties))?;
 
