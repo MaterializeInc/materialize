@@ -334,58 +334,9 @@ impl Cluster {
         self.replicas_by_id_.get(&replica_id)
     }
 
-    /// Lookup a replica by ID and return a mutable reference.
-    pub fn replica_mut(&mut self, replica_id: ReplicaId) -> Option<&mut ClusterReplica> {
-        self.replicas_by_id_.get_mut(&replica_id)
-    }
-
     /// Lookup a replica ID by name.
     pub fn replica_id(&self, name: &str) -> Option<ReplicaId> {
         self.replica_id_by_name_.get(name).copied()
-    }
-
-    /// Insert a new replica into the cluster.
-    ///
-    /// Panics if the name or ID are reused.
-    pub fn insert_replica(&mut self, replica: ClusterReplica) {
-        assert!(self
-            .replica_id_by_name_
-            .insert(replica.name.clone(), replica.replica_id)
-            .is_none());
-        assert!(self
-            .replicas_by_id_
-            .insert(replica.replica_id, replica)
-            .is_none());
-    }
-
-    /// Remove a replica from this cluster.
-    ///
-    /// Panics if the replica ID does not exist, or if the internal state is inconsistent.
-    pub fn remove_replica(&mut self, replica_id: ReplicaId) {
-        let replica = self
-            .replicas_by_id_
-            .remove(&replica_id)
-            .expect("catalog out of sync");
-        self.replica_id_by_name_
-            .remove(&replica.name)
-            .expect("catalog out of sync");
-        assert_eq!(self.replica_id_by_name_.len(), self.replicas_by_id_.len());
-    }
-
-    /// Renames a replica to a new name.
-    ///
-    /// Panics if the replica ID is unknown, or new name is not unique, or the internal state is
-    /// inconsistent.
-    pub fn rename_replica(&mut self, replica_id: ReplicaId, to_name: String) {
-        let replica = self.replica_mut(replica_id).expect("Must exist");
-        let old_name = std::mem::take(&mut replica.name);
-        replica.name.clone_from(&to_name);
-
-        assert!(self.replica_id_by_name_.remove(&old_name).is_some());
-        assert!(self
-            .replica_id_by_name_
-            .insert(to_name, replica_id)
-            .is_none());
     }
 
     /// Returns the availability zones of this cluster, if they exist.
@@ -2432,6 +2383,9 @@ pub enum StateUpdateKind {
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
+    // Temporary items are not actually updated via the durable catalog, but this allows us to
+    // model them the same way as all other items.
+    TemporaryItem(TemporaryItem),
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
     AuditLog(durable::objects::AuditLog),
@@ -2464,6 +2418,30 @@ impl TryFrom<Diff> for StateDiff {
             -1 => Ok(Self::Retraction),
             1 => Ok(Self::Addition),
             diff => Err(format!("invalid diff {diff}")),
+        }
+    }
+}
+
+/// Information needed to process an update to a temporary item.
+#[derive(Debug, Clone)]
+pub struct TemporaryItem {
+    pub id: GlobalId,
+    pub oid: u32,
+    pub name: QualifiedItemName,
+    pub item: CatalogItem,
+    pub owner_id: RoleId,
+    pub privileges: PrivilegeMap,
+}
+
+impl From<CatalogEntry> for TemporaryItem {
+    fn from(entry: CatalogEntry) -> Self {
+        TemporaryItem {
+            id: entry.id,
+            oid: entry.oid,
+            name: entry.name,
+            item: entry.item,
+            owner_id: entry.owner_id,
+            privileges: entry.privileges,
         }
     }
 }
