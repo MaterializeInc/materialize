@@ -70,7 +70,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         async {},
         move |error| {
             let error = format!("storage_sink: {error}");
-            tracing::error!("{error}");
+            tracing::info!("{error}");
             let mut command_tx = command_tx.borrow_mut();
             command_tx.broadcast(InternalStorageCommand::SuspendAndRestart {
                 id: sink_id,
