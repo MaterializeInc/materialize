@@ -167,7 +167,7 @@ pub enum BlobTraceUpdates {
     /// an Apache Arrow columnar format.
     ///
     /// [`Codec`]: mz_persist_types::Codec
-    Both((ColumnarRecords, ColumnarRecordsStructuredExt)),
+    Both(ColumnarRecords, ColumnarRecordsStructuredExt),
     // TODO(parkmycar): Write only columnar/Arrow data.
 }
 
@@ -176,7 +176,7 @@ impl BlobTraceUpdates {
     pub fn get(&self, idx: usize) -> Option<&ColumnarRecords> {
         match self {
             BlobTraceUpdates::Row(updates) => updates.get(idx),
-            BlobTraceUpdates::Both((codec, _structured)) => match idx {
+            BlobTraceUpdates::Both(codec, _structured) => match idx {
                 0 => Some(codec),
                 _ => None,
             },
@@ -187,7 +187,7 @@ impl BlobTraceUpdates {
     pub fn num_row_groups(&self) -> usize {
         match self {
             BlobTraceUpdates::Row(updates) => updates.len(),
-            BlobTraceUpdates::Both(_) => 1,
+            BlobTraceUpdates::Both(..) => 1,
         }
     }
 
@@ -195,7 +195,7 @@ impl BlobTraceUpdates {
     pub fn iter(&self) -> impl Iterator<Item = &'_ ColumnarRecords> {
         let updates: Box<dyn Iterator<Item = _>> = match self {
             BlobTraceUpdates::Row(updates) => Box::new(updates.iter()),
-            BlobTraceUpdates::Both((codec, _s)) => Box::new(std::iter::once(codec)),
+            BlobTraceUpdates::Both(codec, _s) => Box::new(std::iter::once(codec)),
         };
         updates
     }
@@ -204,7 +204,7 @@ impl BlobTraceUpdates {
     pub fn goodbytes(&self) -> usize {
         match self {
             BlobTraceUpdates::Row(updates) => updates.iter().map(|u| u.goodbytes()).sum(),
-            BlobTraceUpdates::Both((codec, _s)) => codec.goodbytes(),
+            BlobTraceUpdates::Both(codec, _s) => codec.goodbytes(),
         }
     }
 }

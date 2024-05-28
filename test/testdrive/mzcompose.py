@@ -103,7 +103,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     additional_system_parameter_defaults = {}
     for val in sysparams:
-        x = val[0].split("=")
+        x = val[0].split("=", maxsplit=1)
         assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
         key = x[0]
         val = x[1]

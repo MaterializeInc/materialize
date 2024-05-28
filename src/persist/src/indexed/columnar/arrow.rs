@@ -77,7 +77,7 @@ pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Vec<arrow::array::ArrayRe
 }
 
 /// Converts a [`ColumnarRecords`] and [`ColumnarRecordsStructuredExt`] pair
-/// (aka [`BlobTraceUpdates::Both`]) into an [`arrow2::chunk::Chunk`] with columns
+/// (aka [`BlobTraceUpdates::Both`]) into [`arrow::array::Array`]s with columns
 /// [(K, V, T, D, K_S, V_S)].
 ///
 /// [`BlobTraceUpdates::Both`]: crate::indexed::encoding::BlobTraceUpdates::Both

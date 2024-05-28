@@ -1034,56 +1034,50 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let (stats, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
                 // Only encode our updates in a structured format if required, it's expensive.
-                let s = if cfg.stats_collection_enabled || cfg.batch_columnar_format.is_structured()
-                {
-                    let result = metrics_
-                        .columnar
-                        .arrow()
-                        .measure_part_build(|| encode_updates(&schemas, &updates.updates));
-                    match result {
-                        Err(err) => {
-                            tracing::error!(?err, "failed to encode in columnar format!");
+                let stats = 'collect_stats: {
+                    if cfg.stats_collection_enabled || cfg.batch_columnar_format.is_structured() {
+                        let result = metrics_
+                            .columnar
+                            .arrow()
+                            .measure_part_build(|| encode_updates(&schemas, &updates.updates));
+
+                        // We can't collect stats if we failed to encode in a columnar format.
+                        let Ok((columnar_part, stats)) = result else {
+                            tracing::error!(?result, "failed to encode in columnar format!");
+                            break 'collect_stats None;
+                        };
+
+                        // If our updates only had a single batch, and the dyncfg is enabled, then
+                        // we'll switch to our structured format.
+                        if let BlobTraceUpdates::Row(ref mut records) = updates.updates {
+                            if records.len() == 1 && cfg.batch_columnar_format.is_structured() {
+                                let record = records.pop().expect("checked length above");
+                                let record_ext = ColumnarRecordsStructuredExt {
+                                    key: columnar_part.to_key_arrow().map(|(_, array)| array),
+                                    val: columnar_part.to_val_arrow().map(|(_, array)| array),
+                                };
+                                updates.updates = BlobTraceUpdates::Both(record, record_ext)
+                            }
+                        }
+
+                        // Collect stats about the updates, if stats collection is enabled.
+                        if cfg.stats_collection_enabled {
+                            let trimmed_start = Instant::now();
+                            let mut trimmed_bytes = 0;
+                            let trimmed_stats = LazyPartStats::encode(&stats, |s| {
+                                trimmed_bytes = trim_to_budget(s, cfg.stats_budget, |s| {
+                                    cfg.stats_untrimmable_columns.should_retain(s)
+                                })
+                            });
+                            let trimmed_duration = trimmed_start.elapsed();
+
+                            Some((trimmed_stats, trimmed_duration, trimmed_bytes))
+                        } else {
                             None
                         }
-                        Ok(s) => Some(s),
-                    }
-                } else {
-                    None
-                };
-
-                let stats = if let Some((part, stats)) = s {
-                    // Only change the updates to use the structured format, if our updates had a
-                    // single batch.
-                    match updates.updates {
-                        BlobTraceUpdates::Row(mut records)
-                            if records.len() == 1 && cfg.batch_columnar_format.is_structured() =>
-                        {
-                            let record = records.pop().expect("checked length above");
-                            let record_ext = ColumnarRecordsStructuredExt {
-                                key: part.to_key_arrow().map(|(_, array)| array),
-                                val: part.to_val_arrow().map(|(_, array)| array),
-                            };
-                            updates.updates = BlobTraceUpdates::Both((record, record_ext))
-                        }
-                        _ => (),
-                    }
-
-                    if cfg.stats_collection_enabled {
-                        let trimmed_start = Instant::now();
-                        let mut trimmed_bytes = 0;
-                        let trimmed_stats = LazyPartStats::encode(&stats, |s| {
-                            trimmed_bytes = trim_to_budget(s, cfg.stats_budget, |s| {
-                                cfg.stats_untrimmable_columns.should_retain(s)
-                            })
-                        });
-                        let trimmed_duration = trimmed_start.elapsed();
-
-                        Some((trimmed_stats, trimmed_duration, trimmed_bytes))
                     } else {
                         None
                     }
-                } else {
-                    None
                 };
 
                 let encode_start = Instant::now();

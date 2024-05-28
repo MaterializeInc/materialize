@@ -748,7 +748,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             // Only downcast and create decoders if we have structured data AND
             // an audit of the data is requested.
             (
-                BlobTraceUpdates::Both((_codec, structured)),
+                BlobTraceUpdates::Both(_codec, structured),
                 PartDecodeFormat::Row {
                     validate_structured: true,
                 },
@@ -921,7 +921,7 @@ where
                     // Purposefully do not trace to prevent blowing up Sentry.
                     let is_valid = val_metrics.report_valid(|| Ok(v_s) == v);
                     if !is_valid {
-                        soft_panic_no_log!("structured key did not match");
+                        soft_panic_no_log!("structured val did not match");
                     }
                 }
 

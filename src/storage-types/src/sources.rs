@@ -1281,8 +1281,8 @@ impl PartDecoder<SourceData> for SourceDataDecoder {
                     .expect("error should be valid");
                 val.0 = Err(err);
             }
-            x @ (true, Some(_)) | x @ (false, None) => {
-                panic!("SourceData should have exactly one of ok or err, {idx} @ {x:?}\n{self:?}")
+            (true, Some(_)) | (false, None) => {
+                panic!("SourceData should have exactly one of ok or err")
             }
         };
     }
@@ -1584,7 +1584,7 @@ mod tests {
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
-    fn all_scalar_types_columnar_roundtrip() {
+    fn all_scalar_types_parquet_roundtrip() {
         proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             let datums = scalar_type.interesting_datums();
@@ -1594,7 +1594,7 @@ mod tests {
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
-    fn all_datums_columnar_roundtrip() {
+    fn all_datums_parquet_roundtrip() {
         let datums = any::<ScalarType>().prop_flat_map(|ty| {
             prop::collection::vec(arb_datum_for_scalar(&ty), 0..128)
                 .prop_map(move |datums| (ty.clone(), datums))

@@ -100,11 +100,11 @@ impl ArrowMetrics {
             var_labels: ["op", "column"],
         ));
 
-        let part_build_duration: CounterVec = registry.register(metric!(
+        let part_build_seconds: Counter = registry.register(metric!(
             name: "mz_persist_columnar_part_build_seconds",
             help: "number of seconds we've spent encoding our structured columnar format",
         ));
-        let part_build_count: IntCounterVec = registry.register(metric!(
+        let part_build_count: IntCounter = registry.register(metric!(
             name: "mz_persist_columnar_part_build_count",
             help: "number of times we've encoded our structured columnar format",
         ));
@@ -112,8 +112,8 @@ impl ArrowMetrics {
         ArrowMetrics {
             key: ArrowColumnMetrics::new(&op_count, &op_seconds, "key"),
             val: ArrowColumnMetrics::new(&op_count, &op_seconds, "val"),
-            part_build_seconds: part_build_duration.with_label_values(&[]),
-            part_build_count: part_build_count.with_label_values(&[]),
+            part_build_seconds,
+            part_build_count,
         }
     }
 

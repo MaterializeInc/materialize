@@ -12,7 +12,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
+use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
@@ -101,7 +101,7 @@ pub fn decode_trace_parquet<T: Timestamp + Codec64>(
     Ok(ret)
 }
 
-/// Encodes [`ColumnarRecords`] to Parquet using the [`parquet`] crate.
+/// Encodes [`BlobTraceUpdates`] to Parquet using the [`parquet`] crate.
 pub fn encode_parquet_kvtd<W: Write + Send>(
     w: &mut W,
     inline_base64: String,
@@ -132,7 +132,7 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
                 "k,v,t,d",
             )
         }
-        BlobTraceUpdates::Both((codec_updates, structured_updates)) => {
+        BlobTraceUpdates::Both(codec_updates, structured_updates) => {
             let (fields, arrays) = encode_arrow_batch_kvtd_ks_vs(codec_updates, structured_updates);
             let schema = Schema::new(fields);
             (
@@ -158,7 +158,7 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
     Ok(())
 }
 
-/// Decodes [`ColumnarRecords`] from a reader, using [`arrow`].
+/// Decodes [`BlobTraceUpdates`] from a reader, using [`arrow`].
 pub fn decode_parquet_file_kvtd(
     r: impl parquet::file::reader::ChunkReader + 'static,
     format_metadata: Option<&ProtoFormatMetadata>,
@@ -211,8 +211,6 @@ pub fn decode_parquet_file_kvtd(
 
             // The first 4 columns are our primary (K, V, T, D) and optionally
             // we also have K_S and/or V_S if we wrote structured data.
-            //
-            // TODO(parkmycar): Add some more validation here.
             let primary_columns = &columns[..4];
             let k_s_column = schema
                 .fields()
@@ -225,9 +223,29 @@ pub fn decode_parquet_file_kvtd(
                 .position(|field| field.name() == "v_s")
                 .map(|idx| columns[idx].as_ref());
 
-            let records =
+            if let Some(k_s) = k_s_column.as_ref() {
+                if !matches!(k_s.data_type(), DataType::Struct(_)) {
+                    return Err(
+                        format!("k_s should be a Struct, found {:?}", k_s.data_type()).into(),
+                    );
+                }
+            }
+            if let Some(v_s) = v_s_column.as_ref() {
+                if !matches!(v_s.data_type(), DataType::Struct(_)) {
+                    return Err(
+                        format!("v_s should be a Struct, found {:?}", v_s.data_type()).into(),
+                    );
+                }
+            }
+            if k_s_column.is_none() && v_s_column.is_none() {
+                return Err(
+                    format!("at least one of k_s or v_s should exist, found {schema:?}").into(),
+                );
+            }
+
+            let (records, structured_ext) =
                 decode_arrow_batch_kvtd_ks_vs(primary_columns, k_s_column, v_s_column, metrics)?;
-            Ok(BlobTraceUpdates::Both(records))
+            Ok(BlobTraceUpdates::Both(records, structured_ext))
         }
         unknown => Err(format!("unkown ProtoFormatMetadata, {unknown:?}"))?,
     }

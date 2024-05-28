@@ -137,7 +137,7 @@ where
 {
     let updates = match updates {
         BlobTraceUpdates::Row(updates) => itertools::Either::Left(updates.into_iter()),
-        BlobTraceUpdates::Both((codec, _structured)) => {
+        BlobTraceUpdates::Both(codec, _structured) => {
             // This is super unexpected, but not worthy of a panic.
             soft_panic_or_log!("re-encoding structured data?");
             itertools::Either::Right(std::iter::once(codec))

@@ -218,10 +218,6 @@ impl DynStructCol {
         let (mut fields, mut arrays) = (Vec::new(), Vec::new());
         for (name, _stats_fn, col) in self.cols() {
             let (array, is_nullable) = col.to_arrow();
-            if array.len() == 0 && self.len != 0 {
-                continue;
-            }
-
             fields.push(Field::new(name, array.data_type().clone(), is_nullable));
             arrays.push(array);
         }
