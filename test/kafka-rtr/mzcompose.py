@@ -92,6 +92,8 @@ def workflow_resumption(c: Composition) -> None:
             "toxiproxy-timeout-hold.td",
         ]
     ):
+        print(f"Running failure mode {failure_mode}...")
+
         c.run_testdrive_files(
             "--no-reset",
             "--max-errors=1",
