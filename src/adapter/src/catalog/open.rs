@@ -10,17 +10,15 @@
 //! Logic related to opening a [`Catalog`].
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::iter;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::future::{self, BoxFuture, FutureExt};
-use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::builtin::{
     Builtin, BuiltinView, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
-    BUILTIN_LOOKUP, BUILTIN_PREFIXES, BUILTIN_ROLES,
+    BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -291,11 +289,7 @@ impl Catalog {
                 state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
             }
 
-            // Durable catalog updates must be partitioned so that we can weave the loading of
-            // builtin objects into the right spots.
-            let mut pre_cluster_updates = Vec::new();
-            let mut cluster_updates = Vec::new();
-            let mut builtin_item_updates = Vec::new();
+            let mut pre_item_updates = Vec::new();
             let mut item_updates = Vec::new();
             let mut post_item_updates = Vec::new();
             for update in txn.get_updates() {
@@ -305,12 +299,12 @@ impl Catalog {
                     | StateUpdateKind::Schema(_)
                     | StateUpdateKind::DefaultPrivilege(_)
                     | StateUpdateKind::SystemPrivilege(_)
-                    | StateUpdateKind::SystemConfiguration(_) => pre_cluster_updates.push(update),
-                    StateUpdateKind::Cluster(_)
+                    | StateUpdateKind::SystemConfiguration(_)
+                    | StateUpdateKind::Cluster(_)
                     | StateUpdateKind::IntrospectionSourceIndex(_)
-                    | StateUpdateKind::ClusterReplica(_) => cluster_updates.push(update),
-                    StateUpdateKind::SystemObjectMapping(system_object_mapping) => builtin_item_updates.push((system_object_mapping, update.diff)),
-                    StateUpdateKind::Item(item) => item_updates.push((item, update.diff)),
+                    | StateUpdateKind::ClusterReplica(_)
+                    | StateUpdateKind::SystemObjectMapping(_) => pre_item_updates.push(update),
+                    StateUpdateKind::Item(_) => item_updates.push(update),
                     StateUpdateKind::Comment(_)
                     | StateUpdateKind::AuditLog(_)
                     | StateUpdateKind::StorageUsage(_)
@@ -319,67 +313,7 @@ impl Catalog {
                 }
             }
 
-            // Sort builtin item updates by dependency.
-            let builtin_item_updates = builtin_item_updates.into_iter()
-                .map(|(system_object_mapping, diff)| {
-                    let idx = BUILTIN_LOOKUP.get(&system_object_mapping.description).expect("missing builtin").0;
-                    (idx, system_object_mapping, diff)
-                })
-                .sorted_by_key(|(idx, _, _)| *idx)
-                .map(|(_, system_object_mapping, diff)| (system_object_mapping, diff));
-
-            let mut builtin_type_updates = Vec::new();
-            let mut other_builtin_updates = Vec::new();
-            let mut builtin_view_updates = Vec::new();
-            let mut builtin_index_updates = Vec::new();
-            for (builtin_item_update, diff) in builtin_item_updates {
-                match &builtin_item_update.description.object_type {
-                    CatalogItemType::Type => builtin_type_updates.push(StateUpdate {
-                        kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                        diff,
-                    }),
-                    CatalogItemType::Index => builtin_index_updates.push(StateUpdate {
-                        kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                        diff,
-                    }),
-                    CatalogItemType::View | CatalogItemType::MaterializedView => {
-                        builtin_view_updates.push(builtin_item_update);
-                    }
-                    CatalogItemType::Table
-                    | CatalogItemType::Source
-                    | CatalogItemType::Sink
-                    | CatalogItemType::Func
-                    | CatalogItemType::Secret
-                    | CatalogItemType::Connection => other_builtin_updates.push(StateUpdate {
-                        kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                        diff,
-                    }),
-                }
-            }
-
-            // Sort item updates by GlobalId.
-            let item_updates: Vec<_> = item_updates.into_iter().sorted_by_key(|(item, _diff)| item.id).map(|(item, diff)| StateUpdate {kind: StateUpdateKind::Item(item), diff}).collect();
-
-            let pre_view_updates = iter::empty()
-                .chain(pre_cluster_updates.into_iter())
-                .chain(builtin_type_updates.into_iter())
-                .chain(other_builtin_updates.into_iter())
-                .collect();
-            let builtin_views: Vec<_> = builtin_view_updates
-                .into_iter()
-                .map(|system_object_mapping| {
-                    let (_, builtin) = BUILTIN_LOOKUP.get(&system_object_mapping.description).expect("missing builtin view");
-                    (*builtin, system_object_mapping.unique_identifier.id)
-                })
-                .collect();
-            let post_view_updates = iter::empty()
-                .chain(cluster_updates.into_iter())
-                .chain(builtin_index_updates.into_iter())
-                .collect();
-
-            state.apply_updates_for_bootstrap(pre_view_updates);
-            Self::parse_views(&mut state, builtin_views).await;
-            state.apply_updates_for_bootstrap(post_view_updates);
+            state.apply_updates_for_bootstrap(pre_item_updates).await;
 
             let last_seen_version = txn
                 .get_catalog_content_version()
@@ -400,12 +334,12 @@ impl Catalog {
                 // Throw the existing item updates away because they may have been re-written in
                 // the migration.
                 let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), diff: 1}).collect();
-                state.apply_updates_for_bootstrap(item_updates);
+                state.apply_updates_for_bootstrap(item_updates).await;
             } else {
-                state.apply_updates_for_bootstrap(item_updates);
+                state.apply_updates_for_bootstrap(item_updates).await;
             }
 
-            state.apply_updates_for_bootstrap(post_item_updates);
+            state.apply_updates_for_bootstrap(post_item_updates).await;
 
             // Migrate builtin items.
             let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
@@ -452,7 +386,7 @@ impl Catalog {
     /// we must maintain a completed set otherwise races could result in orphaned views languishing
     /// in awaiting with nothing retriggering the attempt.
     #[instrument(name = "catalog::parse_views")]
-    async fn parse_views(
+    pub(crate) async fn parse_views(
         state: &mut CatalogState,
         builtin_views: Vec<(&Builtin<NameReference>, GlobalId)>,
     ) {

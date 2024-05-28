@@ -10,8 +10,10 @@
 //! Logic related to applying updates from a [`mz_catalog::durable::DurableCatalogState`] to a
 //! [`CatalogState`].
 
+use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::iter;
 
 use mz_catalog::builtin::{Builtin, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP};
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -26,8 +28,8 @@ use mz_ore::instrument;
 use mz_ore::now::to_datetime;
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::Diff;
-use mz_sql::catalog::{CatalogSchema, CatalogType};
+use mz_repr::{Diff, GlobalId};
+use mz_sql::catalog::{CatalogItemType, CatalogSchema, CatalogType, NameReference};
 use mz_sql::names::{
     ItemQualifiers, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds,
     SchemaSpecifier,
@@ -39,7 +41,134 @@ use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
 use tracing::warn;
 
-use crate::catalog::{BuiltinTableUpdate, CatalogState};
+use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
+
+/// Sorted [`StateUpdate`]s. Builtin view updates are stored separately, because they are loaded
+/// via a different mechanism than all other update types.
+struct SortedUpdates {
+    pre_builtin_view_updates: Vec<StateUpdate>,
+    builtin_view_updates: Vec<(&'static Builtin<NameReference>, GlobalId)>,
+    post_builtin_view_updates: Vec<StateUpdate>,
+}
+
+/// Sort [`StateUpdate`]s in dependency order.
+// TODO(jkosh44) It is very IMPORTANT that per timestamp, the updates are sorted retractions
+// then additions. Within the retractions the objects should be sorted in reverse dependency
+// order (objects->schema->database, replica->cluster, etc.). For now we panic on retractions.
+fn sort_updates(updates: Vec<StateUpdate>) -> SortedUpdates {
+    // Partition updates by type so that we can weave different update types into the right spots.
+    let mut pre_cluster_updates = Vec::new();
+    let mut cluster_updates = Vec::new();
+    let mut builtin_item_updates = Vec::new();
+    let mut item_updates = Vec::new();
+    let mut post_item_updates = Vec::new();
+    for update in updates {
+        assert_eq!(
+            update.diff, 1,
+            "This function does not handle negative diffs yet"
+        );
+        match update.kind {
+            StateUpdateKind::Role(_)
+            | StateUpdateKind::Database(_)
+            | StateUpdateKind::Schema(_)
+            | StateUpdateKind::DefaultPrivilege(_)
+            | StateUpdateKind::SystemPrivilege(_)
+            | StateUpdateKind::SystemConfiguration(_) => pre_cluster_updates.push(update),
+            StateUpdateKind::Cluster(_)
+            | StateUpdateKind::IntrospectionSourceIndex(_)
+            | StateUpdateKind::ClusterReplica(_) => cluster_updates.push(update),
+            StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
+                builtin_item_updates.push((system_object_mapping, update.diff))
+            }
+            StateUpdateKind::Item(item) => item_updates.push((item, update.diff)),
+            StateUpdateKind::Comment(_)
+            | StateUpdateKind::AuditLog(_)
+            | StateUpdateKind::StorageUsage(_)
+            | StateUpdateKind::StorageCollectionMetadata(_)
+            | StateUpdateKind::UnfinalizedShard(_) => post_item_updates.push(update),
+        }
+    }
+
+    // Sort builtin item updates by dependency.
+    let builtin_item_updates = builtin_item_updates
+        .into_iter()
+        .map(|(system_object_mapping, diff)| {
+            let idx = BUILTIN_LOOKUP
+                .get(&system_object_mapping.description)
+                .expect("missing builtin")
+                .0;
+            (idx, system_object_mapping, diff)
+        })
+        .sorted_by_key(|(idx, _, _)| *idx)
+        .map(|(_, system_object_mapping, diff)| (system_object_mapping, diff));
+
+    let mut builtin_type_updates = Vec::new();
+    let mut other_builtin_updates = Vec::new();
+    let mut builtin_view_updates = Vec::new();
+    let mut builtin_index_updates = Vec::new();
+    for (builtin_item_update, diff) in builtin_item_updates {
+        match &builtin_item_update.description.object_type {
+            CatalogItemType::Type => builtin_type_updates.push(StateUpdate {
+                kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                diff,
+            }),
+            CatalogItemType::Index => builtin_index_updates.push(StateUpdate {
+                kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                diff,
+            }),
+            CatalogItemType::View | CatalogItemType::MaterializedView => {
+                builtin_view_updates.push(builtin_item_update);
+            }
+            CatalogItemType::Table
+            | CatalogItemType::Source
+            | CatalogItemType::Sink
+            | CatalogItemType::Func
+            | CatalogItemType::Secret
+            | CatalogItemType::Connection => other_builtin_updates.push(StateUpdate {
+                kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                diff,
+            }),
+        }
+    }
+
+    // Sort item updates by GlobalId.
+    let item_updates: Vec<_> = item_updates
+        .into_iter()
+        .sorted_by_key(|(item, _diff)| item.id)
+        .map(|(item, diff)| StateUpdate {
+            kind: StateUpdateKind::Item(item),
+            diff,
+        })
+        .collect();
+
+    // Put everything back together.
+    let pre_builtin_view_updates = iter::empty()
+        .chain(pre_cluster_updates.into_iter())
+        .chain(builtin_type_updates.into_iter())
+        .chain(other_builtin_updates.into_iter())
+        .collect();
+    let builtin_view_updates: Vec<_> = builtin_view_updates
+        .into_iter()
+        .map(|system_object_mapping| {
+            let (_, builtin) = BUILTIN_LOOKUP
+                .get(&system_object_mapping.description)
+                .expect("missing builtin view");
+            (*builtin, system_object_mapping.unique_identifier.id)
+        })
+        .collect();
+    let post_builtin_view_updates = iter::empty()
+        .chain(cluster_updates.into_iter())
+        .chain(builtin_index_updates.into_iter())
+        .chain(item_updates.into_iter())
+        .chain(post_item_updates.into_iter())
+        .collect();
+
+    SortedUpdates {
+        pre_builtin_view_updates,
+        builtin_view_updates,
+        post_builtin_view_updates,
+    }
+}
 
 impl CatalogState {
     /// Update in-memory catalog state from a list of updates made to the durable catalog state.
@@ -47,16 +176,22 @@ impl CatalogState {
     /// This is meant specifically for bootstrapping because it does not produce builtin table
     /// updates. The builtin tables need to be loaded before we can produce builtin table updates
     /// which creates a bootstrapping problem.
-    // TODO(jkosh44) It is very IMPORTANT that per timestamp, the updates are sorted retractions
-    // then additions. Within the retractions the objects should be sorted in reverse dependency
-    // order (objects->schema->database, replica->cluster, etc.). Within the additions the objects
-    // should be sorted in dependency order (database->schema->objects, cluster->replica, etc.).
-    // Objects themselves also need to be sorted by dependency order, this will be tricky but we can
-    // look at the existing bootstrap code for ways of doing this. For now we rely on the caller
-    // providing objects in dependency order.
     #[instrument]
-    pub(crate) fn apply_updates_for_bootstrap(&mut self, updates: Vec<StateUpdate>) {
-        for StateUpdate { kind, diff } in updates {
+    pub(crate) async fn apply_updates_for_bootstrap(&mut self, updates: Vec<StateUpdate>) {
+        let SortedUpdates {
+            pre_builtin_view_updates,
+            builtin_view_updates,
+            post_builtin_view_updates,
+        } = sort_updates(updates);
+        for StateUpdate { kind, diff } in pre_builtin_view_updates {
+            assert_eq!(
+                diff, 1,
+                "initial catalog updates should be consolidated: ({kind:?}, {diff:?})"
+            );
+            self.apply_update(kind, diff);
+        }
+        Catalog::parse_views(self, builtin_view_updates).await;
+        for StateUpdate { kind, diff } in post_builtin_view_updates {
             assert_eq!(
                 diff, 1,
                 "initial catalog updates should be consolidated: ({kind:?}, {diff:?})"
@@ -384,7 +519,10 @@ impl CatalogState {
         system_object_mapping: mz_catalog::durable::SystemObjectMapping,
         diff: Diff,
     ) {
-        assert_eq!(diff, 1, "TODO(jkosh44) should get fenced");
+        assert_eq!(
+            diff, 1,
+            "another env is upgrading and should have already fenced us out"
+        );
         let builtin = BUILTIN_LOOKUP
             .get(&system_object_mapping.description)
             .expect("missing builtin")

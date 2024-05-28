@@ -125,7 +125,7 @@ pub(crate) async fn migrate(
             diff: 1,
         })
         .collect();
-    state.apply_updates_for_bootstrap(item_updates);
+    state.apply_updates_for_bootstrap(item_updates).await;
 
     info!("migrating from catalog version {:?}", catalog_version);
 
