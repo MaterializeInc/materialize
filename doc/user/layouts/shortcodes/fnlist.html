@@ -34,9 +34,9 @@
       {{/*  We use clojure highlighting simply because it looks best with the
       components we want to highlight. In the future, this should be customized
       in some way.  */}}
-      <p class="heading {{if (not (isset $.Params 0))}}docsearch_l3{{end}}" id="{{ index (split .signature "(") 0 | urlize }}">
-        {{ highlight .signature "clojure" "hl_inline=true" }}
-      </p>
+      <div class="heading {{if (not (isset $.Params 0))}}docsearch_l3{{end}}" id="{{ index (split .signature "(") 0 | urlize }}">
+        {{ highlight .signature "clojure" "hl_inline=false" }}
+      </div>
 
       <p>
         {{ .description | $.Page.RenderString }}

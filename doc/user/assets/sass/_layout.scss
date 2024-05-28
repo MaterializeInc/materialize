@@ -53,9 +53,8 @@ table.inline-headings {
             margin-bottom: 0.3em;
             padding-left: 2em;
         }
-        p.heading {
-            margin-bottom: -0.1em;
-            text-indent: -1.75em;
+        .heading .highlight {
+            display: inline-block;
         }
     }
 }
