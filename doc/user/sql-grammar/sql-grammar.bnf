@@ -625,7 +625,10 @@ with_options_aws ::= 'WITH' '('
 with_options_aws_static ::=
   'access_key_id' '=' val ',' 'secret_access_key' '=' val ( ',' 'token' '=' val )?
 with_options_materialized_view ::=
-  ('WITH' '(' ( 'ASSERT NOT NULL' col_ident ( ',' 'ASSERT NOT NULL' col_ident )* )?
-    ( 'RETAIN HISTORY' '='? 'FOR' retention_period )?
-  ')')
+  ('WITH' '(' with_option ( ',' with_option )* ')')?
+with_option_materialized_view ::=
+  (
+    ( 'ASSERT NOT NULL' col_ident )
+    | ( 'RETAIN HISTORY' '='? 'FOR' retention_period )
+  )
 with_options_retain_history ::= ('WITH' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')')
