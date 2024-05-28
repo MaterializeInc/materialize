@@ -365,8 +365,6 @@ where
     ///     | \
     ///     |  reduce
     ///     |  |
-    ///     |  negate
-    ///     |  |
     ///     concat
     ///     |
     ///     | output
@@ -437,9 +435,7 @@ where
 
             (input, stage, None)
         };
-        // Turn input into collection.
         let input = input.as_collection(|k, v| (k.into_owned(), v.into_owned()));
-        // Concatenate oks with the input.
         (oks.concat(&input), errs)
     }
 
@@ -543,7 +539,7 @@ where
     let mut datum_vec = mz_repr::DatumVec::new();
 
     // We only want to arrange parts of the input that are not part of the actual output
-    // such that `input.concat(&negated_output.negate())` yields the correct TopK
+    // such that `input.concat(&negated_output)` yields the correct TopK
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
     // built-in view mz_internal.mz_expected_group_size_advice.
     let arranged = input.mz_arrange::<RowRowSpine<_, _>>("Arranged TopK input");
