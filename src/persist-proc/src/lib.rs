@@ -91,7 +91,7 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                 {
                     // Using DELTA_LENGTH_BYTE_ARRAY encoding for 'k' and 'v' columns.
                     let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_use_parquet_delta_length_byte_array", ::mz_dyncfg::ConfigVal::Bool(true));
+                    x.add_dynamic("persist_enable_parquet_delta_length_byte_array", ::mz_dyncfg::ConfigVal::Bool(true));
                     x
                 }
             ];

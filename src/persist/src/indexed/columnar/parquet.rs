@@ -38,8 +38,8 @@ use crate::metrics::ColumnarMetrics;
 
 const INLINE_METADATA_KEY: &str = "MZ:inline";
 
-pub(crate) const USE_PARQUET_DELTA_LENGTH_BYTE_ARRAY: Config<bool> = Config::new(
-    "persist_use_parquet_delta_length_byte_array",
+pub(crate) const ENABLE_PARQUET_DELTA_LENGTH_BYTE_ARRAY: Config<bool> = Config::new(
+    "persist_enable_parquet_delta_length_byte_array",
     false,
     "'false' by default, when 'true' uses Parquet's `DELTA_LENGTH_BYTE_ARRAY` encoding for the 'k' and 'v' columns."
 );
@@ -118,7 +118,7 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
         .set_max_row_group_size(usize::MAX)
         .set_key_value_metadata(Some(vec![metadata]));
 
-    if USE_PARQUET_DELTA_LENGTH_BYTE_ARRAY.get(&metrics.cfg) {
+    if ENABLE_PARQUET_DELTA_LENGTH_BYTE_ARRAY.get(&metrics.cfg) {
         properties_builder = properties_builder
             .set_column_encoding(
                 ColumnPath::new(vec!["k".to_string()]),

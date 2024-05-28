@@ -918,7 +918,7 @@ class FlipFlagsAction(Action):
         ] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values[
-            "persist_use_parquet_delta_length_byte_array"
+            "persist_enable_parquet_delta_length_byte_array"
         ] = BOOLEAN_FLAG_VALUES
 
     def run(self, exe: Executor) -> bool:
