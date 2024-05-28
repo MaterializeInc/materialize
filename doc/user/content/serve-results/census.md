@@ -7,7 +7,7 @@ menu:
   main:
     parent: sink
     name: "Census"
-    weight: 5
+    weight: 15
 ---
 
 This guide walks you through the steps required to create a [Census](https://www.getcensus.com/) sync using Materialize.

@@ -26,10 +26,8 @@ certificates) can be specified as plain `text`, or also stored as secrets.
 {{< private-preview />}}
 
 An Amazon Web Services (AWS) connection provides Materialize with access to an
-Identity and Access Management (IAM) user or role in your AWS account. In the
-future, you will be able to use AWS connections with sources and sinks that
-interact with AWS services, like Amazon Simple Storage Service (S3) and Amazon
-Relational Database Service (RDS).
+Identity and Access Management (IAM) user or role in your AWS account. You can
+use AWS connections to perform [bulk exports to Amazon s3](/sink/s3).
 
 {{< diagram "create-connection-aws.svg" >}}
 
@@ -51,7 +49,7 @@ Field         | Value     | Description
 --------------|-----------|-------------------------------------
 `VALIDATE`    | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation.<br><br>Defaults to `false`.
 
-#### Permissions
+#### Permissions {#aws-permissions}
 
 {{< warning >}}
 Failing to constrain the external ID in your role trust policy will allow
@@ -103,7 +101,7 @@ table:
 SELECT id, external_id, example_trust_policy FROM mz_internal.mz_aws_connections;
 ```
 
-#### Examples
+#### Examples {#aws-examples}
 
 {{< tabs >}}
 {{< tab "Role assumption">}}

@@ -151,8 +151,7 @@ weight= 20
 name = "Redpanda"
 parent = "sink"
 url = "/sql/create-sink"
-weight= 25
-
+weight= 30
 #
 # Manage Materialize
 #
@@ -203,14 +202,12 @@ identifier = "csink_kafka"
 name = "Kafka"
 parent = "create-sink"
 url = "/sql/create-sink/kafka"
-weight= 5
 
 [[menu.main]]
 identifier = "csink_redpanda"
 name = "Redpanda"
 parent = "create-sink"
 url = "/sql/create-sink/kafka"
-weight= 10
 
 [[menu.main]]
 name = "SQL commands"

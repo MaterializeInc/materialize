@@ -118,8 +118,7 @@ Debezium has an extensive ecosystem of connectors, but each database has its own
 
 | Service              | Support level                    | Notes                                                                                                                                                                                                            |             |
 | -------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| Amazon S3            | {{< supportLevel researching >}} | Subscribe via “Notify Me” to register interest.                                                                                                                                                                  | [](#notify) |
-| MinIO Object Storage | {{< supportLevel researching >}} | Not supported yet {{% gh 6568 %}}. <br> MinIO provides a [S3-compatible API](https://min.io/product/s3-compatibility) that may enable interoperability with Materialize, but this hasn't been officially tested. | [](#notify) |
+| Amazon S3            | {{< supportLevel production >}} | Supported as a _one-shot_ sink. See the [Amazon S3 integration guide](/serve-results/s3/) for a step-by-step breakdown of the integration. |
 
 ### Other object storage services
 

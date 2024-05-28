@@ -1,41 +1,164 @@
 ---
 title: "COPY TO"
-description: "`COPY TO` outputs a query via the COPY protocol."
+description: "`COPY TO` outputs results from Materialize using the PostgreSQL `COPY` protocol."
 menu:
     main:
         parent: "commands"
 ---
 
-`COPY TO` sends rows using the [Postgres COPY protocol](https://www.postgresql.org/docs/current/sql-copy.html).
+`COPY TO` outputs results from Materialize using the [PostgreSQL `COPY` protocol](https://www.postgresql.org/docs/current/sql-copy.html).
+This command is useful to output [`SUBSCRIBE`](/sql/subscribe/) results
+[to `stdout`](#copy-to-stdout), or perform [bulk exports to Amazon s3](#copy-to-amazon-s3).
 
-## Syntax
+## Copy to `stdout`
 
-{{< diagram "copy-to.svg" >}}
+Copying results to `stdout` is useful to output the stream of updates from a
+[`SUBSCRIBE`](/sql/subscribe/) command in interactive SQL clients like `psql`.
 
-Field | Use
-------|-----
-_query_ | The [`SELECT`](/sql/select) or [`SUBSCRIBE`](/sql/subscribe) query to send
-_field_ | The name of the option you want to set.
-_val_ | The value for the option.
+### Syntax {#copy-to-stdout-syntax}
 
-### `WITH` options
+{{< diagram "copy-to-stdout.svg" >}}
 
-Name | Value type | Default value | Description
-----------------------------|--------|--------|--------
-`FORMAT` | `TEXT`,`BINARY` | `TEXT` | Sets the output formatting method.
+Field         | Use
+--------------|-----
+_query_       | The [`SELECT`](/sql/select) or [`SUBSCRIBE`](/sql/subscribe) query to output results for.
+_field_       | The name of the option you want to set.
+_val_         | The value for the option.
 
-## Example
+### `WITH` options {#copy-to-stdout-with-options}
 
-### Copying a view
+Name     | Values                 | Default value | Description
+---------|------------------------|---------------|-----------------------------------
+`FORMAT` | `TEXT`,`BINARY`, `CSV` | `TEXT`        | Sets the output formatting method.
 
-```sql
-COPY (SELECT * FROM some_view) TO STDOUT;
-```
+### Examples {#copy-to-stdout-examples}
 
-### Subscribing to a view with binary output
+#### Subscribing to a view with binary output
 
 ```sql
 COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
+```
+
+## Copy to Amazon s3 {#copy-to-s3}
+
+{{< private-preview />}}
+
+Copying results to Amazon s3 is useful to perform tasks like periodic backups
+for auditing, or downstream processing in analytical data warehouses like
+Snowflake, Databricks or BigQuery. For step-by-step instructions, see the
+integration guide for [Amazon s3](/serve-results/s3/).
+
+The `COPY TO` command is _one-shot_: every time you want to export results, you
+must run the command. To automate exporting results on a regular basis, you can
+set up scheduling, for example using a simple `cron`-like service or an
+orchestration platform like Airflow or Dagster.
+
+### Syntax {#copy-to-s3-syntax}
+
+{{< diagram "copy-to-s3.svg" >}}
+
+Field         | Use
+--------------|-----
+_query_       | The [`SELECT`](/sql/select) query to copy results out for.
+_object_name_ | The name of the object to copy results out for.
+**AWS CONNECTION** _connection_name_ | The name of the AWS connection to use in the `COPY TO` command. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#aws) documentation page.
+_s3_uri_      | The unique resource identifier (URI) of the Amazon s3 bucket to store the output results in.
+**FORMAT**    | The file format to write.
+_field_       | The name of the option you want to set.
+_val_         | The value for the option.
+
+### `WITH` options {#copy-to-s3-with-options}
+
+Name             | Values          | Default value | Description                       |
+-----------------|-----------------|---------------|-----------------------------------|
+`MAX FILE SIZE`  | `int`           |               | Sets the approximate maximum file size of each file uploaded to the S3 bucket. |
+
+### Supported formats {#copy-to-s3-supported-formats}
+
+#### CSV {#copy-to-s3-csv}
+
+**Syntax:** `FORMAT = 'csv'`
+
+By default, Materialize writes CSV files using the following writer settings:
+
+Setting     | Value
+------------|---------------
+delimiter   | `,`
+quote       | `"`
+escape      | `"`
+header      | `true`
+
+#### Parquet {#copy-to-s3-parquet}
+
+**Syntax:** `FORMAT = 'parquet'`
+
+Materialize writes Parquet files that aim for maximum compatibility with
+downstream systems. By default, the following Parquet writer settings are
+used:
+
+Setting                       | Value
+------------------------------|---------------
+Writer version                | 1.0
+Compression                   | `snappy`
+Default column encoding       | Dictionary
+Fallback column encoding      | Plain
+Dictionary page encoding      | Plain
+Dictionary data page encoding | `RLE_DICTIONARY`
+
+If you run into a snag trying to ingest Parquet files produced by Materialize
+into your downstream systems, please [contact our team](https://materialize.com/docs/support/)
+or [open an issue](https://github.com/MaterializeInc/demos/issues/new)!
+
+##### Data types {#copy-to-s3-parquet-data-types}
+
+Materialize converts the values in the result set to [Apache Arrow](https://arrow.apache.org/docs/index.html),
+and then serializes this Arrow representation to Parquet. The Arrow schema is
+embedded in the Parquet file metadata and allows reconstructing the Arrow
+representation using a compatible reader.
+
+Materialize also includes [Parquet `LogicalType` annotations](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#metadata)
+where possible. However, many newer `LogicalType` annotations are not supported
+in the 1.0 writer version.
+
+Materialize also embeds its own type information into the Apache Arrow schema.
+The field metadata in the schema contains an `ARROW:extension:name` annotation
+to indicate the Materialize native type the field originated from.
+
+Materialize type | Arrow extension name | [Arrow type](https://github.com/apache/arrow/blob/main/format/Schema.fbs) | [Parquet primitive type](https://parquet.apache.org/docs/file-format/types/) | [Parquet logical type](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md)
+----------------------------------|----------------------------|------------|-------------------|--------------
+[`bigint`](types/integer)         | `materialize.v1.bigint`    | `int64` | `INT64`
+[`boolean`](types/boolean)        | `materialize.v1.boolean`   | `bool` | `BOOLEAN`
+[`bytea`](types/bytea)            | `materialize.v1.bytea`     | `large_binary` | `BYTE_ARRAY`
+[`date`](types/date)              | `materialize.v1.date`      | `date32` | `INT32` | `DATE`
+[`double precision`](types/float) | `materialize.v1.double`    | `float64` | `DOUBLE`
+[`integer`](types/integer)        | `materialize.v1.integer`   | `int32` | `INT32`
+[`jsonb`](types/jsonb)            | `materialize.v1.jsonb`     | `large_utf8` | `BYTE_ARRAY`
+[`map`](types/map)                | `materialize.v1.map`       | `map` (`struct` with fields `keys` and `values`) | Nested | `MAP`
+[`list`](types/list)              | `materialize.v1.list`      | `list` | Nested
+[`numeric`](types/numeric)        | `materialize.v1.numeric`   | `decimal128[38, 10 or max-scale]` | `FIXED_LEN_BYTE_ARRAY`             | `DECIMAL`
+[`real`](types/float)             | `materialize.v1.real`      | `float32` | `FLOAT`
+[`smallint`](types/integer)       | `materialize.v1.smallint`  | `int16` | `INT32` | `INT(16, true)`
+[`text`](types/text)              | `materialize.v1.text`      | `utf8` or `large_utf8` | `BYTE_ARRAY` | `STRING`
+[`time`](types/time)              | `materialize.v1.time`      | `time64[nanosecond]` | `INT64` | `TIME[isAdjustedToUTC = false, unit = NANOS]`
+[`uint2`](types/uint)             | `materialize.v1.uint2`     | `uint16` | `INT32` | `INT(16, false)`
+[`uint4`](types/uint)             | `materialize.v1.uint4`     | `uint32` | `INT32` | `INT(32, false)`
+[`uint8`](types/uint)             | `materialize.v1.uint8`     | `uint64` | `INT64` | `INT(64, false)`
+[`timestamp`](types/timestamp)    | `materialize.v1.timestamp` | `time64[microsecond]` | `INT64` | `TIMESTAMP[isAdjustedToUTC = false, unit = MICROS]`
+[`timestamp with time zone`](types/timestamp) | `materialize.v1.timestampz` | `time64[microsecond]` | `INT64` | `TIMESTAMP[isAdjustedToUTC = true, unit = MICROS]`
+[Arrays](types/array) (`[]`)      | `materialize.v1.array`     | `struct` with `list` field `items` and `uint8` field `dimensions` | Nested
+[`uuid`](types/uuid)              | `materialize.v1.uuid`      | `fixed_size_binary(16)` | `FIXED_LEN_BYTE_ARRAY`
+[`oid`](oid)                      | Unsupported
+[`interval`](interval)            | Unsupported
+[`record`](record)                | Unsupported
+
+### Examples {#copy-to-s3-examples}
+
+```sql
+COPY some_view TO 's3://mz-to-snow/'
+WITH (
+    AWS CONNECTION = aws_role_assumption,
+    FORMAT = 'parquet'
+  );
 ```
 
 ## Privileges
@@ -50,62 +173,9 @@ The privileges required to execute this statement are:
 - `USAGE` privileges on all types used in the query.
 - `USAGE` privileges on the active cluster.
 
+## Related pages
 
-<!--
-
-## Parquet Format
-
-### Parquet Compatibility
-
-Materialize writes Parquet files that aim for maximum compatibility with downstream systems.
-
-By default the following Parquet writer settings are used:
-
-Option | Setting
--------|--------
-Writer Version | 1.0
-Compression | snappy
-Default Column Encoding | Dictionary
-Fallback Column Encoding | Plain
-Dictionary Page Encoding | Plain
-Dictionary Data Page Encoding | RLE_DICTIONARY
-
-### Data Types
-
-Materialize converts the values in the result set to [Apache Arrow](https://arrow.apache.org/docs/index.html), and then serializes
-this Arrow representation to Parquet.
-The Arrow schema is embedded in the Parquet file metadata and allows reconstruction of the Arrow representation using a compatible reader.
-
-Materialize will also include [Parquet Logical Type](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md) annotations where possible, however
-many newer Logical Type annotations are not supported in Parquet Writer Version 1.0.
-
-Materialize also embeds its own type information into the Apache Arrow schema. The field metadata in the schema contains an `ARROW:extension:name` annotation to indicate the Materialize native type the field came from.
-
-Materialize Type | Arrow Extension Name | [Arrow Type](https://github.com/apache/arrow/blob/main/format/Schema.fbs) | [Parquet Primitive Type](https://parquet.apache.org/docs/file-format/types/) | [Parquet Logical Type](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md)
------------------|----------------|------------|-------------------|--------------
-[`bigint`](types/integer) | `materialize.v1.bigint` | `int64` | `INT64`
-[`boolean`](types/boolean) | `materialize.v1.boolean` | `bool` | `BOOLEAN`
-[`bytea`](types/bytea) | `materialize.v1.bytea` | `large_binary` | `BYTE_ARRAY`
-[`date`](types/date) | `materialize.v1.date` | `date32` | `INT32` | `DATE`
-[`double precision`](types/float) | `materialize.v1.double` | `float64` | `DOUBLE`
-[`integer`](types/integer) | `materialize.v1.integer` | `int32` | `INT32`
-[`jsonb`](types/jsonb) | `materialize.v1.jsonb` | `large_utf8` | `BYTE_ARRAY`
-[`map`](types/map) | `materialize.v1.map` | `map` (`struct` with fields `keys` and `values`) | Nested | `MAP`
-[`list`](types/list) | `materialize.v1.list` | `list` | Nested
-[`numeric`](types/numeric) | `materialize.v1.numeric` | `decimal128[38, 10 or max-scale]` | `FIXED_LEN_BYTE_ARRAY` | `DECIMAL`
-[`real`](types/float) | `materialize.v1.real` | `float32` | `FLOAT`
-[`smallint`](types/integer) | `materialize.v1.smallint` | `int16` | `INT32` | `INT(16, true)`
-[`text`](types/text) | `materialize.v1.text` | `utf8` or `large_utf8` | `BYTE_ARRAY` | `STRING`
-[`time`](types/time) | `materialize.v1.time` | `time64[nanosecond]` | `INT64` | `TIME[isAdjustedToUTC = false, unit = NANOS]`
-[`uint2`](types/uint) | `materialize.v1.uint2` | `uint16` | `INT32` | `INT(16, false)`
-[`uint4`](types/uint) | `materialize.v1.uint4` | `uint32` | `INT32` | `INT(32, false)`
-[`uint8`](types/uint) | `materialize.v1.uint8` | `uint64` | `INT64` | `INT(64, false)`
-[`timestamp`](types/timestamp) | `materialize.v1.timestamp` | `time64[microsecond]` | `INT64` | `TIMESTAMP[isAdjustedToUTC = false, unit = MICROS]`
-[`timestamp with time zone`](types/timestamp) | `materialize.v1.timestampz` | `time64[microsecond]` | `INT64` | `TIMESTAMP[isAdjustedToUTC = true, unit = MICROS]`
-[Arrays](types/array) (`[]`) | `materialize.v1.array` | `struct` with `list` field `items` and `uint8` field `dimensions` | Nested
-[`uuid`](types/uuid) | `materialize.v1.uuid` | `fixed_size_binary(16)` | `FIXED_LEN_BYTE_ARRAY`
-[`oid`](oid) | Unsupported
-[`interval`](interval) | Unsupported
-[`record`](record) | Unsupported
-
--->
+- [`CREATE CONNECTION`](/sql/create-connection)
+- Integration guides:
+  - [Amazon s3](/serve-results/s3/)
+  - [Snowflake (via s3)](/serve-results/snowflake/)
