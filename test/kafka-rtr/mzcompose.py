@@ -132,6 +132,15 @@ def workflow_resumption(c: Composition) -> None:
         time.sleep(10)
         t2.join()
 
+        # reset toxiproxy
+        c.kill("toxiproxy")
+        c.up("toxiproxy")
+
+        c.run_testdrive_files(
+            "--no-reset",
+            "resumption/mz-reset.td",
+        )
+
 
 def workflow_multithreaded(c: Composition) -> None:
     c.down(destroy_volumes=True)
