@@ -737,7 +737,14 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
       }
     }
   ],
-  "sources": []
+  "sources": [
+    {
+      "id": {
+        "User": 8
+      },
+      "op": null
+    }
+  ]
 }
 EOF
 
@@ -835,7 +842,14 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
       }
     }
   ],
-  "sources": []
+  "sources": [
+    {
+      "id": {
+        "User": 8
+      },
+      "op": null
+    }
+  ]
 }
 EOF
 
@@ -1908,7 +1922,14 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
       }
     }
   ],
-  "sources": []
+  "sources": [
+    {
+      "id": {
+        "User": 8
+      },
+      "op": null
+    }
+  ]
 }
 EOF
 

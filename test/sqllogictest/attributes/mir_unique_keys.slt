@@ -41,6 +41,8 @@ Explained Query:
         Project (#0) // { keys: "()" }
           ReadStorage materialize.public.t // { keys: "()" }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF

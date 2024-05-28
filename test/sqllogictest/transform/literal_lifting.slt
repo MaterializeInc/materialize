@@ -49,6 +49,8 @@ Explained Query:
             Project (#1) // { arity: 1 }
               ReadStorage materialize.public.t1 // { arity: 2 }
 
+Source materialize.public.t1
+
 Target cluster: quickstart
 
 EOF
@@ -90,6 +92,8 @@ Explained Query:
             ReadStorage materialize.public.t1 // { arity: 2 }
           Project (#1) // { arity: 1 }
             ReadStorage materialize.public.t1 // { arity: 2 }
+
+Source materialize.public.t1
 
 Target cluster: quickstart
 

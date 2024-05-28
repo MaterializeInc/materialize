@@ -79,6 +79,9 @@ Explained Query:
                 Project () // { arity: 0 }
                   ReadStorage materialize.public.t1 // { arity: 1 }
 
+Source materialize.public.t1
+Source materialize.public.t2
+
 Target cluster: quickstart
 
 EOF
@@ -135,6 +138,7 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
+Source materialize.public.t2
 
 Target cluster: quickstart
 
@@ -210,6 +214,7 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
+Source materialize.public.t2
 
 Target cluster: quickstart
 
@@ -298,6 +303,7 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
+Source materialize.public.t2
 
 Target cluster: quickstart
 
@@ -381,6 +387,7 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
+Source materialize.public.t2
 
 Target cluster: quickstart
 
@@ -466,6 +473,7 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
+Source materialize.public.t2
 
 Target cluster: quickstart
 
@@ -571,6 +579,7 @@ Source materialize.public.t1
   filter=((#0) IS NOT NULL)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
+Source materialize.public.t3
 
 Target cluster: quickstart
 
@@ -687,6 +696,7 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
+Source materialize.public.t2
 
 Target cluster: quickstart
 
@@ -760,6 +770,7 @@ Source materialize.public.t1
   filter=((#0) IS NOT NULL)
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
+Source materialize.public.t3
 
 Target cluster: quickstart
 
@@ -839,6 +850,8 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
+Source materialize.public.t2
+Source materialize.public.t3
 
 Target cluster: quickstart
 

@@ -50,6 +50,7 @@ Explained Query:
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
+Source materialize.public.y
 
 Target cluster: quickstart
 
@@ -92,6 +93,7 @@ Explained Query:
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
+Source materialize.public.y
 
 Target cluster: quickstart
 
@@ -135,6 +137,7 @@ Explained Query:
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
+Source materialize.public.y
 
 Target cluster: quickstart
 

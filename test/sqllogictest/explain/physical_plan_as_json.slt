@@ -255,7 +255,14 @@ SELECT * FROM u
       }
     }
   ],
-  "sources": []
+  "sources": [
+    {
+      "id": {
+        "User": 2
+      },
+      "op": null
+    }
+  ]
 }
 EOF
 

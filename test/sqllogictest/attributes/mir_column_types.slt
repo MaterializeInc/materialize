@@ -38,6 +38,8 @@ Explained Query:
     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
       ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
 
+Source materialize.public.v
+
 Target cluster: quickstart
 
 EOF
@@ -52,6 +54,8 @@ Explained Query:
       ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
       ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
+
+Source materialize.public.v
 
 Target cluster: quickstart
 
@@ -74,6 +78,8 @@ Explained Query:
             ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
       Constant // { types: "(bigint, text, date?)" }
         - (1, "hello", null)
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -115,6 +121,7 @@ Explained Query:
 
 Source materialize.public.t
   filter=((#0) IS NOT NULL)
+Source materialize.public.u
 
 Target cluster: quickstart
 
@@ -151,6 +158,7 @@ Explained Query:
       Constant // { types: "(boolean?, bigint)" }
         - (null, 10)
 
+Source materialize.public.u
 Source materialize.public.v
   filter=((#0) IS NOT NULL)
 

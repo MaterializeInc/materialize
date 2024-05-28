@@ -200,6 +200,9 @@ Explained Query:
     ArrangeBy keys=[[(#0 + 1)]] // { arity: 2 }
       ReadStorage materialize.public.t2 // { arity: 2 }
 
+Source materialize.public.t1
+Source materialize.public.t2
+
 Target cluster: quickstart
 
 EOF
@@ -216,6 +219,9 @@ Explained Query:
       ReadStorage materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[(#0 + 1)]] // { arity: 2 }
       ReadStorage materialize.public.t2 // { arity: 2 }
+
+Source materialize.public.t1
+Source materialize.public.t2
 
 Target cluster: quickstart
 
@@ -234,6 +240,9 @@ Explained Query:
     ArrangeBy keys=[[#0]] // { arity: 2 }
       ReadStorage materialize.public.t2 // { arity: 2 }
 
+Source materialize.public.t1
+Source materialize.public.t2
+
 Target cluster: quickstart
 
 EOF
@@ -250,6 +259,9 @@ Explained Query:
       ReadStorage materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[#0]] // { arity: 2 }
       ReadStorage materialize.public.t2 // { arity: 2 }
+
+Source materialize.public.t1
+Source materialize.public.t2
 
 Target cluster: quickstart
 
@@ -327,6 +339,7 @@ Explained Query:
 
 Source materialize.public.t1
   filter=(((#1 = 27) OR (#1 <= 1995)))
+Source materialize.public.t2
 
 Target cluster: quickstart
 
@@ -652,6 +665,8 @@ Explained Query:
           ReadStorage materialize.public.init
         Get l2
 
+Source materialize.public.init
+
 Target cluster: quickstart
 
 EOF
@@ -696,6 +711,8 @@ Explained Query:
         Project (#0)
           ReadStorage materialize.public.init
         Get l2
+
+Source materialize.public.init
 
 Target cluster: quickstart
 
@@ -749,6 +766,8 @@ Explained Query:
           ReadStorage materialize.public.init
         Get l2
 
+Source materialize.public.init
+
 Target cluster: quickstart
 
 EOF
@@ -796,6 +815,8 @@ Explained Query:
           ReadStorage materialize.public.init
         Filter (#0 > 7)
           Get l2
+
+Source materialize.public.init
 
 Target cluster: quickstart
 
@@ -847,6 +868,8 @@ Explained Query:
           ReadStorage materialize.public.init
         Get l2
 
+Source materialize.public.init
+
 Target cluster: quickstart
 
 EOF
@@ -895,6 +918,8 @@ Explained Query:
           ReadStorage materialize.public.init
         Filter (#0 < 3)
           Get l2
+
+Source materialize.public.init
 
 Target cluster: quickstart
 
@@ -1031,6 +1056,8 @@ Explained Query:
   Filter (((((((((((((#4 * #4) * #4) * #4) * #4) * #4) * #4) * #4) * #4) * #4) * #4) * #4) * #4) > 5)
     Map ((#0 * #1), (#2 + 1), ((((((((((((((((((((((((((#0 + #1) + #2) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3))
       ReadStorage materialize.public.t
+
+Source materialize.public.t
 
 Target cluster: quickstart
 

@@ -273,6 +273,8 @@ Explained Query:
                       Project (#0{a})
                         ReadStorage materialize.public.mv
 
+Source materialize.public.mv
+
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***, differential join)
 
@@ -576,6 +578,8 @@ Explained Query:
         Reduce aggregates=[lag[ignore_nulls=true, order_by=[#0{x} asc nulls_last]](row(row(row(#0{x}), row(#0{x}, █, █)), (#0{x} || #0{x})))]
           ReadStorage materialize.public.t1
 
+Source materialize.public.t1
+
 Target cluster: quickstart
 
 EOF
@@ -591,6 +595,8 @@ Explained Query:
       FlatMap unnest_list(#0{first_value})
         Reduce aggregates=[first_value[order_by=[#0{x} asc nulls_last] rows between 5 preceding and current row](row(row(row(#0{x}), #0{x}), (#0{x} || #0{x})))]
           ReadStorage materialize.public.t1
+
+Source materialize.public.t1
 
 Target cluster: quickstart
 

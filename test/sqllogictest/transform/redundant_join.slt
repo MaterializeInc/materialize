@@ -77,6 +77,8 @@ Explained Query:
           Map ((#0 % 2)) // { arity: 3 }
             ReadStorage materialize.public.t2 // { arity: 2 }
 
+Source materialize.public.t2
+
 Target cluster: quickstart
 
 EOF
@@ -165,6 +167,8 @@ Explained Query:
       Distinct project=[(#0 % 2)] // { arity: 1 }
         Project (#0) // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 2 }
+
+Source materialize.public.t2
 
 Target cluster: quickstart
 

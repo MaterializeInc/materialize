@@ -1787,8 +1787,11 @@ EXPLAIN SELECT a::ty FROM t;
 Explained Query:
   ReadStorage materialize.public.t
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
+COMPLETE 1
 EOF
 COMPLETE 1
 
@@ -1798,8 +1801,11 @@ EXPLAIN SELECT a::ty FROM t;
 Explained Query:
   ReadStorage materialize.public.t
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
+COMPLETE 1
 EOF
 COMPLETE 1
 
@@ -1964,8 +1970,11 @@ EXPLAIN SELECT * FROM v;
 Explained Query:
   ReadStorage materialize.public.t
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
+COMPLETE 1
 EOF
 COMPLETE 1
 
@@ -1975,8 +1984,11 @@ EXPLAIN SELECT * FROM v;
 Explained Query:
   ReadStorage materialize.public.t
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
+COMPLETE 1
 EOF
 COMPLETE 1
 
@@ -2071,6 +2083,8 @@ EXPLAIN INDEX i;
 materialize.public.i:
   ArrangeBy keys=[[#0]]
     ReadStorage materialize.public.t
+
+Source materialize.public.t
 
 Target cluster: quickstart
 

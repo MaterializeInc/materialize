@@ -76,6 +76,8 @@ Explained Query:
   TopK order_by=[#0 asc nulls_first] limit=1
     ReadStorage materialize.public.char_table
 
+Source materialize.public.char_table
+
 Target cluster: quickstart
 
 > SELECT * FROM (SELECT * FROM char_table ORDER BY f1 LIMIT 1 OFFSET 0)

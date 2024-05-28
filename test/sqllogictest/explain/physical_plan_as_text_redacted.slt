@@ -158,6 +158,8 @@ Explained Query:
   Get::PassArrangements materialize.public.u
     raw=true
 
+Source materialize.public.u
+
 Target cluster: quickstart
 
 EOF
@@ -959,6 +961,8 @@ materialize.public.t_a_idx:
     types=[integer?, integer?]
     Get::PassArrangements materialize.public.t
       raw=true
+
+Source materialize.public.t
 
 Target cluster: quickstart
 

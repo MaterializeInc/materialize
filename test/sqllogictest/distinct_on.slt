@@ -36,6 +36,8 @@ Explained Query:
       Project (#0, #2) // { arity: 2 }
         ReadStorage materialize.public.abc // { arity: 3 }
 
+Source materialize.public.abc
+
 Target cluster: quickstart
 
 EOF
@@ -47,6 +49,8 @@ Explained Query:
   Finish order_by=[#2 asc nulls_last, #1 asc nulls_last] output=[#0]
     TopK group_by=[#2] order_by=[#1 asc nulls_last] limit=1 // { arity: 3 }
       ReadStorage materialize.public.abc // { arity: 3 }
+
+Source materialize.public.abc
 
 Target cluster: quickstart
 

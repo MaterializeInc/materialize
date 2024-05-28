@@ -344,6 +344,8 @@ Explained Query:
   Project (#0)
     ReadStorage materialize.public.bareformatconfluent
 
+Source materialize.public.bareformatconfluent
+
 Target cluster: quickstart
 
 > CREATE DEFAULT INDEX ON bareformatconfluent;
@@ -376,6 +378,8 @@ Explained Query:
   Distinct project=[#0] monotonic
     Project (#0)
       ReadStorage materialize.public.envelope_none_with_key
+
+Source materialize.public.envelope_none_with_key
 
 Target cluster: quickstart
 

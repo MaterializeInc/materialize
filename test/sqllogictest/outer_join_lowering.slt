@@ -823,6 +823,7 @@ Explained Query:
           Filter (#4{facts_d01} > 42) // { arity: 9 }
             ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
 
+Source materialize.left_joins_raw.facts
 Source materialize.left_joins_raw.dim01
   filter=((#2{dim01_d02} < 24))
 
@@ -883,6 +884,7 @@ Explained Query:
           Filter (#4{facts_d01} > 42) // { arity: 9 }
             ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
 
+Source materialize.left_joins_raw.facts
 Source materialize.left_joins_raw.dim01
   filter=((#2{dim01_d02} < 24))
 
@@ -930,6 +932,7 @@ materialize.public.v:
           Filter (#4{facts_d01} > 42) // { arity: 9 }
             ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
 
+Source materialize.left_joins_raw.facts
 Source materialize.left_joins_raw.dim01
   filter=((#2{dim01_d02} < 24))
 
@@ -986,6 +989,7 @@ materialize.public.mv:
           Filter (#4{facts_d01} > 42) // { arity: 9 }
             ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
 
+Source materialize.left_joins_raw.facts
 Source materialize.left_joins_raw.dim01
   filter=((#2{dim01_d02} < 24))
 

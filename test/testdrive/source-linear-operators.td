@@ -143,6 +143,8 @@ Explained Query:
           Filter (#3 = 4) AND (#1) IS NOT NULL
             ReadStorage materialize.public.data
 
+Source materialize.public.data
+
 Target cluster: quickstart
 
 > CREATE DEFAULT INDEX ON v;
@@ -272,6 +274,7 @@ Explained Query:
           Filter (#3) IS NULL
             ReadStorage materialize.public.data2
 
+Source materialize.public.data
 Source materialize.public.data2
   filter=((#3) IS NULL)
 

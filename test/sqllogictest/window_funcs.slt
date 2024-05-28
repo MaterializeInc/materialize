@@ -255,6 +255,9 @@ Explained Query:
       Project (#0) // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 2 }
 
+Source materialize.public.t1
+Source materialize.public.t2
+
 Target cluster: quickstart
 
 EOF
@@ -5739,6 +5742,8 @@ Explained Query:
             Reduce group_by=[(2 * #0), (3 * #1)] aggregates=[window_agg[sum order_by=[#0 asc nulls_last, #1 asc nulls_last] rows between unbounded preceding and current row](row(row(row(#0, #1), (#1 - 3)), (#0 + 1), (#1 + 2)))]
               ReadStorage materialize.public.t7
 
+Source materialize.public.t7
+
 Target cluster: quickstart
 
 EOF
@@ -6599,6 +6604,8 @@ Explained Query:
         Project (#0) // { keys: "()" }
           ReadStorage materialize.public.t7 // { keys: "()" }
 
+Source materialize.public.t7
+
 Target cluster: quickstart
 
 EOF
@@ -6652,6 +6659,8 @@ Explained Query:
           Project (#2) // { keys: "()" }
             Map (list[row(integer_to_bigint(#1), row(#0, #1))]) // { keys: "([0])" }
               ReadStorage materialize.public.t9 // { keys: "([0])" }
+
+Source materialize.public.t9
 
 Target cluster: quickstart
 

@@ -59,6 +59,8 @@ Explained Query:
     Map (is_regexp_match["foo?", case_insensitive=false](#0)) // { arity: 2 }
       ReadStorage materialize.public.data // { arity: 1 }
 
+Source materialize.public.data
+
 Target cluster: quickstart
 
 EOF
@@ -71,6 +73,8 @@ Explained Query:
   Project (#1) // { arity: 1 }
     Map ((#0 ~ #0)) // { arity: 2 }
       ReadStorage materialize.public.data // { arity: 1 }
+
+Source materialize.public.data
 
 Target cluster: quickstart
 
@@ -201,6 +205,8 @@ Explained Query:
 ", "<newline>"), regexp_match["a.*", case_insensitive=false](#0))
       ReadStorage materialize.public.t
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -226,6 +232,8 @@ Explained Query:
     Map (replace(#0, "
 ", "<newline>"), regexp_match["a.*", case_insensitive=true](#0))
       ReadStorage materialize.public.t
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -331,6 +339,8 @@ Explained Query:
 ", "<newline>"), regexp_match(#0, #2))
       ReadStorage materialize.public.t
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -361,6 +371,8 @@ Explained Query:
     Map (replace(#0, "
 ", "<newline>"), regexp_match(#0, #2, "i"))
       ReadStorage materialize.public.t
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -433,6 +445,8 @@ Explained Query:
     ^
 error: incomplete escape sequence, reached end of pattern prematurely"))
     ReadStorage materialize.public.t
+
+Source materialize.public.t
 
 Target cluster: quickstart
 

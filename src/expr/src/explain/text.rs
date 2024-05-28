@@ -140,7 +140,9 @@ where
                     // pass it to the ExplainSource rendering code.
                     if let Some(cols) = cols.as_mut() {
                         let anonymous = std::iter::repeat(String::new());
-                        cols.extend(anonymous.take(src.op.expressions.len()))
+                        cols.extend(
+                            anonymous.take(src.op.map(|op| op.expressions.len()).unwrap_or(0)),
+                        )
                     };
                     // Render source with humanized expressions.
                     mode.expr(src, cols.as_ref()).fmt_text(f, &mut ctx)?;

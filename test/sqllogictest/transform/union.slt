@@ -43,6 +43,9 @@ Explained Query:
     ReadStorage materialize.public.t2 // { arity: 2 }
     ReadStorage materialize.public.t2 // { arity: 2 }
 
+Source materialize.public.t1
+Source materialize.public.t2
+
 Target cluster: quickstart
 
 EOF
@@ -78,6 +81,9 @@ Explained Query:
       Negate // { arity: 2 }
         ReadStorage materialize.public.t2 // { arity: 2 }
 
+Source materialize.public.t1
+Source materialize.public.t2
+
 Target cluster: quickstart
 
 EOF
@@ -105,6 +111,10 @@ Explained Query:
           Negate // { arity: 2 }
             ReadStorage materialize.public.t3 // { arity: 2 }
 
+Source materialize.public.t1
+Source materialize.public.t2
+Source materialize.public.t3
+
 Target cluster: quickstart
 
 EOF
@@ -130,6 +140,10 @@ Explained Query:
             Project (#0, #2) // { arity: 2 }
               Map (null) // { arity: 3 }
                 ReadStorage materialize.public.t3 // { arity: 2 }
+
+Source materialize.public.t1
+Source materialize.public.t2
+Source materialize.public.t3
 
 Target cluster: quickstart
 
@@ -176,6 +190,7 @@ Explained Query:
 
 Source materialize.public.t2
   filter=((#1) IS NOT NULL)
+Source materialize.public.t3
 
 Target cluster: quickstart
 

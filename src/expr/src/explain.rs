@@ -93,21 +93,27 @@ where
 #[allow(missing_debug_implementations)]
 pub struct ExplainSource<'a> {
     pub id: GlobalId,
-    pub op: &'a MapFilterProject,
+    pub op: Option<&'a MapFilterProject>,
     pub pushdown_info: Option<PushdownInfo<'a>>,
 }
 
 impl<'a> ExplainSource<'a> {
-    pub fn new(id: GlobalId, op: &'a MapFilterProject, filter_pushdown: bool) -> ExplainSource<'a> {
+    pub fn new(
+        id: GlobalId,
+        op: Option<&'a MapFilterProject>,
+        filter_pushdown: bool,
+    ) -> ExplainSource<'a> {
         let pushdown_info = if filter_pushdown {
-            let mfp_mapped = MfpEval::new(&Trace, op.input_arity, &op.expressions);
-            let pushdown = op
-                .predicates
-                .iter()
-                .filter(|(_, e)| mfp_mapped.expr(e).pushdownable())
-                .map(|(_, e)| e)
-                .collect();
-            Some(PushdownInfo { pushdown })
+            op.map(|op| {
+                let mfp_mapped = MfpEval::new(&Trace, op.input_arity, &op.expressions);
+                let pushdown = op
+                    .predicates
+                    .iter()
+                    .filter(|(_, e)| mfp_mapped.expr(e).pushdownable())
+                    .map(|(_, e)| e)
+                    .collect();
+                PushdownInfo { pushdown }
+            })
         } else {
             None
         };
@@ -121,7 +127,10 @@ impl<'a> ExplainSource<'a> {
 
     #[inline]
     pub fn is_identity(&self) -> bool {
-        self.op.is_identity()
+        match self.op {
+            Some(op) => op.is_identity(),
+            None => false,
+        }
     }
 }
 
@@ -137,7 +146,9 @@ where
             .unwrap_or_else(|| self.expr.id.to_string());
         writeln!(f, "{}Source {}", ctx.as_mut(), id)?;
         ctx.indented(|ctx| {
-            self.child(self.expr.op).fmt_text(f, ctx)?;
+            if let Some(op) = self.expr.op {
+                self.child(op).fmt_text(f, ctx)?;
+            }
             if let Some(pushdown_info) = &self.expr.pushdown_info {
                 self.child(pushdown_info).fmt_text(f, ctx)?;
             }

@@ -205,6 +205,8 @@ Explained Query:
       Project (#0) // { arity: 1 }
         ReadStorage materialize.public.l // { arity: 2 }
 
+Source materialize.public.l
+
 Target cluster: quickstart
 
 EOF
@@ -358,6 +360,7 @@ Explained Query:
             Filter (#0) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.r // { arity: 2 }
 
+Source materialize.public.l
 Source materialize.public.r
   filter=((#0) IS NOT NULL)
 
@@ -404,6 +407,7 @@ Explained Query:
 
 Source materialize.public.l
   filter=((#0) IS NOT NULL)
+Source materialize.public.r
 
 Target cluster: quickstart
 
@@ -458,6 +462,9 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.r // { arity: 2 }
+
+Source materialize.public.l
+Source materialize.public.r
 
 Target cluster: quickstart
 
@@ -558,6 +565,8 @@ Explained Query:
       Filter (#1 = 1) // { arity: 2 }
         ReadStorage materialize.public.t4362 // { arity: 2 }
 
+Source materialize.public.t4362
+
 Target cluster: quickstart
 
 EOF
@@ -651,6 +660,9 @@ Explained Query:
       ArrangeBy keys=[[#0]] // { arity: 2 }
         ReadStorage materialize.public.r3 // { arity: 2 }
 
+Source materialize.public.l3
+Source materialize.public.r3
+
 Target cluster: quickstart
 
 EOF
@@ -674,6 +686,9 @@ Explained Query:
         ReadStorage materialize.public.l3 // { arity: 2 }
       ArrangeBy keys=[[#0]] // { arity: 2 }
         ReadStorage materialize.public.r3 // { arity: 2 }
+
+Source materialize.public.l3
+Source materialize.public.r3
 
 Target cluster: quickstart
 
@@ -1183,6 +1198,9 @@ Explained Query:
         Project () // { arity: 0 }
           ReadStorage materialize.public.c // { arity: 1 }
 
+Source materialize.public.a
+Source materialize.public.c
+
 Target cluster: quickstart
 
 EOF
@@ -1225,6 +1243,9 @@ Explained Query:
             ReadStorage materialize.public.fuel_test_1
           ArrangeBy keys=[[]]
             ReadStorage materialize.public.fuel_test_2
+
+Source materialize.public.fuel_test_1
+Source materialize.public.fuel_test_2
 
 Target cluster: quickstart
 

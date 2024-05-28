@@ -43,6 +43,7 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
+Source materialize.public.t2
 
 Target cluster: quickstart
 
@@ -98,6 +99,9 @@ Explained Query:
     cte l0 =
       Project (#1) // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 2 }
+
+Source materialize.public.t1
+Source materialize.public.t2
 
 Target cluster: quickstart
 

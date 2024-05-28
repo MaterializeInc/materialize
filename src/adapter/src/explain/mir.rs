@@ -133,9 +133,9 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
             .0
             .source_imports
             .iter_mut()
-            .filter_map(|(id, (source_desc, _))| {
+            .map(|(id, (source_desc, _))| {
                 let op = source_desc.arguments.operators.as_ref();
-                op.map(|op| ExplainSource::new(*id, op, context.config.filter_pushdown))
+                ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
             .collect::<Vec<_>>();
 
