@@ -826,9 +826,9 @@ impl CatalogState {
     fn apply_item_update(&mut self, item: mz_catalog::durable::Item, diff: Diff) {
         match diff {
             1 => {
-                let catalog_item = self
-                    .deserialize_item(&item.create_sql)
-                    .expect("invalid persisted SQL");
+                let catalog_item = self.deserialize_item(&item.create_sql).unwrap_or_else(|e| {
+                    panic!("invalid persisted SQL: {}: {:?}", item.create_sql, e)
+                });
                 let schema = self.find_non_temp_schema(&item.schema_id);
                 let name = QualifiedItemName {
                     qualifiers: ItemQualifiers {

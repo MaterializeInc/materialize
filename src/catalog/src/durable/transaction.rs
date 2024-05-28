@@ -341,7 +341,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
-    ) -> Result<Vec<(&'static BuiltinLog, GlobalId, u32)>, CatalogError> {
+    ) -> Result<(), CatalogError> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
@@ -361,7 +361,7 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         owner_id: RoleId,
         config: ClusterConfig,
-    ) -> Result<Vec<(&'static BuiltinLog, GlobalId, u32)>, CatalogError> {
+    ) -> Result<(), CatalogError> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
@@ -380,7 +380,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
-    ) -> Result<Vec<(&'static BuiltinLog, GlobalId, u32)>, CatalogError> {
+    ) -> Result<(), CatalogError> {
         if let Err(_) = self.clusters.insert(
             ClusterKey { id: cluster_id },
             ClusterValue {
@@ -400,12 +400,12 @@ impl<'a> Transaction<'a> {
             .zip(oids.into_iter())
             .map(|((builtin, index_id), oid)| (builtin, index_id, oid))
             .collect();
-        for (builtin, index_id, oid) in &introspection_source_indexes {
+        for (builtin, index_id, oid) in introspection_source_indexes {
             let introspection_source_index = IntrospectionSourceIndex {
                 cluster_id,
                 name: builtin.name.to_string(),
-                index_id: *index_id,
-                oid: *oid,
+                index_id,
+                oid,
             };
             let (key, value) = introspection_source_index.into_key_value();
             self.introspection_sources
@@ -413,7 +413,7 @@ impl<'a> Transaction<'a> {
                 .expect("no uniqueness violation");
         }
 
-        Ok(introspection_source_indexes)
+        Ok(())
     }
 
     pub fn rename_cluster(
@@ -1563,8 +1563,16 @@ impl<'a> Transaction<'a> {
     /// These are mirrored so that we can toggle the flag with Launch Darkly,
     /// but use it in boot before Launch Darkly is available.
     pub fn set_txn_wal_tables(&mut self, value: TxnWalTablesImpl) -> Result<(), CatalogError> {
-        self.set_config(TXN_WAL_TABLES.into(), Some(u64::from(value)))?;
-        Ok(())
+        self.set_config(TXN_WAL_TABLES.into(), Some(u64::from(value)))
+    }
+
+    /// Removes the catalog `txn_wal_tables` "config" value to
+    /// match the `txn_wal_tables` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with Launch Darkly,
+    /// but use it in boot before Launch Darkly is available.
+    pub fn reset_txn_wal_tables(&mut self) -> Result<(), CatalogError> {
+        self.set_config(TXN_WAL_TABLES.into(), None)
     }
 
     /// Updates the catalog `system_config_synced` "config" value to true.
@@ -1830,23 +1838,6 @@ impl<'a> Transaction<'a> {
                     None
                 }
             })
-        }
-
-        fn get_large_collection_op_updates<'a, K, T>(
-            collection: &'a Vec<(K, Diff, Timestamp)>,
-            kind_fn: impl Fn(T) -> StateUpdateKind + 'a,
-            op: Timestamp,
-        ) -> impl Iterator<Item = (StateUpdateKind, Diff)> + 'a
-        where
-            K: Ord + Eq + Clone + Debug,
-            T: DurableType<K, ()>,
-        {
-            collection
-                .iter()
-                .filter(move |(_k, _diff, ts)| *ts == op)
-                .map(|(k, diff, _ts)| (k.clone(), (), diff.clone()))
-                .map(|(k, v, diff)| (DurableType::from_key_value(k, v), diff))
-                .map(move |(update, diff)| (kind_fn(update), diff))
         }
 
         let Transaction {

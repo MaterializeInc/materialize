@@ -61,20 +61,19 @@ async fn datadriven() {
                     match test_case.directive.as_str() {
                         "add-table" => {
                             let id = catalog.allocate_user_id().await.unwrap();
-                            let database_id = catalog
-                                .resolve_database(DEFAULT_DATABASE_NAME)
-                                .unwrap()
-                                .id();
+                            let database = catalog.resolve_database(DEFAULT_DATABASE_NAME).unwrap();
+                            let database_name = database.name.clone();
+                            let database_id = database.id();
                             let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
-                            let schema_spec = catalog
+                            let schema = catalog
                                 .resolve_schema_in_database(
                                     &database_spec,
                                     DEFAULT_SCHEMA,
                                     &SYSTEM_CONN_ID,
                                 )
-                                .unwrap()
-                                .id
-                                .clone();
+                                .unwrap();
+                            let schema_name = schema.name.schema.clone();
+                            let schema_spec = schema.id.clone();
                             catalog
                                 .transact(
                                     None,
@@ -91,7 +90,9 @@ async fn datadriven() {
                                         },
                                         item: CatalogItem::Table(Table {
                                             create_sql: Some(format!(
-                                                "CREATE TABLE {} ()",
+                                                "CREATE TABLE {}.{}.{} ()",
+                                                database_name,
+                                                schema_name,
                                                 test_case.input.trim_end()
                                             )),
                                             desc: RelationDesc::empty(),

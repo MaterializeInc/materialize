@@ -920,11 +920,15 @@ impl SystemVar {
         val.as_any().downcast_ref::<V>().expect("success")
     }
 
-    fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
+    fn parse(&self, input: VarInput) -> Result<Box<dyn Value>, VarError> {
         let v = self.definition.parse(input)?;
-
         // Validate our parsed value.
         self.validate_constraints(v.as_ref())?;
+        Ok(v)
+    }
+
+    fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
+        let v = self.parse(input)?;
 
         if self.persisted_value.as_ref() != Some(&v) {
             self.persisted_value = Some(v);
@@ -1403,6 +1407,21 @@ impl SystemVars {
         Self::SESSION_VARS.contains_key(UncasedStr::new(name)) || name == ENABLE_RBAC_CHECKS.name()
     }
 
+    /// Returns a [`SystemVar`] representing the configuration parameter with the
+    /// specified name.
+    ///
+    /// See [`Self::get`] for more details.
+    ///
+    /// # Errors
+    ///
+    /// The call will return an error:
+    /// 1. If `name` does not refer to a valid [`SystemVars`] field.
+    fn get_sys_var(&self, name: &str) -> Result<&SystemVar, VarError> {
+        self.vars
+            .get(UncasedStr::new(name))
+            .ok_or_else(|| VarError::UnknownParameter(name.into()))
+    }
+
     /// Returns a [`Var`] representing the configuration parameter with the
     /// specified name.
     ///
@@ -1424,10 +1443,7 @@ impl SystemVars {
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn get(&self, name: &str) -> Result<&dyn Var, VarError> {
-        self.vars
-            .get(UncasedStr::new(name))
-            .map(|v| v.as_var())
-            .ok_or_else(|| VarError::UnknownParameter(name.into()))
+        self.get_sys_var(name).map(|v| v.as_var())
     }
 
     /// Check if the given `values` is the default value for the [`Var`]
@@ -1451,16 +1467,46 @@ impl SystemVars {
     }
 
     /// Sets the configuration parameter named `name` to the value represented
-    /// by `value`.
+    /// by `input`.
     ///
     /// Like with [`SystemVars::get`], configuration parameters are matched case
-    /// insensitively. If `value` is not valid, as determined by the underlying
+    /// insensitively. If `input` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
     ///
     /// Return a `bool` value indicating whether the [`Var`] identified by
     /// `name` was modified by this call (it won't be if it already had the
-    /// given `value`).
+    /// given `input`).
+    ///
+    /// Note that this function does not check that the access variable should
+    /// be visible because of other settings or users. Before or after accessing
+    /// this method, you should call `Var::visible`.
+    ///
+    /// # Errors
+    ///
+    /// The call will return an error:
+    /// 1. If `name` does not refer to a valid [`SystemVars`] field.
+    /// 2. If `input` does not represent a valid [`SystemVars`] value for
+    ///    `name`.
+    pub fn set(&mut self, name: &str, input: VarInput) -> Result<bool, VarError> {
+        let result = self
+            .vars
+            .get_mut(UncasedStr::new(name))
+            .ok_or_else(|| VarError::UnknownParameter(name.into()))
+            .and_then(|v| v.set(input))?;
+        self.propagate_var_change(name);
+        Ok(result)
+    }
+
+    /// Parses the configuration parameter value represented by `input` named
+    /// `name`.
+    ///
+    /// Like with [`SystemVars::get`], configuration parameters are matched case
+    /// insensitively. If `input` is not valid, as determined by the underlying
+    /// configuration parameter, or if the named configuration parameter does
+    /// not exist, an error is returned.
+    ///
+    /// Return a `Box<dyn Value>` that is the result of parsing `input`.
     ///
     /// Note that this function does not check that the access variable should
     /// be visible because of other settings or users. Before or after accessing
@@ -1472,14 +1518,11 @@ impl SystemVars {
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     /// 2. If `value` does not represent a valid [`SystemVars`] value for
     ///    `name`.
-    pub fn set(&mut self, name: &str, input: VarInput) -> Result<bool, VarError> {
-        let result = self
-            .vars
-            .get_mut(UncasedStr::new(name))
+    pub fn parse(&self, name: &str, input: VarInput) -> Result<Box<dyn Value>, VarError> {
+        self.vars
+            .get(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
-            .and_then(|v| v.set(input))?;
-        self.propagate_var_change(name);
-        Ok(result)
+            .and_then(|v| v.parse(input))
     }
 
     /// Set the default for this variable. This is the value this
