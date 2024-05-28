@@ -16,11 +16,14 @@ use std::fmt::Debug;
 use std::iter;
 
 use mz_catalog::builtin::{Builtin, BuiltinTable, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP};
-use mz_catalog::durable::objects::{ClusterKey, DatabaseKey, DurableType, RoleKey, SchemaKey};
+use mz_catalog::durable::objects::{
+    ClusterKey, DatabaseKey, DurableType, ItemKey, RoleKey, SchemaKey,
+};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, CatalogMemoryType, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Log,
-    Role, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table, Type,
+    CatalogEntry, CatalogItem, CatalogMemoryType, Cluster, ClusterReplica, DataSourceDesc,
+    Database, Func, Log, Role, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
+    Type,
 };
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
@@ -49,6 +52,7 @@ struct InProgressRetractions {
     databases: BTreeMap<DatabaseKey, Database>,
     schemas: BTreeMap<SchemaKey, Schema>,
     clusters: BTreeMap<ClusterKey, Cluster>,
+    items: BTreeMap<ItemKey, CatalogEntry>,
 }
 
 impl InProgressRetractions {
@@ -58,6 +62,7 @@ impl InProgressRetractions {
             databases: BTreeMap::new(),
             schemas: BTreeMap::new(),
             clusters: BTreeMap::new(),
+            items: BTreeMap::new(),
         }
     }
 }
@@ -265,7 +270,7 @@ impl CatalogState {
                 {
                     // Apply updates and start batching builtin view additions.
                     let builtin_table_update =
-                        self.apply_updates(std::mem::take(updates), &mut retractions);
+                        self.apply_updates_inner(std::mem::take(updates), &mut retractions);
                     builtin_table_updates.extend(builtin_table_update);
                     let view_addition = lookup_builtin_view_addition(system_object_mapping);
                     state = ApplyState::BuiltinViewAdditions(vec![view_addition]);
@@ -302,7 +307,7 @@ impl CatalogState {
         // Apply remaining state.
         match state {
             ApplyState::Updates(updates) => {
-                let builtin_table_update = self.apply_updates(updates, &mut retractions);
+                let builtin_table_update = self.apply_updates_inner(updates, &mut retractions);
                 builtin_table_updates.extend(builtin_table_update);
             }
             ApplyState::BuiltinViewAdditions(builtin_view_additions) => {
@@ -317,9 +322,19 @@ impl CatalogState {
     /// Update in-memory catalog state from a list of updates made to the durable catalog state.
     ///
     /// Returns builtin table updates corresponding to the changes to catalog state.
-    #[must_use]
     #[instrument]
     pub(crate) fn apply_updates(
+        &mut self,
+        updates: Vec<StateUpdate>,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let mut retractions = InProgressRetractions::new();
+        let updates = sort_updates(updates);
+        self.apply_updates_inner(updates, &mut retractions)
+    }
+
+    #[must_use]
+    #[instrument(level = "debug")]
+    fn apply_updates_inner(
         &mut self,
         updates: Vec<StateUpdate>,
         retractions: &mut InProgressRetractions,
@@ -623,10 +638,16 @@ impl CatalogState {
             || cluster_replica.replica_id,
             diff,
         );
-        apply(
-            &mut cluster.replicas_by_id_,
-            cluster_replica.replica_id,
-            || {
+        match diff {
+            StateDiff::Retraction => {
+                let prev = cluster.replicas_by_id_.remove(&cluster_replica.replica_id);
+                assert!(
+                    prev.is_some(),
+                    "retraction does not match existing value: {:?}",
+                    cluster_replica.replica_id
+                );
+            }
+            StateDiff::Addition => {
                 let logging = ReplicaLogging {
                     log_logging: cluster_replica.config.logging.log_logging,
                     interval: cluster_replica.config.logging.interval,
@@ -635,16 +656,23 @@ impl CatalogState {
                     location,
                     compute: ComputeReplicaConfig { logging },
                 };
-                ClusterReplica {
+                let replica = ClusterReplica {
                     name: cluster_replica.name.clone(),
                     cluster_id: cluster_replica.cluster_id,
                     replica_id: cluster_replica.replica_id,
                     config,
                     owner_id: cluster_replica.owner_id,
-                }
-            },
-            diff,
-        );
+                };
+                let prev = cluster
+                    .replicas_by_id_
+                    .insert(cluster_replica.replica_id, replica);
+                assert_eq!(
+                    prev, None,
+                    "values must be explicitly retracted before inserting a new value: {:?}",
+                    cluster_replica.replica_id
+                );
+            }
+        }
     }
 
     #[instrument(level = "debug")]
@@ -856,13 +884,14 @@ impl CatalogState {
         &mut self,
         item: mz_catalog::durable::Item,
         diff: StateDiff,
-        _retractions: &mut InProgressRetractions,
+        retractions: &mut InProgressRetractions,
     ) {
         match diff {
             StateDiff::Addition => {
-                let catalog_item = self
-                    .deserialize_item(&item.create_sql)
-                    .expect("invalid persisted SQL");
+                let key = item.key();
+                let catalog_item = self.deserialize_item(&item.create_sql).unwrap_or_else(|e| {
+                    panic!("invalid persisted SQL: {}: {:?}", item.create_sql, e)
+                });
                 let schema = self.find_non_temp_schema(&item.schema_id);
                 let name = QualifiedItemName {
                     qualifiers: ItemQualifiers {
@@ -879,9 +908,18 @@ impl CatalogState {
                     item.owner_id,
                     PrivilegeMap::from_mz_acl_items(item.privileges),
                 );
+                // TODO(jkosh44) Think of better way for this.
+                let id = item.id;
+                if let Some(retraction) = retractions.items.remove(&key) {
+                    let entry = self.entry_by_id.get_mut(&id).expect("just inserted");
+                    entry.referenced_by = retraction.referenced_by;
+                    entry.used_by = retraction.used_by;
+                }
             }
             StateDiff::Retraction => {
-                self.drop_item(item.id);
+                let entry = self.drop_item(item.id);
+                let key = item.into_key_value().0;
+                retractions.items.insert(key, entry);
             }
         }
     }
@@ -1057,14 +1095,12 @@ impl CatalogState {
 /// TODO(jkosh44) Name change?
 fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: impl FnOnce() -> V, diff: StateDiff)
 where
-    K: Ord + Debug,
+    K: Ord + Debug + Clone,
     V: PartialEq + Debug,
 {
     match diff {
         StateDiff::Retraction => {
             let prev = map.remove(&key);
-            // We can't assert the exact contents of the previous value, since we don't know
-            // what it should look like.
             assert_eq!(
                 prev,
                 Some(value()),
@@ -1072,10 +1108,10 @@ where
             );
         }
         StateDiff::Addition => {
-            let prev = map.insert(key, value());
+            let prev = map.insert(key.clone(), value());
             assert_eq!(
                 prev, None,
-                "values must be explicitly retracted before inserting a new value"
+                "values must be explicitly retracted before inserting a new value: {key:?}"
             );
         }
     }

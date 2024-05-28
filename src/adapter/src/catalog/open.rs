@@ -1334,7 +1334,7 @@ mod builtin_migration_tests {
         ) -> (String, ItemNamespace, CatalogItem) {
             let item = match self.item {
                 SimplifiedItem::Table => CatalogItem::Table(Table {
-                    create_sql: Some("CREATE TABLE t ()".to_string()),
+                    create_sql: Some("CREATE TABLE materialize.public.t (a INT)".to_string()),
                     desc: RelationDesc::empty()
                         .with_column("a", ScalarType::Int32.nullable(true))
                         .with_key(vec![0]),
@@ -1345,11 +1345,19 @@ mod builtin_migration_tests {
                     is_retained_metrics_object: false,
                 }),
                 SimplifiedItem::MaterializedView { referenced_names } => {
-                    let table_list = referenced_names.iter().join(",");
+                    let table_list = referenced_names
+                        .iter()
+                        .map(|table| format!("materialize.public.{table}"))
+                        .join(",");
+                    let column_list = referenced_names
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, _)| format!("a{idx}"))
+                        .join(",");
                     let resolved_ids = convert_names_to_ids(referenced_names, id_mapping);
                     CatalogItem::MaterializedView(MaterializedView {
                         create_sql: format!(
-                            "CREATE MATERIALIZED VIEW mv AS SELECT * FROM {table_list}"
+                            "CREATE MATERIALIZED VIEW materialize.public.mv ({column_list}) AS SELECT * FROM {table_list}"
                         ),
                         raw_expr: mz_sql::plan::HirRelationExpr::constant(
                             Vec::new(),
@@ -1379,7 +1387,7 @@ mod builtin_migration_tests {
                 SimplifiedItem::Index { on } => {
                     let on_id = id_mapping[&on];
                     CatalogItem::Index(Index {
-                        create_sql: format!("CREATE INDEX idx ON {on} (a)"),
+                        create_sql: format!("CREATE INDEX idx ON materialize.public.{on} (a)"),
                         on: on_id,
                         keys: Vec::new(),
                         conn_id: None,
