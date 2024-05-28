@@ -67,6 +67,7 @@ use crate::{Diagnostics, PersistClient, ShardId};
 pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     scope: &mut Child<'g, G, T>,
     name: &str,
+    purpose: &str,
     client: impl Fn() -> C,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
@@ -130,6 +131,7 @@ where
     let (descs, descs_token) = shard_source_descs::<K, V, D, _, G>(
         &scope.parent,
         name,
+        purpose,
         client(),
         shard_id.clone(),
         as_of,
@@ -208,6 +210,7 @@ impl<T: Timestamp + Codec64> LeaseManager<T> {
 pub(crate) fn shard_source_descs<K, V, D, F, G>(
     scope: &G,
     name: &str,
+    purpose: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
@@ -271,6 +274,8 @@ where
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
     let (mut descs_output, descs_stream) = builder.new_output();
+
+    let purpose = purpose.to_owned();
 
     #[allow(clippy::await_holding_refcell_ref)]
     let shutdown_button = builder.build(move |caps| async move {
@@ -345,7 +350,7 @@ where
             SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
                 Ok(parts) => parts,
                 Err(e) => {
-                    panic!("{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}")
+                    panic!("{name_owned}: {shard_id} ({purpose}) cannot serve requested as_of {as_of:?}: {e:?}")
                 }
             },
             SnapshotMode::Exclude => vec![],
@@ -364,7 +369,7 @@ where
         let listen = match read.listen(as_of.clone()).await {
             Ok(handle) => listen.insert(handle),
             Err(e) => {
-                panic!("{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}")
+                panic!("{name_owned}: {shard_id} ({purpose}) cannot serve requested as_of {as_of:?}: {e:?}")
             }
         };
 
@@ -620,6 +625,7 @@ mod tests {
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _, _>(
                         scope,
                         "test_source",
+                        "test",
                         move || std::future::ready(persist_client.clone()),
                         shard_id,
                         None, // No explicit as_of!
@@ -689,6 +695,7 @@ mod tests {
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _, _>(
                         scope,
                         "test_source",
+                        "test",
                         move || std::future::ready(persist_client.clone()),
                         shard_id,
                         Some(as_of), // We specify the as_of explicitly!

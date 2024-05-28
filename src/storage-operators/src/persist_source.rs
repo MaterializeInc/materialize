@@ -134,6 +134,7 @@ impl Subtime {
 pub fn persist_source<G>(
     scope: &mut G,
     source_id: GlobalId,
+    purpose: &str,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: &TxnsContext,
     // In case we need to use a dyncfg to decide which operators to render in a
@@ -200,6 +201,7 @@ where
         let (stream, source_tokens) = persist_source_core(
             scope,
             source_id,
+            purpose,
             Arc::clone(&persist_clients),
             metadata.clone(),
             as_of.clone(),
@@ -269,6 +271,7 @@ type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)
 pub fn persist_source_core<'g, G>(
     scope: &RefinedScope<'g, G>,
     source_id: GlobalId,
+    purpose: &str,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
     as_of: Option<Antichain<Timestamp>>,
@@ -337,6 +340,7 @@ where
     let (fetched, token) = shard_source(
         &mut scope.clone(),
         &name,
+        purpose,
         move || {
             let (c, l) = (
                 Arc::clone(&persist_clients),

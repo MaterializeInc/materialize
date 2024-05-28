@@ -309,6 +309,7 @@ where
                             let (stream, tok) = persist_source::persist_source_core(
                                 scope,
                                 id,
+                                "upsert_rehydration",
                                 persist_clients,
                                 description.ingestion_metadata,
                                 Some(as_of),

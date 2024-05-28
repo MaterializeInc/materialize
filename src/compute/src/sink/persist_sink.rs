@@ -106,6 +106,7 @@ where
     let (persist_oks, persist_errs, token) = mz_storage_operators::persist_source::persist_source(
         &mut desired_oks.scope(),
         sink_id,
+        "compute_persist_sink",
         Arc::clone(&compute_state.persist_clients),
         &compute_state.txns_ctx,
         &compute_state.worker_config,

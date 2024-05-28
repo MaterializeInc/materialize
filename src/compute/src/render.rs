@@ -221,6 +221,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     let (mut ok_stream, err_stream, token) = persist_source::persist_source(
                         inner,
                         *source_id,
+                        "compute_import",
                         Arc::clone(&compute_state.persist_clients),
                         &compute_state.txns_ctx,
                         &compute_state.worker_config,

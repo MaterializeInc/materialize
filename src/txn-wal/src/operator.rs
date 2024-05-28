@@ -648,6 +648,7 @@ impl DataSubscribe {
                 let (data_stream, token) = shard_source::<String, (), u64, i64, _, _, _, _>(
                     scope,
                     name,
+                    "data_subscribe",
                     move || std::future::ready(client.clone()),
                     data_id,
                     Some(Antichain::from_elem(as_of)),

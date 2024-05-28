@@ -54,6 +54,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
         scope,
         sink.from,
+        "sink",
         Arc::clone(&storage_state.persist_clients),
         &storage_state.txns_ctx,
         storage_state.storage_configuration.config_set(),
