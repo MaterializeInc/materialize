@@ -309,7 +309,6 @@ where
                             let (stream, tok) = persist_source::persist_source_core(
                                 scope,
                                 id,
-                                "upsert_rehydration",
                                 persist_clients,
                                 description.ingestion_metadata,
                                 Some(as_of),
@@ -319,6 +318,7 @@ where
                                 flow_control,
                                 false.then_some(|| unreachable!()),
                                 async {},
+                                |error| panic!("upsert_rehydration: {error}"),
                             );
                             (
                                 stream.as_collection(),

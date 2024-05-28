@@ -31,6 +31,7 @@ use timely::dataflow::{Scope, Stream};
 use tracing::warn;
 
 use crate::healthcheck::HealthStatusMessage;
+use crate::internal_control::InternalStorageCommand;
 use crate::storage_state::StorageState;
 
 /// _Renders_ complete _differential_ [`Collection`]s
@@ -51,10 +52,12 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     } else {
         SnapshotMode::Exclude
     };
+
+    let command_tx = Rc::clone(&storage_state.internal_cmd_tx);
+
     let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
         scope,
         sink.from,
-        "sink",
         Arc::clone(&storage_state.persist_clients),
         &storage_state.txns_ctx,
         storage_state.storage_configuration.config_set(),
@@ -65,6 +68,15 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         None,
         None,
         async {},
+        move |error| {
+            let error = format!("storage_sink: {error}");
+            tracing::error!("{error}");
+            let mut command_tx = command_tx.borrow_mut();
+            command_tx.broadcast(InternalStorageCommand::SuspendAndRestart {
+                id: sink_id,
+                reason: error,
+            });
+        },
     );
     tokens.extend(persist_tokens);
 

@@ -14,7 +14,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt::Debug;
-use std::future::Future;
+use std::future::{self, Future};
 use std::hash::{Hash, Hasher};
 use std::pin::pin;
 use std::rc::Rc;
@@ -67,7 +67,6 @@ use crate::{Diagnostics, PersistClient, ShardId};
 pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     scope: &mut Child<'g, G, T>,
     name: &str,
-    purpose: &str,
     client: impl Fn() -> C,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
@@ -80,6 +79,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
+    error_handler: impl FnMut(String) -> () + 'static,
     project: ProjectionPushdown,
 ) -> (
     Stream<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
@@ -131,7 +131,6 @@ where
     let (descs, descs_token) = shard_source_descs::<K, V, D, _, G>(
         &scope.parent,
         name,
-        purpose,
         client(),
         shard_id.clone(),
         as_of,
@@ -144,6 +143,7 @@ where
         should_fetch_part,
         listen_sleep,
         start_signal,
+        error_handler,
         project,
     );
     tokens.push(descs_token);
@@ -210,7 +210,6 @@ impl<T: Timestamp + Codec64> LeaseManager<T> {
 pub(crate) fn shard_source_descs<K, V, D, F, G>(
     scope: &G,
     name: &str,
-    purpose: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
@@ -224,6 +223,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
+    mut error_handler: impl FnMut(String) -> () + 'static,
     project: ProjectionPushdown,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, PressOnDropButton)
 where
@@ -274,8 +274,6 @@ where
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
     let (mut descs_output, descs_stream) = builder.new_output();
-
-    let purpose = purpose.to_owned();
 
     #[allow(clippy::await_holding_refcell_ref)]
     let shutdown_button = builder.build(move |caps| async move {
@@ -350,7 +348,12 @@ where
             SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
                 Ok(parts) => parts,
                 Err(e) => {
-                    panic!("{name_owned}: {shard_id} ({purpose}) cannot serve requested as_of {as_of:?}: {e:?}")
+                    error_handler(format!("{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"));
+
+                    // We cannot continue, and we cannot shut down. Otherwise
+                    // downstream operators might interpret our downgrading our
+                    // sink as a statement of progress.
+                    future::pending().await
                 }
             },
             SnapshotMode::Exclude => vec![],
@@ -369,7 +372,12 @@ where
         let listen = match read.listen(as_of.clone()).await {
             Ok(handle) => listen.insert(handle),
             Err(e) => {
-                panic!("{name_owned}: {shard_id} ({purpose}) cannot serve requested as_of {as_of:?}: {e:?}")
+                error_handler(format!("{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"));
+
+                // We cannot continue, and we cannot shut down. Otherwise
+                // downstream operators might interpret our downgrading our sink
+                // as a statement of progress.
+                future::pending().await
             }
         };
 
@@ -625,7 +633,6 @@ mod tests {
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _, _>(
                         scope,
                         "test_source",
-                        "test",
                         move || std::future::ready(persist_client.clone()),
                         shard_id,
                         None, // No explicit as_of!
@@ -641,6 +648,7 @@ mod tests {
                         |_fetch, _frontier| true,
                         false.then_some(|| unreachable!()),
                         async {},
+                        |error| panic!("test: {error}"),
                         ProjectionPushdown::FetchAll,
                     );
                     (stream.leave(), tokens)
@@ -695,7 +703,6 @@ mod tests {
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _, _>(
                         scope,
                         "test_source",
-                        "test",
                         move || std::future::ready(persist_client.clone()),
                         shard_id,
                         Some(as_of), // We specify the as_of explicitly!
@@ -711,6 +718,7 @@ mod tests {
                         |_fetch, _frontier| true,
                         false.then_some(|| unreachable!()),
                         async {},
+                        |error| panic!("test: {error}"),
                         ProjectionPushdown::FetchAll,
                     );
                     (stream.leave(), tokens)

@@ -134,7 +134,6 @@ impl Subtime {
 pub fn persist_source<G>(
     scope: &mut G,
     source_id: GlobalId,
-    purpose: &str,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: &TxnsContext,
     // In case we need to use a dyncfg to decide which operators to render in a
@@ -147,6 +146,7 @@ pub fn persist_source<G>(
     map_filter_project: Option<&mut MfpPlan>,
     max_inflight_bytes: Option<usize>,
     start_signal: impl Future<Output = ()> + 'static,
+    error_handler: impl FnMut(String) -> () + 'static,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -201,7 +201,6 @@ where
         let (stream, source_tokens) = persist_source_core(
             scope,
             source_id,
-            purpose,
             Arc::clone(&persist_clients),
             metadata.clone(),
             as_of.clone(),
@@ -211,6 +210,7 @@ where
             flow_control,
             subscribe_sleep,
             start_signal,
+            error_handler,
         );
         tokens.extend(source_tokens);
 
@@ -271,7 +271,6 @@ type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)
 pub fn persist_source_core<'g, G>(
     scope: &RefinedScope<'g, G>,
     source_id: GlobalId,
-    purpose: &str,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
     as_of: Option<Antichain<Timestamp>>,
@@ -282,6 +281,7 @@ pub fn persist_source_core<'g, G>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
+    error_handler: impl FnMut(String) -> () + 'static,
 ) -> (
     Stream<
         RefinedScope<'g, G>,
@@ -340,7 +340,6 @@ where
     let (fetched, token) = shard_source(
         &mut scope.clone(),
         &name,
-        purpose,
         move || {
             let (c, l) = (
                 Arc::clone(&persist_clients),
@@ -380,6 +379,7 @@ where
         },
         listen_sleep,
         start_signal,
+        error_handler,
         project,
     );
     let rows = decode_and_mfp(cfg, &fetched, &name, until, map_filter_project);
