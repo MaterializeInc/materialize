@@ -51,17 +51,22 @@ class Environment:
             json,
         )
 
+        created_environment_assignment = self.sys_kubectl.get(
+            None,
+            "environmentassignment",
+            environment_assignment,
+        )
+
+        self.env_kubectl.context = created_environment_assignment["spec"]["cluster"]
+
         self.env_kubectl.get_retry(
             None,
             "environment",
             environment,
             self.create_env_assignment_get_retries,
         )
-        return self.sys_kubectl.get(
-            None,
-            "environmentassignment",
-            environment_assignment,
-        )
+
+        return created_environment_assignment
 
     def wait_for_environmentd(self, max_attempts: int = 600) -> dict[str, Any]:
         def get_environment() -> Response:
