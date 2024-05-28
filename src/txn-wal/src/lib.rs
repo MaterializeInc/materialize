@@ -551,7 +551,7 @@ pub(crate) async fn cads<T, O, C>(
 
 #[cfg(test)]
 pub mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
     use std::sync::Mutex;
 
@@ -563,6 +563,7 @@ pub mod tests {
     use prost::Message;
 
     use crate::operator::DataSubscribe;
+    use crate::txn_cache::TxnsCache;
     use crate::txn_write::{Txn, TxnApply};
     use crate::txns::{Tidy, TxnsHandle};
 
@@ -740,12 +741,55 @@ pub mod tests {
         #[allow(ungated_async_fn_track_caller)]
         #[track_caller]
         pub async fn assert_snapshot(&self, data_id: ShardId, as_of: u64) {
-            self.assert_subscribe(data_id, as_of, as_of + 1).await;
+            let mut cache: TxnsCache<u64, TxnsCodecDefault> =
+                TxnsCache::open(&self.client, self.txns_id, Some(data_id)).await;
+            let _ = cache.update_gt(&as_of).await;
+            let snapshot = cache.data_snapshot(data_id, as_of);
+            let mut data_read = self
+                .client
+                .open_leased_reader(
+                    data_id,
+                    Arc::new(StringSchema),
+                    Arc::new(UnitSchema),
+                    Diagnostics::from_purpose("assert snapshot"),
+                    true,
+                )
+                .await
+                .expect("reader creation shouldn't panic");
+            let snapshot = snapshot
+                .snapshot_and_fetch(&mut data_read)
+                .await
+                .expect("snapshot shouldn't panic");
+            data_read.expire().await;
+            let snapshot: Vec<_> = snapshot
+                .into_iter()
+                .map(|((k, v), t, d)| {
+                    let (k, ()) = (k.unwrap(), v.unwrap());
+                    (k, t, d)
+                })
+                .collect();
+
+            // Check that a subscribe would produce the same result.
+            let subscribe = self.subscribe(data_id, as_of, as_of + 1).await;
+            assert_eq!(
+                snapshot.iter().collect::<BTreeSet<_>>(),
+                subscribe.output().into_iter().collect::<BTreeSet<_>>()
+            );
+
+            // Check that the result is correct.
+            self.assert_eq(data_id, as_of, as_of + 1, snapshot);
         }
 
         #[allow(ungated_async_fn_track_caller)]
         #[track_caller]
         pub async fn assert_subscribe(&self, data_id: ShardId, as_of: u64, until: u64) {
+            let data_subscribe = self.subscribe(data_id, as_of, until).await;
+            self.assert_eq(data_id, as_of, until, data_subscribe.output().clone());
+        }
+
+        #[allow(ungated_async_fn_track_caller)]
+        #[track_caller]
+        pub async fn subscribe(&self, data_id: ShardId, as_of: u64, until: u64) -> DataSubscribe {
             let mut data_subscribe = DataSubscribe::new(
                 "test",
                 self.client.clone(),
@@ -756,7 +800,7 @@ pub mod tests {
                 true,
             );
             data_subscribe.step_past(until - 1).await;
-            self.assert_eq(data_id, as_of, until, data_subscribe.output().clone());
+            data_subscribe
         }
     }
 
