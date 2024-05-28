@@ -7,7 +7,7 @@ possible.
 
 Anyone is welcome to upgrade the version of Rust! Below is the list of things you need to do:
 
-1. Bump the `rust-version` field in our [Workspace `Cargo.toml`](/Cargo.toml).
+1. Bump the `rust-version` field in our [Workspace `Cargo.toml`](/Cargo.toml) and in the [Bazel `WORKSPACE`](/WORKSPACE).
 2. Bump the `NIGHTLY_RUST_DATE` value in the [`ci-builder`](/bin/ci-builder) script.
     * Note: CI has a nightly version of Rust so we can run [Miri](https://github.com/rust-lang/miri).
 3. Locally run `rustup upgrade stable` to pull the latest version of the Rust toolchain, or
