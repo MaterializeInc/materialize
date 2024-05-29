@@ -62,7 +62,7 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         assert all_passed == (len(self.failures) == 0)
         return all_passed
 
-    def __str__(self) -> str:
+    def get(self) -> str:
         count_accepted_queries = (
             self.count_successful_query_templates
             + self.count_ignored_error_query_templates
@@ -107,3 +107,18 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
             warning_rows.append(f"* {warning}")
 
         return warning_rows
+
+    def get_function_and_operation_stats(self) -> str:
+        output = []
+
+        for (
+            operation_or_function,
+            stats,
+        ) in self.stats_by_operation_and_function.items():
+            output.append(
+                f"* {operation_or_function.to_description()}: {stats.count_top_level} top level, {stats.count_nested} nested, {stats.count_generation_failed} generation failed"
+            )
+
+        output.sort()
+
+        return "\n".join(output)

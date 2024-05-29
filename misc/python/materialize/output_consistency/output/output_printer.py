@@ -41,7 +41,9 @@ class OutputPrinter(BaseOutputPrinter):
 
     def print_test_summary(self, summary: ConsistencyTestSummary) -> None:
         self.start_section("Test summary", collapsed=False)
-        self._print_text(str(summary))
+        self._print_text(summary.get())
+        self.start_section("Operation and function statistics", collapsed=True)
+        self._print_text(summary.get_function_and_operation_stats())
 
     def print_status(self, status_message: str) -> None:
         self._print_text(status_message)
