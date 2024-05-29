@@ -112,3 +112,7 @@ def compute_sha256_of_file(path: str | Path) -> str:
         for block in iter(lambda: f.read(filecmp.BUFSIZE), b""):
             sha256.update(block)
     return sha256.hexdigest()
+
+
+def compute_sha256_of_utf8_string(string: str) -> str:
+    return hashlib.sha256(bytes(string, encoding="utf-8")).hexdigest()

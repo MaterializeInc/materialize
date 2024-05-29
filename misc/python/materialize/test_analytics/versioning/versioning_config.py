@@ -11,10 +11,31 @@ from pathlib import Path
 
 
 @dataclass
-class PerFileVersioningConfig:
-    directory: Path
-    excluded_file_names: set[str]
-    sha256_per_file: dict[str, str]
-    sha256_per_file_dict_name: str
+class VersioningConfig:
+    root_directory: Path
+    sha256_per_entry: dict[str, str]
+    sha256_per_entry_dict_name: str
     task_on_hash_mismatch: str
+    recursive: bool
+    excluded_file_names: set[str] = field(default_factory=lambda: set())
+    excluded_paths: set[str] = field(default_factory=lambda: set())
     included_file_extensions: set[str] = field(default_factory=lambda: {"py"})
+
+    def group_hash_by_directory(self) -> bool:
+        raise NotImplementedError
+
+
+@dataclass
+class PerFileVersioningConfig(VersioningConfig):
+    recursive: bool = False
+
+    def group_hash_by_directory(self) -> bool:
+        return False
+
+
+@dataclass
+class PerDirectoryVersioningConfig(VersioningConfig):
+    recursive: bool = True
+
+    def group_hash_by_directory(self) -> bool:
+        return True
