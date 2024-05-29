@@ -4067,3 +4067,114 @@ def workflow_test_read_frontier_advancement(
     # Drop the cluster to cancel the subscribe.
     c.sql("DROP CLUSTER test CASCADE")
     subscribe_thread.join()
+
+
+def workflow_test_adhoc_system_indexes(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests that the system user can create ad-hoc system indexes and that they
+    are handled normally by the system.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    # The system user should be able to create a new index on a catalog object
+    # in the mz_introspection cluster.
+    c.sql(
+        """
+        SET cluster = mz_introspection;
+        CREATE INDEX mz_test_idx1 ON mz_tables (char_length(name));
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    output = c.sql_query(
+        """
+        SELECT i.id, o.name, c.name
+        FROM mz_indexes i
+        JOIN mz_objects o ON (i.on_id = o.id)
+        JOIN mz_clusters c ON (i.cluster_id = c.id)
+        WHERE i.name = 'mz_test_idx1'
+        """
+    )
+    assert output[0] == ["u1", "mz_tables", "mz_introspection"], output
+    output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 9")
+    assert "mz_test_idx1" in output[0][0], output
+    output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 9")
+    assert len(output) > 0
+
+    # The system user should be able to create a new index on an unstable
+    # catalog object in the mz_introspection cluster if
+    # `enable_unstable_dependencies` is set.
+    c.sql(
+        """
+        ALTER SYSTEM SET enable_unstable_dependencies = on;
+        SET cluster = mz_introspection;
+        CREATE INDEX mz_test_idx2 ON mz_internal.mz_hydration_statuses (hydrated);
+        ALTER SYSTEM SET enable_unstable_dependencies = off;
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    output = c.sql_query(
+        """
+        SELECT i.id, o.name, c.name
+        FROM mz_indexes i
+        JOIN mz_objects o ON (i.on_id = o.id)
+        JOIN mz_clusters c ON (i.cluster_id = c.id)
+        WHERE i.name = 'mz_test_idx2'
+        """
+    )
+    assert output[0] == ["u2", "mz_hydration_statuses", "mz_introspection"], output
+    output = c.sql_query(
+        "EXPLAIN SELECT * FROM mz_internal.mz_hydration_statuses WHERE hydrated"
+    )
+    assert "mz_test_idx2" in output[0][0]
+    output = c.sql_query(
+        "SELECT * FROM mz_internal.mz_hydration_statuses WHERE hydrated"
+    )
+    assert len(output) > 0
+
+    # Make sure everything the new indexes survive a restart.
+
+    c.kill("materialized")
+    c.up("materialized")
+
+    output = c.sql_query(
+        """
+        SELECT i.id, o.name, c.name
+        FROM mz_indexes i
+        JOIN mz_objects o ON (i.on_id = o.id)
+        JOIN mz_clusters c ON (i.cluster_id = c.id)
+        WHERE i.name LIKE 'mz_test_idx%'
+        ORDER BY id
+        """
+    )
+    assert output[0] == ["u1", "mz_tables", "mz_introspection"], output
+    assert output[1] == ["u2", "mz_hydration_statuses", "mz_introspection"], output
+
+    # Make sure the new indexes can be dropped again.
+    c.sql(
+        """
+        DROP INDEX mz_test_idx1;
+        DROP INDEX mz_internal.mz_test_idx2;
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    output = c.sql_query(
+        """
+        SELECT i.id, o.name, c.name
+        FROM mz_indexes i
+        JOIN mz_objects o ON (i.on_id = o.id)
+        JOIN mz_clusters c ON (i.cluster_id = c.id)
+        WHERE i.name LIKE 'mz_test_idx%'
+        ORDER BY id
+        """
+    )
+    assert not output, output

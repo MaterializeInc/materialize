@@ -18,7 +18,7 @@ COMPLETE 0
 simple conn=mz_system,user=mz_system
 CREATE INDEX i ON mz_views()
 ----
-db error: ERROR: system schema 'mz_catalog' cannot be modified
+COMPLETE 0
 
 # Test that creating indexes on objects in the mz_internal schema fails
 simple conn=mz_system,user=mz_system
