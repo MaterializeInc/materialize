@@ -2432,18 +2432,6 @@ def workflow_test_replica_metrics(c: Composition) -> None:
     assert (
         mv_correction_max_cap_per_worker > 0
     ), f"unexpected persist sink max correction capacity per worker: {mv_correction_max_cap_per_worker}"
-    mv_correction_peak_len = metrics.get_value(
-        "mz_persist_sink_correction_peak_len_updates"
-    )
-    assert (
-        mv_correction_peak_len > 0
-    ), f"unexpected persist peak correction len: {mv_correction_peak_len}"
-    mv_correction_peak_cap = metrics.get_value(
-        "mz_persist_sink_correction_peak_capacity_updates"
-    )
-    assert (
-        mv_correction_peak_cap > 0
-    ), f"unexpected persist sink peak correction capacity: {mv_correction_peak_cap}"
 
     assert metrics.get_last_command_received("compute") >= before_connection_time
 

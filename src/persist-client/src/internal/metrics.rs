@@ -41,7 +41,7 @@ use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
-use tracing::{debug, error, info, info_span, Instrument};
+use tracing::{debug, info, info_span, Instrument};
 
 use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
 use crate::internal::paths::BlobKey;
@@ -1775,10 +1775,6 @@ pub struct SinkMetrics {
     correction_capacity_increases_total: IntCounter,
     /// Cumulative capacity decreases made to the correction buffer across workers
     correction_capacity_decreases_total: IntCounter,
-    /// Peak length observed for the correction buffer across workers
-    correction_peak_len_updates: UIntGauge,
-    /// Peak capacity observed for the correction buffer across workers
-    correction_peak_capacity_updates: UIntGauge,
     /// Maximum length observed for any one correction buffer per worker
     correction_max_per_sink_worker_len_updates: raw::UIntGaugeVec,
     /// Maximum capacity observed for any one correction buffer per worker
@@ -1811,14 +1807,6 @@ impl SinkMetrics {
             correction_capacity_decreases_total: registry.register(metric!(
                 name: "mz_persist_sink_correction_capacity_decreases_total",
                 help: "The cumulative capacity decreases observed on the correction buffer across workers and persist sinks.",
-            )),
-            correction_peak_len_updates: registry.register(metric!(
-                name: "mz_persist_sink_correction_peak_len_updates",
-                help: "The peak length observed for the correction buffer across workers and persist sinks.",
-            )),
-            correction_peak_capacity_updates: registry.register(metric!(
-                name: "mz_persist_sink_correction_peak_capacity_updates",
-                help: "The peak capacity observed for the correction buffer across workers and persist sinks.",
             )),
             correction_max_per_sink_worker_len_updates: registry.register(metric!(
                 name: "mz_persist_sink_correction_max_per_sink_worker_len_updates",
@@ -1878,58 +1866,6 @@ impl SinkMetrics {
                 }
             }
             UpdateDelta::Negative(delta) => self.correction_capacity_decreases_total.inc_by(delta),
-        }
-    }
-
-    /// Updates our estimate of the aggregate peak for the correction buffer
-    /// length and capacity across workers and persist sink.
-    ///
-    /// This method assumes temporary quiescence on the correction buffer metrics,
-    /// i.e., there are no updates to these metrics taking place when the method
-    /// is called. This occurs, e.g., after a `step_or_park` call.
-    pub fn update_sink_correction_peak_metrics(&self) {
-        // Correctness argument:
-        // 1. We always update insertions/increases prior to updating deletions/decreases
-        // in each worker. So upon quiescence, the net effect of these must result in a
-        // non-negative quantity.
-        // 2. Every worker will execute the instructions below and compute the same peak.
-        // This is because during quiescence, no changes happen to the previous peak nor
-        // other metrics, and the ones we look at are all shared across workers. So at least
-        // one worker will update the peak with its new value, if there is an increase, at
-        // the quiescence granularity.
-        // Note that we may miss the overall peak if between quiescence moments there are
-        // lots of insertions followed by lots of deletions to the correction buffer. We
-        // find this trade-off more attractive than adding explicity multi-metric synchronization
-        // among workers.
-        let aggregate_correction_len = self
-            .correction_insertions_total
-            .get()
-            .checked_sub(self.correction_deletions_total.get());
-        let Some(aggregate_correction_len) = aggregate_correction_len else {
-            error!(
-                aggregate_correction_len,
-                "Negative aggregate length for persist sink correction"
-            );
-            return;
-        };
-        if aggregate_correction_len > self.correction_peak_len_updates.get() {
-            self.correction_peak_len_updates
-                .set(aggregate_correction_len);
-        }
-        let aggregate_correction_cap = self
-            .correction_capacity_increases_total
-            .get()
-            .checked_sub(self.correction_capacity_decreases_total.get());
-        let Some(aggregate_correction_cap) = aggregate_correction_cap else {
-            error!(
-                aggregate_correction_cap,
-                "Negative aggregate capacity for persist sink correction"
-            );
-            return;
-        };
-        if aggregate_correction_cap > self.correction_peak_capacity_updates.get() {
-            self.correction_peak_capacity_updates
-                .set(aggregate_correction_cap);
         }
     }
 }
