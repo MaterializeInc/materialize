@@ -17,7 +17,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashMap;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::operators::shard_source::SnapshotMode;
@@ -32,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{
-    Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
+    Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect, Probe,
 };
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -231,6 +230,7 @@ where
         target,
         &batch_descriptions,
         &written_batches,
+        &persist_oks,
         persist_clients,
         compute_state.read_only_rx.clone(),
     );
@@ -853,17 +853,20 @@ where
             correction_oks.advance_by(&persist_frontier);
             correction_errs.advance_by(&persist_frontier);
 
+            // Discard batch descriptions whose upper is already not beyond the
+            // persist frontier. Those have no chance of being applied to the
+            // shard succesfully.
+            in_flight_batches
+                .retain(|(_lower, upper), _cap| PartialOrder::less_equal(&persist_frontier, upper));
+
             if read_only.borrow().clone() {
                 // We are not allowed to do writes, so go back to the beginning
                 // of the loop.
                 //
-                // We are only bailing here to make sure that we keep our
-                // corrections buffers up to date, which will potentially
-                // consolidate things out.
-                //
-                // WIP: We need to do something about in_flight_batches: we keep
-                // accumulating those. Maybe we can remove those that are not
-                // beyond both the persist and desired frontier?
+                // We are bailing here and not earlier to make sure that we keep
+                // our corrections buffers up to date, which will potentially
+                // consolidate things out, and to make sure that we weed out
+                // batches that we can never apply.
                 continue;
             }
 
@@ -963,6 +966,7 @@ fn append_batches<G>(
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     batches: &Stream<G, BatchOrData>,
+    persist_oks: &Stream<G, (Row, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
     mut read_only: watch::Receiver<bool>,
 ) -> (Stream<G, ()>, Rc<dyn Any>)
@@ -996,6 +1000,10 @@ where
     let mut batches_input =
         append_op.new_disconnected_input(batches, Exchange::new(move |_| hashed_id));
 
+    // We use this to discard batches and batch descriptions that can never be
+    // applied because the persist frontier is already past their upper.
+    let persist_probe = persist_oks.probe();
+
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn
     // from our input frontiers that we have seen all batches for a given batch
@@ -1025,7 +1033,8 @@ where
             incomplete: Option<BatchBuilder<SourceData, (), Timestamp, Diff>>,
         }
 
-        let mut in_flight_batches = HashMap::<
+        #[allow(clippy::disallowed_types)]
+        let mut in_flight_batches = std::collections::HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
             BatchSet,
         >::new();
@@ -1138,16 +1147,52 @@ where
                 }
             };
 
+            // Only retain descriptions and batches that still have a chance of
+            // being applied.
+            in_flight_descriptions.retain(|(_lower, upper)| {
+                upper.is_empty() || upper.iter().any(|ts| persist_probe.less_equal(ts))
+            });
+
+            for ((_lower, upper), batch_set) in in_flight_batches.iter_mut() {
+                if upper.is_empty() || upper.iter().any(|ts| persist_probe.less_equal(ts)) {
+                    continue;
+                }
+
+                // We're not keeping this batch. Be nice and delete any data
+                // that has been written.
+                for batch in batch_set.finished.drain(..) {
+                    batch.delete().await;
+                }
+                if let Some(batch) = batch_set.incomplete.take() {
+                    batch
+                        .finish(upper.clone()).await
+                        .expect("invalid usage")
+                        .delete().await;
+                }
+            }
+            // WIP: It's annoying that we're first iterating and doing the
+            // retain, but we can't do the batch deletion inside retain because
+            // we need async.
+            in_flight_batches.retain(|(_lower, upper), batch_set| {
+                if upper.is_empty() || upper.iter().any(|ts| persist_probe.less_equal(ts)) {
+                    return true;
+                }
+
+                // We're not keeping this batch, make sure that the above loop
+                // cleared and deleted all the batches.
+                assert!(batch_set.finished.is_empty());
+                assert!(batch_set.incomplete.is_none());
+
+                false
+            });
+
             if read_only.borrow().clone() {
                 // We are not allowed to do writes, so go back to the beginning
                 // of the loop.
                 //
-                // We are only bailing here to make sure that we keep reading
+                // We are bailing here and not earlier to make sure that we weed
+                // out batches that we can never apply and that we keep reading
                 // our inputs.
-                //
-                // WIP: We need to do something about in_flight_descriptions: we
-                // keep accumulating those. Maybe we can remove those that are
-                // not beyond both the persist and desired frontier?
                 continue;
             }
 
