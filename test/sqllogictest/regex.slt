@@ -528,15 +528,46 @@ SELECT regexp_split_to_table('no match', 'nope')
 ----
 no match
 
-query T
-SELECT regexp_replace('foobarbaz', 'b..', 'X')
+# Test regexp_replace success paths
+
+query T multiline
+EXPLAIN
+SELECT regexp_replace('FOOBARBAZ', 'b..', 'X');
 ----
-fooXbaz
+Explained Query (fast path):
+  Constant
+    - ("FOOBARBAZ")
+
+Target cluster: quickstart
+
+EOF
 
 query T
-SELECT regexp_replace('foobarbaz', 'b..', 'X', 'g')
+SELECT regexp_replace('FOOBARBAZ', 'b..', 'X');
 ----
-fooXX
+FOOBARBAZ
+
+query T multiline
+EXPLAIN
+SELECT regexp_replace('FOOBARBAZ', 'b..', 'X', 'i');
+----
+Explained Query (fast path):
+  Constant
+    - ("FOOXBAZ")
+
+Target cluster: quickstart
+
+EOF
+
+query T
+SELECT regexp_replace('FOOBARBAZ', 'b..', 'X', 'i');
+----
+FOOXBAZ
+
+query T
+SELECT regexp_replace('FOOBARBAZ', 'b..', 'X', 'ig');
+----
+FOOXX
 
 query T
 SELECT regexp_replace('foobarbaz', 'b(..)', 'X${1}Y', 'g')
@@ -547,3 +578,162 @@ query T
 SELECT regexp_replace('foobarbaz', 'no match', 'X')
 ----
 foobarbaz
+
+statement ok
+CREATE TABLE r(s string, regex string, replacement string);
+
+statement ok
+INSERT INTO r VALUES ('foobarbaz', 'b..', 'X'), ('foobarbaz', 'b(..)', '>${1}<'), ('FOOBARBAZ', 'b..', 'X'), ('FOOZARZAZ', 'b..', 'X');
+
+query T multiline
+EXPLAIN
+SELECT regexp_replace(s, 'b..', 'X') FROM r;
+----
+Explained Query:
+  Project (#3)
+    Map (regexp_replace["b..", case_insensitive=false, limit=1](#0, "X"))
+      ReadStorage materialize.public.r
+
+Target cluster: quickstart
+
+EOF
+
+query TT
+SELECT s, regexp_replace(s, 'b..', 'X') FROM r;
+----
+foobarbaz
+fooXbaz
+foobarbaz
+fooXbaz
+FOOBARBAZ
+FOOBARBAZ
+FOOZARZAZ
+FOOZARZAZ
+
+query T multiline
+EXPLAIN
+SELECT regexp_replace(s, 'b..', 'X', 'i') FROM r;
+----
+Explained Query:
+  Project (#3)
+    Map (regexp_replace["b..", case_insensitive=true, limit=1](#0, "X"))
+      ReadStorage materialize.public.r
+
+Target cluster: quickstart
+
+EOF
+
+query TT
+SELECT s, regexp_replace(s, 'b..', 'X', 'i') FROM r;
+----
+FOOBARBAZ
+FOOXBAZ
+foobarbaz
+fooXbaz
+foobarbaz
+fooXbaz
+FOOZARZAZ
+FOOZARZAZ
+
+query T multiline
+EXPLAIN
+SELECT regexp_replace(s, 'b..', 'X', 'ig') FROM r;
+----
+Explained Query:
+  Project (#3)
+    Map (regexp_replace["b..", case_insensitive=true, limit=0](#0, "X"))
+      ReadStorage materialize.public.r
+
+Target cluster: quickstart
+
+EOF
+
+query TT
+SELECT s, regexp_replace(s, 'b..', 'X', 'ig') FROM r;
+----
+FOOBARBAZ
+FOOXX
+foobarbaz
+fooXX
+foobarbaz
+fooXX
+FOOZARZAZ
+FOOZARZAZ
+
+query T multiline
+EXPLAIN
+SELECT regexp_replace(s, regex, replacement, 'ig') FROM r;
+----
+Explained Query:
+  Project (#3)
+    Map (regexp_replace(#0, #1, #2, "ig"))
+      ReadStorage materialize.public.r
+
+Target cluster: quickstart
+
+EOF
+
+query TT
+SELECT s, regexp_replace(s, regex, replacement, 'ig') FROM r;
+----
+FOOBARBAZ
+FOOXX
+foobarbaz
+fooXX
+FOOZARZAZ
+FOOZARZAZ
+foobarbaz
+foo>ar<>az<
+
+# Test regexp_replace error paths
+
+query T multiline
+EXPLAIN
+SELECT regexp_replace('foobarbaz', 'b(..', 'X', 'ig');
+----
+Explained Query (fast path):
+  Error "invalid regular expression: regex parse error:
+    b(..
+     ^
+error: unclosed group"
+
+Target cluster: quickstart
+
+EOF
+
+query error invalid regular expression: regex parse error:
+SELECT regexp_replace('foobarbaz', 'b(..', 'X', 'ig');
+
+query error invalid regular expression flag: x
+SELECT regexp_replace('foobarbaz', 'b(..', 'X', 'igx');
+
+statement ok
+CREATE TABLE e(s string, regex string, replacement string);
+
+statement ok
+INSERT INTO e VALUES ('foobarbaz', 'b(..', 'X');
+
+query T multiline
+EXPLAIN
+SELECT s, regexp_replace(s, 'b(..', replacement, 'ig') FROM e;
+----
+Explained Query:
+  Project (#0, #3)
+    Map (regexp_replace[EvalError]: invalid regular expression: regex parse error:
+    b(..
+     ^
+error: unclosed group(#0, #2))
+      ReadStorage materialize.public.e
+
+Target cluster: quickstart
+
+EOF
+
+query error invalid regular expression: regex parse error:
+SELECT s, regexp_replace(s, 'b(..', replacement, 'ig') FROM e;
+
+query error invalid regular expression: regex parse error:
+SELECT s, regexp_replace(s, regex, replacement, 'ig') FROM e;
+
+query error invalid regular expression flag: x
+SELECT regexp_replace(s, regex, replacement, 'igx') FROM e;

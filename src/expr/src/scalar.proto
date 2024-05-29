@@ -450,6 +450,17 @@ message ProtoBinaryFunc {
         mz_repr.relation_and_scalar.ProtoScalarType elem_type = 1;
         bool rev = 2;
     }
+    message ProtoRegexpReplace {
+        mz_repr.adt.regex.ProtoRegex regex = 1;
+        uint64 limit = 2;
+    }
+    message ProtoRegexpReplaceResult {
+        oneof result {
+            ProtoRegexpReplace ok = 1;
+            ProtoEvalError err = 2;
+        }
+    }
+
 
     reserved 93; // timezone_time
     reserved 108; // map_get_values
@@ -641,6 +652,7 @@ message ProtoBinaryFunc {
         google.protobuf.Empty constant_time_eq_bytes = 189;
         google.protobuf.Empty timezone_offset = 190;
         google.protobuf.Empty pretty_sql = 191;
+        ProtoRegexpReplaceResult regexp_replace = 192;
     }
 }
 
