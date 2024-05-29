@@ -98,6 +98,7 @@ where
         let mut final_configuration = ComputeParameters::default();
 
         let mut initialization_complete = false;
+        let mut read_only = true;
 
         for command in self.commands.drain(..) {
             match command {
@@ -130,6 +131,9 @@ where
                 }
                 ComputeCommand::CancelPeek { uuid } => {
                     live_peeks.remove(&uuid);
+                }
+                ComputeCommand::AllowWrites => {
+                    read_only = false;
                 }
             }
         }
@@ -243,6 +247,10 @@ where
         command_counts.initialization_complete.borrow().set(count);
         if initialization_complete {
             self.commands.push(ComputeCommand::InitializationComplete);
+        }
+
+        if !read_only {
+            self.commands.push(ComputeCommand::AllowWrites);
         }
 
         self.reduced_count = self.commands.len();

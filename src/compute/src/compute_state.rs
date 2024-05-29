@@ -55,7 +55,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tracing::{debug, error, info, span, warn, Level};
 use uuid::Uuid;
 
@@ -141,6 +141,21 @@ pub struct ComputeState {
     /// dataflow. Multiple collections can reference the same token if they are exported by the
     /// same dataflow.
     suspended_collections: BTreeMap<GlobalId, Rc<dyn Any>>,
+
+    /// When this replica/cluster is in read-only mode it must not affect any
+    /// changes to external state. This flag can only be changed by a
+    /// [ComputeCommand::AllowWrites].
+    ///
+    /// Everything running on this replica/cluster must obey this flag. At the
+    /// time of writing the only part that is doing this is `persist_sink`.
+    ///
+    /// NOTE: In the future, we might want a more complicated flag, for example
+    /// something that tells us after which timestamp we are allowed to write.
+    /// In this first version we are keeping things as simple as possible!
+    pub read_only_rx: watch::Receiver<bool>,
+
+    /// Send-side for read-only state.
+    pub read_only_tx: watch::Sender<bool>,
 }
 
 impl ComputeState {
@@ -156,6 +171,10 @@ impl ComputeState {
         let traces = TraceManager::new(metrics.for_traces(worker_id));
         let command_history = ComputeCommandHistory::new(metrics.for_history(worker_id));
         let (hydration_tx, hydration_rx) = mpsc::channel();
+
+        // We always initialize as read_only=true. Only when we're explicitly
+        // allowed do we switch to doing writes.
+        let (read_only_tx, read_only_rx) = watch::channel(true);
 
         Self {
             collections: Default::default(),
@@ -177,6 +196,8 @@ impl ComputeState {
             hydration_rx,
             hydration_tx,
             suspended_collections: Default::default(),
+            read_only_tx,
+            read_only_rx,
         }
     }
 
@@ -317,6 +338,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 self.handle_peek(peek)
             }
             CancelPeek { uuid } => self.handle_cancel_peek(uuid),
+            AllowWrites => {
+                self.compute_state
+                    .read_only_tx
+                    .send(false)
+                    .expect("we're holding one other end");
+            }
         }
     }
 

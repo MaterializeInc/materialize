@@ -245,6 +245,20 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         /// This Value must match a [`Peek::uuid`] value transmitted in a previous `Peek` command.
         uuid: Uuid,
     },
+
+    /// Allow this instance to affect writes to external systems from now on.
+    ///
+    /// An instance starts out in read-only mode. Only when receiving this
+    /// command will it go out of that and allow running operations to do
+    /// writes.
+    ///
+    /// NOTE: We don't allow flipping back to read-only mode. We also don't have
+    /// a protocol in place that allows writes only after a certain timestamps.
+    /// Those are all things we might want to do in the future but this initial
+    /// version is keeping things minimal!
+    ///
+    /// WIP: Naming is hard, I'm very open to suggestions!
+    AllowWrites,
 }
 
 impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
@@ -272,6 +286,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 }
                 ComputeCommand::Peek(peek) => Peek(peek.into_proto()),
                 ComputeCommand::CancelPeek { uuid } => CancelPeek(uuid.into_proto()),
+                ComputeCommand::AllowWrites => AllowWrites(()),
             }),
         }
     }
@@ -305,6 +320,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             Some(CancelPeek(uuid)) => Ok(ComputeCommand::CancelPeek {
                 uuid: uuid.into_rust()?,
             }),
+            Some(AllowWrites(())) => Ok(ComputeCommand::AllowWrites),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeCommand::kind",
             )),

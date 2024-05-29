@@ -441,6 +441,8 @@ pub struct CommandMetrics<M> {
     pub initialization_complete: M,
     /// Metrics for `UpdateConfiguration`.
     pub update_configuration: M,
+    /// Metrics for `AllowWrites`.
+    pub allow_writes: M,
 }
 
 impl<M> CommandMetrics<M> {
@@ -459,6 +461,7 @@ impl<M> CommandMetrics<M> {
             cancel_peek: build_metric("cancel_peek"),
             initialization_complete: build_metric("initialization_complete"),
             update_configuration: build_metric("update_configuration"),
+            allow_writes: build_metric("allow_writes"),
         }
     }
 
@@ -491,6 +494,7 @@ impl<M> CommandMetrics<M> {
             AllowCompaction { .. } => &self.allow_compaction,
             Peek(_) => &self.peek,
             CancelPeek { .. } => &self.cancel_peek,
+            AllowWrites { .. } => &self.allow_writes,
         }
     }
 
@@ -507,6 +511,7 @@ impl<M> CommandMetrics<M> {
             CancelPeek(_) => &self.cancel_peek,
             InitializationComplete(_) => &self.initialization_complete,
             UpdateConfiguration(_) => &self.update_configuration,
+            AllowWrites(_) => &self.allow_writes,
         }
     }
 }
