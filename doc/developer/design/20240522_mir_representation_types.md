@@ -48,33 +48,35 @@ We know these implicit coercions interfere with joins; they may also interfere w
 
 We will not rethink other components of MIR types, like nullability or unique keys.
 
+In general, we may want a "smart index selector", which can appropriately handle mixed-type lookups, i.e., it should let us look up an `i32` in an `i64`-sized index without needing to build a separate `i32`-sized arrangement. Such an approach generalizes `eq-indx` (see ["Alternatives"](#alternatives)).
+
 ## Solution Proposal
 
 Having MIR be typechecked in terms of representation types demands a few changes, which can be broken into three PRs:
 
-1. Rename the existing `ScalarType` to `SqlScalarType`. (We may want to rename `ColumnType` and `RelationType`, as well.)
-2. Have MIR work with `ReprScalarType` (see [MVP](#minimal-viable-prototype)).
-   a. Introduce the `ReprScalarType` datatype (see [MVP](#minimal-viable-prototype)).
-   b. Change the optimizer to work with `ReprScalarType` throughout.
-   c. Change the adapter to record the `SqlScalarType` of a query and update its nullability information using the `ReprScalarType` at the end of optimization.
+1. Rename the existing `ScalarType` to `HirScalarType`. (We may want to rename `ColumnType` and `RelationType`, as well.)
+2. Have MIR work with `MirScalarType` (see [MVP](#minimal-viable-prototype)).
+   a. Introduce the `MirScalarType` datatype (see [MVP](#minimal-viable-prototype)).
+   b. Change the optimizer to work with `MirScalarType` throughout.
+   c. Change the adapter to record the `HirScalarType` of a query and update its nullability information using the `MirScalarType` at the end of optimization.
 3. Elide noop casts, confirming that we plan the problematic joins better.
 
 PR #2 will have a large diff.
-On the plus side, it should be a largely mechanical change: there is a straightforward way to project a `SqlScalarType` to a `ReprScalarType`, and most uses of types in the optimizer will be parametric.
+On the plus side, it should be a largely mechanical change: there is a straightforward way to project a `HirScalarType` to a `MirScalarType`, and most uses of types in the optimizer will be parametric.
 
 ## Minimal Viable Prototype
 
 The representation types will look like the following:
 
 ```rust
-pub enum ReprScalarType {
+pub enum MirScalarType {
   Bool,
   Int16,
   Int32,
   Int64,
-  UInt8, // also includes SqlScalarType::PgLegacyChar
+  UInt8, // also includes HirScalarType::PgLegacyChar
   UInt16,
-  UInt32, // also includes SqlScalarType::{Oid,RegClass,RegProc,RegType}
+  UInt32, // also includes HirScalarType::{Oid,RegClass,RegProc,RegType}
   UInt64,
   Float32,
   Float64,
@@ -87,23 +89,27 @@ pub enum ReprScalarType {
   Interval,
   Bytes,
   Jsonb,
-  String, // also includes SqlScalarType::{VarChar,Char,PgLegacyName}
+  String, // also includes HirScalarType::{VarChar,Char,PgLegacyName}
   Uuid,
-  Array(Box<ReprScalarType>), // also includes SqlScalarType::Int2Vector
-  List { element_type: Box<ReprScalarType> }, // also includes SqlScalarType::Record
-  Map { value_type: Box<ReprScalarType> },
-  Range { element_type: Box<ReprScalarType> },
+  Array(Box<MirScalarType>), // also includes HirScalarType::Int2Vector
+  List { element_type: Box<MirScalarType> }, // also includes HirScalarType::Record
+  Map { value_type: Box<MirScalarType> },
+  Range { element_type: Box<MirScalarType> },
   MzAclItem,
   AclItem,
 }
 
-pub struct ReprColumnType {
-    pub scalar_type: ReprScalarType,
+pub struct MirColumnType {
+    pub scalar_type: MirScalarType,
     pub nullable: bool,
 }
 ```
 
-We'll need to define a projection from `SqlScalarType` to `ReprScalarType` (see [`ScalarType::is_instance_of()`](https://github.com/MaterializeInc/materialize/blob/e4578164fb28a204b43c58ab8ff6c1d3e3b4427f/src/repr/src/scalar.rs#L947) for the correspondence).
+Since LIR is effectively untyped, there's no need for us to define `LirScalarType` or the like. We already use `MirScalarExpr` inside of `Mfp`s in LIR.
+
+We'll need to define a projection from `HirScalarType` to `MirScalarType` (see [`ScalarType::is_instance_of()`](https://github.com/MaterializeInc/materialize/blob/e4578164fb28a204b43c58ab8ff6c1d3e3b4427f/src/repr/src/scalar.rs#L947) for the correspondence).
+
+In `EXPLAIN PLAN`s, we will report `MirScalarType`s with `r`-prefixed names, where `r` is short for "representation", e.g., `rstring` is the `MirScalarType` corresponding to `text`, `varchar`, etc.
 
 ## Alternatives
 
@@ -123,11 +129,6 @@ Such rewriting feels a bit risky/annoying/confusing, and I'm not sure how it wou
 
 ## Open questions
 
-How should we report `ReprScalarType`s to the user in `EXPLAIN PLAN`s?
-There's a potential for confusion if we report something as type `string` that the user expected to have type `VARCHAR(18)` or something similar.
-Apparently we already treat `string` as a synonym for `text`... can we somehow choose names that will be unambiguous?
-Say, `mzstring` or `charseq` or `utf8`?
-
-It's possible that (as Nikhil worries) somewhere in the pgwire or WS layers calls `.typ()` on a `MirRelationExpr` and expects a `SqlScalarType` but will now find a `ReprScalarType`.
+It's possible that (as Nikhil worries) somewhere in the pgwire or WS layers calls `.typ()` on a `MirRelationExpr` and expects a `HirScalarType` but will now find a `MirScalarType`.
 I don't know those layers well, but we could derisk some of the work of PR #2 by checking for that in advance.
 (In any case, the Rust type checker will be eager to tell us about it.)
