@@ -23,7 +23,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_databases mz_show_databases_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_show_databases_ind (*** full scan ***)
+  - mz_catalog.mz_show_databases_ind (*** full scan ***)
 
 Target cluster: mz_introspection
 
@@ -38,7 +38,7 @@ Explained Query (fast path):
       ReadIndex on=mz_catalog.mz_schemas mz_show_schemas_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_show_schemas_ind (*** full scan ***)
+  - mz_catalog.mz_show_schemas_ind (*** full scan ***)
 
 Target cluster: mz_introspection
 
@@ -52,7 +52,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_connections mz_show_connections_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_connections_ind (lookup)
+  - mz_catalog.mz_show_connections_ind (lookup)
 
 Target cluster: mz_introspection
 
@@ -66,7 +66,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_tables mz_show_tables_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_tables_ind (lookup)
+  - mz_catalog.mz_show_tables_ind (lookup)
 
 Target cluster: mz_introspection
 
@@ -94,7 +94,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_views mz_show_views_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_views_ind (lookup)
+  - mz_catalog.mz_show_views_ind (lookup)
 
 Target cluster: mz_introspection
 
@@ -181,7 +181,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_types mz_show_types_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_types_ind (lookup)
+  - mz_catalog.mz_show_types_ind (lookup)
 
 Target cluster: mz_introspection
 
@@ -195,7 +195,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_objects mz_show_all_objects_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_all_objects_ind (lookup)
+  - mz_catalog.mz_show_all_objects_ind (lookup)
 
 Target cluster: mz_introspection
 
@@ -212,7 +212,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_columns mz_show_columns_ind=[lookup value=("u1")]
 
 Used Indexes:
-  - mz_internal.mz_show_columns_ind (lookup)
+  - mz_catalog.mz_show_columns_ind (lookup)
 
 Target cluster: mz_introspection
 
@@ -276,7 +276,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_secrets mz_show_secrets_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_secrets_ind (lookup)
+  - mz_catalog.mz_show_secrets_ind (lookup)
 
 Target cluster: mz_introspection
 
@@ -290,7 +290,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_indexes mz_indexes_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_indexes_ind (*** full scan ***)
+  - mz_catalog.mz_indexes_ind (*** full scan ***)
 
 Target cluster: mz_introspection
 
@@ -304,7 +304,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_roles mz_roles_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_roles_ind (*** full scan ***)
+  - mz_catalog.mz_roles_ind (*** full scan ***)
 
 Target cluster: mz_introspection
 
@@ -318,7 +318,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_sources mz_sources_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_sources_ind (*** full scan ***)
+  - mz_catalog.mz_sources_ind (*** full scan ***)
 
 Target cluster: mz_introspection
 
@@ -332,7 +332,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_sinks mz_sinks_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_sinks_ind (*** full scan ***)
+  - mz_catalog.mz_sinks_ind (*** full scan ***)
 
 Target cluster: mz_introspection
 
@@ -346,7 +346,7 @@ Explained Query (fast path):
     ReadIndex on=mz_catalog.mz_materialized_views mz_materialized_views_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_materialized_views_ind (*** full scan ***)
+  - mz_catalog.mz_materialized_views_ind (*** full scan ***)
 
 Target cluster: mz_introspection
 
@@ -428,9 +428,9 @@ Explained Query:
             ReadIndex on=mz_cluster_replica_metrics mz_cluster_replica_metrics_ind=[delta join lookup]
 
 Used Indexes:
-  - mz_internal.mz_clusters_ind (delta join lookup)
-  - mz_internal.mz_cluster_replicas_ind (*** full scan ***)
-  - mz_internal.mz_cluster_replica_sizes_ind (delta join lookup)
+  - mz_catalog.mz_clusters_ind (delta join lookup)
+  - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
+  - mz_catalog.mz_cluster_replica_sizes_ind (delta join lookup)
   - mz_internal.mz_cluster_replica_metrics_ind (delta join lookup)
 
 Target cluster: mz_introspection
@@ -475,7 +475,7 @@ Explained Query:
         ReadIndex on=mz_sources mz_sources_ind=[differential join]
 
 Used Indexes:
-  - mz_internal.mz_sources_ind (*** full scan ***, differential join)
+  - mz_catalog.mz_sources_ind (*** full scan ***, differential join)
   - mz_internal.mz_source_statuses_ind (differential join)
 
 Target cluster: mz_introspection

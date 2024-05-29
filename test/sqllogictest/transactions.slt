@@ -936,7 +936,7 @@ Explained Query:
           - (20)
 
 Used Indexes:
-  - mz_internal.mz_show_views_ind (*** full scan ***)
+  - mz_catalog.mz_show_views_ind (*** full scan ***)
 
 Target cluster: mz_introspection
 

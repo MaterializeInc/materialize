@@ -429,9 +429,9 @@ Explained Query:
                 ReadIndex on=mz_materialized_views mz_materialized_views_ind=[*** full scan ***] // { arity: 10 }
 
 Used Indexes:
-  - mz_internal.mz_show_schemas_ind (*** full scan ***)
-  - mz_internal.mz_show_views_ind (*** full scan ***)
-  - mz_internal.mz_materialized_views_ind (*** full scan ***)
+  - mz_catalog.mz_show_schemas_ind (*** full scan ***)
+  - mz_catalog.mz_show_views_ind (*** full scan ***)
+  - mz_catalog.mz_materialized_views_ind (*** full scan ***)
 
 Target cluster: mz_introspection
 
