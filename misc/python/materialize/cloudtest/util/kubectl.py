@@ -202,3 +202,37 @@ class Kubectl:
             contents = contents.replace(old, new)
         yaml_data: dict[str, Any] = yaml.safe_load(contents)
         return yaml_data
+
+    def apply(
+        self,
+        filepath: str,
+        field_manager: str | None = None,
+        server_side: bool = False,
+        namespace: str | None = None,
+    ) -> None:
+        """
+        Apply configuration to a resource from a file.
+
+        :param filepath: The path to the config file being applied.
+        :param field_manager: The field manager that owns the resource being modified.
+        :param server_side: Whether to apply the update server-side, required to avoid field ownership conflicts in some cases.
+        :param namespace: The namespace to apply the update in.
+        """
+        command = [
+            "kubectl",
+            "--context",
+            self.context,
+            "apply",
+            "-f",
+            filepath,
+        ]
+        if field_manager:
+            command.extend(["--field-manager", field_manager])
+        if namespace:
+            command.extend(["-n", namespace])
+        if server_side:
+            command.extend(["--server-side"])
+        subprocess.run(
+            args=command,
+            check=True,
+        )
