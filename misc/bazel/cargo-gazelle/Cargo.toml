@@ -1,0 +1,40 @@
+[package]
+name = "cargo-gazelle"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.66"
+camino = "1"
+cargo_toml = "0.19.1"
+clap = { version = "3.2.24", features = ["derive"] }
+convert_case = "0.6"
+guppy = "0.17.5"
+proc-macro2 = "1.0.60"
+protobuf-parse = "3.4.0"
+quote = "1.0.23"
+syn = { version = "1.0.107", features = ["extra-traits", "full"] }
+serde = "1.0.152"
+serde_json = "1.0.89"
+tracing = "0.1.37"
+tracing-subscriber = "0.3.16"
+workspace-hack = { version = "0.0.0", path = "../../../src/workspace-hack", optional = true }
+
+[dev-dependencies]
+insta = "1.32"
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
+
+[[example]]
+name = "gen"

@@ -103,6 +103,7 @@ members = [
     "test/metabase/smoketest",
     "test/test-util",
     "src/regexp",
+    "misc/bazel/cargo-gazelle",
 ]
 
 # Here we should specify our high level binaries to prevent folks from needing to take extra steps
@@ -123,6 +124,7 @@ default-members = [
     "src/testdrive",
     "test/metabase/smoketest",
     "src/pgtest",
+    "misc/bazel/cargo-gazelle",
 ]
 
 exclude = [
