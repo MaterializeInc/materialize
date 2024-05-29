@@ -387,7 +387,6 @@ crates_repository(
         "//:src/persist-cli/Cargo.toml",
         "//:src/persist-client/Cargo.toml",
         "//:src/persist-proc/Cargo.toml",
-        "//:src/persist-txn/Cargo.toml",
         "//:src/persist-types/Cargo.toml",
         "//:src/persist/Cargo.toml",
         "//:src/pgcopy/Cargo.toml",
