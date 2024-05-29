@@ -1920,18 +1920,19 @@ impl PackedNaiveTime {
         &self.0
     }
 
-    /// Interprets a slice of bytes as a [`PackedNaiveTime`].
+    /// Interprets a slice of bytes as a [`PackedNaiveTime`], returns an error
+    /// if the size of the slice is incorrect.
     ///
-    /// Returns an error if the size of the slice is incorrect.
+    /// Note: It is the responsibility of the caller to make sure the provided
+    /// data is a valid [`PackedNaiveTime`].
     pub fn from_bytes(slice: &[u8]) -> Result<Self, String> {
-        if slice.len() != Self::SIZE {
-            let err = format!("expected {} bytes, got {}", Self::SIZE, slice.len());
-            return Err(err);
-        }
-
-        let mut buf = [0u8; Self::SIZE];
-        buf.copy_from_slice(slice);
-
+        let buf: [u8; Self::SIZE] = slice.try_into().map_err(|_| {
+            format!(
+                "size for PackedNaiveTime is {} bytes, got {}",
+                Self::SIZE,
+                slice.len()
+            )
+        })?;
         Ok(PackedNaiveTime(buf))
     }
 }

@@ -832,19 +832,19 @@ impl PackedInterval {
         &self.0[..]
     }
 
-    /// Creates a [`PackedInterval`] from a slice of bytes, returns an error if the size is
-    /// incorrect.
+    /// Interprets a slice of bytes as a [`PackedInterval`], returns an error
+    /// if the size of the slice is incorrect.
+    ///
+    /// Note: It is the responsibility of the caller to make sure the provided
+    /// data is a valid [`PackedInterval`].
     pub fn from_bytes(slice: &[u8]) -> Result<Self, String> {
-        if slice.len() != Self::SIZE {
-            return Err(format!(
-                "size for PackedInterval is incorrect, {}",
+        let buf: [u8; Self::SIZE] = slice.try_into().map_err(|_| {
+            format!(
+                "size for PackedInterval is {} bytes, got {}",
+                Self::SIZE,
                 slice.len()
-            ));
-        }
-
-        let mut buf = [0u8; 16];
-        buf.copy_from_slice(&slice[..16]);
-
+            )
+        })?;
         Ok(PackedInterval(buf))
     }
 }
