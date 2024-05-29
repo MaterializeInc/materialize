@@ -659,6 +659,7 @@ impl DataSubscribe {
                     |_, _| true,
                     false.then_some(|| unreachable!()),
                     async {},
+                    |error| panic!("data_subscribe: {error}"),
                     ProjectionPushdown::FetchAll,
                 );
                 (data_stream.leave(), token)

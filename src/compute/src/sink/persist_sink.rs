@@ -116,6 +116,7 @@ where
         None,             // no MFP
         compute_state.dataflow_max_inflight_bytes(),
         start_signal,
+        |error| panic!("compute_persist_sink: {error}"),
     );
 
     Some(Rc::new((

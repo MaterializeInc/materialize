@@ -14,7 +14,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt::Debug;
-use std::future::Future;
+use std::future::{self, Future};
 use std::hash::{Hash, Hasher};
 use std::pin::pin;
 use std::rc::Rc;
@@ -79,6 +79,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
+    error_handler: impl FnMut(String) -> () + 'static,
     project: ProjectionPushdown,
 ) -> (
     Stream<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
@@ -142,6 +143,7 @@ where
         should_fetch_part,
         listen_sleep,
         start_signal,
+        error_handler,
         project,
     );
     tokens.push(descs_token);
@@ -221,6 +223,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
+    error_handler: impl FnMut(String) -> () + 'static,
     project: ProjectionPushdown,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, PressOnDropButton)
 where
@@ -267,6 +270,26 @@ where
         // Make it explicit that the subscriber is kept alive until we have finished returning parts
         drop(return_listen_handle);
     });
+
+    // This feels a bit clunky but it makes sure that we can't misuse the error
+    // handler below.
+    struct ErrorHandler<H: FnMut(String) -> () + 'static> {
+        inner: H,
+    }
+    impl<H: FnMut(String) -> () + 'static> ErrorHandler<H> {
+        /// Report the error and enforce that we never return.
+        async fn report_and_stop<R>(&mut self, error: String) -> R {
+            (self.inner)(error);
+
+            // We cannot continue, and we cannot shut down. Otherwise downstream
+            // operators might interpret our downgrading/releasing our
+            // capability as a statement of progress.
+            future::pending().await
+        }
+    }
+    let mut error_handler = ErrorHandler {
+        inner: error_handler,
+    };
 
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
@@ -345,7 +368,11 @@ where
             SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
                 Ok(parts) => parts,
                 Err(e) => {
-                    panic!("{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}")
+                    error_handler
+                        .report_and_stop(format!(
+                            "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
+                        ))
+                        .await
                 }
             },
             SnapshotMode::Exclude => vec![],
@@ -364,7 +391,11 @@ where
         let listen = match read.listen(as_of.clone()).await {
             Ok(handle) => listen.insert(handle),
             Err(e) => {
-                panic!("{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}")
+                error_handler
+                    .report_and_stop(format!(
+                        "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
+                    ))
+                    .await
             }
         };
 
@@ -635,6 +666,7 @@ mod tests {
                         |_fetch, _frontier| true,
                         false.then_some(|| unreachable!()),
                         async {},
+                        |error| panic!("test: {error}"),
                         ProjectionPushdown::FetchAll,
                     );
                     (stream.leave(), tokens)
@@ -704,6 +736,7 @@ mod tests {
                         |_fetch, _frontier| true,
                         false.then_some(|| unreachable!()),
                         async {},
+                        |error| panic!("test: {error}"),
                         ProjectionPushdown::FetchAll,
                     );
                     (stream.leave(), tokens)

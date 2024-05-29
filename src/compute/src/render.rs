@@ -231,6 +231,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         mfp.as_mut(),
                         compute_state.dataflow_max_inflight_bytes(),
                         start_signal.clone(),
+                        |error| panic!("compute_import: {error}"),
                     );
 
                     // If `mfp` is non-identity, we need to apply what remains.

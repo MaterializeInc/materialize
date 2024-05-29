@@ -146,6 +146,7 @@ pub fn persist_source<G>(
     map_filter_project: Option<&mut MfpPlan>,
     max_inflight_bytes: Option<usize>,
     start_signal: impl Future<Output = ()> + 'static,
+    error_handler: impl FnMut(String) -> () + 'static,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -209,6 +210,7 @@ where
             flow_control,
             subscribe_sleep,
             start_signal,
+            error_handler,
         );
         tokens.extend(source_tokens);
 
@@ -279,6 +281,7 @@ pub fn persist_source_core<'g, G>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
+    error_handler: impl FnMut(String) -> () + 'static,
 ) -> (
     Stream<
         RefinedScope<'g, G>,
@@ -376,6 +379,7 @@ where
         },
         listen_sleep,
         start_signal,
+        error_handler,
         project,
     );
     let rows = decode_and_mfp(cfg, &fetched, &name, until, map_filter_project);

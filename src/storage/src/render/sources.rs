@@ -318,6 +318,7 @@ where
                                 flow_control,
                                 false.then_some(|| unreachable!()),
                                 async {},
+                                |error| panic!("upsert_rehydration: {error}"),
                             );
                             (
                                 stream.as_collection(),
