@@ -223,7 +223,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
-    mut error_handler: impl FnMut(String) -> () + 'static,
+    error_handler: impl FnMut(String) -> () + 'static,
     project: ProjectionPushdown,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, PressOnDropButton)
 where
@@ -270,6 +270,26 @@ where
         // Make it explicit that the subscriber is kept alive until we have finished returning parts
         drop(return_listen_handle);
     });
+
+    // This feels a bit clunky but it makes sure that we can't misuse the error
+    // handler below.
+    struct ErrorHandler<H: FnMut(String) -> () + 'static> {
+        inner: H,
+    }
+    impl<H: FnMut(String) -> () + 'static> ErrorHandler<H> {
+        /// Report the error and enforce that we never return.
+        async fn report_and_stop<R>(&mut self, error: String) -> R {
+            (self.inner)(error);
+
+            // We cannot continue, and we cannot shut down. Otherwise downstream
+            // operators might interpret our downgrading/releasing our
+            // capability as a statement of progress.
+            future::pending().await
+        }
+    }
+    let mut error_handler = ErrorHandler {
+        inner: error_handler,
+    };
 
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
@@ -348,12 +368,11 @@ where
             SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
                 Ok(parts) => parts,
                 Err(e) => {
-                    error_handler(format!("{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"));
-
-                    // We cannot continue, and we cannot shut down. Otherwise
-                    // downstream operators might interpret our downgrading our
-                    // sink as a statement of progress.
-                    future::pending().await
+                    error_handler
+                        .report_and_stop(format!(
+                            "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
+                        ))
+                        .await
                 }
             },
             SnapshotMode::Exclude => vec![],
@@ -372,12 +391,11 @@ where
         let listen = match read.listen(as_of.clone()).await {
             Ok(handle) => listen.insert(handle),
             Err(e) => {
-                error_handler(format!("{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"));
-
-                // We cannot continue, and we cannot shut down. Otherwise
-                // downstream operators might interpret our downgrading our sink
-                // as a statement of progress.
-                future::pending().await
+                error_handler
+                    .report_and_stop(format!(
+                        "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
+                    ))
+                    .await
             }
         };
 
