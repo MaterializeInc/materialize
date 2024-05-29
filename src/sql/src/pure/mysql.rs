@@ -14,11 +14,11 @@ use std::ops::DerefMut;
 
 use mz_mysql_util::{validate_source_privileges, MySqlError, MySqlTableDesc, QualifiedTableRef};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
     IdentError, MySqlConfigOptionName, ReferencedSubsources, WithOptionValue,
 };
+use mz_sql_parser::ast::{ReferencedSubsources, UnresolvedItemName};
 
 use crate::catalog::{SessionCatalog, SubsourceCatalog};
 use crate::names::Aug;

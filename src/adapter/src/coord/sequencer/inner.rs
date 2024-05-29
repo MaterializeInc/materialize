@@ -3405,6 +3405,7 @@ impl Coordinator {
 
                 let mz_sql::plan::AlterSourceAddSubsourceOptionExtracted {
                     text_columns: mut new_text_columns,
+                    ignore_columns: mut new_ignore_columns,
                     details: new_details,
                     ..
                 } = options.try_into()?;
@@ -3412,31 +3413,6 @@ impl Coordinator {
                 // Resolve items in statement
                 let (mut create_source_stmt, resolved_ids) =
                     create_sql_to_stmt_deps(self, ALTER_SOURCE, cur_entry.create_sql())?;
-
-                // We are doing a lot of unwrapping, so just make an error to reference; all of
-                // these invariants are guaranteed to be true because of how we plan subsources.
-                let purification_err =
-                    || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
-
-                let curr_options = match &mut create_source_stmt.connection {
-                    CreateSourceConnection::Postgres { options, .. } => options,
-                    _ => return Err(purification_err()),
-                };
-
-                let mz_sql::plan::PgConfigOptionExtracted {
-                    details,
-                    mut text_columns,
-                    ..
-                } = curr_options.clone().try_into()?;
-
-                // Drop both details and text columns; we will add them back in
-                // as appropriate below.
-                curr_options.retain(|o| {
-                    !matches!(
-                        o.name,
-                        PgConfigOptionName::Details | PgConfigOptionName::TextColumns
-                    )
-                });
 
                 // Get all currently referred-to items
                 let catalog = self.catalog();
@@ -3452,118 +3428,153 @@ impl Coordinator {
                     })
                     .collect();
 
-                let gen_details =
-                    |details: Option<String>| -> Result<PostgresSourcePublicationDetails, AdapterError> {
-                        let details = details.as_ref().ok_or_else(|| {
-                            AdapterError::internal(ALTER_SOURCE, "Postgres source missing details")
-                        })?;
+                // We are doing a lot of unwrapping, so just make an error to reference; all of
+                // these invariants are guaranteed to be true because of how we plan subsources.
+                let purification_err =
+                    || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
 
-                        let details = hex::decode(details)
-                            .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-                        let details = ProtoPostgresSourcePublicationDetails::decode(&*details)
-                            .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+                match &mut create_source_stmt.connection {
+                    CreateSourceConnection::Postgres {
+                        options: curr_options,
+                        ..
+                    } => {
+                        let mz_sql::plan::PgConfigOptionExtracted {
+                            details,
+                            mut text_columns,
+                            ..
+                        } = curr_options.clone().try_into()?;
 
-                        PostgresSourcePublicationDetails::from_proto(details)
-                            .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
-                    };
+                        // Drop both details and text columns; we will add them back in
+                        // as appropriate below.
+                        curr_options.retain(|o| {
+                            !matches!(
+                                o.name,
+                                PgConfigOptionName::Details | PgConfigOptionName::TextColumns
+                            )
+                        });
 
-                let mut curr_details = gen_details(details)?;
-                let mut new_details = gen_details(new_details)?;
+                        let gen_details = |details: Option<String>| -> Result<
+                            PostgresSourcePublicationDetails,
+                            AdapterError,
+                        > {
+                            let details = details.as_ref().ok_or_else(|| {
+                                AdapterError::internal(
+                                    ALTER_SOURCE,
+                                    "Postgres source missing details",
+                                )
+                            })?;
 
-                // n.b. this does not check publication table names, so we must
-                // do that separately.
-                curr_details
-                    .alter_compatible(cur_entry.id(), &new_details)
-                    .map_err(StorageError::InvalidAlter)?;
+                            let details = hex::decode(details)
+                                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+                            let details = ProtoPostgresSourcePublicationDetails::decode(&*details)
+                                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
-                // Trim any unreferred-to tables.
-                curr_details.tables.retain(|table| {
-                    let name = UnresolvedItemName(vec![
-                        // Unchecked is fine beause we have previously verified
-                        // that these are valid idents.
-                        Ident::new_unchecked(curr_details.database.clone()),
-                        Ident::new_unchecked(table.namespace.clone()),
-                        Ident::new_unchecked(table.name.clone()),
-                    ]);
+                            PostgresSourcePublicationDetails::from_proto(details)
+                                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
+                        };
 
-                    // Retain the definition of only those that are still referenced. This
-                    // lets us retain only the minimal set of publication details, which can
-                    // help avoid issues when generating PostgreSQL table casts.
-                    //
-                    // For example, if a table in the publication contains a column whose
-                    // cast requires using `TEXT COLUMNS` but the table is not an ingested
-                    // subsource. This poses an issue because `TEXT COLUMNS` requires that
-                    // the columns refer only to referenced subsources. The best solution to
-                    // this is to ensure that we simply don't try to generate the table cast
-                    // in the first place.
-                    curr_references.contains(&name)
-                });
+                        let mut curr_details = gen_details(details)?;
+                        let mut new_details = gen_details(new_details)?;
 
-                mz_ore::soft_assert_eq_or_log!(
-                    curr_details.tables.len(),
-                    curr_references.len(),
-                    "PostgresSourcePublicationDetails must have entry for every reference"
-                );
+                        // n.b. this does not check publication table names, so we must
+                        // do that separately.
+                        curr_details
+                            .alter_compatible(cur_entry.id(), &new_details)
+                            .map_err(StorageError::InvalidAlter)?;
 
-                let referenced_oids: BTreeSet<_> =
-                    curr_details.tables.iter().map(|t| t.oid).collect();
+                        // Trim any unreferred-to tables.
+                        curr_details.tables.retain(|table| {
+                            let name = UnresolvedItemName(vec![
+                                // Unchecked is fine beause we have previously verified
+                                // that these are valid idents.
+                                Ident::new_unchecked(curr_details.database.clone()),
+                                Ident::new_unchecked(table.namespace.clone()),
+                                Ident::new_unchecked(table.name.clone()),
+                            ]);
 
-                // Ensure that new tables are distinct from the current tables. We check the names only because
-                for table in new_details.tables.iter() {
-                    let name = UnresolvedItemName(vec![
-                        // Unchecked is fine beause we have previously verified
-                        // that these are valid idents.
-                        Ident::new_unchecked(curr_details.database.clone()),
-                        Ident::new_unchecked(table.namespace.clone()),
-                        Ident::new_unchecked(table.name.clone()),
-                    ]);
+                            // Retain the definition of only those that are still referenced. This
+                            // lets us retain only the minimal set of publication details, which can
+                            // help avoid issues when generating PostgreSQL table casts.
+                            //
+                            // For example, if a table in the publication contains a column whose
+                            // cast requires using `TEXT COLUMNS` but the table is not an ingested
+                            // subsource. This poses an issue because `TEXT COLUMNS` requires that
+                            // the columns refer only to referenced subsources. The best solution to
+                            // this is to ensure that we simply don't try to generate the table cast
+                            // in the first place.
+                            curr_references.contains(&name)
+                        });
 
-                    // Check both the OIDs and the names of the references to protect against
-                    // hard-to-reason-about renames.
-                    if referenced_oids.contains(&table.oid) || curr_references.contains(&name) {
-                        Err(AdapterError::SubsourceAlreadyReferredTo { name })?;
+                        mz_ore::soft_assert_eq_or_log!(
+                            curr_details.tables.len(),
+                            curr_references.len(),
+                            "PostgresSourcePublicationDetails must have entry for every reference"
+                        );
+
+                        let referenced_oids: BTreeSet<_> =
+                            curr_details.tables.iter().map(|t| t.oid).collect();
+
+                        // Ensure that new tables are distinct from the current tables. We check the names only because
+                        for table in new_details.tables.iter() {
+                            let name = UnresolvedItemName(vec![
+                                // Unchecked is fine beause we have previously verified
+                                // that these are valid idents.
+                                Ident::new_unchecked(curr_details.database.clone()),
+                                Ident::new_unchecked(table.namespace.clone()),
+                                Ident::new_unchecked(table.name.clone()),
+                            ]);
+
+                            // Check both the OIDs and the names of the references to protect against
+                            // hard-to-reason-about renames.
+                            if referenced_oids.contains(&table.oid)
+                                || curr_references.contains(&name)
+                            {
+                                Err(AdapterError::SubsourceAlreadyReferredTo { name })?;
+                            }
+                        }
+
+                        // Merge the current table definitions into new tables. Note
+                        // this changes the output indexes of the subsources.
+                        new_details.tables.extend(curr_details.tables);
+
+                        curr_options.push(PgConfigOption {
+                            name: PgConfigOptionName::Details,
+                            value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                                new_details.into_proto().encode_to_vec(),
+                            )))),
+                        });
+
+                        // Drop all text columns that are not currently referred to.
+                        text_columns.retain(|column_qualified_reference| {
+                            mz_ore::soft_assert_eq_or_log!(
+                                column_qualified_reference.0.len(),
+                                4,
+                                "all TEXT COLUMNS values must be column-qualified references"
+                            );
+                            let mut table = column_qualified_reference.clone();
+                            table.0.truncate(3);
+                            curr_references.contains(&table)
+                        });
+
+                        // Merge the current text columns into the new text columns.
+                        new_text_columns.extend(text_columns);
+
+                        // If we have text columns, add them to the options.
+                        if !new_text_columns.is_empty() {
+                            new_text_columns.sort();
+                            let new_text_columns = new_text_columns
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect();
+
+                            curr_options.push(PgConfigOption {
+                                name: PgConfigOptionName::TextColumns,
+                                value: Some(WithOptionValue::Sequence(new_text_columns)),
+                            });
+                        }
                     }
-                }
-
-                // Merge the current table definitions into new tables. Note
-                // this changes the output indexes of the subsources.
-                new_details.tables.extend(curr_details.tables);
-
-                curr_options.push(PgConfigOption {
-                    name: PgConfigOptionName::Details,
-                    value: Some(WithOptionValue::Value(Value::String(hex::encode(
-                        new_details.into_proto().encode_to_vec(),
-                    )))),
-                });
-
-                // Drop all text columns that are not currently referred to.
-                text_columns.retain(|column_qualified_reference| {
-                    mz_ore::soft_assert_eq_or_log!(
-                        column_qualified_reference.0.len(),
-                        4,
-                        "all TEXT COLUMNS values must be column-qualified references"
-                    );
-                    let mut table = column_qualified_reference.clone();
-                    table.0.truncate(3);
-                    curr_references.contains(&table)
-                });
-
-                // Merge the current text columns into the new text columns.
-                new_text_columns.extend(text_columns);
-
-                // If we have text columns, add them to the options.
-                if !new_text_columns.is_empty() {
-                    new_text_columns.sort();
-                    let new_text_columns = new_text_columns
-                        .into_iter()
-                        .map(WithOptionValue::UnresolvedItemName)
-                        .collect();
-
-                    curr_options.push(PgConfigOption {
-                        name: PgConfigOptionName::TextColumns,
-                        value: Some(WithOptionValue::Sequence(new_text_columns)),
-                    });
-                }
+                    _ => return Err(purification_err()),
+                };
 
                 let mut catalog = self.catalog().for_system_session();
                 catalog.mark_id_unresolvable_for_replanning(cur_entry.id());
