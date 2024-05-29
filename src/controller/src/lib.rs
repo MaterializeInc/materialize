@@ -298,6 +298,14 @@ where
         self.compute.initialization_complete();
     }
 
+    /// Allow this controller and instances controller by it to write to
+    /// external systems.
+    pub fn allow_writes(&mut self) {
+        self.compute.allow_writes();
+        // TODO: Storage does not yet understand the concept of read-only
+        // instances.
+    }
+
     /// Returns `Some` if there is an immediately available
     /// internally-generated response that we need to return to the
     /// client (as opposed to waiting for a response from compute or storage).

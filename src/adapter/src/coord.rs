@@ -1762,6 +1762,9 @@ impl Coordinator {
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
+        // Allow controller to go out of read-only mode right away.
+        self.controller.allow_writes();
+
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(self.catalog().state().pack_all_replica_size_updates());
 

@@ -145,6 +145,12 @@ pub struct ComputeController<T> {
     build_info: &'static BuildInfo,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
+    /// Whether or not this controller is in read-only mode.
+    ///
+    /// When in read-only mode, neither this controller nor the instances
+    /// controlled by it are allowed to affect changes to external systems
+    /// (largely persist).
+    read_only: bool,
     /// Compute configuration to apply to new instances.
     config: ComputeParameters,
     /// `arrangement_exert_proportionality` value passed to new replicas.
@@ -195,6 +201,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             instances: BTreeMap::new(),
             build_info,
             initialized: false,
+            read_only: true,
             config: Default::default(),
             arrangement_exert_proportionality: 16,
             stashed_replica_response: None,
@@ -323,6 +330,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             instances,
             build_info: _,
             initialized,
+            read_only,
             config: _,
             arrangement_exert_proportionality,
             stashed_replica_response,
@@ -353,6 +361,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         let map = serde_json::Map::from_iter([
             field("instances", instances)?,
             field("initialized", initialized)?,
+            field("read_only", read_only)?,
             field(
                 "arrangement_exert_proportionality",
                 arrangement_exert_proportionality,
@@ -401,6 +410,10 @@ where
             instance.initialization_complete();
         }
 
+        if !self.read_only {
+            instance.allow_writes();
+        }
+
         let config_params = self.config.clone();
         instance.update_configuration(config_params);
 
@@ -441,6 +454,15 @@ where
         self.initialized = true;
         for instance in self.instances.values_mut() {
             instance.initialization_complete();
+        }
+    }
+
+    /// Allow this controller and instances controller by it to write to
+    /// external systems.
+    pub fn allow_writes(&mut self) {
+        self.read_only = false;
+        for instance in self.instances.values_mut() {
+            instance.allow_writes();
         }
     }
 
