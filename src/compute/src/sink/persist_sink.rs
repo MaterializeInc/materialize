@@ -37,6 +37,7 @@ use timely::dataflow::operators::{
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
+use tokio::sync::watch;
 use tracing::trace;
 
 use crate::compute_state::ComputeState;
@@ -221,6 +222,7 @@ where
         &persist_oks,
         &persist_errs,
         Arc::clone(&persist_clients),
+        compute_state.read_only_rx.clone(),
     );
 
     let (append_frontier_stream, append_token) = append_batches(
@@ -230,6 +232,7 @@ where
         &batch_descriptions,
         &written_batches,
         persist_clients,
+        compute_state.read_only_rx.clone(),
     );
 
     append_frontier_stream.connect_loop(persist_feedback_handle);
@@ -598,6 +601,7 @@ fn write_batches<G>(
     persist_oks: &Stream<G, (Row, Timestamp, Diff)>,
     persist_errs: &Stream<G, (DataflowError, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
+    mut read_only: watch::Receiver<bool>,
 ) -> (Stream<G, BatchOrData>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -820,6 +824,10 @@ where
                         }
                     }
                 }
+                _it_changed = read_only.changed() => {
+                    // We might have to append some batches that we stashed
+                    // while in read-only mode.
+                }
                 else => {
                     // All inputs are exhausted, so we can shut down.
                     return;
@@ -844,6 +852,20 @@ where
             // Advance all updates to `persist`'s frontier.
             correction_oks.advance_by(&persist_frontier);
             correction_errs.advance_by(&persist_frontier);
+
+            if read_only.borrow().clone() {
+                // We are not allowed to do writes, so go back to the beginning
+                // of the loop.
+                //
+                // We are only bailing here to make sure that we keep our
+                // corrections buffers up to date, which will potentially
+                // consolidate things out.
+                //
+                // WIP: We need to do something about in_flight_batches: we keep
+                // accumulating those. Maybe we can remove those that are not
+                // beyond both the persist and desired frontier?
+                continue;
+            }
 
             // We can write updates for a given batch description when
             // a) the batch is not beyond `batch_descriptions_frontier`,
@@ -942,6 +964,7 @@ fn append_batches<G>(
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     batches: &Stream<G, BatchOrData>,
     persist_clients: Arc<PersistClientCache>,
+    mut read_only: watch::Receiver<bool>,
 ) -> (Stream<G, ()>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1105,11 +1128,28 @@ where
                         }
                     }
                 }
+                _it_changed = read_only.changed() => {
+                    // We might have to append some batches that we stashed
+                    // while in read-only mode.
+                }
                 else => {
                     // All inputs are exhausted, so we can shut down.
                     return;
                 }
             };
+
+            if read_only.borrow().clone() {
+                // We are not allowed to do writes, so go back to the beginning
+                // of the loop.
+                //
+                // We are only bailing here to make sure that we keep reading
+                // our inputs.
+                //
+                // WIP: We need to do something about in_flight_descriptions: we
+                // keep accumulating those. Maybe we can remove those that are
+                // not beyond both the persist and desired frontier?
+                continue;
+            }
 
             // Peel off any batches that are not beyond the frontier
             // anymore.
