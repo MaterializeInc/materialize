@@ -532,6 +532,7 @@ impl Listeners {
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 txn_wal_tables_cli: Some(TxnWalTablesImpl::Lazy),
                 reload_certs,
+                read_only_controllers: false,
             })
             .await?;
 
