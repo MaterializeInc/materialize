@@ -430,6 +430,7 @@ crates_repository(
         "//:src/tls-util/Cargo.toml",
         "//:src/tracing/Cargo.toml",
         "//:src/transform/Cargo.toml",
+        "//:src/txn-wal/Cargo.toml",
         "//:src/walkabout/Cargo.toml",
         "//:src/workspace-hack/Cargo.toml",
         "//:test/metabase/smoketest/Cargo.toml",
