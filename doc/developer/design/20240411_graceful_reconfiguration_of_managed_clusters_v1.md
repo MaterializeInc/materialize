@@ -11,69 +11,95 @@ replicas that match the new configuration. The duration of downtime can be seen
 as extending through the full period it takes to rehydrate the new replicas.
 
 ## Success Criteria
-A mechanism should be provided that allows users to delay the deletion of old
-replicas while new replicas are spun up
+A mechanism should be provided that allows users to alter a managed cluster,
+delaying the deletion of old replicas while new replicas are spun up and
+hydrated.
 
 ## Scope
 ### V1 Scope
- - Timeout-based reconfiguration cleanup scheduling
+ - Provide a timeout-based reconfiguration cleanup scheduling.
+ - The DDL will block for the duration of the reconfiguration.
+ - The action will be cancellable by canceling the query.
 
 ### V2 Scope
- - Hydration-based reconfiguration cleanup scheduling
+ - Provide a Hydration-based reconfiguration cleanup scheduling.
+ - The DDL will be able to run in the background.
+ - The action will be cancelable or able to be preemptively finalized.
 
-### Out of scope
- - Issues arising from multi-subscriber message handling are out of scope.
+## Out of Scope
+ - Interactions with proposed schedules, ex: auto-scaling/auto-quiescing
 
 ## Solution Proposal
 
 ### Summary:
-This feature will introduce new SQL in `ALTER CLUSTER` which will delay the
-cleanup of replicas until a specified timeout, or until a hydration check
-is triggered. 
+This feature will introduce new SQL in `ALTER CLUSTER` which will create new
+replicas matching the alter statement; however, unlike existing alter mechanisms,
+we will delay the cleanup of old replicas until the provided conditions are met.
 
-Ex:
+The SQL will need to define a type of check to be performed, parameters for that
+check, and whether or not to background the operation.
+
+Suggested syntax:
+
 ```sql
-ALTER CLUSTER c1 SET (SIZE 'small') WITH ( CLEANUP TIMEOUT 5 minutes );
+ALTER CLUSTER c1 SET (SIZE 'small') WITH ( 
+  WAIT = FOR <interval>,
+  BACKGROUND = {true|false},
+)
 ```
 
-Additionally, it will be possible to preempt the cleanup by specifying the
-statement with a TIMEOUT of 0, as long as no other changes are made to the
-cluster.
-
-Ex:
 ```sql
-ALTER CLUSTER c1 SET (SIZE 'small') WITH ( CLEANUP TIMEOUT 0 minutes );
+ALTER CLUSTER c1 SET (SIZE 'small') WITH ( 
+  WAIT = UNTIL CAUGHT UP (
+    TIMEOUT = <interval>,
+    ON TIMEOUT = {CONTINUE | ABORT}
+  )
+  BACKGROUND = {true|false},
+)
 ```
 
+The two types of checks, in agreement with the V1 and V2 scopes respectively, are: 
+ - `FOR` which waits for a provided duration before failing and aborting.
+ - `UNTIL CAUGHT UP` which will wait for a "catch up" mechanism to return true
+   or for a timeout to be met. It will roll back or forward depending on the value
+   provided to `ON TIMEOUT`.
 
-The new syntax and mechanisms will be built to work with auto-cleanup mechanisms
-built around cluster hydration but the syntax for that and the mechanism are not
-in scope for this document.
+The SQL will kick off some action in `sequence_alter_cluster_managed_to_managed`
+which will result in new reconfiguration replicas being created, new entries
+placed `mz_internal.mz_pending_cluster_replicas` and a `ReconfigureCluster`
+task being created which will ensure the reconfiguration finishes.
+
+To keep track of ongoing reconfigurations we will introduce a new
+`mz_internal.mz_pending_cluster_replicas` table which holds the state of
+reconfiguration replicas. This table will include all configuration parameters
+required to restart a reconfiguration task. It will be in charge of resuming or
+cleaning up a reconfiguration.
 
 All replicas will be billed during reconfiguration (except explicitly unbilled replicas).
 
 
 ### Definitions:
- -  Active Replica: These replicas should be actively serving results and are
-    named r1, r2, r3, etc. If a reconfiguration is ongoing, they will match the
-    prior version of the configuration. If a reconfiguration is not ongoing they
-    should be the only replicas.
+ - Active Replica: These replicas should be actively serving results and are
+   named r1, r2, r3, etc. If a reconfiguration is ongoing, they will match the
+   prior version of the configuration. If a reconfiguration is not ongoing they
+   should be the only replicas.
  - Reconfiguration Replica: These replicas only exist during a reconfiguration,
-   their names will be suffixed with `reconfig-`. They will move to active once
-   the reconfiguration is finalized.
-
+   their names will be suffixed with `reconfig-`. They will move to active
+   once the reconfiguration is finalized. These will be stored in the
+   `mz_pending_cluster_replicas` table.
+ - Reconfiguring Cluster: any cluster with one or more replicas in the
+   `mz_pending_cluster_replicas` table
 
 ### Guard Rails
-- Only one reconfiguration will occur at a time for a given cluster If a
-  cluster undergoing reconfiguration is modified we should drop reconfiguration
-  replicas and overwrite the reconfigure value. If the alter changes no fields
-  we should just modify the reconfigure value without dropping the replicas. We
-  will issue a notice when overwriting an existing reconfigure.
+- Only one reconfiguration will occur at a time for a given cluster. Alter statements
+  run against a reconfiguring cluster will fail.
 - We must protect against creating a source/sink on a reconfiguring cluster and
   reconfiguring a cluster with sources/sinks. These clusters will need to use
   the non-scheduled mechanism (delete-before-create). This is due to a limitation
   where sources and sinks must only run on a single replica.
-- Optionally, we may want to consider limiting timeout duration.
+- We must store all state required to restart a `ReconfigureCluster` task in the event that environmentd
+  crashes/restarts.
+- We may want to consider limiting timeout duration.
 
 ### Visibility
 Reconfiguration replicas should be identifiable for purposes of reporting and
@@ -83,169 +109,125 @@ replica resource in the catalog.
 
 ### Details
 
-#### Invariants:
-  - Only one reconfiguration will be allowed at a time for a cluster. 
-  - Unbilled replicas do not count towards reconfiguration and are not affected
-    by reconfiguration.
-
 #### Limitations:
   - Cannot be used on clusters with sources, sources should not be created on
-    clusters with reconfigure replicas.
+    clusters with reconfiguration replicas.
+  - Must be run on managed clusters, and cannot be used to alter a cluster from
+    managed to unmanaged.
 
 #### Replica Naming
 Active replicas will continue with the same naming scheme (r1, r2, ...)
 Reconfiguration replicas will use the `reconfig` prefix; ex `reconfig-r3`,
 `reconfig-r4`, which will be removed once they are moved to active.
 
-#### SQL
-Introduce new SQL to define a delay duration for alter cluster.
-
-`ALTER CLUSTER c1 SET (SIZE 'small') WITH ( CLEANUP TIMEOUT  5 minutes );`
-
-This will alter the cluster and create new cluster replicas, but will not
-remove existing replicas. Instead, it will set the schedule for the cluster
-to `ClusterSchedule::Reconfigure` and set the deadline to `now + the provided
-duration`. When CLEANUP TIMEOUT is not provided the cluster will behave as it
-previously did, immediately tearing down and then creating the new replicas.
-
-Initially, all reconfigurations will wait for the full timeout; however, when we
-move to a hydration/parity cleanup detection mechanism, the reconfiguration may
-finish before the timeout. The same SQL can be used in both cases.
-
 #### Interactions with other schedules:
 
-In introducing a second `ClusterScehdule` variant, we now have to account for
-the interaction between these variants. To do so, `ClusterSchedule::Manual`
-will be special-cased. We will allow multiple `ClusterSchedules` to be set
-concurrently on a given cluster, however, when `ClusterSchedule::Reconfigure`
-is one of them, it will be the only schedule that will cause a decision to be
-emitted.
+__V1__
+We will choose to initially disallow any reconfiguration of a cluster
+with a schedule.
 
-Benefits of this approach:
- - No other `ClusterSchedule` could interact with a cluster being reconfigured,
-   which may reduce the complexity of behavior between interacting schedules.
- - Interactions with refresh. A resize on an active refresh to a smaller cluster
-   size would complete (or timeout) rather than be quiesced by the refresh
-   schedule decision. This should give a better indication of whether the new
-   size would work on subsequent refreshes.
+__V2__
+For refresh schedules, we will only allow graceful reconfiguration on clusters
+whose refresh schedule is "ON", we would also need to prevent the clusters from being
+turned off until the reconfiguration is finished.
 
-Downsides of this approach:
- - Replicas may be alive for the entire delay period rather than just the period
-   it takes to perform the refresh, this could lead to additional/unexpected
-   billing.
+
+__Future Schedules__
+Some proposed schedules, auto-scaling, for instance, may want to use graceful
+reconfiguration under the hood. These would need specific well-defined
+interactions with user-invoked graceful reconfiguration.
+
 
 #### Catalog Changes
-__Cluster__
-Add a new ClusterSchedule Enum along with a `Reconfigure`  variant which would
-be applied temporarily during reconfigure.
-```rust
-ClusterSchedule::Reconfigure {
-  // timestamp for user-provided timeout
-  timeout: Option<u64>,
-  // V2 hydration config may end up here when we determine how it should be
-  // used to determine reconfiguration is complete This could also want to be
-  // a detection_mechanism: enum if we want different detection mechanisms that
-  // the user can specify 
-  // auto_detect: bool
-}
-```
+We will need to create a new table `mz_internal.mz_pending_cluster_replicas`
 
-#### Scheduling
-`cluster_scheduling`'s `check_schedule_policies`, will be updated
-to additionally check `check_reconfiguration_policy`, which sends
-`ScheduleDecisions` with the decision `FinalizeReconfigure`, when the reconfigure timeout deadline has passed.
+| column     |  type |
+| ---------- | ----- |
+| replica_id | str   |
+| cluster_id | str   |
+| timeout    | int   |
+| wait_type  | str   |
+| background | bool  |
+| start_time | int   |
+| finished   | bool  |
+| continue_on_timeout | bool |
 
-`check_reconfiguration_policy`, for V1, will trigger a `FinalizeReconfiguration` `ScheduingDecision` for clusters that
-have a `Reconfigure` `ClusterSchedule` with a timeout value greater than the current time. In V2, we will add logic to this to also check for parity/hydration. At this point, it may need to be backgrounded as it's likely a much more costly check.
+This table will be responsible for holding the state of the graceful replication task.
+Each reconfiguration replica will have an entry in `mz_epnding_cluster_replicas`.
 
-`Message::SchedulingDecisions` will be adjusted from 
-`SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, bool)>)>)` to be
-`SchedulingDecisions(Vec<SchedulingPolicyDecision>)`
-```rust
-enum SchedulingPolicyDecision {
-  Refresh(Vec<(ClusterId, bool)>),
-  FinalizeReconfigure(Vec<(ClusterId)>),
-}
-```
 
-The logic for `handle_schedule_decision` will be directed to the correct
-function based on the  variant of decision `handle_refresh_decision` or
-`handle_finalize_reconfigure_decision`.
+#### Reconfiguration Task
 
-For each cluster `handle_finalize_reconfigure_decisions` will check the current
-catalog to avoid conflicts with catalog updates since the `FinalizeDecision`
-was sent. If there's a collision that should prevent the finalization, such as a
-new size adjustment, then break; Otherwise, remove the active replicas and move
-the reconfiguration replicas to be active. Finally, remove the `Reconfigure`
-schedule from the cluster.
+The reconfiguration task will perform the following actions:
+1. Monitor the `wait` condition
+The `wait` condition provided in the DDL will be polled by this task, once the
+condition is met the replicas will be marked as finished and the task will move
+on to finalization.
+
+2. Finalize the reconfiguration
+Finalizing the reconfiguration will occur once the `wait` condition has been
+met. During this phase, the following steps will occur.
+- reconfiguration replica promotion to active
+- cluster configuration update to the new desired state
+- replicas with the previous configuration will be removed
+- replicas for the cluster will be removed from the `mz_pending_cluster_replicas` table
+
+3. Reverting the reconfiguration
+On failure or timeout of the reconfiguration, this task will revert to the state
+prior to the `ALTER CLUSTER` DDL. It will remove reconfigure replicas, and ensure the
+cluster config matches the original version.
 
 
 #### Cluster Sequencer
+
 The following roughly defines the new logic for the cluster sequencer when
 performing an alter cluster on a managed cluster.
 
-There are two states to look at
-1. the newly provided config
-2. the reconfigue config (what is in the catalog)
+`mz_sql::plan::AlterClusterOptions` will have additional fields added to keep track of
+the mechanism being used to perform the alter `AlterClusterMechanism::{Default|Duration|UntilCaughtUp}`.
 
-First scenario, the cluster being altered has no `Reconfigure` `cluster_schedule`:
-If cleanup_timeout is None:
- - use the old mechanism ( drop and replace )
-If the new alter statement provides a `cleanup_timeout`: 
- - check for sources/sinks,
- - update the catalog with the changes and add a `Reconfigure` cluster schedule
- - deploy new reconfigure replicas
+If we see a non-default mechanism we'll ensure that the cluster is managed
+and pass the mechanism to `sequence_alter_cluster_managed_to_managed`.
+This function will need to be updated to either perform a
+`sequence_alter_cluster_managed_to_managed_disruptive` or
+`sequence_alter_cluster_managed_to_managed_graceful` operation.
 
-Second scenario, the cluster being altered is undergoing a reconfigure:
-If cleanup_timeout is None,
- - Use the old mechanism - Drop and replace including all reconfigure replicas and remove the schedule.
-If the new alter statement provides a `cleanup_timeout`:
- - If the new config matches the current config
-   - bump the timeout
- - If the new config doesn't match the current config
-   - check for sources/sinks
-   - update cluster catalog with new schedule and config
-   - drop reconfigure replicas
-   - launch new reconfigure replicas
+The `disruptive` version will perform the current delete-before-create mechanism.
+The `graceful` version will perform the following actions:
+1. Validations
+  1. validate that the cluster is not undergoing a reconfiguration
+  2. validate the cluster is managed
+  3. validate the cluster has no sources and now sinks
+  4. the cluster cannot have a refresh schedule (v1)
+2. Creating the reconfiguration replicas
+3. Transactionally creating reconfiguration replicas and inserting the replicas into
+   the `mz_pending_cluster_replicas` table.
+4. Starting a blocking (or backgrounded) reconfiguration task 
 
-Note:
-An `ALTER CLUSTER` statement that is run twice (double shot), either needs to
-push out the timeout of an ongoing reconfiguration or needs to entirely replace
-the existing reconfigure schedule dropping and recreating any reconfigure
-replicas. I believe the former is the more useful behavior.
+
+#### Recoviner from Environmentd Crash
+Initially, we will recover from an environmentd crash by removing all
+reconfiguration replicas and clearing the `mz_pending_cluster_replicas` table,
+to ensure no active reconfigures are occurring. This is because
+we will treat any disruption in connection as a failed DDL which will need to
+be aborted.
+
+For V2, for each cluster, we will want to inspect whether an active
+reconfiguration is ongoing and continue it. To do this we'll likely need calls
+to `sequence_alter_cluster_managed_to_managed` to be idempotent w.r.t pending
+cluster replicas. 
+
 
 ## Alternatives
-### Multiple Schedule Interactions
-We may choose to not special-case the `Reonconfigure` `ClusterSchedule`. In
-doing so both Schedules can create `ScheduleDecision` messages in their handle
-scheduling calls, the handler for each decision may happen in any order one
-after the other with no delay. Importantly, handling decisions is a serial
-process so no two decision handlers will be taking action at the same time. This
-may lead to a replica  that was recently spinning up from an `ALTER CLUSTER`
-statement being immediately shut down due to a refresh finalizing. Notably, if
-the cluster was sized down the following refresh may fail due to OOD or OOM as
-it never succeeded with the new size.
 
-Benefits
-  - Should be relatively easy to write this, as the expectation for any schedule
-    adjustment should be idempotent, ensure the cluster/replicas are in the
-    correct state after the decision action has finished.
-Downsides
-  - The interaction with `REFRESH EVERY` here is still weird. One might downsize
-    during the active period of `REFRESH EVERY`, but refresh finishes before the
-    reconfiguration finishing and the user will not know that the smaller size
-    will OOM or OOD(out of disk) on the next run because the reconfigure size
-    never had to finish.
-
-### Allow cancelation?
-We could additionally add a prior config field in `ClusterSchedule::Reconfigure`
-that stores the `prior_config`. This would be the pre-reconfigure configuration
-and could be used to cancel an upgrade. This would be done by running an
-`ALTER CLUSTER` statement that does not provide a `CLEANUP TIMEOUT`, and whose
-configuration matches the `prior_config`. This seems somewhat convoluted and
-I don't know that allowing for cancellation is necessary as long as we allow for
-adjustment of the current reconfigure timeout, and we allow for overwriting the
-current reconfiguration entirely.
+### Treating Reconfigure as a Schedule
+The initial version of this doc detailed a potential solution where reconfiguration
+was treated as a cluster schedule. In that plan, roughly, a new schedule would be added
+to the cluster being gracefully reconfigured. Rather than having a task handle the reconfiguration
+`HandleClusterSchedule` would have logic that looked for `ReconfigurationSchedule`s and would
+send `ReconfigurationFinalization` decisions when the `wait` condition was met. This decision
+would then promote pending replicas to active replicas, and remove the `ReconfigurationSchedule`
+in `handle_schedule_decision`
 
 
 ### Syntax
@@ -260,17 +242,11 @@ be applied on every reconfigure. For this to work we'd need to update
 the cluster to know when a reconfigure event started, then we could compare the
 event + the duration to now and send a `ReconfigureFinalization` decision.
 
-To me the reconfigure schedule exists only to interact with actions taken from
-`ALTER CLUSTER` statements and is not really a property of the cluster, so I'm
-not very bullish on this syntax. I could be convinced that this is more ergonimic.
+It seems like the reconfiguration task exists only to interact with actions taken from
+`ALTER CLUSTER` statements are not a property of the cluster, so I'm
+not very bullish on this syntax. I could be convinced that this is more ergonomic.
 
 ## Open Questions
-
-### How do we handle multiple schedules?
-If this feature is introducing multiple schedules we'll need some rules
-governing the interaction between schedules. There's a world where each schedule
-needs to consider its interaction with all other schedules and that seems kind
-of scary.
 
 ### How do we handle clusters with sinks and sources?
 There is a current limitation around clusters with sources where the replication
@@ -281,25 +257,6 @@ consider some ways to handle this, one potential is to keep source activity to
 a single replica in a multi-replica cluster. Alternatively, we just don't allow
 this, and we add some big disclaimers to clusters with sources.
 
-### How does a multi-subscriber coord work with schedules?
-We don't want two schedule decisions to be acting at the same time. Currently,
-this isn't an issue, but it seems a bit scary. Is this a concern?
-
-### How will this impact coord delays?
-Particularly when we look at hydration-based, this may add a reasonable
-complexity/time to the `coord` loop, which could lead to stalls. We may need to
-consider spinning off cluster scheduling decisions to a task.
-
-### Should ClusterSchedule::Reconfigure be a schedule?
-Since reconfiguration is only a temporary action it's somewhat reasonable that
-we wouldn't want to count it as a "schedule" option. If we're not doing this,
-we'd still have to define and persist some field to alert us of the timeout
-deadline, which likely means adding `reconfiugration_deadline: option<u64>`
-and `reconfiguration_mechanism` to the durable cluster object. I don't think
-this plays well with other types of scheduling and doesn't properly encapsulate
-the reconfiguration behavior, it's also less extensible when we think about
-different configurations for reconfiguration we may want in the future.
-
 ### Hydration-Based Scheduling
 There is currently the beginning of the mechanism to look at hydration
 based metrics for scheduling in `compute-client/src/controller/
@@ -308,18 +265,15 @@ but can't gauge the hydration status of a replica as a whole.
 
 What we likely want is a mechanism [discussed here](https://github.com/MaterializeInc/materialize/issues/20010#issuecomment-2058563052), where we
 compare the data-flow frontiers between reconfiguration and active replicas,
-and when the reconfiguration replicas have all data flows within some threshold
-of the active, we send a message which invokes a `RecofigurationFinalize`
-scheduling decision. This decision may have to be a different decision policy
-then the standard `ReconfigurationFinalize` as we may want to perform some
-additional checks of the hydration status to ensure new data flows between when
-the message got sent and when the action is being taken have hydrated.
+and when the reconfiguration replicas have all data-flows within some threshold
+of the active, we send a claim that the check condition has been met and proceed with
+finalization of the reconfiguration.
 
 __Potential challenges with using hydration status__:
 It is difficult to know when "hydration" has finished because:
   - New data coming in may change the timestamp and lead to hydration status inaccuracies
   - New data-flows can be created ad-hock which will need to be "hydrated"
-  - hydration_status errors related to `evnironmentd` restart?
+  - hydration_status errors related to Environmentd restart?
     (https://materializeinc.slack.com/archives/CTESPM7FU/p1712227236046369?thread_ts=1712224682.263469&cid=CTESPM7FU)
 Some of these can be resolved by only looking at data flows that were installed
 when the replica was created. It seems like comparing active and reconfiguration
@@ -327,5 +281,22 @@ replicas will likely work better than attempting to gauge when hydration has
 finished for a given replica. It also may allow us to shorten the timeout if all
 replicas for a cluster undergoing reconfiguration are restarted.
 
-Ideally, no extra syntax is needed for hydration. We can implement it directly using the
-current syntax and it will just finalize the reconfiguration before we hit the timeout.
+For hydration-based scheduling the `until caught up` syntax will be used.
+
+
+### Reconfiguration replica naming:
+Is it still useful to have reconfiguration replica naming differences if we also have a table tracking those
+replicas? It seems like we could get the list just as easily with a join and skip a step in the reconfiguration task.
+
+### Should the reconfiguration task create the replicas
+Currently, I have the reconfiguration task set to be in charge of the wait check and the finalization, but not
+the reconfiguration replica creation nor the insertion into `mz_cluster_pending_replicas`. This seems like a reasonable
+separation, as if we cannot do these two things we should fail and not background a task.
+
+
+### Do we want a more generic jobs table?
+The proposed mechanism is for a sort of one-off very specific job engine. Assuming we
+want a more robust job engine in the future it may make sense to take baby steps towards that here.
+For instance, we could introduce an `mz_job` table that stores all information about a ReconfiguratTask. This
+could be used on environmentd restart to re-initialize the task or perform cleanup for the task if the envd restart
+would've caused the task to fail. I haven't thought this through much.
