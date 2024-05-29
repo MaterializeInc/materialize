@@ -10,6 +10,8 @@
 import random
 import time
 
+from pg8000.exceptions import InterfaceError
+
 from materialize.data_ingest.executor import (
     KafkaExecutor,
     KafkaRoundtripExecutor,
@@ -103,14 +105,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     executor_classes = [MySqlExecutor, KafkaRoundtripExecutor, KafkaExecutor]
     ports = {s: c.default_port(s) for s in services}
 
-    for i, workload_class in enumerate(workloads):
-        random.seed(args.seed)
-        print(f"--- Testing workload {workload_class.__name__}")
-        execute_workload(
-            executor_classes,
-            workload_class(c),
-            i,
-            ports,
-            args.runtime,
-            args.verbose,
-        )
+    try:
+        for i, workload_class in enumerate(workloads):
+            random.seed(args.seed)
+            print(f"--- Testing workload {workload_class.__name__}")
+            execute_workload(
+                executor_classes,
+                workload_class(c),
+                i,
+                ports,
+                args.runtime,
+                args.verbose,
+            )
+    except InterfaceError as e:
+        if "network error" in str(e):
+            # temporary error, invited to retry
+            exit(75)
+
+        raise
