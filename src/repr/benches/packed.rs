@@ -19,7 +19,7 @@ fn bench_interval(c: &mut Criterion) {
     const INTERVAL: Interval = Interval::new(1, 1, 0);
     group.bench_function("encode", |b| {
         b.iter(|| {
-            let packed = PackedInterval::from(INTERVAL);
+            let packed = PackedInterval::from(std::hint::black_box(INTERVAL));
             std::hint::black_box(packed);
         })
     });
@@ -28,7 +28,7 @@ fn bench_interval(c: &mut Criterion) {
     group.bench_function("decode", |b| {
         let packed = PackedInterval::from_bytes(&PACKED).unwrap();
         b.iter(|| {
-            let normal = Interval::from(packed);
+            let normal = Interval::from(std::hint::black_box(packed));
             std::hint::black_box(normal);
         })
     });
@@ -43,7 +43,7 @@ fn bench_time(c: &mut Criterion) {
     group.bench_function("encode", |b| {
         let naive_time = NaiveTime::from_hms_opt(1, 1, 1).unwrap();
         b.iter(|| {
-            let packed = PackedNaiveTime::from(naive_time);
+            let packed = PackedNaiveTime::from(std::hint::black_box(naive_time));
             std::hint::black_box(packed);
         })
     });
@@ -52,7 +52,7 @@ fn bench_time(c: &mut Criterion) {
     group.bench_function("decode", |b| {
         let packed = PackedNaiveTime::from_bytes(&PACKED).unwrap();
         b.iter(|| {
-            let normal = NaiveTime::from(packed);
+            let normal = NaiveTime::from(std::hint::black_box(packed));
             std::hint::black_box(normal);
         })
     });

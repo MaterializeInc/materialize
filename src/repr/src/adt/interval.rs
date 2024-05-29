@@ -872,6 +872,10 @@ impl From<Interval> for PackedInterval {
     }
 }
 
+// `as` conversions are okay here because we're doing bit level logic to make
+// sure the sort order of the packed binary is correct. This is implementation
+// is proptest-ed below.
+#[allow(clippy::as_conversions)]
 impl From<PackedInterval> for Interval {
     fn from(value: PackedInterval) -> Self {
         // Note: We XOR the values to get correct sorting of negative values.

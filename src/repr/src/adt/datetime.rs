@@ -1944,8 +1944,8 @@ impl From<NaiveTime> for PackedNaiveTime {
 
         let mut buf = [0u8; Self::SIZE];
 
-        (&mut buf[..4]).copy_from_slice(&secs.to_be_bytes());
-        (&mut buf[4..]).copy_from_slice(&nano.to_be_bytes());
+        (buf[..4]).copy_from_slice(&secs.to_be_bytes());
+        (buf[4..]).copy_from_slice(&nano.to_be_bytes());
 
         PackedNaiveTime(buf)
     }
