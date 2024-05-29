@@ -10,8 +10,6 @@ menu:
     name: "AWS PrivateLink connections"
 ---
 
-{{< public-preview />}}
-
 Materialize can connect to a Kafka broker, a Confluent Schema Registry server or
 a PostgreSQL database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/) service.
 

@@ -426,8 +426,6 @@ If your Kafka broker is not exposed to the public internet, you can [tunnel the 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
 
-{{< public-preview />}}
-
 ```sql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',

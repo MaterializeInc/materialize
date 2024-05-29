@@ -337,8 +337,6 @@ through an AWS PrivateLink service or an SSH bastion host.
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
 
-{{< public-preview />}}
-
 ```sql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',

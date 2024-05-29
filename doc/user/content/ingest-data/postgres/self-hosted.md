@@ -84,8 +84,6 @@ Select the option that works best for you.
 
 {{< tab "Use AWS PrivateLink">}}
 
-{{< public-preview />}}
-
 Materialize can connect to a PostgreSQL database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/)
 service. Your PostgreSQL database must be running on AWS in order to use this
 option.
