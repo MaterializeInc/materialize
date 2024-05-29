@@ -686,20 +686,6 @@ where
             _ => return Ok(()),
         };
 
-        for dep in deps.iter() {
-            let dep_collection = self_collections
-                .get(dep)
-                .ok_or(StorageError::IdentifierMissing(id))?;
-
-            mz_ore::soft_assert_or_log!(
-                PartialOrder::less_equal(
-                    &dep_collection.implied_capability,
-                    collection_implied_capability
-                ),
-                "dependency since cannot be in advance of dependent's since"
-            );
-        }
-
         self.install_read_capabilities_inner(
             self_collections,
             id,
@@ -1499,57 +1485,7 @@ where
             )?;
 
             // Determine the intial since of the collection.
-            let initial_since = match storage_dependencies
-                .iter()
-                .at_most_one()
-                .expect("should have at most one depdendency")
-            {
-                Some(dep) => {
-                    let dependency_collection = self_collections
-                        .get(dep)
-                        .ok_or(StorageError::IdentifierMissing(*dep))?;
-                    let dependency_since = dependency_collection.implied_capability.clone();
-
-                    // If an item has a dependency, its initial since must be
-                    // advanced as far as its dependency, i.e. a dependency's
-                    // since may never be in advance of its dependents.
-                    //
-                    // We have to do this every time we initialize the
-                    // collection, though––the invariant might have been upheld
-                    // correctly in the previous epoch, but the
-                    // `data_shard_since` might not have compacted and, on
-                    // establishing a new persist connection, still have data we
-                    // said _could_ be compacted.
-                    if PartialOrder::less_than(&data_shard_since, &dependency_since) {
-                        // The dependency since cannot be in advance of the
-                        // dependent upper unless the collection is new. If the
-                        // dependency since advanced past the dependent's upper,
-                        // the dependent cannot read data from the dependency at
-                        // its upper.
-                        //
-                        // Another way of understanding that this is a problem
-                        // is that this means that the read hold installed on
-                        // the dependency was probably not been upheld––if it
-                        // were, the dependency's since could not have advanced
-                        // as far the dependent's upper.
-                        mz_ore::soft_assert_or_log!(
-                            write_frontier.elements() == &[T::minimum()]
-                                || PartialOrder::less_than(&dependency_since, write_frontier),
-                            "dependency ({dep}) since has advanced past dependent ({id}) upper \n
-                            dependent ({id}): since {:?}, upper {:?} \n
-                            dependency ({dep}): since {:?}",
-                            data_shard_since,
-                            write_frontier,
-                            dependency_since
-                        );
-
-                        dependency_since
-                    } else {
-                        data_shard_since
-                    }
-                }
-                None => data_shard_since,
-            };
+            let initial_since = data_shard_since;
 
             let mut collection_state = CollectionState::new(
                 description,
