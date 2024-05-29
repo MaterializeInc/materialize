@@ -318,8 +318,6 @@ connection through an AWS PrivateLink service or an SSH bastion host.
 {{< tabs >}}
 {{< tab "AWS PrivateLink">}}
 
-{{< public-preview />}}
-
 Depending on the hosted service you are connecting to, you might need to specify
 a PrivateLink connection [per advertised broker](#kafka-privatelink-syntax)
 (e.g. Amazon MSK), or a single [default PrivateLink connection](#kafka-privatelink-default) (e.g. Redpanda Cloud).
@@ -384,8 +382,6 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 ```
 
 ##### Default connections {#kafka-privatelink-default}
-
-{{< public-preview />}}
 
 [Redpanda Cloud](/ingest-data/redpanda-cloud/)) does not require listing every
 broker individually. In this case, you should specify a PrivateLink connection
@@ -802,8 +798,6 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 ## Network security connections
 
 ### AWS PrivateLink
-
-{{< public-preview />}}
 
 An AWS PrivateLink connection establishes a link to an [AWS PrivateLink] service.
 You can use AWS PrivateLink connections in [Confluent Schema Registry connections](#confluent-schema-registry),

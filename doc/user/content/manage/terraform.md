@@ -147,7 +147,6 @@ objects. A few use cases are captured in the sections below:
 
 ### AWS PrivateLink
 
-{{< public-preview />}}
 
 To get data into Materialize, you need a connection to allow your data source to
 communicate with Materialize. One option to connect securely to Materialize is
