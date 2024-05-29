@@ -1326,12 +1326,13 @@ async fn purify_alter_source(
         print_id: true,
     };
 
-    // Get PG connection.
-    let pg_source_connection = match desc.connection {
-        GenericSourceConnection::Postgres(pg_connection) => pg_connection,
+    // Validate this is a source that can be altered.
+    match desc.connection {
+        GenericSourceConnection::Postgres(_) => {}
+        GenericSourceConnection::MySql(_) => {}
         _ => sql_bail!(
             "{} is a {} source, which does not support ALTER SOURCE.",
-            scx.catalog.minimal_qualification(item.name()),
+            scx.catalog.minimal_qualification(name),
             desc.connection.name()
         ),
     };
@@ -1353,135 +1354,146 @@ async fn purify_alter_source(
 
     let crate::plan::statement::ddl::AlterSourceAddSubsourceOptionExtracted {
         mut text_columns,
+        mut ignore_columns,
         details,
-        ..
+        seen: _,
     } = options.clone().try_into()?;
     assert!(details.is_none(), "details cannot be explicitly set");
 
-    // Get PostgresConnection for generating subsources.
-    let pg_connection = &pg_source_connection.connection;
+    match desc.connection {
+        GenericSourceConnection::Postgres(pg_source_connection) => {
+            // Get PostgresConnection for generating subsources.
+            let pg_connection = &pg_source_connection.connection;
 
-    let config = pg_connection
-        .config(
-            &storage_configuration.connection_context.secrets_reader,
-            storage_configuration,
-            InTask::No,
-        )
-        .await?;
-
-    let available_replication_slots = mz_postgres_util::available_replication_slots(
-        &storage_configuration.connection_context.ssh_tunnel_manager,
-        &config,
-    )
-    .await?;
-
-    // We need 1 additional replication slot for the snapshots
-    if available_replication_slots < 1 {
-        Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
-    }
-
-    let new_publication_tables = mz_postgres_util::publication_info(
-        &storage_configuration.connection_context.ssh_tunnel_manager,
-        &config,
-        &pg_source_connection.publication,
-    )
-    .await?;
-
-    if new_publication_tables.is_empty() {
-        Err(PgSourcePurificationError::EmptyPublication(
-            pg_source_connection.publication.to_string(),
-        ))?;
-    }
-
-    let publication_catalog = postgres::derive_catalog_from_publication_tables(
-        &pg_connection.database,
-        &new_publication_tables,
-    )?;
-
-    let validated_requested_subsources = subsource_gen(
-        &mut targeted_subsources,
-        &publication_catalog,
-        &unresolved_source_name,
-    )?;
-
-    validate_subsource_names(&validated_requested_subsources)?;
-
-    postgres::validate_requested_subsources_privileges(
-        &config,
-        &validated_requested_subsources,
-        &storage_configuration.connection_context.ssh_tunnel_manager,
-    )
-    .await?;
-
-    let text_cols_dict = postgres::generate_text_columns(
-        &publication_catalog,
-        // In addition to using the `text_columns` values here, we also fully
-        // normalize the objects to which they refer.
-        &mut text_columns,
-        &AlterSourceAddSubsourceOptionName::TextColumns.to_ast_string(),
-    )?;
-
-    if !text_columns.is_empty() {
-        // Normalize options to contain full qualified values.
-        text_columns.sort();
-        text_columns.dedup();
-        options.retain(|o| o.name != AlterSourceAddSubsourceOptionName::TextColumns);
-        options.push(AlterSourceAddSubsourceOption {
-            name: mz_sql_parser::ast::AlterSourceAddSubsourceOptionName::TextColumns,
-            value: Some(WithOptionValue::Sequence(
-                text_columns
-                    .into_iter()
-                    .map(WithOptionValue::UnresolvedItemName)
-                    .collect(),
-            )),
-        });
-    }
-
-    let (create_subsource_stmts, referenced_tables) = postgres::generate_targeted_subsources(
-        &scx,
-        Some(resolved_source_name),
-        validated_requested_subsources,
-        text_cols_dict,
-        &new_publication_tables,
-    )?;
-
-    let timeline_id = match pg_source_connection.publication_details.timeline_id {
-        None => {
-            // If we had not yet been able to fill in the source's timeline ID, fill it in now.
-            let replication_client = config
-                .connect_replication(&storage_configuration.connection_context.ssh_tunnel_manager)
+            let config = pg_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
                 .await?;
-            let timeline_id = mz_postgres_util::get_timeline_id(&replication_client).await?;
-            Some(timeline_id)
+
+            let available_replication_slots = mz_postgres_util::available_replication_slots(
+                &storage_configuration.connection_context.ssh_tunnel_manager,
+                &config,
+            )
+            .await?;
+
+            // We need 1 additional replication slot for the snapshots
+            if available_replication_slots < 1 {
+                Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
+            }
+
+            let new_publication_tables = mz_postgres_util::publication_info(
+                &storage_configuration.connection_context.ssh_tunnel_manager,
+                &config,
+                &pg_source_connection.publication,
+            )
+            .await?;
+
+            if new_publication_tables.is_empty() {
+                Err(PgSourcePurificationError::EmptyPublication(
+                    pg_source_connection.publication.to_string(),
+                ))?;
+            }
+
+            let publication_catalog = postgres::derive_catalog_from_publication_tables(
+                &pg_connection.database,
+                &new_publication_tables,
+            )?;
+
+            let validated_requested_subsources = subsource_gen(
+                &mut targeted_subsources,
+                &publication_catalog,
+                &unresolved_source_name,
+            )?;
+
+            validate_subsource_names(&validated_requested_subsources)?;
+
+            postgres::validate_requested_subsources_privileges(
+                &config,
+                &validated_requested_subsources,
+                &storage_configuration.connection_context.ssh_tunnel_manager,
+            )
+            .await?;
+
+            let text_cols_dict = postgres::generate_text_columns(
+                &publication_catalog,
+                // In addition to using the `text_columns` values here, we also fully
+                // normalize the objects to which they refer.
+                &mut text_columns,
+                &AlterSourceAddSubsourceOptionName::TextColumns.to_ast_string(),
+            )?;
+
+            if !text_columns.is_empty() {
+                // Normalize options to contain full qualified values.
+                text_columns.sort();
+                text_columns.dedup();
+                options.retain(|o| o.name != AlterSourceAddSubsourceOptionName::TextColumns);
+                options.push(AlterSourceAddSubsourceOption {
+                    name: mz_sql_parser::ast::AlterSourceAddSubsourceOptionName::TextColumns,
+                    value: Some(WithOptionValue::Sequence(
+                        text_columns
+                            .into_iter()
+                            .map(WithOptionValue::UnresolvedItemName)
+                            .collect(),
+                    )),
+                });
+            }
+
+            let (create_subsource_stmts, referenced_tables) =
+                postgres::generate_targeted_subsources(
+                    &scx,
+                    Some(resolved_source_name),
+                    validated_requested_subsources,
+                    text_cols_dict,
+                    &new_publication_tables,
+                )?;
+
+            let timeline_id = match pg_source_connection.publication_details.timeline_id {
+                None => {
+                    // If we had not yet been able to fill in the source's timeline ID, fill it in now.
+                    let replication_client = config
+                        .connect_replication(
+                            &storage_configuration.connection_context.ssh_tunnel_manager,
+                        )
+                        .await?;
+                    let timeline_id =
+                        mz_postgres_util::get_timeline_id(&replication_client).await?;
+                    Some(timeline_id)
+                }
+                timeline_id => timeline_id,
+            };
+
+            // These new details need to be merged with the existing details and cannot
+            // simply overwrite the existing details. This suggests they should be their
+            // own options, but it's nice to be able to take the values to and from a
+            // hex-encoded string.
+            let new_details = PostgresSourcePublicationDetails {
+                // In this context, we only track the referenced tables; we will merge these with the tables
+                // referenced in the catalog.
+                //
+                // We MUST check for duplicate references when we rejoin the main coordinator thread! We do
+                // that later because the sources that are present might have changed while this
+                // purification occurs.
+                tables: referenced_tables,
+                timeline_id,
+                // This value is not allowed to be altered in the source.
+                slot: pg_source_connection.publication_details.slot,
+                // This value is not allowed to be altered in the source.
+                database: pg_source_connection.publication_details.database,
+            };
+
+            options.push(AlterSourceAddSubsourceOption {
+                name: mz_sql_parser::ast::AlterSourceAddSubsourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    new_details.into_proto().encode_to_vec(),
+                )))),
+            });
         }
-        timeline_id => timeline_id,
+        GenericSourceConnection::MySql(mysql_source_connection) => {}
+        _ => unreachable!(),
     };
-
-    // These new details need to be merged with the existing details and cannot
-    // simply overwrite the existing details. This suggests they should be their
-    // own options, but it's nice to be able to take the values to and from a
-    // hex-encoded string.
-    let new_details = PostgresSourcePublicationDetails {
-        // In this context, we only track the referenced tables; we will merge these with the tables
-        // referenced in the catalog.
-        //
-        // We MUST check for duplicate references when we rejoin the main coordinator thread! We do
-        // that later because the sources that are present might have changed while this
-        // purification occurs.
-        tables: referenced_tables,
-        timeline_id,
-        // This value is not allowed to be altered in the source.
-        slot: pg_source_connection.publication_details.slot,
-        // This value is not allowed to be altered in the source.
-        database: pg_source_connection.publication_details.database,
-    };
-
-    options.push(AlterSourceAddSubsourceOption {
-        name: mz_sql_parser::ast::AlterSourceAddSubsourceOptionName::Details,
-        value: Some(WithOptionValue::Value(Value::String(hex::encode(
-            new_details.into_proto().encode_to_vec(),
-        )))),
-    });
 
     Ok(PurifiedStatement::PurifiedAlterSourceAddSubsources {
         altered_id,
