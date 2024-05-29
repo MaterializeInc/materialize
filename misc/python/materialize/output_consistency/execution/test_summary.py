@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from materialize.mzcompose.test_result import TestFailureDetails
+from materialize.output_consistency.operation.operation import DbOperationOrFunction
 
 
 class ConsistencyTestLogger:
@@ -17,6 +18,13 @@ class ConsistencyTestLogger:
 
     def add_global_warning(self, message: str) -> None:
         self.global_warnings.append(message)
+
+
+class DbOperationOrFunctionStats:
+    def __init__(self):
+        self.count_top_level = 0
+        self.count_nested = 0
+        self.count_generation_failed = 0
 
 
 class ConsistencyTestSummary(ConsistencyTestLogger):
@@ -37,6 +45,9 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         self.count_ignored_error_query_templates = count_ignored_error_query_templates
         self.count_with_warning_query_templates = count_with_warning_query_templates
         self.failures: list[TestFailureDetails] = []
+        self.stats_by_operation_and_function: dict[
+            DbOperationOrFunction, DbOperationOrFunctionStats
+        ] = dict()
 
     def add_failures(self, failures: list[TestFailureDetails]):
         self.failures.extend(failures)
@@ -51,7 +62,7 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         assert all_passed == (len(self.failures) == 0)
         return all_passed
 
-    def __str__(self) -> str:
+    def get(self) -> str:
         count_accepted_queries = (
             self.count_successful_query_templates
             + self.count_ignored_error_query_templates
@@ -96,3 +107,18 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
             warning_rows.append(f"* {warning}")
 
         return warning_rows
+
+    def get_function_and_operation_stats(self) -> str:
+        output = []
+
+        for (
+            operation_or_function,
+            stats,
+        ) in self.stats_by_operation_and_function.items():
+            output.append(
+                f"* {operation_or_function.to_description()}: {stats.count_top_level} top level, {stats.count_nested} nested, {stats.count_generation_failed} generation failed"
+            )
+
+        output.sort()
+
+        return "\n".join(output)

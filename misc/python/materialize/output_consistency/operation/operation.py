@@ -92,6 +92,21 @@ class DbOperationOrFunction:
     def __str__(self) -> str:
         raise NotImplementedError
 
+    def operation_type_name(self) -> str:
+        raise NotImplementedError
+
+    def to_description(self) -> str:
+        desc = f"{self.operation_type_name()}"
+        desc = f"{desc} '{self.to_pattern(self.min_param_count)}'"
+
+        if self.min_param_count != self.max_param_count:
+            desc = f"{desc}-'{self.to_pattern(self.max_param_count)}'"
+
+        if self.comment is not None:
+            desc = f"{desc} (comment: {self.comment})"
+
+        return desc
+
     def is_tagged(self, tag: str) -> bool:
         if self.tags is None:
             return False
@@ -166,6 +181,9 @@ class DbOperation(DbOperationOrFunction):
         comment = f" (comment: {self.comment})" if self.comment is not None else ""
         return f"DbOperation: {self.pattern}{comment}"
 
+    def operation_type_name(self) -> str:
+        return "operation"
+
 
 class DbFunction(DbOperationOrFunction):
     """A database function (e.g., `SUM(x)`)"""
@@ -227,6 +245,9 @@ class DbFunction(DbOperationOrFunction):
     def __str__(self) -> str:
         comment = f" (comment: {self.comment})" if self.comment is not None else ""
         return f"DbFunction: {self.function_name_in_lower_case}{comment}"
+
+    def operation_type_name(self) -> str:
+        return "function"
 
 
 class DbFunctionWithCustomPattern(DbFunction):
