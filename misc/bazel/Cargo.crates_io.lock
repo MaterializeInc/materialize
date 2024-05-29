@@ -1,5 +1,5 @@
 {
-  "checksum": "18c3b3d2061d519bf05252ec4da97b827e27dd734d69bea3d0472522b37c3d58",
+  "checksum": "6b7d532f2d4480ccc84eeb095613e2cfdcf67dce0c1e1b9bbd4dac2836ae22e8",
   "crates": {
     "abomonation 0.7.3": {
       "name": "abomonation",
@@ -23501,9 +23501,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-balancerd 0.101.0-dev": {
+    "mz-balancerd 0.102.0-dev": {
       "name": "mz-balancerd",
-      "version": "0.101.0-dev",
+      "version": "0.102.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -23637,7 +23637,7 @@
           ],
           "selects": {}
         },
-        "version": "0.101.0-dev"
+        "version": "0.102.0-dev"
       },
       "license": null,
       "license_ids": [],
@@ -23760,7 +23760,7 @@
               "target": "cfg_if"
             },
             {
-              "id": "protobuf-src 2.0.0+26.1",
+              "id": "protobuf-src 2.0.1+26.1",
               "target": "protobuf_src"
             },
             {
@@ -24007,9 +24007,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-catalog-debug 0.101.0-dev": {
+    "mz-catalog-debug 0.102.0-dev": {
       "name": "mz-catalog-debug",
-      "version": "0.101.0-dev",
+      "version": "0.102.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [],
@@ -24064,7 +24064,7 @@
           "selects": {}
         },
         "edition": "2021",
-        "version": "0.101.0-dev"
+        "version": "0.102.0-dev"
       },
       "license": null,
       "license_ids": [],
@@ -24588,9 +24588,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-clusterd 0.101.0-dev": {
+    "mz-clusterd 0.102.0-dev": {
       "name": "mz-clusterd",
-      "version": "0.101.0-dev",
+      "version": "0.102.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [],
@@ -24649,7 +24649,7 @@
           "selects": {}
         },
         "edition": "2021",
-        "version": "0.101.0-dev"
+        "version": "0.102.0-dev"
       },
       "license": null,
       "license_ids": [],
@@ -25351,9 +25351,9 @@
       ],
       "license_file": null
     },
-    "mz-environmentd 0.101.0-dev": {
+    "mz-environmentd 0.102.0-dev": {
       "name": "mz-environmentd",
-      "version": "0.101.0-dev",
+      "version": "0.102.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -25493,7 +25493,7 @@
               "target": "mime"
             },
             {
-              "id": "mz-environmentd 0.101.0-dev",
+              "id": "mz-environmentd 0.102.0-dev",
               "target": "build_script_build"
             },
             {
@@ -25718,7 +25718,7 @@
           ],
           "selects": {}
         },
-        "version": "0.101.0-dev"
+        "version": "0.102.0-dev"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -28442,9 +28442,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-persist-client 0.101.0-dev": {
+    "mz-persist-client 0.102.0-dev": {
       "name": "mz-persist-client",
-      "version": "0.101.0-dev",
+      "version": "0.102.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -28527,7 +28527,7 @@
               "target": "hex"
             },
             {
-              "id": "mz-persist-client 0.101.0-dev",
+              "id": "mz-persist-client 0.102.0-dev",
               "target": "build_script_build"
             },
             {
@@ -28636,7 +28636,7 @@
           ],
           "selects": {}
         },
-        "version": "0.101.0-dev"
+        "version": "0.102.0-dev"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -28715,144 +28715,6 @@
       "license_ids": [
         "Apache-2.0"
       ],
-      "license_file": null
-    },
-    "mz-persist-txn 0.0.0": {
-      "name": "mz-persist-txn",
-      "version": "0.0.0",
-      "package_url": null,
-      "repository": null,
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "mz_persist_txn",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        },
-        {
-          "BuildScript": {
-            "crate_name": "build_script_build",
-            "crate_root": "build.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "mz_persist_txn",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "crate_features": {
-          "common": [
-            "default"
-          ],
-          "selects": {}
-        },
-        "deps": {
-          "common": [
-            {
-              "id": "bytes 1.4.0",
-              "target": "bytes"
-            },
-            {
-              "id": "differential-dataflow 0.12.0",
-              "target": "differential_dataflow"
-            },
-            {
-              "id": "futures 0.3.25",
-              "target": "futures"
-            },
-            {
-              "id": "itertools 0.10.5",
-              "target": "itertools"
-            },
-            {
-              "id": "mz-persist-txn 0.0.0",
-              "target": "build_script_build"
-            },
-            {
-              "id": "prometheus 0.13.3",
-              "target": "prometheus"
-            },
-            {
-              "id": "prost 0.11.9",
-              "target": "prost"
-            },
-            {
-              "id": "serde 1.0.164",
-              "target": "serde"
-            },
-            {
-              "id": "timely 0.12.0",
-              "target": "timely"
-            },
-            {
-              "id": "tokio 1.32.0",
-              "target": "tokio"
-            },
-            {
-              "id": "tracing 0.1.37",
-              "target": "tracing"
-            },
-            {
-              "id": "uuid 1.7.0",
-              "target": "uuid"
-            }
-          ],
-          "selects": {}
-        },
-        "deps_dev": {
-          "common": [
-            {
-              "id": "crossbeam-channel 0.5.8",
-              "target": "crossbeam_channel"
-            },
-            {
-              "id": "rand 0.8.5",
-              "target": "rand"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "proc_macro_deps": {
-          "common": [
-            {
-              "id": "async-trait 0.1.68",
-              "target": "async_trait"
-            }
-          ],
-          "selects": {}
-        },
-        "version": "0.0.0"
-      },
-      "build_script_attrs": {
-        "data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "prost-build 0.11.9",
-              "target": "prost_build"
-            }
-          ],
-          "selects": {}
-        }
-      },
-      "license": null,
-      "license_ids": [],
       "license_file": null
     },
     "mz-persist-types 0.0.0": {
@@ -31621,6 +31483,10 @@
               "target": "os_info"
             },
             {
+              "id": "prometheus 0.13.3",
+              "target": "prometheus"
+            },
+            {
               "id": "proptest 1.0.0",
               "target": "proptest"
             },
@@ -32747,6 +32613,10 @@
               "target": "differential_dataflow"
             },
             {
+              "id": "futures 0.3.25",
+              "target": "futures"
+            },
+            {
               "id": "http 0.2.9",
               "target": "http"
             },
@@ -33157,6 +33027,10 @@
               "target": "fail"
             },
             {
+              "id": "futures 0.3.25",
+              "target": "futures"
+            },
+            {
               "id": "itertools 0.10.5",
               "target": "itertools"
             },
@@ -33366,9 +33240,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-testdrive 0.101.0-dev": {
+    "mz-testdrive 0.102.0-dev": {
       "name": "mz-testdrive",
-      "version": "0.101.0-dev",
+      "version": "0.102.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -33503,7 +33377,7 @@
               "target": "mysql_async"
             },
             {
-              "id": "mz-testdrive 0.101.0-dev",
+              "id": "mz-testdrive 0.102.0-dev",
               "target": "build_script_build"
             },
             {
@@ -33631,7 +33505,7 @@
           ],
           "selects": {}
         },
-        "version": "0.101.0-dev"
+        "version": "0.102.0-dev"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -34068,6 +33942,144 @@
           "selects": {}
         },
         "version": "0.0.0"
+      },
+      "license": null,
+      "license_ids": [],
+      "license_file": null
+    },
+    "mz-txn-wal 0.0.0": {
+      "name": "mz-txn-wal",
+      "version": "0.0.0",
+      "package_url": null,
+      "repository": null,
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "mz_txn_wal",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": false,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        },
+        {
+          "BuildScript": {
+            "crate_name": "build_script_build",
+            "crate_root": "build.rs",
+            "srcs": {
+              "allow_empty": false,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "mz_txn_wal",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "default"
+          ],
+          "selects": {}
+        },
+        "deps": {
+          "common": [
+            {
+              "id": "bytes 1.4.0",
+              "target": "bytes"
+            },
+            {
+              "id": "differential-dataflow 0.12.0",
+              "target": "differential_dataflow"
+            },
+            {
+              "id": "futures 0.3.25",
+              "target": "futures"
+            },
+            {
+              "id": "itertools 0.10.5",
+              "target": "itertools"
+            },
+            {
+              "id": "mz-txn-wal 0.0.0",
+              "target": "build_script_build"
+            },
+            {
+              "id": "prometheus 0.13.3",
+              "target": "prometheus"
+            },
+            {
+              "id": "prost 0.11.9",
+              "target": "prost"
+            },
+            {
+              "id": "serde 1.0.164",
+              "target": "serde"
+            },
+            {
+              "id": "timely 0.12.0",
+              "target": "timely"
+            },
+            {
+              "id": "tokio 1.32.0",
+              "target": "tokio"
+            },
+            {
+              "id": "tracing 0.1.37",
+              "target": "tracing"
+            },
+            {
+              "id": "uuid 1.7.0",
+              "target": "uuid"
+            }
+          ],
+          "selects": {}
+        },
+        "deps_dev": {
+          "common": [
+            {
+              "id": "crossbeam-channel 0.5.8",
+              "target": "crossbeam_channel"
+            },
+            {
+              "id": "rand 0.8.5",
+              "target": "rand"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2021",
+        "proc_macro_deps": {
+          "common": [
+            {
+              "id": "async-trait 0.1.68",
+              "target": "async_trait"
+            }
+          ],
+          "selects": {}
+        },
+        "version": "0.0.0"
+      },
+      "build_script_attrs": {
+        "data_glob": [
+          "**"
+        ],
+        "deps": {
+          "common": [
+            {
+              "id": "prost-build 0.11.9",
+              "target": "prost_build"
+            }
+          ],
+          "selects": {}
+        }
       },
       "license": null,
       "license_ids": [],
@@ -40660,7 +40672,7 @@
               "target": "cxx"
             },
             {
-              "id": "protobuf-src 2.0.0+26.1",
+              "id": "protobuf-src 2.0.1+26.1",
               "target": "protobuf_src"
             }
           ],
@@ -40697,14 +40709,14 @@
       "license_file": null,
       "additive_build_file_content": "# Copyright Materialize, Inc. and contributors. All rights reserved.\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License in the LICENSE file at the\n# root of this repository, or online at\n#\n#     http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n\n\"\"\"Additive BUILD file for the protobuf-native Rust crate.\"\"\"\n\nload(\"@rules_cc//cc:defs.bzl\", \"cc_library\")\nload(\"@//misc/bazel/rules:rust_cxx_bridge.bzl\", \"rust_cxx_bridge\")\n\nrust_cxx_bridge(\n    name = \"compiler-bridge\",\n    src = \"src/compiler.rs\",\n    deps = [\":protobuf-native-include\"],\n)\n\ncc_library(\n    name = \"compiler-sys\",\n    srcs = [\"src/compiler.cc\"],\n    copts = [\"-std=c++17\"],\n    linkstatic = True,\n    deps = [\n        \":protobuf-native-include\",\n        \":compiler-bridge/include\",\n    ],\n)\n\nrust_cxx_bridge(\n    name = \"io-bridge\",\n    src = \"src/io.rs\",\n    deps = [\":protobuf-native-include\"],\n)\n\ncc_library(\n    name = \"io-sys\",\n    srcs = [\"src/io.cc\"],\n    copts = [\"-std=c++17\"],\n    linkstatic = True,\n    deps = [\n        \":protobuf-native-include\",\n        \":io-bridge/include\",\n    ],\n)\n\nrust_cxx_bridge(\n    name = \"lib-bridge\",\n    src = \"src/lib.rs\",\n    deps = [\":protobuf-native-include\"],\n)\n\ncc_library(\n    name = \"lib-sys\",\n    srcs = [\"src/lib.cc\"],\n    copts = [\"-std=c++17\"],\n    linkstatic = True,\n    deps = [\n        \":protobuf-native-include\",\n        \":lib-bridge/include\",\n    ],\n)\n\nrust_cxx_bridge(\n    name = \"internal-bridge\",\n    src = \"src/internal.rs\",\n    deps = [\":protobuf-native-include\"],\n)\n\ncc_library(\n    name = \"protobuf-native-include\",\n    hdrs = glob([\"src/**/*.h\"]),\n    copts = [\"-std=c++14\"],\n    deps = [\n        \"@cxxbridge//:cxx_cc\",\n        \"@protobuf//:protobuf_headers\",\n    ],\n)\n"
     },
-    "protobuf-src 2.0.0+26.1": {
+    "protobuf-src 2.0.1+26.1": {
       "name": "protobuf-src",
-      "version": "2.0.0+26.1",
+      "version": "2.0.1+26.1",
       "package_url": "https://github.com/MaterializeInc/rust-protobuf-native",
       "repository": {
         "Http": {
-          "url": "https://static.crates.io/crates/protobuf-src/2.0.0+26.1/download",
-          "sha256": "9617ed8dcac13e32d6814bb9bed744b45bb9a9535876abc90a3eda43f98e1617"
+          "url": "https://static.crates.io/crates/protobuf-src/2.0.1+26.1/download",
+          "sha256": "f8ba1cfa4b9dc098926b8cce388bf434b93516db3ecf6e8b1a37eb643d733ee7"
         }
       },
       "targets": [
@@ -40733,7 +40745,7 @@
           },
           "selects": {}
         },
-        "version": "2.0.0+26.1"
+        "version": "2.0.1+26.1"
       },
       "license": "Apache-2.0",
       "license_ids": [
@@ -59720,17 +59732,17 @@
     "mz-avro 0.7.0": "src/avro",
     "mz-aws-secrets-controller 0.1.0": "src/aws-secrets-controller",
     "mz-aws-util 0.0.0": "src/aws-util",
-    "mz-balancerd 0.101.0-dev": "src/balancerd",
+    "mz-balancerd 0.102.0-dev": "src/balancerd",
     "mz-build-info 0.0.0": "src/build-info",
     "mz-build-tools 0.0.0": "src/build-tools",
     "mz-catalog 0.0.0": "src/catalog",
-    "mz-catalog-debug 0.101.0-dev": "src/catalog-debug",
+    "mz-catalog-debug 0.102.0-dev": "src/catalog-debug",
     "mz-ccsr 0.0.0": "src/ccsr",
     "mz-cloud-api 0.0.0": "src/cloud-api",
     "mz-cloud-resources 0.0.0": "src/cloud-resources",
     "mz-cluster 0.0.0": "src/cluster",
     "mz-cluster-client 0.0.0": "src/cluster-client",
-    "mz-clusterd 0.101.0-dev": "src/clusterd",
+    "mz-clusterd 0.102.0-dev": "src/clusterd",
     "mz-compute 0.0.0": "src/compute",
     "mz-compute-client 0.0.0": "src/compute-client",
     "mz-compute-types 0.0.0": "src/compute-types",
@@ -59738,7 +59750,7 @@
     "mz-controller-types 0.0.0": "src/controller-types",
     "mz-dyncfg 0.0.0": "src/dyncfg",
     "mz-dyncfgs 0.0.0": "src/dyncfgs",
-    "mz-environmentd 0.101.0-dev": "src/environmentd",
+    "mz-environmentd 0.102.0-dev": "src/environmentd",
     "mz-expr 0.0.0": "src/expr",
     "mz-expr-parser 0.0.0": "src/expr-parser",
     "mz-expr-test-util 0.0.0": "src/expr-test-util",
@@ -59764,9 +59776,8 @@
     "mz-ore 0.1.0": "src/ore",
     "mz-ore-proc 0.1.0": "src/ore-proc",
     "mz-persist 0.0.0": "src/persist",
-    "mz-persist-client 0.101.0-dev": "src/persist-client",
+    "mz-persist-client 0.102.0-dev": "src/persist-client",
     "mz-persist-proc 0.1.0": "src/persist-proc",
-    "mz-persist-txn 0.0.0": "src/persist-txn",
     "mz-persist-types 0.0.0": "src/persist-types",
     "mz-pgcopy 0.0.0": "src/pgcopy",
     "mz-pgrepr 0.0.0": "src/pgrepr",
@@ -59804,12 +59815,13 @@
     "mz-storage-operators 0.0.0": "src/storage-operators",
     "mz-storage-types 0.0.0": "src/storage-types",
     "mz-test-util 0.0.0": "test/test-util",
-    "mz-testdrive 0.101.0-dev": "src/testdrive",
+    "mz-testdrive 0.102.0-dev": "src/testdrive",
     "mz-timely-util 0.0.0": "src/timely-util",
     "mz-timestamp-oracle 0.0.0": "src/timestamp-oracle",
     "mz-tls-util 0.0.0": "src/tls-util",
     "mz-tracing 0.0.0": "src/tracing",
     "mz-transform 0.0.0": "src/transform",
+    "mz-txn-wal 0.0.0": "src/txn-wal",
     "mz-walkabout 0.0.0": "src/walkabout",
     "persistcli 0.0.0": "src/persist-cli",
     "workspace-hack 0.0.0": "src/workspace-hack"
@@ -60744,7 +60756,7 @@
     "prost-reflect 0.11.4",
     "prost-types 0.11.9",
     "protobuf-native 0.3.0+26.1",
-    "protobuf-src 2.0.0+26.1",
+    "protobuf-src 2.0.1+26.1",
     "qcell 0.5.4",
     "quote 1.0.36",
     "rand 0.8.5",
