@@ -4181,7 +4181,7 @@ fn arb_interval() -> BoxedStrategy<Interval> {
         .boxed()
 }
 
-fn add_arb_duration<T: 'static + Copy + Add<chrono::Duration> + std::fmt::Debug>(
+pub(crate) fn add_arb_duration<T: 'static + Copy + Add<chrono::Duration> + std::fmt::Debug>(
     to: T,
 ) -> BoxedStrategy<T::Output>
 where
