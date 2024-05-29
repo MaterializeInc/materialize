@@ -456,10 +456,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             self.metrics
                 .timely_step_duration_seconds
                 .observe(start.elapsed().as_secs_f64());
-            self.persist_clients
-                .metrics()
-                .sink
-                .update_sink_correction_peak_metrics();
 
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
