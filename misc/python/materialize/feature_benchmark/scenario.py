@@ -12,6 +12,7 @@ from math import ceil
 from materialize.feature_benchmark.action import Action, DummyAction, TdAction
 from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.measurement_source import MeasurementSource
+from materialize.feature_benchmark.scenario_version import ScenarioVersion
 from materialize.mz_version import MzVersion
 
 BenchmarkingSequence = MeasurementSource | list[Action | MeasurementSource]
@@ -54,6 +55,9 @@ class RootScenario:
 
     def name(self) -> str:
         return self._name
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 0, 0)
 
     def scale(self) -> float:
         return self._scale
