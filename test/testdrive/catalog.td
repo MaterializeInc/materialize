@@ -493,6 +493,7 @@ mz_aws_privatelink_connections
 mz_base_types
 mz_clusters
 mz_cluster_replicas
+mz_cluster_replica_sizes
 mz_columns
 mz_connections
 mz_databases
@@ -588,10 +589,10 @@ name
 mz_aggregates
 mz_aws_connections
 mz_cluster_replica_metrics
-mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_cluster_schedules
 mz_comments
+mz_history_retention_strategies
 mz_internal_cluster_replicas
 mz_kafka_sources
 mz_materialized_view_refresh_strategies
@@ -692,6 +693,7 @@ mz_show_system_privileges
 mz_sink_statistics
 mz_sink_statuses
 mz_source_statistics
+mz_source_statistics_with_history
 mz_source_statuses
 mz_sql_text_redacted
 mz_aws_privatelink_connection_statuses
@@ -710,11 +712,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-51
+54
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-182
+183
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
