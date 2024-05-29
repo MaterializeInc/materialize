@@ -13,6 +13,7 @@ from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.operation import Operation
 from materialize.scalability.operation_data import OperationData
 from materialize.scalability.schema import Schema
+from materialize.scalability.workload_version import WorkloadVersion
 
 
 class Workload:
@@ -43,6 +44,9 @@ class Workload:
 
     def name(self) -> str:
         return self.__class__.__name__
+
+    def version(self) -> WorkloadVersion:
+        return WorkloadVersion.create(1, 0, 0)
 
 
 class WorkloadWithContext(Workload):

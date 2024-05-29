@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,12 +10,19 @@
 # by the Apache License, Version 2.0.
 from pathlib import Path
 
+from materialize.test_analytics.versioning.scalability.scalability_version_skew_check import (
+    SCALABILITY_FRAMEWORK_VERSION_SKEW_CHECK_CONFIG,
+    SCALABILITY_WORKLOADS_VERSION_SKEW_CHECK_CONFIG,
+)
 from materialize.test_analytics.versioning.versioning_config import (
     VersioningConfig,
 )
 from materialize.util import compute_sha256_of_file, compute_sha256_of_utf8_string
 
-VERSION_SKEW_CHECK_CONFIGS = []
+VERSION_SKEW_CHECK_CONFIGS = [
+    SCALABILITY_FRAMEWORK_VERSION_SKEW_CHECK_CONFIG,
+    SCALABILITY_WORKLOADS_VERSION_SKEW_CHECK_CONFIG,
+]
 
 DEFAULT_EXCLUDED_FILE_NAMES = {"__pycache__"}
 
