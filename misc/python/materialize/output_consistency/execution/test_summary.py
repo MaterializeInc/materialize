@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from materialize.mzcompose.test_result import TestFailureDetails
+from materialize.output_consistency.operation.operation import DbOperationOrFunction
 
 
 class ConsistencyTestLogger:
@@ -17,6 +18,13 @@ class ConsistencyTestLogger:
 
     def add_global_warning(self, message: str) -> None:
         self.global_warnings.append(message)
+
+
+class DbOperationOrFunctionStats:
+    def __init__(self):
+        self.count_top_level = 0
+        self.count_nested = 0
+        self.count_generation_failed = 0
 
 
 class ConsistencyTestSummary(ConsistencyTestLogger):
@@ -37,6 +45,9 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         self.count_ignored_error_query_templates = count_ignored_error_query_templates
         self.count_with_warning_query_templates = count_with_warning_query_templates
         self.failures: list[TestFailureDetails] = []
+        self.stats_by_operation_and_function: dict[
+            DbOperationOrFunction, DbOperationOrFunctionStats
+        ] = dict()
 
     def add_failures(self, failures: list[TestFailureDetails]):
         self.failures.extend(failures)
