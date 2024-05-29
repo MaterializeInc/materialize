@@ -167,6 +167,10 @@ pub struct Config {
     // === Testing options. ===
     /// A now generation function for mocking time.
     pub now: NowFn,
+    /// Whether or not to start controllers in read-only mode. This is only
+    /// meant for use during development of read-only clusters and 0dt upgrades
+    /// and should go away once we have proper orchestration during upgrades.
+    pub read_only_controllers: bool,
 }
 
 /// Configuration for network listeners.
@@ -543,6 +547,7 @@ impl Listeners {
             webhook_concurrency_limit: webhook_concurrency_limit.clone(),
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
+            read_only_controllers: config.read_only_controllers,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;

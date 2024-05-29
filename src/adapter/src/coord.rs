@@ -898,6 +898,10 @@ pub struct Config {
     pub webhook_concurrency_limit: WebhookConcurrencyLimiter,
     pub http_host_name: Option<String>,
     pub tracing_handle: TracingHandle,
+    /// Whether or not to start controllers in read-only mode. This is only
+    /// meant for use during development of read-only clusters and 0dt upgrades
+    /// and should go away once we have proper orchestration during upgrades.
+    pub read_only_controllers: bool,
 }
 
 /// Soft-state metadata about a compute replica
@@ -1429,6 +1433,11 @@ pub struct Coordinator {
 
     /// Tracks the currently installed watchsets for each connection.
     connection_watch_sets: BTreeMap<ConnectionId, BTreeSet<WatchSetId>>,
+
+    /// Whether or not to start controllers in read-only mode. This is only
+    /// meant for use during development of read-only clusters and 0dt upgrades
+    /// and should go away once we have proper orchestration during upgrades.
+    read_only_controllers: bool,
 }
 
 impl Coordinator {
@@ -1762,8 +1771,12 @@ impl Coordinator {
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
-        // Allow controller to go out of read-only mode right away.
-        self.controller.allow_writes();
+        if !self.read_only_controllers {
+            // Allow controller to go out of read-only mode right away.
+            self.controller.allow_writes();
+        } else {
+            tracing::info!("starting controllers in read-only mode!");
+        }
 
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(self.catalog().state().pack_all_replica_size_updates());
@@ -2965,6 +2978,7 @@ pub fn serve(
         webhook_concurrency_limit,
         http_host_name,
         tracing_handle,
+        read_only_controllers,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -3158,6 +3172,7 @@ pub fn serve(
                     cluster_scheduling_decisions: BTreeMap::new(),
                     installed_watch_sets: BTreeMap::new(),
                     connection_watch_sets: BTreeMap::new(),
+                    read_only_controllers,
                 };
                 let bootstrap = handle.block_on(async {
                     coord

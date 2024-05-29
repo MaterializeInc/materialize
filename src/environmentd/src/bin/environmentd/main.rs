@@ -556,6 +556,13 @@ pub struct Args {
     // === Tracing options. ===
     #[clap(flatten)]
     tracing: TracingCliArgs,
+
+    // === Testing options. ===
+    /// Whether or not to start controllers in read-only mode. This is only
+    /// meant for use during development of read-only clusters and 0dt upgrades
+    /// and should go away once we have proper orchestration during upgrades.
+    #[clap(long)]
+    read_only_controllers: bool,
 }
 
 #[derive(ArgEnum, Debug, Clone)]
@@ -963,6 +970,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 internal_console_redirect_url: args.internal_console_redirect_url,
                 txn_wal_tables_cli: args.persist_txn_tables,
                 reload_certs: mz_server_core::default_cert_reload_ticker(),
+                read_only_controllers: args.read_only_controllers,
             })
             .await
     })?;
