@@ -76,7 +76,6 @@ use self::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
     LoadGeneratorSourcePurificationError, MySqlSourcePurificationError, PgSourcePurificationError,
 };
-use self::mysql::MYSQL_DATABASE_FAKE_NAME;
 
 pub(crate) mod error;
 mod mysql;
@@ -941,207 +940,62 @@ async fn purify_create_source(
                 ))?;
             }
 
-            // Determine which table schemas to request from mysql. Note that in mysql
-            // a 'schema' is the same as a 'database', and a fully qualified table
-            // name is 'schema_name.table_name' (there is no db_name)
-            let table_schema_request = match referenced_subsources
-                .as_mut()
-                .ok_or(MySqlSourcePurificationError::RequiresReferencedSubsources)?
-            {
-                ReferencedSubsources::All => mz_mysql_util::SchemaRequest::All,
-                ReferencedSubsources::SubsetSchemas(schemas) => {
-                    mz_mysql_util::SchemaRequest::Schemas(
-                        schemas.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                    )
-                }
-                ReferencedSubsources::SubsetTables(tables) => mz_mysql_util::SchemaRequest::Tables(
-                    tables
-                        .iter()
-                        .map(|t| {
-                            let idents = &t.reference.0;
-                            // We only support fully qualified table names for now
-                            if idents.len() != 2 {
-                                Err(MySqlSourcePurificationError::InvalidTableReference(
-                                    t.reference.to_ast_string(),
-                                ))?;
-                            }
-                            Ok((idents[0].as_str(), idents[1].as_str()))
-                        })
-                        .collect::<Result<Vec<_>, MySqlSourcePurificationError>>()?,
-                ),
-            };
-
-            let text_cols_map =
-                mysql::map_column_refs(&text_columns, MySqlConfigOptionName::TextColumns)?;
-            let ignore_cols_map =
-                mysql::map_column_refs(&ignore_columns, MySqlConfigOptionName::IgnoreColumns)?;
-
-            // Retrieve schemas for all requested tables
-            // NOTE: mysql will only expose the schemas of tables we have at least one privilege on
-            // and we can't tell if a table exists without a privilege, so in some cases we may
-            // return an EmptyDatabase error in the case of privilege issues.
-            let tables = mz_mysql_util::schema_info(
-                &mut *conn,
-                &table_schema_request,
-                &text_cols_map,
-                &ignore_cols_map,
-            )
-            .await
-            .map_err(|err| match err {
-                mz_mysql_util::MySqlError::UnsupportedDataTypes { columns } => {
-                    PlanError::from(MySqlSourcePurificationError::UnrecognizedTypes {
-                        cols: columns
-                            .into_iter()
-                            .map(|c| (c.qualified_table_name, c.column_name, c.column_type))
-                            .collect(),
-                    })
-                }
-                mz_mysql_util::MySqlError::DuplicatedColumnNames {
-                    qualified_table_name,
-                    columns,
-                } => PlanError::from(MySqlSourcePurificationError::DuplicatedColumnNames(
-                    qualified_table_name,
-                    columns,
-                )),
-                _ => err.into(),
-            })?;
-
-            if tables.is_empty() {
-                Err(MySqlSourcePurificationError::EmptyDatabase)?;
-            }
-
-            let mysql_catalog = mysql::derive_catalog_from_tables(&tables)?;
-
-            // Normalize column options and remove unused column references.
-            if let Some(text_cols_option) = options
-                .iter_mut()
-                .find(|option| option.name == MySqlConfigOptionName::TextColumns)
-            {
-                text_cols_option.value = Some(WithOptionValue::Sequence(
-                    mysql::normalize_column_refs(text_columns, &mysql_catalog)?,
-                ));
-            }
-            if let Some(ignore_cols_option) = options
-                .iter_mut()
-                .find(|option| option.name == MySqlConfigOptionName::IgnoreColumns)
-            {
-                ignore_cols_option.value = Some(WithOptionValue::Sequence(
-                    mysql::normalize_column_refs(ignore_columns, &mysql_catalog)?,
-                ));
-            }
-
-            let mut validated_requested_subsources = vec![];
-            match referenced_subsources
-                .as_mut()
-                .ok_or(MySqlSourcePurificationError::RequiresReferencedSubsources)?
-            {
-                ReferencedSubsources::All => {
-                    for table in &tables {
-                        let upstream_name = mysql::mysql_upstream_name(table)?;
-                        let subsource_name = subsource_name_gen(source_name, &table.name)?;
-                        validated_requested_subsources.push(RequestedSubsource {
-                            upstream_name,
-                            subsource_name,
-                            table,
-                        });
-                    }
-                }
-                ReferencedSubsources::SubsetSchemas(schemas) => {
-                    let available_schemas: BTreeSet<_> =
-                        tables.iter().map(|t| t.schema_name.as_str()).collect();
-                    let requested_schemas: BTreeSet<_> =
-                        schemas.iter().map(|s| s.as_str()).collect();
-                    let missing_schemas: Vec<_> = requested_schemas
-                        .difference(&available_schemas)
-                        .map(|s| s.to_string())
-                        .collect();
-                    if !missing_schemas.is_empty() {
-                        Err(MySqlSourcePurificationError::NoTablesFoundForSchemas(
-                            missing_schemas,
-                        ))?;
-                    }
-
-                    for table in &tables {
-                        if !requested_schemas.contains(table.schema_name.as_str()) {
-                            continue;
-                        }
-
-                        let upstream_name = mysql::mysql_upstream_name(table)?;
-                        let subsource_name = subsource_name_gen(source_name, &table.name)?;
-                        validated_requested_subsources.push(RequestedSubsource {
-                            upstream_name,
-                            subsource_name,
-                            table,
-                        });
-                    }
-                }
-                ReferencedSubsources::SubsetTables(subsources) => {
-                    // The user manually selected a subset of upstream tables so we need to
-                    // validate that the names actually exist and are not ambiguous
-                    validated_requested_subsources =
-                        subsource_gen(subsources, &mysql_catalog, source_name)?;
-
-                    // subsource_gen automatically inserts the "fully qualified
-                    // name," which for MySQL sources includes the fake database
-                    // name.
-                    for requested_subsource in validated_requested_subsources.iter_mut() {
-                        let fake_database_name = requested_subsource.upstream_name.0.remove(0);
-                        if fake_database_name.as_str() != MYSQL_DATABASE_FAKE_NAME {
-                            sql_bail!(
-                                    "[internal error]: expected first element of upstream reference to be {}, but is {}",
-                                    MYSQL_DATABASE_FAKE_NAME,
-                                    fake_database_name.as_str()
-                                );
-                        }
-                    }
-                }
-            }
-
-            if validated_requested_subsources.is_empty() {
-                sql_bail!(
-                    "[internal error]: MySQL source must ingest at least one table, but {} matched none",
-                    referenced_subsources.as_ref().unwrap().to_ast_string()
-                );
-            }
-
-            validate_subsource_names(&validated_requested_subsources)?;
-
-            mysql::validate_requested_subsources_privileges(
-                &validated_requested_subsources,
-                &mut conn,
-            )
-            .await?;
-
-            let new_subsources =
-                mysql::generate_targeted_subsources(&scx, validated_requested_subsources)?;
-
-            // Now that we know which subsources to create alongside this
-            // statement, remove the references so it is not canonicalized as
-            // part of the `CREATE SOURCE` statement in the catalog.
-            *referenced_subsources = None;
-
             // Retrieve the current @gtid_executed value of the server to mark as the effective
             // initial snapshot point such that we can ensure consistency if the initial source
             // snapshot is broken up over multiple points in time.
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
-            // Remove any old detail references
-            options
-                .retain(|MySqlConfigOption { name, .. }| name != &MySqlConfigOptionName::Details);
+            let mysql::PurifiedSubsources {
+                new_subsources,
+                tables,
+                normalized_text_columns,
+                normalized_ignore_columns,
+            } = mysql::purify_subsources(
+                &mut conn,
+                referenced_subsources,
+                text_columns,
+                ignore_columns,
+                source_name,
+                &catalog,
+            )
+            .await?;
+
+            // Create/Update the details for the source to include the new tables
             let details = MySqlSourceDetails {
                 tables,
                 initial_gtid_set,
             };
-
-            create_subsource_stmts.extend(new_subsources);
-
+            // Update options with the purified details
+            options
+                .retain(|MySqlConfigOption { name, .. }| name != &MySqlConfigOptionName::Details);
             options.push(MySqlConfigOption {
                 name: MySqlConfigOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
                     details.into_proto().encode_to_vec(),
                 )))),
-            })
+            });
+
+            if let Some(text_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == MySqlConfigOptionName::TextColumns)
+            {
+                text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
+            }
+            if let Some(ignore_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == MySqlConfigOptionName::IgnoreColumns)
+            {
+                ignore_cols_option.value =
+                    Some(WithOptionValue::Sequence(normalized_ignore_columns));
+            }
+
+            // Now that we know which subsources to create alongside this
+            // statement, remove the references so it is not canonicalized as
+            // part of the `CREATE SOURCE` statement in the catalog.
+            *referenced_subsources = None;
+
+            create_subsource_stmts.extend(new_subsources);
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let scx = StatementContext::new(None, &catalog);
@@ -1325,6 +1179,7 @@ async fn purify_alter_source(
         full_name,
         print_id: true,
     };
+    let connection_name = desc.connection.name();
 
     // Validate this is a source that can be altered.
     match desc.connection {
@@ -1333,7 +1188,7 @@ async fn purify_alter_source(
         _ => sql_bail!(
             "{} is a {} source, which does not support ALTER SOURCE.",
             scx.catalog.minimal_qualification(name),
-            desc.connection.name()
+            connection_name,
         ),
     };
 
@@ -1354,11 +1209,13 @@ async fn purify_alter_source(
 
     let crate::plan::statement::ddl::AlterSourceAddSubsourceOptionExtracted {
         mut text_columns,
-        mut ignore_columns,
+        ignore_columns,
         details,
         seen: _,
     } = options.clone().try_into()?;
     assert!(details.is_none(), "details cannot be explicitly set");
+
+    let mut create_subsource_stmts = vec![];
 
     match desc.connection {
         GenericSourceConnection::Postgres(pg_source_connection) => {
@@ -1417,6 +1274,14 @@ async fn purify_alter_source(
             )
             .await?;
 
+            if !ignore_columns.is_empty() {
+                sql_bail!(
+                    "{} is a {} source, which does not support IGNORE COLUMNS.",
+                    scx.catalog.minimal_qualification(name),
+                    connection_name
+                )
+            }
+
             let text_cols_dict = postgres::generate_text_columns(
                 &publication_catalog,
                 // In addition to using the `text_columns` values here, we also fully
@@ -1441,14 +1306,15 @@ async fn purify_alter_source(
                 });
             }
 
-            let (create_subsource_stmts, referenced_tables) =
-                postgres::generate_targeted_subsources(
-                    &scx,
-                    Some(resolved_source_name),
-                    validated_requested_subsources,
-                    text_cols_dict,
-                    &new_publication_tables,
-                )?;
+            let (new_subsources, referenced_tables) = postgres::generate_targeted_subsources(
+                &scx,
+                Some(resolved_source_name),
+                validated_requested_subsources,
+                text_cols_dict,
+                &new_publication_tables,
+            )?;
+
+            create_subsource_stmts.extend(new_subsources);
 
             let timeline_id = match pg_source_connection.publication_details.timeline_id {
                 None => {
@@ -1491,7 +1357,81 @@ async fn purify_alter_source(
                 )))),
             });
         }
-        GenericSourceConnection::MySql(mysql_source_connection) => {}
+        GenericSourceConnection::MySql(mysql_source_connection) => {
+            let mysql_connection = &mysql_source_connection.connection;
+            let config = mysql_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+
+            let mut conn = config
+                .connect(
+                    "mysql purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            let mut referenced_subsources =
+                Some(ReferencedSubsources::SubsetTables(targeted_subsources));
+
+            let mysql::PurifiedSubsources {
+                new_subsources,
+                tables,
+                normalized_text_columns,
+                normalized_ignore_columns,
+            } = mysql::purify_subsources(
+                &mut conn,
+                &mut referenced_subsources,
+                text_columns,
+                ignore_columns,
+                &unresolved_source_name,
+                &catalog,
+            )
+            .await?;
+
+            // These new details need to be merged with the existing details and cannot
+            // simply overwrite the existing details. This suggests they should be their
+            // own options, but it's nice to be able to take the values to and from a
+            // hex-encoded string.
+            let new_details = MySqlSourceDetails {
+                // In this context, we only track the referenced tables; we will merge these with the tables
+                // referenced in the catalog.
+                //
+                // We MUST check for duplicate references when we rejoin the main coordinator thread! We do
+                // that later because the sources that are present might have changed while this
+                // purification occurs.
+                tables,
+                // This value is not allowed to be altered in the source.
+                initial_gtid_set: mysql_source_connection.details.initial_gtid_set,
+            };
+
+            options.push(AlterSourceAddSubsourceOption {
+                name: mz_sql_parser::ast::AlterSourceAddSubsourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    new_details.into_proto().encode_to_vec(),
+                )))),
+            });
+
+            // Update options with the purified details
+            if let Some(text_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == AlterSourceAddSubsourceOptionName::TextColumns)
+            {
+                text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
+            }
+            if let Some(ignore_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == AlterSourceAddSubsourceOptionName::IgnoreColumns)
+            {
+                ignore_cols_option.value =
+                    Some(WithOptionValue::Sequence(normalized_ignore_columns));
+            }
+
+            create_subsource_stmts.extend(new_subsources);
+        }
         _ => unreachable!(),
     };
 

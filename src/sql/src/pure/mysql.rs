@@ -10,19 +10,20 @@
 //! MySQL utilities for SQL purification.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::DerefMut;
 
 use mz_mysql_util::{validate_source_privileges, MySqlError, MySqlTableDesc, QualifiedTableRef};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
-    IdentError, WithOptionValue,
+    IdentError, MySqlConfigOptionName, ReferencedSubsources, WithOptionValue,
 };
 
-use crate::catalog::SubsourceCatalog;
+use crate::catalog::{SessionCatalog, SubsourceCatalog};
 use crate::names::Aug;
 use crate::plan::{PlanError, StatementContext};
-use crate::pure::{MySqlConfigOptionName, MySqlSourcePurificationError};
+use crate::pure::MySqlSourcePurificationError;
 
 use super::RequestedSubsource;
 
@@ -237,4 +238,178 @@ pub(super) async fn validate_requested_subsources_privileges(
         })?;
 
     Ok(())
+}
+
+pub(super) struct PurifiedSubsources {
+    pub(super) new_subsources: Vec<CreateSubsourceStatement<Aug>>,
+    pub(super) tables: Vec<MySqlTableDesc>,
+    pub(super) normalized_text_columns: Vec<WithOptionValue<Aug>>,
+    pub(super) normalized_ignore_columns: Vec<WithOptionValue<Aug>>,
+}
+
+// Purify the referenced subsources, return the list of subsource statements,
+// corresponding tables, and and additional fields necessary to update the source
+// options
+pub(super) async fn purify_subsources(
+    conn: &mut mz_mysql_util::MySqlConn,
+    referenced_subsources: &mut Option<ReferencedSubsources>,
+    text_columns: Vec<UnresolvedItemName>,
+    ignore_columns: Vec<UnresolvedItemName>,
+    source_name: &UnresolvedItemName,
+    catalog: &impl SessionCatalog,
+) -> Result<PurifiedSubsources, PlanError> {
+    // Determine which table schemas to request from mysql. Note that in mysql
+    // a 'schema' is the same as a 'database', and a fully qualified table
+    // name is 'schema_name.table_name' (there is no db_name)
+    let table_schema_request = match referenced_subsources
+        .as_mut()
+        .ok_or(MySqlSourcePurificationError::RequiresReferencedSubsources)?
+    {
+        ReferencedSubsources::All => mz_mysql_util::SchemaRequest::All,
+        ReferencedSubsources::SubsetSchemas(schemas) => mz_mysql_util::SchemaRequest::Schemas(
+            schemas.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        ),
+        ReferencedSubsources::SubsetTables(tables) => mz_mysql_util::SchemaRequest::Tables(
+            tables
+                .iter()
+                .map(|t| {
+                    let idents = &t.reference.0;
+                    // We only support fully qualified table names for now
+                    if idents.len() != 2 {
+                        Err(MySqlSourcePurificationError::InvalidTableReference(
+                            t.reference.to_ast_string(),
+                        ))?;
+                    }
+                    Ok((idents[0].as_str(), idents[1].as_str()))
+                })
+                .collect::<Result<Vec<_>, MySqlSourcePurificationError>>()?,
+        ),
+    };
+
+    let text_cols_map = map_column_refs(&text_columns, MySqlConfigOptionName::TextColumns)?;
+    let ignore_cols_map = map_column_refs(&ignore_columns, MySqlConfigOptionName::IgnoreColumns)?;
+
+    // Retrieve schemas for all requested tables
+    // NOTE: mysql will only expose the schemas of tables we have at least one privilege on
+    // and we can't tell if a table exists without a privilege, so in some cases we may
+    // return an EmptyDatabase error in the case of privilege issues.
+    let tables = mz_mysql_util::schema_info(
+        conn.deref_mut(),
+        &table_schema_request,
+        &text_cols_map,
+        &ignore_cols_map,
+    )
+    .await
+    .map_err(|err| match err {
+        mz_mysql_util::MySqlError::UnsupportedDataTypes { columns } => {
+            PlanError::from(MySqlSourcePurificationError::UnrecognizedTypes {
+                cols: columns
+                    .into_iter()
+                    .map(|c| (c.qualified_table_name, c.column_name, c.column_type))
+                    .collect(),
+            })
+        }
+        mz_mysql_util::MySqlError::DuplicatedColumnNames {
+            qualified_table_name,
+            columns,
+        } => PlanError::from(MySqlSourcePurificationError::DuplicatedColumnNames(
+            qualified_table_name,
+            columns,
+        )),
+        _ => err.into(),
+    })?;
+
+    if tables.is_empty() {
+        Err(MySqlSourcePurificationError::EmptyDatabase)?;
+    }
+
+    let mysql_catalog = derive_catalog_from_tables(&tables)?;
+
+    let mut validated_requested_subsources = vec![];
+    match referenced_subsources
+        .as_mut()
+        .ok_or(MySqlSourcePurificationError::RequiresReferencedSubsources)?
+    {
+        ReferencedSubsources::All => {
+            for table in &tables {
+                let upstream_name = mysql_upstream_name(table)?;
+                let subsource_name = super::subsource_name_gen(source_name, &table.name)?;
+                validated_requested_subsources.push(RequestedSubsource {
+                    upstream_name,
+                    subsource_name,
+                    table,
+                });
+            }
+        }
+        ReferencedSubsources::SubsetSchemas(schemas) => {
+            let available_schemas: BTreeSet<_> =
+                tables.iter().map(|t| t.schema_name.as_str()).collect();
+            let requested_schemas: BTreeSet<_> = schemas.iter().map(|s| s.as_str()).collect();
+            let missing_schemas: Vec<_> = requested_schemas
+                .difference(&available_schemas)
+                .map(|s| s.to_string())
+                .collect();
+            if !missing_schemas.is_empty() {
+                Err(MySqlSourcePurificationError::NoTablesFoundForSchemas(
+                    missing_schemas,
+                ))?;
+            }
+
+            for table in &tables {
+                if !requested_schemas.contains(table.schema_name.as_str()) {
+                    continue;
+                }
+
+                let upstream_name = mysql_upstream_name(table)?;
+                let subsource_name = super::subsource_name_gen(source_name, &table.name)?;
+                validated_requested_subsources.push(RequestedSubsource {
+                    upstream_name,
+                    subsource_name,
+                    table,
+                });
+            }
+        }
+        ReferencedSubsources::SubsetTables(subsources) => {
+            // The user manually selected a subset of upstream tables so we need to
+            // validate that the names actually exist and are not ambiguous
+            validated_requested_subsources =
+                super::subsource_gen(subsources, &mysql_catalog, source_name)?;
+
+            // subsource_gen automatically inserts the "fully qualified
+            // name," which for MySQL sources includes the fake database
+            // name.
+            for requested_subsource in validated_requested_subsources.iter_mut() {
+                let fake_database_name = requested_subsource.upstream_name.0.remove(0);
+                if fake_database_name.as_str() != MYSQL_DATABASE_FAKE_NAME {
+                    sql_bail!(
+                            "[internal error]: expected first element of upstream reference to be {}, but is {}",
+                            MYSQL_DATABASE_FAKE_NAME,
+                            fake_database_name.as_str()
+                        );
+                }
+            }
+        }
+    }
+
+    if validated_requested_subsources.is_empty() {
+        sql_bail!(
+            "[internal error]: MySQL source must ingest at least one table, but {} matched none",
+            referenced_subsources.as_ref().unwrap().to_ast_string()
+        );
+    }
+
+    super::validate_subsource_names(&validated_requested_subsources)?;
+
+    validate_requested_subsources_privileges(&validated_requested_subsources, conn).await?;
+
+    let scx = StatementContext::new(None, catalog);
+    let new_subsources = generate_targeted_subsources(&scx, validated_requested_subsources)?;
+
+    Ok(PurifiedSubsources {
+        new_subsources,
+        // Normalize column options and remove unused column references.
+        normalized_text_columns: normalize_column_refs(text_columns, &mysql_catalog)?,
+        normalized_ignore_columns: normalize_column_refs(ignore_columns, &mysql_catalog)?,
+        tables,
+    })
 }

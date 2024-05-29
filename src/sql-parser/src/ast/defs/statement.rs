@@ -2292,8 +2292,12 @@ impl<T: AstInfo> AstDisplay for AlterSinkStatement<T> {
 pub enum AlterSourceAddSubsourceOptionName {
     /// Columns whose types you want to unconditionally format as text
     TextColumns,
+    /// Columns you want to ignore when ingesting data
+    IgnoreColumns,
     /// Updated `DETAILS` for an ingestion, e.g.
-    /// [`crate::ast::PgConfigOptionName::Details`].
+    /// [`crate::ast::PgConfigOptionName::Details`]
+    /// or
+    /// [`crate::ast::MySqlConfigOptionName::Details`].
     Details,
 }
 
@@ -2301,6 +2305,7 @@ impl AstDisplay for AlterSourceAddSubsourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             AlterSourceAddSubsourceOptionName::TextColumns => "TEXT COLUMNS",
+            AlterSourceAddSubsourceOptionName::IgnoreColumns => "IGNORE COLUMNS",
             AlterSourceAddSubsourceOptionName::Details => "DETAILS",
         })
     }
@@ -2314,10 +2319,7 @@ impl WithOptionName for AlterSourceAddSubsourceOptionName {
     /// this value could contain sensitive user data. If you're uncertain, err
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
-        match self {
-            AlterSourceAddSubsourceOptionName::Details
-            | AlterSourceAddSubsourceOptionName::TextColumns => false,
-        }
+        false
     }
 }
 
