@@ -45,6 +45,7 @@ message ProtoComputeCommand {
         google.protobuf.Empty initialization_complete = 7;
         ProtoComputeParameters update_configuration = 8;
         mz_repr.global_id.ProtoGlobalId schedule = 9;
+        google.protobuf.Empty allow_writes = 10;
     }
 }
 
