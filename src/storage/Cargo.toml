@@ -85,6 +85,7 @@ rocksdb = { git = "https://github.com/MaterializeInc/rust-rocksdb", branch = "ma
 seahash = "4"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }
+serde_bytes = { version = "0.11.14" }
 sha2 = "0.10.6"
 timely = { version = "0.12.0", default-features = false, features = [
     "bincode",

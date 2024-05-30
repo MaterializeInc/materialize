@@ -568,6 +568,21 @@ who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "1.0.23"
 
+[[audits.serde]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.202"
+
+[[audits.serde_bytes]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.11.14"
+
+[[audits.serde_derive]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.202"
+
 [[audits.sized-chunks]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"

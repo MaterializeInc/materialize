@@ -189,6 +189,7 @@ pub enum Value<O> {
 /// A value as produced during consolidation of a snapshot.
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Snapshotting {
+    #[serde(with = "serde_bytes")]
     value_xor: Vec<u8>,
     len_sum: Wrapping<i64>,
     checksum_sum: Wrapping<i64>,
@@ -360,7 +361,7 @@ impl<O: Default> StateValue<O> {
 
     /// Merge an existing StateValue into this one, using the same method described in `merge_update`.
     /// See the docstring above for more information on correctness and robustness.
-    pub fn merge_update_state(&mut self, other: &Self) -> bool {
+    pub fn merge_update_state(&mut self, other: &Self) {
         match (self, other) {
             (
                 Self::Snapshotting(Snapshotting {
@@ -383,7 +384,6 @@ impl<O: Default> StateValue<O> {
                 {
                     *acc ^= val;
                 }
-                diff_sum.0 == 0 && checksum_sum.0 == 0 && value_xor.iter().all(|&x| x == 0)
             }
             _ => panic!("`merge_update_state` called with non-snapshotting state"),
         }
