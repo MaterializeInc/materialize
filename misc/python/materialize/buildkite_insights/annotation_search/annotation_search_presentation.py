@@ -55,7 +55,7 @@ def print_annotation_match(
 
     if not short_result_presentation:
         matched_snippet = trim_match(
-            input=annotation.title_and_text,
+            match_text=annotation.title_and_text,
             search_value=search_value,
             use_regex=use_regex,
             one_line_match_presentation=one_line_match_presentation,
