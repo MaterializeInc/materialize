@@ -108,6 +108,9 @@ class EvaluationStrategy:
         )
         return f"{self.object_name_base}_{storage_suffix}"
 
+    def alias(self) -> str:
+        raise NotImplementedError
+
     def __str__(self) -> str:
         return self.name
 
@@ -229,6 +232,9 @@ class DummyEvaluation(EvaluationStrategy):
     ) -> list[str]:
         return []
 
+    def alias(self) -> str:
+        return "t"
+
 
 class DataFlowRenderingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
@@ -268,6 +274,9 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
 
         return statements
 
+    def alias(self) -> str:
+        return "t"
+
 
 class ConstantFoldingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
@@ -305,3 +314,6 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         )
 
         return [create_view_statement]
+
+    def alias(self) -> str:
+        return "v"

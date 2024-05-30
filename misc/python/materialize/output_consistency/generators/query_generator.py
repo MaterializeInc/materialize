@@ -26,6 +26,7 @@ from materialize.output_consistency.ignore_filter.internal_output_inconsistency_
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
+from materialize.output_consistency.query.query_join import JoinSpecification, JoinType
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.selection.selection import (
@@ -64,6 +65,7 @@ class QueryGenerator:
         # ONE query FOR ALL expressions accessing the vertical storage layout and applying aggregations; expressions
         # presumably succeed
         self.vertical_layout_aggregate_expressions: list[Expression] = []
+        self.join_specifications = self._generate_join_specs()
 
     def push_expression(self, expression: Expression) -> None:
         if expression.is_expect_error:
@@ -246,6 +248,24 @@ class QueryGenerator:
         else:
             raise RuntimeError(f"Unsupported storage layout: {storage_layout}")
 
+    def _generate_join_specs(self) -> list[JoinSpecification]:
+        if self.randomized_picker.random_boolean(0.5):
+            # no joins
+            return []
+
+        count_joins = self.randomized_picker.random_number(1, 2)
+
+        join_specs = []
+        for index in range(0, count_joins):
+            join_type = (
+                JoinType.INNER
+                if self.randomized_picker.random_boolean(0.8)
+                else JoinType.LEFT_OUTER
+            )
+            join_specs.append(JoinSpecification(join_type))
+
+        return join_specs
+
     def _remove_known_inconsistencies(
         self,
         logger: ConsistencyTestLogger,
@@ -323,3 +343,4 @@ class QueryGenerator:
         self.horizontal_layout_aggregate_expressions = []
         self.vertical_layout_normal_expressions = []
         self.vertical_layout_aggregate_expressions = []
+        self.join_specifications = self._generate_join_specs()

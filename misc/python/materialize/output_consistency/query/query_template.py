@@ -20,6 +20,7 @@ from materialize.output_consistency.execution.value_storage_layout import (
 )
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.query.query_format import QueryOutputFormat
+from materialize.output_consistency.query.query_join import JoinSpecification, JoinType
 from materialize.output_consistency.selection.selection import (
     DataRowSelection,
     QueryColumnByIndexSelection,
@@ -37,6 +38,7 @@ class QueryTemplate:
         storage_layout: ValueStorageLayout,
         contains_aggregations: bool,
         row_selection: DataRowSelection,
+        join_specs: list[JoinSpecification],
         offset: int | None = None,
         limit: int | None = None,
         custom_db_object_name: str | None = None,
@@ -49,6 +51,7 @@ class QueryTemplate:
         self.storage_layout = storage_layout
         self.contains_aggregations = contains_aggregations
         self.row_selection = row_selection
+        self.join_specs = join_specs
         self.offset = offset
         self.limit = limit
         self.custom_db_object_name = custom_db_object_name
@@ -73,11 +76,14 @@ class QueryTemplate:
             or self.custom_db_object_name
             or strategy.get_db_object_name(self.storage_layout)
         )
+        strategy.alias()
+        self._get_table_aliases(strategy)
         space_separator = self._get_space_separator(output_format)
 
         column_sql = self._create_column_sql(
             query_column_selection, space_separator, strategy.sql_adjuster
         )
+        join_clause = self._create_join_clause(db_object_name, space_separator)
         where_clause = self._create_where_clause(strategy.sql_adjuster)
         order_by_clause = self._create_order_by_clause(strategy.sql_adjuster)
         limit_clause = self._create_limit_clause()
@@ -86,6 +92,7 @@ class QueryTemplate:
         sql = f"""
 SELECT{space_separator}{column_sql}
 FROM{space_separator}{db_object_name}
+{join_clause}
 {where_clause}
 {order_by_clause}
 {limit_clause}
@@ -96,6 +103,22 @@ FROM{space_separator}{db_object_name}
 
     def _get_space_separator(self, output_format: QueryOutputFormat) -> str:
         return "\n  " if output_format == QueryOutputFormat.MULTI_LINE else " "
+
+    def _get_table_aliases(
+        self,
+        strategy: EvaluationStrategy,
+    ) -> list[str]:
+        alias_prefix = strategy.alias()
+        result = []
+
+        if len(self.join_specs) == 0:
+            return [alias_prefix]
+
+        # also create an entry for the FROM table
+        for index in range(0, len(self.join_specs) + 1):
+            result.append(f"{alias_prefix}_{index}")
+
+        return result
 
     def _create_column_sql(
         self,
@@ -109,6 +132,29 @@ FROM{space_separator}{db_object_name}
                 expressions_as_sql.append(expression.to_sql(sql_adjuster, True))
 
         return f",{space_separator}".join(expressions_as_sql)
+
+    def _create_join_clause(self, db_object_name: str, space_separator: str) -> str:
+        if len(self.join_specs) == 0:
+            return ""
+
+        join_sqls = []
+        for join_spec in self.join_specs:
+            if join_spec.join_type == JoinType.INNER:
+                join_sql = "INNER JOIN"
+            elif join_spec.join_type == JoinType.LEFT_OUTER:
+                join_sql = "LEFT OUTER JOIN"
+            else:
+                raise RuntimeError(f"Unexpected join type: {join_spec.join_type}")
+
+            # TODO
+            alias = "TODO"
+
+            join_sql = f"{join_sql} {db_object_name} {alias}"
+            join_sql = f"{join_sql}{space_separator}ON "
+
+            join_sqls.append(join_sql)
+
+        return space_separator.join(join_sqls)
 
     def _create_where_clause(self, sql_adjuster: SqlDialectAdjuster) -> str:
         where_conditions = []
