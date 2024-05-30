@@ -63,7 +63,7 @@ impl FronteggMockServer {
         now: NowFn,
         expires_in_secs: i64,
         latency: Option<Duration>,
-        roles: Vec<UserRole>,
+        roles: Option<Vec<UserRole>>,
     ) -> Result<FronteggMockServer, anyhow::Error> {
         let (role_updates_tx, role_updates_rx) = unbounded_channel();
 
@@ -94,6 +94,20 @@ impl FronteggMockServer {
                     vec!["materialize.environment.read".to_owned()],
                 ),
             ])
+        });
+
+        // Provide default roles if None is provided
+        let roles = roles.unwrap_or_else(|| {
+            vec![
+                UserRole {
+                    id: "1".to_string(),
+                    name: "Organization Admin".to_string(),
+                },
+                UserRole {
+                    id: "2".to_string(),
+                    name: "Organization Member".to_string(),
+                },
+            ]
         });
 
         let context = Arc::new(Context {
@@ -391,7 +405,11 @@ async fn handle_get_user(
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<UserResponse>, StatusCode> {
     let users = context.users.lock().unwrap();
-    let role_mapping: BTreeMap<String, UserRole> = context.roles.iter().map(|role| (role.id.clone(), role.clone())).collect();
+    let role_mapping: BTreeMap<String, UserRole> = context
+        .roles
+        .iter()
+        .map(|role| (role.id.clone(), role.clone()))
+        .collect();
 
     match users.iter().find(|(_, user)| user.id == Some(user_id)) {
         Some((_, user)) => {
@@ -448,7 +466,11 @@ async fn handle_create_user(
     Json(new_user): Json<UserCreate>,
 ) -> Result<(StatusCode, Json<UserResponse>), StatusCode> {
     let mut users = context.users.lock().unwrap();
-    let role_mapping: BTreeMap<String, UserRole> = context.roles.iter().map(|role| (role.id.clone(), role.clone())).collect();
+    let role_mapping: BTreeMap<String, UserRole> = context
+        .roles
+        .iter()
+        .map(|role| (role.id.clone(), role.clone()))
+        .collect();
 
     if users.contains_key(&new_user.email) {
         return Err(StatusCode::CONFLICT);

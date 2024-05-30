@@ -103,12 +103,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         Some(s) => serde_json::from_str(s).with_context(|| "decoding --role-permissions")?,
         None => None,
     };
-    let roles: Vec<UserRole> = match &args.roles {
-        Some(s) => serde_json::from_str(s).with_context(|| "decoding --roles")?,
-        None => vec![
-            UserRole { id: "1".to_string(), name: "Organization Admin".to_string() },
-            UserRole { id: "2".to_string(), name: "Organization Member".to_string() },
-        ],
+    let roles = match &args.roles {
+        Some(s) => {
+            Some(serde_json::from_str::<Vec<UserRole>>(s).with_context(|| "decoding --roles")?)
+        }
+        None => None,
     };
     let server = FronteggMockServer::start(
         Some(&addr),
