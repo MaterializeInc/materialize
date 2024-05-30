@@ -21,7 +21,7 @@ use bitflags::bitflags;
 use columnation::{Columnation, CopyRegion};
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
-use mz_persist_types::columnar::ColumnarCodec;
+use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
 use proptest::proptest;
@@ -383,14 +383,16 @@ impl Columnation for MzAclItem {
 ///
 /// We uphold the variant that [`PackedMzAclItem`] sorts the same as [`MzAclItem`].
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-#[repr(align(8))]
 pub struct PackedMzAclItem([u8; Self::SIZE]);
 
 impl PackedMzAclItem {
     // Note: It's critical to the sort order guarantee that these tags sort the same as the
-    // variants of RoleId.
+    // variants of RoleId. We leave space between each tag for future variants.
     //
-    // Note: While a u32 wastes a bit of memory it provides better memory alignment.
+    // Note: An alternative would be to use a `u8` for the tag, while this is more memory
+    // efficient micro benchmarks show throughput increases by ~40% for the encode path and ~130%
+    // for the decode path when using a `u32`. Looking at the generated assembly there are more
+    // load and store instructions when using a `u8` and unaligned reads.
 
     pub const SYSTEM_TAG: u32 = 100;
     pub const PREDEFINED_TAG: u32 = 200;
@@ -444,7 +446,7 @@ impl PackedMzAclItem {
     }
 }
 
-impl ColumnarCodec<MzAclItem> for PackedMzAclItem {
+impl FixedSizeCodec<MzAclItem> for PackedMzAclItem {
     const SIZE: usize = 32;
 
     fn as_bytes(&self) -> &[u8] {
@@ -640,10 +642,9 @@ impl Columnation for AclItem {
 ///
 /// We uphold the variant that [`PackedAclItem`] sorts the same as [`AclItem`].
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-#[repr(align(8))]
 pub struct PackedAclItem([u8; Self::SIZE]);
 
-impl ColumnarCodec<AclItem> for PackedAclItem {
+impl FixedSizeCodec<AclItem> for PackedAclItem {
     const SIZE: usize = 16;
 
     fn as_bytes(&self) -> &[u8] {

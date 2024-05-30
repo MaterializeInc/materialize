@@ -261,7 +261,7 @@ pub trait Schema<T>: Debug + Send + Sync {
 
 /// A __stable__ encoding for a type that gets durably persisted in an
 /// [`arrow::array::FixedSizeBinaryArray`].
-pub trait ColumnarCodec<T>: Debug + PartialEq + Eq + PartialOrd + Ord {
+pub trait FixedSizeCodec<T>: Debug + PartialEq + Eq + PartialOrd + Ord {
     /// Number of bytes the encoded format requires.
     const SIZE: usize;
 

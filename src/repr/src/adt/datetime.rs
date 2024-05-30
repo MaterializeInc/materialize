@@ -17,7 +17,7 @@ use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveTime, Timelike};
 use mz_lowertest::MzReflect;
-use mz_persist_types::columnar::ColumnarCodec;
+use mz_persist_types::columnar::FixedSizeCodec;
 use mz_pgtz::timezone::Timezone;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
@@ -1911,10 +1911,9 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
 /// We uphold the invariant that [`PackedNaiveTime`] sorts the same as
 /// [`NaiveTime`].
 #[derive(Copy, Clone, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
-#[repr(align(8))]
 pub struct PackedNaiveTime([u8; Self::SIZE]);
 
-impl ColumnarCodec<NaiveTime> for PackedNaiveTime {
+impl FixedSizeCodec<NaiveTime> for PackedNaiveTime {
     const SIZE: usize = 8;
 
     fn as_bytes(&self) -> &[u8] {

@@ -7,11 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::{Duration, Instant};
-
 use chrono::NaiveTime;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use mz_persist_types::columnar::ColumnarCodec;
+use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::chrono::ProtoNaiveTime;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::datetime::PackedNaiveTime;
@@ -37,21 +35,12 @@ fn bench_interval(c: &mut Criterion) {
         })
     });
     group.bench_function("encode/proto", |b| {
-        let mut total_duration = Duration::from_secs(0);
         let mut buf = vec![0u8; 64];
-
-        b.iter_custom(|iters| {
-            for _ in 0..iters {
-                let start = Instant::now();
-                let proto = std::hint::black_box(INTERVAL).into_proto();
-                proto.encode(std::hint::black_box(&mut buf)).unwrap();
-                let elapsed = start.elapsed();
-
-                buf.clear();
-                total_duration += elapsed;
-            }
-            total_duration
-        })
+        b.iter(|| {
+            let proto = std::hint::black_box(INTERVAL).into_proto();
+            proto.encode(std::hint::black_box(&mut buf)).unwrap();
+            buf.clear();
+        });
     });
 
     const PACKED: [u8; 16] = [128, 0, 0, 1, 128, 0, 0, 1, 128, 0, 0, 0, 0, 0, 0, 0];
@@ -88,21 +77,12 @@ fn bench_time(c: &mut Criterion) {
         })
     });
     group.bench_function("encode/proto", |b| {
-        let mut total_duration = Duration::from_secs(0);
         let mut buf = vec![0u8; 64];
-
-        b.iter_custom(|iters| {
-            for _ in 0..iters {
-                let start = Instant::now();
-                let proto = std::hint::black_box(naive_time).into_proto();
-                proto.encode(std::hint::black_box(&mut buf)).unwrap();
-                let elapsed = start.elapsed();
-
-                buf.clear();
-                total_duration += elapsed;
-            }
-            total_duration
-        })
+        b.iter(|| {
+            let proto = std::hint::black_box(naive_time).into_proto();
+            proto.encode(std::hint::black_box(&mut buf)).unwrap();
+            buf.clear();
+        });
     });
 
     const PACKED: [u8; 8] = [0, 0, 14, 77, 0, 0, 0, 0];
@@ -143,20 +123,11 @@ fn bench_acl_item(c: &mut Criterion) {
         })
     });
     group.bench_function("encode/proto", |b| {
-        let mut total_duration = Duration::from_secs(0);
         let mut buf = vec![0u8; 64];
-
-        b.iter_custom(|iters| {
-            for _ in 0..iters {
-                let start = Instant::now();
-                let proto = std::hint::black_box(acl_item).into_proto();
-                proto.encode(std::hint::black_box(&mut buf)).unwrap();
-                let elapsed = start.elapsed();
-
-                buf.clear();
-                total_duration += elapsed;
-            }
-            total_duration
+        b.iter(|| {
+            let proto = std::hint::black_box(acl_item).into_proto();
+            proto.encode(std::hint::black_box(&mut buf)).unwrap();
+            buf.clear();
         })
     });
 
@@ -198,21 +169,12 @@ fn bench_mz_acl_item(c: &mut Criterion) {
         })
     });
     group.bench_function("encode/proto", |b| {
-        let mut total_duration = Duration::from_secs(0);
         let mut buf = vec![0u8; 64];
-
-        b.iter_custom(|iters| {
-            for _ in 0..iters {
-                let start = Instant::now();
-                let proto = std::hint::black_box(acl_item).into_proto();
-                proto.encode(std::hint::black_box(&mut buf)).unwrap();
-                let elapsed = start.elapsed();
-
-                buf.clear();
-                total_duration += elapsed;
-            }
-            total_duration
-        })
+        b.iter(|| {
+            let proto = std::hint::black_box(acl_item).into_proto();
+            proto.encode(std::hint::black_box(&mut buf)).unwrap();
+            buf.clear();
+        });
     });
 
     const PACKED: [u8; 32] = [

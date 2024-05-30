@@ -13,7 +13,7 @@ use std::fmt::{self, Write};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
-use mz_persist_types::columnar::ColumnarCodec;
+use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::CheckedMul;
 use once_cell::sync::Lazy;
@@ -823,14 +823,13 @@ impl Arbitrary for Interval {
 ///
 /// We uphold the variant that [`PackedInterval`] sorts the same as [`Interval`].
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-#[repr(align(8))]
 pub struct PackedInterval([u8; Self::SIZE]);
 
 // `as` conversions are okay here because we're doing bit level logic to make
 // sure the sort order of the packed binary is correct. This is implementation
 // is proptest-ed below.
 #[allow(clippy::as_conversions)]
-impl ColumnarCodec<Interval> for PackedInterval {
+impl FixedSizeCodec<Interval> for PackedInterval {
     const SIZE: usize = 16;
 
     fn as_bytes(&self) -> &[u8] {
