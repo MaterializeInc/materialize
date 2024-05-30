@@ -16,10 +16,15 @@
 
 //! Persist command-line utilities
 
+use std::sync::Arc;
+
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
+use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::{RelationDesc, ScalarType};
+use mz_storage_types::sources::SourceData;
 
 pub mod maelstrom;
 pub mod open_loop;
@@ -79,7 +84,37 @@ fn main() {
             runtime.block_on(mz_persist_client::cli::inspect::run(command))
         }
         Command::Admin(command) => runtime.block_on(mz_persist_client::cli::admin::run(command)),
-        Command::Bench(command) => runtime.block_on(mz_persist_client::cli::bench::run(command)),
+        Command::Bench(command) => {
+            let identifier = ScalarType::Int64.nullable(false);
+            let decimal = ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::try_from(2i64).unwrap()),
+            }
+            .nullable(false);
+            // HACK: Decodes the K, V data assuming the schema of lineitem table
+            // from the TPCH load generator source.
+            let lineitem = RelationDesc::empty()
+                .with_column("l_orderkey", identifier.clone())
+                .with_column("l_partkey", identifier.clone())
+                .with_column("l_suppkey", identifier.clone())
+                .with_column("l_linenumber", ScalarType::Int32.nullable(false))
+                .with_column("l_quantity", decimal.clone())
+                .with_column("l_extendedprice", decimal.clone())
+                .with_column("l_discount", decimal.clone())
+                .with_column("l_tax", decimal)
+                .with_column("l_returnflag", ScalarType::String.nullable(false))
+                .with_column("l_linestatus", ScalarType::String.nullable(false))
+                .with_column("l_shipdate", ScalarType::Date.nullable(false))
+                .with_column("l_commitdate", ScalarType::Date.nullable(false))
+                .with_column("l_receiptdate", ScalarType::Date.nullable(false))
+                .with_column("l_shipinstruct", ScalarType::String.nullable(false))
+                .with_column("l_shipmode", ScalarType::String.nullable(false))
+                .with_column("l_comment", ScalarType::String.nullable(false))
+                .with_key(vec![0, 3]);
+            runtime.block_on(mz_persist_client::cli::bench::run::<SourceData>(
+                command,
+                Arc::new(lineitem),
+            ))
+        }
         Command::Service(args) => runtime.block_on(crate::service::run(args)),
     };
 
