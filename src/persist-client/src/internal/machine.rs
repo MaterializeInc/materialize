@@ -1727,7 +1727,7 @@ pub mod datadriven {
             .await
             .expect("invalid batch part");
             let mut cursor = Cursor::default();
-            while let Some((k, _v, t, d)) = cursor.pop(&part) {
+            while let Some(((k, _v, t, d), _)) = cursor.pop(&part) {
                 let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
                 write!(s, "{k} {t} {d}\n");
             }
@@ -1974,7 +1974,7 @@ pub mod datadriven {
 
                     let mut updates = Vec::new();
                     let mut cursor = Cursor::default();
-                    while let Some((k, _v, mut t, d)) = cursor.pop(&part) {
+                    while let Some(((k, _v, mut t, d), _)) = cursor.pop(&part) {
                         t.advance_by(as_of.borrow());
                         updates.push((String::decode(k).unwrap(), t, i64::decode(d)));
                     }

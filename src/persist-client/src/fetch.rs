@@ -21,7 +21,7 @@ use differential_dataflow::trace::Description;
 use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::{soft_panic_no_log, soft_panic_or_log};
+use mz_ore::{soft_assert_eq_no_log, soft_panic_no_log, soft_panic_or_log};
 use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::columnar::{PartDecoder, Schema};
@@ -844,13 +844,10 @@ where
         val: &mut Option<V>,
         result_override: Option<(K, V)>,
     ) -> Option<((Result<K, String>, Result<V, String>), T, D)> {
-        while let Some((k, v, mut t, d)) = self.part_cursor.pop(&self.part) {
+        while let Some(((k, v, mut t, d), (part_idx, idx))) = self.part_cursor.pop(&self.part) {
             if !self.ts_filter.filter_ts(&mut t) {
                 continue;
             }
-            // Record the index at which we popped this element, incase we want to do structured
-            // validation below.
-            let popped_idx = self.part_cursor.idx - 1;
 
             let mut d = D::decode(d);
 
@@ -900,10 +897,12 @@ where
                 // Note: We only provide structured columns, if they were originally written, and a
                 // dyncfg was specified to run validation.
                 if let Some(key_structured) = self.structured_part.0.as_ref() {
+                    // Structured data should always have at most 1 part.
+                    soft_assert_eq_no_log!(part_idx, 0);
                     let key_metrics = self.metrics.columnar.arrow().key();
 
                     let mut k_s = K::default();
-                    key_metrics.measure_decoding(|| key_structured.decode(popped_idx, &mut k_s));
+                    key_metrics.measure_decoding(|| key_structured.decode(idx, &mut k_s));
 
                     // Purposefully do not trace to prevent blowing up Sentry.
                     let is_valid = key_metrics.report_valid(|| Ok(k_s) == k);
@@ -913,10 +912,12 @@ where
                 }
 
                 if let Some(val_structured) = self.structured_part.1.as_ref() {
+                    // Structured data should always have at most 1 part.
+                    soft_assert_eq_no_log!(part_idx, 0);
                     let val_metrics = self.metrics.columnar.arrow().val();
 
                     let mut v_s = V::default();
-                    val_metrics.measure_decoding(|| val_structured.decode(popped_idx, &mut v_s));
+                    val_metrics.measure_decoding(|| val_structured.decode(idx, &mut v_s));
 
                     // Purposefully do not trace to prevent blowing up Sentry.
                     let is_valid = val_metrics.report_valid(|| Ok(v_s) == v);
@@ -1159,15 +1160,17 @@ impl Cursor {
     }
 
     /// Similar to peek, but advance the cursor just past the end of the most recent update.
+    /// Returns the update and the `(part_idx, idx)` that is was popped at.
     pub fn pop<'a, T: Timestamp + Lattice + Codec64>(
         &mut self,
         part: &'a EncodedPart<T>,
-    ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
+    ) -> Option<((&'a [u8], &'a [u8], T, [u8; 8]), (usize, usize))> {
         while !self.is_exhausted(part) {
             let current = self.get(part);
+            let popped_idx = (self.part_idx, self.idx);
             self.advance(part);
             if current.is_some() {
-                return current;
+                return current.map(|p| (p, popped_idx));
             }
         }
         None
