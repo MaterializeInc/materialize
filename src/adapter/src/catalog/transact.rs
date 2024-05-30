@@ -11,7 +11,10 @@
 
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_audit_log::{EventDetails, EventType, IdFullNameV1, ObjectType, VersionedEvent};
+use mz_audit_log::{
+    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, ObjectType,
+    SchedulingDecisionsWithReasonsV1, VersionedEvent,
+};
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::Transaction;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
@@ -51,7 +54,7 @@ use crate::catalog::{
     object_type_to_audit_object_type, system_object_type_to_audit_object_type, BuiltinTableUpdate,
     Catalog, CatalogState, UpdatePrivilegeVariant,
 };
-use crate::coord::cluster_scheduling::ReplicaCreateDropReason;
+use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::ConnMeta;
 use crate::util::ResultExt;
 use crate::AdapterError;
@@ -239,6 +242,42 @@ impl DropObjectInfo {
             DropObjectInfo::Role(role_id) => ObjectId::Role(role_id.clone()),
             DropObjectInfo::Item(global_id) => ObjectId::Item(global_id.clone()),
         }
+    }
+}
+
+/// The reason for creating or dropping a replica.
+#[derive(Debug, Clone)]
+pub enum ReplicaCreateDropReason {
+    /// The user initiated the replica create or drop, e.g., by
+    /// - creating/dropping a cluster,
+    /// - ALTERing various options on a managed cluster,
+    /// - CREATE/DROP CLUSTER REPLICA on an unmanaged cluster.
+    Manual,
+    /// The automated cluster scheduling initiated the replica create or drop, e.g., a
+    /// materialized view is needing a refresh on a SCHEDULE ON REFRESH cluster.
+    ClusterScheduling(Vec<SchedulingDecision>),
+}
+
+impl ReplicaCreateDropReason {
+    pub fn into_audit_log(
+        self,
+    ) -> (
+        CreateOrDropClusterReplicaReasonV1,
+        Option<SchedulingDecisionsWithReasonsV1>,
+    ) {
+        let (reason, scheduling_policies) = match self {
+            ReplicaCreateDropReason::Manual => (CreateOrDropClusterReplicaReasonV1::Manual, None),
+            ReplicaCreateDropReason::ClusterScheduling(scheduling_decisions) => (
+                CreateOrDropClusterReplicaReasonV1::Schedule,
+                Some(scheduling_decisions),
+            ),
+        };
+        (
+            reason,
+            scheduling_policies
+                .as_ref()
+                .map(SchedulingDecision::reasons_to_audit_log_reasons),
+        )
     }
 }
 

@@ -31,8 +31,7 @@ use mz_sql::plan::{
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 
-use crate::catalog::Op;
-use crate::coord::cluster_scheduling::ReplicaCreateDropReason;
+use crate::catalog::{Op, ReplicaCreateDropReason};
 use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
