@@ -3683,7 +3683,7 @@ checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
 [[package]]
 name = "mysql_async"
 version = "0.34.1"
-source = "git+https://github.com/MaterializeInc/mysql_async?rev=6afd2136181f2ec93b7ca7de524f6d02b6f10c1d#6afd2136181f2ec93b7ca7de524f6d02b6f10c1d"
+source = "git+https://github.com/MaterializeInc/mysql_async#a0dbdb7c76e6ff7a27dfa2523a398ca686413737"
 dependencies = [
  "bytes",
  "crossbeam",
