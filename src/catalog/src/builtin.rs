@@ -6360,7 +6360,7 @@ JOIN root_times r USING (id)",
 
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_databases_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_DATABASES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_databases (name)",
@@ -6369,7 +6369,7 @@ ON mz_catalog.mz_databases (name)",
 
 pub const MZ_SHOW_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_schemas_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_SCHEMAS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_schemas (database_id)",
@@ -6378,7 +6378,7 @@ ON mz_catalog.mz_schemas (database_id)",
 
 pub const MZ_SHOW_CONNECTIONS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_connections_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_CONNECTIONS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_connections (schema_id)",
@@ -6387,7 +6387,7 @@ ON mz_catalog.mz_connections (schema_id)",
 
 pub const MZ_SHOW_TABLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_tables_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_TABLES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_tables (schema_id)",
@@ -6405,7 +6405,7 @@ ON mz_internal.mz_show_sources (schema_id)",
 
 pub const MZ_SHOW_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_views_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_VIEWS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_views (schema_id)",
@@ -6432,7 +6432,7 @@ ON mz_internal.mz_show_sinks (schema_id)",
 
 pub const MZ_SHOW_TYPES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_types_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_TYPES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_types (schema_id)",
@@ -6441,7 +6441,7 @@ ON mz_catalog.mz_types (schema_id)",
 
 pub const MZ_SHOW_ALL_OBJECTS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_all_objects_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_ALL_OBJECTS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_objects (schema_id)",
@@ -6459,7 +6459,7 @@ ON mz_internal.mz_show_indexes (schema_id)",
 
 pub const MZ_SHOW_COLUMNS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_columns_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_COLUMNS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_columns (id)",
@@ -6468,7 +6468,7 @@ ON mz_catalog.mz_columns (id)",
 
 pub const MZ_SHOW_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_clusters_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_CLUSTERS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_clusters (name)",
@@ -6486,7 +6486,7 @@ ON mz_internal.mz_show_cluster_replicas (cluster)",
 
 pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_secrets_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SHOW_SECRETS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_secrets (schema_id)",
@@ -6495,7 +6495,7 @@ ON mz_catalog.mz_secrets (schema_id)",
 
 pub const MZ_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_clusters_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTERS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_clusters (id)",
@@ -6504,7 +6504,7 @@ ON mz_catalog.mz_clusters (id)",
 
 pub const MZ_INDEXES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_indexes_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_INDEXES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_indexes (id)",
@@ -6513,7 +6513,7 @@ ON mz_catalog.mz_indexes (id)",
 
 pub const MZ_ROLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_roles_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_ROLES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_roles (id)",
@@ -6522,7 +6522,7 @@ ON mz_catalog.mz_roles (id)",
 
 pub const MZ_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sources_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SOURCES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_sources (id)",
@@ -6531,7 +6531,7 @@ ON mz_catalog.mz_sources (id)",
 
 pub const MZ_SINKS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sinks_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_SINKS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_sinks (id)",
@@ -6540,7 +6540,7 @@ ON mz_catalog.mz_sinks (id)",
 
 pub const MZ_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_materialized_views_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_MATERIALIZED_VIEWS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_materialized_views (id)",
@@ -6685,7 +6685,7 @@ ON mz_internal.mz_sink_statistics (id)",
 
 pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replicas_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_REPLICAS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_cluster_replicas (id)",
@@ -6694,7 +6694,7 @@ ON mz_catalog.mz_cluster_replicas (id)",
 
 pub const MZ_CLUSTER_REPLICA_SIZES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_sizes_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: oid::INDEX_MZ_CLUSTER_REPLICA_SIZES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_cluster_replica_sizes (size)",

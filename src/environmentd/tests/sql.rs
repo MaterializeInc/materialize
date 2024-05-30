@@ -13,6 +13,7 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -24,6 +25,7 @@ use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use mz_adapter::{TimestampContext, TimestampExplanation};
+use mz_catalog::builtin::BUILTINS;
 use mz_environmentd::test_util::{
     self, get_explain_timestamp, get_explain_timestamp_determination, try_get_explain_timestamp,
     MzTimestamp, PostgresErrorExt, TestServerWithRuntime, KAFKA_ADDRS,
@@ -3881,4 +3883,44 @@ async fn test_cancel_linearize_read_then_writes() {
         .await;
     res.unwrap();
     handle.await.unwrap();
+}
+
+// Test that builtin objects are created in the schemas they advertise in builtin.rs.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_builtin_schemas() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+
+    let mut builtins = BTreeMap::new();
+    for builtin in BUILTINS::iter() {
+        builtins.insert(builtin.name(), builtin.schema());
+    }
+
+    let rows = client
+        .query(
+            "
+            SELECT o.name name, s.name schema
+            FROM mz_objects o
+            JOIN mz_schemas s ON o.schema_id = s.id
+            WHERE o.id LIKE 's%'",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    // Remove suffixes like _s1_primary_idx from some items.
+    let name_re = Regex::new("_[su][0-9]+_.*").unwrap();
+
+    for row in rows {
+        let name: String = row.get("name");
+        let name: String = name_re.replace(&name, "").into();
+        let schema: String = row.get("schema");
+        let builtin_schema = builtins.get(name.as_str());
+        assert_eq!(
+            builtin_schema,
+            Some(&schema.as_str()),
+            "wrong schema for {name}, builtin.rs has {builtin_schema:?}, database has {schema}"
+        );
+    }
 }
