@@ -33,6 +33,7 @@ mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
+mz-storage-types = { path = "../storage-types" }
 mz-timestamp-oracle = { path = "../timestamp-oracle" }
 mz-txn-wal = { path = "../txn-wal" }
 num_cpus = "1.14.0"
