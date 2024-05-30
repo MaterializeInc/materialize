@@ -43,7 +43,7 @@ COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
 
 {{< private-preview />}}
 
-Copying results to Amazon s3 is useful to perform tasks like periodic backups
+Copying results to Amazon S3 is useful to perform tasks like periodic backups
 for auditing, or downstream processing in analytical data warehouses like
 Snowflake, Databricks or BigQuery. For step-by-step instructions, see the
 integration guide for [Amazon s3](/serve-results/s3/).
