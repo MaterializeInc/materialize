@@ -2181,6 +2181,23 @@ where
         }
     }
 
+    /// Return the write frontiers of the dependencies of the given collection.
+    fn dependency_write_frontiers<'b>(
+        &'b self,
+        collection: &'b CollectionState<T>,
+    ) -> impl Iterator<Item = Antichain<T>> + 'b {
+        let compute_frontiers = collection.compute_dependency_ids().filter_map(|dep_id| {
+            let collection = self.collections.get(&dep_id);
+            collection.map(|c| c.write_frontier())
+        });
+        let storage_frontiers = collection.storage_dependency_ids().filter_map(|dep_id| {
+            let frontiers = self.storage_collections.collection_frontiers(dep_id).ok();
+            frontiers.map(|f| f.write_frontier)
+        });
+
+        compute_frontiers.chain(storage_frontiers)
+    }
+
     /// Downgrade the warmup capabilities of collections as much as possible.
     ///
     /// The only requirement we have for a collection's warmup capability is that it is for a time
@@ -2206,19 +2223,10 @@ where
                 continue;
             }
 
-            let compute_frontiers = collection.compute_dependency_ids().filter_map(|dep_id| {
-                let collection = self.collections.get(&dep_id);
-                collection.map(|c| c.write_frontier())
-            });
-            let storage_frontiers = collection.storage_dependency_ids().filter_map(|dep_id| {
-                let frontiers = self.storage_collections.collection_frontiers(dep_id).ok();
-                frontiers.map(|f| f.write_frontier)
-            });
-
             let mut new_capability = Antichain::new();
-            for frontier in compute_frontiers.chain(storage_frontiers) {
-                for time in frontier.iter() {
-                    new_capability.insert(time.step_back().unwrap_or_else(|| time.clone()));
+            for frontier in self.dependency_write_frontiers(collection) {
+                for time in frontier {
+                    new_capability.insert(time.step_back().unwrap_or(time));
                 }
             }
 
