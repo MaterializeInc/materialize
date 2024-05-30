@@ -3416,7 +3416,7 @@ checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 [[package]]
 name = "librocksdb-sys"
 version = "0.11.0+8.3.2"
-source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#ab3684f999a5586d7a5e94bd65defd78af15d40f"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb#ab3684f999a5586d7a5e94bd65defd78af15d40f"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -8037,7 +8037,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.21.0"
-source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#ab3684f999a5586d7a5e94bd65defd78af15d40f"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb#ab3684f999a5586d7a5e94bd65defd78af15d40f"
 dependencies = [
  "libc",
  "librocksdb-sys",
