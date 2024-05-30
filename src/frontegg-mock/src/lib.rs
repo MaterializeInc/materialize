@@ -242,6 +242,24 @@ fn generate_refresh_token(context: &Context, email: String) -> String {
     refresh_token
 }
 
+fn get_user_roles(
+    role_ids_or_names: &[String],
+    role_mapping: &BTreeMap<String, UserRole>,
+) -> Vec<UserRole> {
+    role_ids_or_names
+        .iter()
+        .map(|id_or_name| {
+            role_mapping
+                .get(id_or_name)
+                .cloned()
+                .unwrap_or_else(|| UserRole {
+                    id: id_or_name.clone(),
+                    name: id_or_name.clone(),
+                })
+        })
+        .collect()
+}
+
 async fn latency_middleware<B>(
     State(context): State<Arc<Context>>,
     request: Request<B>,
@@ -413,22 +431,8 @@ async fn handle_get_user(
 
     match users.iter().find(|(_, user)| user.id == Some(user_id)) {
         Some((_, user)) => {
-            // Convert the stored role names in UserConfig to UserRole structs.
-            let roles: Vec<UserRole> = user
-                .roles
-                .iter()
-                .map(|role_name| {
-                    role_mapping
-                        .get(role_name)
-                        .cloned()
-                        .unwrap_or_else(|| UserRole {
-                            id: "unknown".to_string(),
-                            name: role_name.to_string(),
-                        })
-                })
-                .collect();
+            let roles = get_user_roles(&user.roles, &role_mapping);
 
-            // Construct and return the UserResponse.
             let user_response = UserResponse {
                 id: user.id.unwrap_or_default(),
                 email: user.email.clone(),
@@ -441,22 +445,6 @@ async fn handle_get_user(
             Ok(Json(user_response))
         }
         None => Err(StatusCode::NOT_FOUND),
-    }
-}
-
-// https://docs.frontegg.com/reference/userscontrollerv1_removeuserfromtenant
-async fn handle_delete_user(
-    State(context): State<Arc<Context>>,
-    Path(user_id): Path<Uuid>,
-) -> impl IntoResponse {
-    let mut users = context.users.lock().unwrap();
-    let initial_count = users.len();
-    users.retain(|_, user| user.id != Some(user_id));
-
-    if users.len() < initial_count {
-        StatusCode::OK.into_response()
-    } else {
-        StatusCode::NOT_FOUND.into_response()
     }
 }
 
@@ -479,7 +467,6 @@ async fn handle_create_user(
     let default_tenant_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
 
-    // Translate role IDs to role names for storing in UserConfig
     let role_names: Vec<String> = new_user
         .role_ids
         .as_ref()
@@ -504,27 +491,13 @@ async fn handle_create_user(
         metadata: None,
     };
 
-    // Insert the new user into the map
     users.insert(new_user.email.clone(), user_config);
 
-    // Construct the roles for UserResponse using the mapping for ID and name
-    let user_roles: Vec<UserRole> = new_user
-        .role_ids
-        .as_ref()
-        .unwrap_or(&Vec::new())
-        .iter()
-        .map(|role_id| {
-            role_mapping
-                .get(role_id)
-                .cloned()
-                .unwrap_or_else(|| UserRole {
-                    id: role_id.clone(),
-                    name: role_id.clone(),
-                })
-        })
-        .collect();
+    let user_roles = get_user_roles(
+        new_user.role_ids.as_ref().unwrap_or(&Vec::new()),
+        &role_mapping,
+    );
 
-    // Create the UserResponse with the appropriate role details
     let user_response = UserResponse {
         id: user_id,
         email: new_user.email.clone(),
@@ -535,6 +508,22 @@ async fn handle_create_user(
     };
 
     Ok((StatusCode::CREATED, Json(user_response)))
+}
+
+// https://docs.frontegg.com/reference/userscontrollerv1_removeuserfromtenant
+async fn handle_delete_user(
+    State(context): State<Arc<Context>>,
+    Path(user_id): Path<Uuid>,
+) -> impl IntoResponse {
+    let mut users = context.users.lock().unwrap();
+    let initial_count = users.len();
+    users.retain(|_, user| user.id != Some(user_id));
+
+    if users.len() < initial_count {
+        StatusCode::OK.into_response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
 }
 
 // https://docs.frontegg.com/reference/permissionscontrollerv2_getallroles
