@@ -35,9 +35,11 @@ pub enum SchedulingDecision {
 
 impl SchedulingDecision {
     /// Extract the On/Off decision from the policy-specific structs.
-    pub fn on_off(&self) -> bool {
+    pub fn cluster_on(&self) -> bool {
         match &self {
-            SchedulingDecision::Refresh(RefreshDecision { on_off, .. }) => on_off.clone(),
+            SchedulingDecision::Refresh(RefreshDecision {
+                cluster_on, ..
+            }) => cluster_on.clone(),
         }
     }
 }
@@ -45,7 +47,7 @@ impl SchedulingDecision {
 #[derive(Clone, Debug)]
 pub struct RefreshDecision {
     /// Whether the ON REFRESH policy wants a certain cluster to be On.
-    on_off: bool,
+    cluster_on: bool,
     /// Objects that currently need a refresh on the cluster (taking into account the rehydration
     /// time estimate).
     objects_needing_refresh: Vec<GlobalId>,
@@ -65,7 +67,7 @@ impl SchedulingDecision {
                 .into_iter()
                 .filter_map(|r| match r {
                     SchedulingDecision::Refresh(RefreshDecision {
-                        on_off,
+                        cluster_on,
                         objects_needing_refresh: mvs_needing_refresh,
                         rehydration_time_estimate,
                     }) => {
@@ -77,7 +79,7 @@ impl SchedulingDecision {
                             ),
                         );
                         Some(mz_audit_log::RefreshDecisionWithReasonV1 {
-                            decision: (*on_off).into(),
+                            decision: (*cluster_on).into(),
                             objects_needing_refresh: mvs_needing_refresh
                                 .iter()
                                 .map(|id| id.to_string())
@@ -182,11 +184,11 @@ impl Coordinator {
                                 }
                             })
                             .collect_vec();
-                        let on_off = !mvs_needing_refresh.is_empty();
+                        let cluster_on = !mvs_needing_refresh.is_empty();
                         (
                             cluster_id,
                             SchedulingDecision::Refresh(RefreshDecision {
-                                on_off,
+                                cluster_on,
                                 objects_needing_refresh: mvs_needing_refresh,
                                 rehydration_time_estimate,
                             }),
@@ -282,7 +284,7 @@ impl Coordinator {
                 // If any policy says On, then we need a replica.
                 let needs_replica = decisions
                     .values()
-                    .map(|decision| decision.on_off())
+                    .map(|decision| decision.cluster_on())
                     .contains(&true);
                 let cluster_config = self
                     .get_managed_cluster_config(cluster_id)
