@@ -1175,7 +1175,7 @@ impl Cursor {
 
     /// Returns true if the cursor is past the end of the part data.
     pub fn is_exhausted<T: Timestamp + Codec64>(&self, part: &EncodedPart<T>) -> bool {
-        self.part_idx >= part.part.updates.len()
+        self.part_idx >= part.part.updates.num_row_groups()
     }
 
     /// Advance the cursor just past the end of the most recent update, if there is one.

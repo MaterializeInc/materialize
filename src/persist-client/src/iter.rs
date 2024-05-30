@@ -919,7 +919,7 @@ mod tests {
     use differential_dataflow::trace::Description;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist::indexed::columnar::ColumnarRecordsBuilder;
-    use mz_persist::indexed::encoding::BlobTraceBatchPart;
+    use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
     use mz_persist::location::Blob;
     use mz_persist::mem::{MemBlob, MemBlobConfig};
     use proptest::collection::vec;
@@ -986,7 +986,9 @@ mod tests {
                                         BlobTraceBatchPart {
                                             desc: desc.clone(),
                                             index: 0,
-                                            updates: vec![records.finish(&metrics.columnar)],
+                                            updates: BlobTraceUpdates::Row(vec![
+                                                records.finish(&metrics.columnar)
+                                            ]),
                                         },
                                     );
                                     (ConsolidationPart::from_encoded(part, &filter, true), 0)
