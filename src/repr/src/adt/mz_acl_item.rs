@@ -19,7 +19,9 @@ use crate::adt::system::Oid;
 use anyhow::{anyhow, Error};
 use bitflags::bitflags;
 use columnation::{Columnation, CopyRegion};
+use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
+use mz_persist_types::columnar::ColumnarCodec;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
 use proptest::proptest;
@@ -377,6 +379,119 @@ impl Columnation for MzAclItem {
     type InnerRegion = CopyRegion<MzAclItem>;
 }
 
+/// An encoded packed variant of [`MzAclItem`].
+///
+/// We uphold the variant that [`PackedMzAclItem`] sorts the same as [`MzAclItem`].
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(align(8))]
+pub struct PackedMzAclItem([u8; Self::SIZE]);
+
+impl PackedMzAclItem {
+    // Note: It's critical to the sort order guarantee that these tags sort the same as the
+    // variants of RoleId.
+    //
+    // Note: While a u32 wastes a bit of memory it provides better memory alignment.
+
+    pub const SYSTEM_TAG: u32 = 100;
+    pub const PREDEFINED_TAG: u32 = 200;
+    pub const USER_TAG: u32 = 300;
+    pub const PUBLIC_TAG: u32 = 400;
+
+    fn encode_role(buf: &mut [u8], role: RoleId) {
+        soft_assert_no_log!(buf.len() == 12);
+
+        match role {
+            RoleId::System(val) => {
+                buf[..4].copy_from_slice(&Self::SYSTEM_TAG.to_be_bytes());
+                buf[4..].copy_from_slice(&val.to_be_bytes());
+            }
+            RoleId::Predefined(val) => {
+                buf[..4].copy_from_slice(&Self::PREDEFINED_TAG.to_be_bytes());
+                buf[4..].copy_from_slice(&val.to_be_bytes());
+            }
+            RoleId::User(val) => {
+                buf[..4].copy_from_slice(&Self::USER_TAG.to_be_bytes());
+                buf[4..].copy_from_slice(&val.to_be_bytes());
+            }
+            RoleId::Public => {
+                buf[..4].copy_from_slice(&Self::PUBLIC_TAG.to_be_bytes());
+            }
+        }
+    }
+
+    fn decode_role(buf: &[u8]) -> RoleId {
+        soft_assert_no_log!(buf.len() == 12);
+
+        let tag: [u8; 4] = buf[..4]
+            .try_into()
+            .expect("PackedMzAclItem should roundtrip");
+        let tag = u32::from_be_bytes(tag);
+
+        let val: [u8; 8] = buf[4..]
+            .try_into()
+            .expect("PackedMzAclItem should roundtrip");
+        let val = u64::from_be_bytes(val);
+
+        match tag {
+            Self::SYSTEM_TAG => RoleId::System(val),
+            Self::PREDEFINED_TAG => RoleId::Predefined(val),
+            Self::USER_TAG => RoleId::User(val),
+            Self::PUBLIC_TAG => RoleId::Public,
+            x => panic!("unrecognized tag {x}"),
+        }
+    }
+}
+
+impl mz_persist_types::columnar::ColumnarCodec<MzAclItem> for PackedMzAclItem {
+    const SIZE: usize = 32;
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn from_bytes(val: &[u8]) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        let buf: [u8; Self::SIZE] = val.try_into().map_err(|_| {
+            format!(
+                "size for PackedMzAclItem is {} bytes, got {}",
+                Self::SIZE,
+                val.len()
+            )
+        })?;
+
+        Ok(PackedMzAclItem(buf))
+    }
+
+    fn from_value(value: MzAclItem) -> Self {
+        let mut buf = [0u8; 32];
+
+        Self::encode_role(&mut buf[..12], value.grantee);
+        Self::encode_role(&mut buf[12..24], value.grantor);
+        buf[24..].copy_from_slice(&value.acl_mode.bits().to_be_bytes());
+
+        PackedMzAclItem(buf)
+    }
+
+    fn into_value(self) -> MzAclItem {
+        let grantee = PackedMzAclItem::decode_role(&self.0[..12]);
+        let grantor = PackedMzAclItem::decode_role(&self.0[12..24]);
+
+        let acl_mode: [u8; 8] = self.0[24..]
+            .try_into()
+            .expect("PackedMzAclItem should roundtrip");
+        let acl_mode = AclMode::from_bits(u64::from_be_bytes(acl_mode))
+            .expect("PackedMzAclItem should roundtrip");
+
+        MzAclItem {
+            grantee,
+            grantor,
+            acl_mode,
+        }
+    }
+}
+
 /// A list of privileges granted to a role.
 ///
 /// This is primarily used for compatibility in PostgreSQL.
@@ -515,6 +630,61 @@ impl RustType<ProtoAclItem> for AclItem {
 
 impl Columnation for AclItem {
     type InnerRegion = CopyRegion<AclItem>;
+}
+
+/// An encoded packed variant of [`AclItem`].
+///
+/// We uphold the variant that [`PackedAclItem`] sorts the same as [`AclItem`].
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(align(8))]
+pub struct PackedAclItem([u8; Self::SIZE]);
+
+impl mz_persist_types::columnar::ColumnarCodec<AclItem> for PackedAclItem {
+    const SIZE: usize = 16;
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn from_bytes(slice: &[u8]) -> Result<Self, String> {
+        let buf: [u8; Self::SIZE] = slice.try_into().map_err(|_| {
+            format!(
+                "size for PackedAclItem is {} bytes, got {}",
+                Self::SIZE,
+                slice.len()
+            )
+        })?;
+        Ok(PackedAclItem(buf))
+    }
+
+    fn from_value(value: AclItem) -> Self {
+        let mut buf = [0u8; 16];
+
+        buf[..4].copy_from_slice(&value.grantee.0.to_be_bytes());
+        buf[4..8].copy_from_slice(&value.grantor.0.to_be_bytes());
+        buf[8..].copy_from_slice(&value.acl_mode.bits().to_be_bytes());
+
+        PackedAclItem(buf)
+    }
+
+    fn into_value(self) -> AclItem {
+        let mut grantee = [0; 4];
+        grantee.copy_from_slice(&self.0[..4]);
+
+        let mut grantor = [0; 4];
+        grantor.copy_from_slice(&self.0[4..8]);
+
+        let mut acl_mode = [0; 8];
+        acl_mode.copy_from_slice(&self.0[8..]);
+        let acl_mode = AclMode::from_bits(u64::from_be_bytes(acl_mode))
+            .expect("PackedAclItem should roundtrip");
+
+        AclItem {
+            grantee: Oid(u32::from_be_bytes(grantee)),
+            grantor: Oid(u32::from_be_bytes(grantor)),
+            acl_mode,
+        }
+    }
 }
 
 /// A container of [`MzAclItem`]s that is optimized to look up an [`MzAclItem`] by the grantee.
@@ -951,4 +1121,71 @@ proptest! {
       let decoded = AclItem::from_str(&encoded).unwrap();
       assert_eq!(acl_item, decoded);
   }
+}
+
+#[mz_ore::test]
+fn proptest_packed_acl_item_roundtrips() {
+    fn roundtrip_acl_item(og: AclItem) {
+        let packed = PackedAclItem::from_value(og);
+        let rnd = packed.into_value();
+        assert_eq!(og, rnd);
+    }
+
+    proptest!(|(acl_item in proptest::arbitrary::any::<AclItem>())| {
+        roundtrip_acl_item(acl_item);
+    })
+}
+
+#[mz_ore::test]
+fn proptest_packed_acl_item_sorts() {
+    fn sort_acl_items(mut og: Vec<AclItem>) {
+        let mut packed: Vec<_> = og.iter().copied().map(PackedAclItem::from_value).collect();
+
+        og.sort();
+        packed.sort();
+
+        let rnd: Vec<_> = packed.into_iter().map(PackedAclItem::into_value).collect();
+        assert_eq!(og, rnd);
+    }
+
+    proptest!(|(acl_items in proptest::arbitrary::any::<Vec<AclItem>>())| {
+        sort_acl_items(acl_items);
+    });
+}
+
+#[mz_ore::test]
+fn proptest_packed_mz_acl_item_roundtrips() {
+    fn roundtrip_mz_acl_item(og: MzAclItem) {
+        let packed = PackedMzAclItem::from_value(og);
+        let rnd = packed.into_value();
+        assert_eq!(og, rnd);
+    }
+
+    proptest!(|(acl_item in proptest::arbitrary::any::<MzAclItem>())| {
+        roundtrip_mz_acl_item(acl_item);
+    })
+}
+
+#[mz_ore::test]
+fn proptest_packed_mz_acl_item_sorts() {
+    fn sort_mz_acl_items(mut og: Vec<MzAclItem>) {
+        let mut packed: Vec<_> = og
+            .iter()
+            .copied()
+            .map(PackedMzAclItem::from_value)
+            .collect();
+
+        og.sort();
+        packed.sort();
+
+        let rnd: Vec<_> = packed
+            .into_iter()
+            .map(PackedMzAclItem::into_value)
+            .collect();
+        assert_eq!(og, rnd);
+    }
+
+    proptest!(|(acl_items in proptest::arbitrary::any::<Vec<MzAclItem>>())| {
+        sort_mz_acl_items(acl_items);
+    });
 }
