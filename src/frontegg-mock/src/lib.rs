@@ -63,6 +63,7 @@ impl FronteggMockServer {
         now: NowFn,
         expires_in_secs: i64,
         latency: Option<Duration>,
+        roles: Vec<UserRole>,
     ) -> Result<FronteggMockServer, anyhow::Error> {
         let (role_updates_tx, role_updates_rx) = unbounded_channel();
 
@@ -110,6 +111,7 @@ impl FronteggMockServer {
             refreshes: Arc::clone(&refreshes),
             enable_auth: Arc::clone(&enable_auth),
             auth_requests: Arc::clone(&auth_requests),
+            roles: Arc::new(roles),
         });
 
         let router = Router::new()
@@ -383,13 +385,13 @@ async fn handle_post_user_api_token<'a>(
     Ok(Json(new_token))
 }
 
-// https://docs.frontegg.com/reference/userscontrollerv1_getuserbyid
+// https://docs.frontegg.com/reference/userscontrollerv2_getuserbyid
 async fn handle_get_user(
     State(context): State<Arc<Context>>,
     Path(user_id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<Json<UserResponse>, StatusCode> {
     let users = context.users.lock().unwrap();
-    let role_mapping = get_role_mapping();
+    let role_mapping: BTreeMap<String, UserRole> = context.roles.iter().map(|role| (role.id.clone(), role.clone())).collect();
 
     match users.iter().find(|(_, user)| user.id == Some(user_id)) {
         Some((_, user)) => {
@@ -418,9 +420,9 @@ async fn handle_get_user(
                 roles,
             };
 
-            Json(user_response).into_response()
+            Ok(Json(user_response))
         }
-        None => StatusCode::NOT_FOUND.into_response(),
+        None => Err(StatusCode::NOT_FOUND),
     }
 }
 
@@ -440,16 +442,16 @@ async fn handle_delete_user(
     }
 }
 
-// https://docs.frontegg.com/reference/userscontrollerv1_createuser
+// https://docs.frontegg.com/reference/userscontrollerv2_createuser
 async fn handle_create_user(
     State(context): State<Arc<Context>>,
     Json(new_user): Json<UserCreate>,
-) -> impl IntoResponse {
+) -> Result<(StatusCode, Json<UserResponse>), StatusCode> {
     let mut users = context.users.lock().unwrap();
-    let role_mapping = get_role_mapping();
+    let role_mapping: BTreeMap<String, UserRole> = context.roles.iter().map(|role| (role.id.clone(), role.clone())).collect();
 
     if users.contains_key(&new_user.email) {
-        return (StatusCode::CONFLICT, "User already exists").into_response();
+        return Err(StatusCode::CONFLICT);
     }
 
     let default_tenant_id = Uuid::new_v4();
@@ -510,26 +512,17 @@ async fn handle_create_user(
         roles: user_roles,
     };
 
-    (StatusCode::CREATED, Json(user_response)).into_response()
+    Ok((StatusCode::CREATED, Json(user_response)))
 }
 
 // https://docs.frontegg.com/reference/permissionscontrollerv2_getallroles
-async fn handle_roles_request(State(_context): State<Arc<Context>>) -> impl IntoResponse {
-    let roles = vec![
-        UserRole {
-            id: "1".to_string(),
-            name: "Organization Admin".to_string(),
-        },
-        UserRole {
-            id: "2".to_string(),
-            name: "Organization Member".to_string(),
-        },
-    ];
+async fn handle_roles_request(State(context): State<Arc<Context>>) -> impl IntoResponse {
+    let roles = Arc::<Vec<UserRole>>::clone(&context.roles);
 
     let response = UserRolesResponse {
-        items: roles,
+        items: roles.to_vec(),
         _metadata: UserRolesMetadata {
-            total_items: 2,
+            total_items: roles.len(),
             total_pages: 1,
         },
     };
@@ -659,29 +652,11 @@ struct Context {
     refreshes: Arc<Mutex<u64>>,
     enable_auth: Arc<AtomicBool>,
     auth_requests: Arc<Mutex<u64>>,
+    roles: Arc<Vec<UserRole>>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RefreshToken<'a> {
     refresh_token: &'a str,
-}
-
-fn get_role_mapping() -> BTreeMap<String, UserRole> {
-    let mut map = BTreeMap::new();
-    map.insert(
-        "1".to_string(),
-        UserRole {
-            id: "1".to_string(),
-            name: "Organization Admin".to_string(),
-        },
-    );
-    map.insert(
-        "2".to_string(),
-        UserRole {
-            id: "2".to_string(),
-            name: "Organization Member".to_string(),
-        },
-    );
-    map
 }
