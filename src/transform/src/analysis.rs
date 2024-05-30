@@ -41,6 +41,10 @@ pub trait Analysis: 'static {
     /// The analysis results for `Self` can only be found in `results`, and are not
     /// available in `depends`.
     ///
+    /// Implementors of this method must defensively check references into `results`, as
+    /// it may be invoked on `LetRec` bindings that have not yet been populated. It is up
+    /// to the analysis what to do in that case, but conservative behavior is recommended.
+    ///
     /// The `index` indicates the post-order index for the expression, for use in finding
     /// the corresponding information in `results` and `depends`.
     ///
@@ -1599,10 +1603,12 @@ mod cardinality {
                     SymExp::from(rows.as_ref().map_or_else(|_| 0, |v| v.len()))
                 }
                 Get { id, .. } => match id {
-                    Id::Local(id) => match depends.bindings().get(id) {
-                        Some(value) => results[*value].clone(),
-                        None => SymExp::symbolic(FactorizerVariable::Unknown),
-                    },
+                    Id::Local(id) => depends
+                        .bindings()
+                        .get(id)
+                        .and_then(|id| results.get(*id))
+                        .cloned()
+                        .unwrap_or(SymExp::symbolic(FactorizerVariable::Unknown)),
                     Id::Global(id) => SymbolicExpression::symbolic(FactorizerVariable::Id(*id)),
                 },
                 Let { .. } | Project { .. } | Map { .. } | ArrangeBy { .. } | Negate { .. } => {

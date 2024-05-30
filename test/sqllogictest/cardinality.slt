@@ -614,3 +614,30 @@ Used Indexes:
 Target cluster: quickstart
 
 EOF
+
+# Regression test for gh issue 27348 (cardinality + WMR panic)
+query T multiline
+explain with(cardinality)
+with mutually recursive
+  t(x int) as (select 1 union all select * from u),
+  u(x int) as (select t.x+1 from t where x < 7)
+(select * from t);
+----
+Explained Query:
+  Return // { cardinality: "unknown^1" }
+    Get l0 // { cardinality: "unknown^1 + 1" }
+  With Mutually Recursive
+    cte l1 =
+      Project (#1) // { cardinality: "unknown^1 * 0.33 + 0.33" }
+        Filter (#0 < 7) // { cardinality: "unknown^1 * 0.33 + 0.33" }
+          Map ((#0 + 1)) // { cardinality: "unknown^1 + 1" }
+            Get l0 // { cardinality: "unknown^1 + 1" }
+    cte l0 =
+      Union // { cardinality: "unknown^1 + 1" }
+        Get l1 // { cardinality: "unknown^1" }
+        Constant // { cardinality: "1" }
+          - (1)
+
+Target cluster: mz_introspection
+
+EOF
