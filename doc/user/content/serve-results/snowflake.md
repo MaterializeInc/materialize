@@ -15,7 +15,7 @@ document that approach."
 {{< private-preview />}}
 
 This guide walks you through the steps required to bulk-export results from
-Materialize to Snowflake using Amazon s3 as the intermediate object store.
+Materialize to Snowflake using Amazon S3 as the intermediate object store.
 
 ## Before you begin
 
@@ -27,9 +27,9 @@ Materialize to Snowflake using Amazon s3 as the intermediate object store.
   user with either the [`ACCOUNTADMIN` role](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#using-the-accountadmin-role),
   or a role with the [global `CREATE INTEGRATION` privilege](https://docs.snowflake.com/en/user-guide/security-access-control-privileges#global-privileges-account-level-privileges).
 
-## Step 1. Set up bulk exports to Amazon s3
+## Step 1. Set up bulk exports to Amazon S3
 
-Follow the [Amazon s3 integration guide](/serve-results/s3/) to set up an Amazon
+Follow the [Amazon S3 integration guide](/serve-results/s3/) to set up an Amazon
 S3 bucket that Materialize securely writes data into. This will be your
 starting point for bulk-loading Materialize data into Snowflake.
 
@@ -142,7 +142,7 @@ connected to Snowflake, create a [storage integration](https://docs.snowflake.co
 replacing `<role>` with the name of the role you created in the previous step:
 
    ```sql
-   CREATE STORAGE INTEGRATION s3_int
+   CREATE STORAGE INTEGRATION S3_int
      TYPE = EXTERNAL_STAGE
      STORAGE_PROVIDER = 'S3'
      ENABLED = TRUE
@@ -172,7 +172,7 @@ replacing `<role>` with the name of the role you created in the previous step:
 
 ## Step 3. Create a Snowflake external stage
 
-Back in Snowflake, create an [external stage](https://docs.snowflake.com/en/user-guide/data-load-s3-create-stage#external-stages) that uses the storage integration above and references your S3 bucket.
+Back in Snowflake, create an [external stage](https://docs.snowflake.com/en/user-guide/data-load-S3-create-stage#external-stages) that uses the storage integration above and references your S3 bucket.
 
 ```sql
 CREATE STAGE s3_stage
@@ -208,7 +208,7 @@ Use `COPY INTO` to load the data into the table:
 
 ```sql
 COPY INTO s3_table_parquet
-  FROM @s3_stage
+  FROM @S3_stage
   FILE_FORMAT = (TYPE = 'PARQUET');
 ```
 
@@ -248,7 +248,7 @@ For more details on importing CSV files staged in S3 into Snowflake, check the
 
 ## Step 5. (Optional) Add scheduling
 
-Bulk exports to Amazon s3 using the `COPY TO` command are _one-shot_: every time
+Bulk exports to Amazon S3 using the `COPY TO` command are _one-shot_: every time
 you want to export results, you must run the command. To automate running bulk
 exports from Materialize to Snowflake on a regular basis, you can set up
 scheduling, for example using a simple `cron`-like service or an orchestration

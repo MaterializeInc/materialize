@@ -8,7 +8,7 @@ menu:
 
 `COPY TO` outputs results from Materialize to standard output or object storage.
 This command is useful to output [`SUBSCRIBE`](/sql/subscribe/) results
-[to `stdout`](#copy-to-stdout), or perform [bulk exports to Amazon s3](#copy-to-s3).
+[to `stdout`](#copy-to-stdout), or perform [bulk exports to Amazon S3](#copy-to-s3).
 
 ## Copy to `stdout`
 
@@ -39,14 +39,14 @@ Name     | Values                 | Default value | Description
 COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
 ```
 
-## Copy to Amazon s3 {#copy-to-s3}
+## Copy to Amazon S3 {#copy-to-s3}
 
 {{< private-preview />}}
 
 Copying results to Amazon S3 is useful to perform tasks like periodic backups
 for auditing, or downstream processing in analytical data warehouses like
 Snowflake, Databricks or BigQuery. For step-by-step instructions, see the
-integration guide for [Amazon s3](/serve-results/s3/).
+integration guide for [Amazon S3](/serve-results/s3/).
 
 The `COPY TO` command is _one-shot_: every time you want to export results, you
 must run the command. To automate exporting results on a regular basis, you can
@@ -62,7 +62,7 @@ Field         | Use
 _query_       | The [`SELECT`](/sql/select) query to copy results out for.
 _object_name_ | The name of the object to copy results out for.
 **AWS CONNECTION** _connection_name_ | The name of the AWS connection to use in the `COPY TO` command. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#aws) documentation page.
-_s3_uri_      | The unique resource identifier (URI) of the Amazon s3 bucket (and prefix) to store the output results in.
+_S3_uri_      | The unique resource identifier (URI) of the Amazon S3 bucket (and prefix) to store the output results in.
 **FORMAT**    | The file format to write.
 _field_       | The name of the option you want to set.
 _val_         | The value for the option.
@@ -195,5 +195,5 @@ The privileges required to execute this statement are:
 
 - [`CREATE CONNECTION`](/sql/create-connection)
 - Integration guides:
-  - [Amazon s3](/serve-results/s3/)
-  - [Snowflake (via s3)](/serve-results/snowflake/)
+  - [Amazon S3](/serve-results/s3/)
+  - [Snowflake (via S3)](/serve-results/snowflake/)
