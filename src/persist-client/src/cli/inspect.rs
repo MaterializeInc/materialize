@@ -769,14 +769,14 @@ impl Codec64 for D {
     }
 }
 
+impl Semigroup for D {
+    fn plus_equals(&mut self, _rhs: &Self) {}
+}
+
 impl IsZero for D {
     fn is_zero(&self) -> bool {
         false
     }
-}
-
-impl Semigroup for D {
-    fn plus_equals(&mut self, _rhs: &Self) {}
 }
 
 pub(crate) static FAKE_OPAQUE_CODEC: Mutex<String> = Mutex::new(String::new());

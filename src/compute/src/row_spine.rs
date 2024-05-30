@@ -448,7 +448,7 @@ mod container {
                 let row = Row::pack(datums.clone());
 
                 let mut container = DatumContainer::with_capacity(row.byte_len());
-                container.copy_push(&row);
+                container.push(&row);
 
                 // When run under miri this catches undefined bytes written to data
                 // eg by calling push_copy! on a type which contains undefined padding values

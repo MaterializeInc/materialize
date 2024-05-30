@@ -847,11 +847,16 @@ where
     }
 
     fn push(&mut self, chunk: &mut Self::Input) {
-        for element in chunk.drain() {
+        // TODO(mh): This is less efficient than it could be because it extracts each item
+        // individually and then pushes it. However, it is not a regression over the previous
+        // implementation. In the future, we want to either clone many elements in one go,
+        // or ensure that `Vec<Input>` == `Output`, which would avoid looking at the container
+        // contents at all.
+        'element: for element in chunk.drain() {
             if let Some(last) = self.buffer.last_mut() {
                 if last.len() < last.capacity() {
                     last.push_into(element);
-                    return;
+                    continue 'element;
                 }
             }
             let mut new =

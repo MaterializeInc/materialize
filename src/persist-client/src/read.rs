@@ -1108,7 +1108,7 @@ where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
     T: Timestamp + Lattice + Codec64 + Ord,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     /// Test helper to generate a [Self::snapshot] call that is expected to
     /// succeed, process its batches, and then return its data sorted.

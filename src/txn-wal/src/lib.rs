@@ -574,7 +574,7 @@ pub mod tests {
         K: Debug + Codec + Clone,
         V: Debug + Codec + Clone,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-        D: Semigroup + Codec64 + Send + Sync + Clone,
+        D: Debug + Semigroup + Ord + Codec64 + Send + Sync + Clone,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
@@ -601,7 +601,7 @@ pub mod tests {
         K: Debug + Codec + Clone,
         V: Debug + Codec + Clone,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-        D: Semigroup + Codec64 + Send + Sync + Clone,
+        D: Debug + Semigroup + Ord + Codec64 + Send + Sync + Clone,
     {
         pub(crate) fn new() -> Self {
             Self {

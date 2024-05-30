@@ -457,15 +457,15 @@ pub struct MzOffset {
     pub offset: u64,
 }
 
-impl differential_dataflow::difference::IsZero for MzOffset {
-    fn is_zero(&self) -> bool {
-        self.offset.is_zero()
-    }
-}
-
 impl differential_dataflow::difference::Semigroup for MzOffset {
     fn plus_equals(&mut self, rhs: &Self) {
         self.offset.plus_equals(&rhs.offset)
+    }
+}
+
+impl differential_dataflow::difference::IsZero for MzOffset {
+    fn is_zero(&self) -> bool {
+        self.offset.is_zero()
     }
 }
 
