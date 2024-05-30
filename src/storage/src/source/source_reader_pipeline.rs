@@ -585,7 +585,7 @@ fn reclock_operator<G, FromTime, D, M>(
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
-    D: Semigroup + Into<Diff>,
+    D: Semigroup + Into<Diff> + 'static,
     M: InstrumentedChannelMetric + 'static,
 {
     let RawSourceCreationConfig {

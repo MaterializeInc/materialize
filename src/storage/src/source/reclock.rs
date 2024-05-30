@@ -258,7 +258,11 @@ where
                 .remap_trace
                 .iter()
                 .filter(|(from_ts, _, _)| PartialOrder::less_equal(from_ts, src_ts))
-                .map(|(_, into_ts, diff)| (into_ts.clone(), diff.negate())),
+                .map(|(_, into_ts, diff)| {
+                    let mut diff = *diff;
+                    diff.negate();
+                    (into_ts.clone(), diff)
+                }),
         );
         Ok(into_times.frontier().to_owned())
     }

@@ -914,7 +914,7 @@ where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     /// Grab the next batch of consolidated data.
     pub async fn next(
@@ -935,7 +935,7 @@ where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     /// Generates a [Self::snapshot], and fetches all of the batches it
     /// contains.

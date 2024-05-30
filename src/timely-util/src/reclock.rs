@@ -208,7 +208,7 @@ where
     D: ExchangeData,
     FromTime: Timestamp,
     IntoTime: Timestamp + Lattice + TotalOrder,
-    R: Semigroup,
+    R: Semigroup + 'static,
 {
     let mut scope = remap_collection.scope();
     let mut builder = OperatorBuilder::new("Reclock".into(), scope.clone());

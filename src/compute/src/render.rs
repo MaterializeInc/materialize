@@ -113,6 +113,7 @@ use std::task::Poll;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
 use futures::channel::oneshot;
@@ -606,7 +607,6 @@ where
     ) -> MzArrangement<G> {
         match oks {
             MzArrangement::RowRow(inner) => {
-                use differential_dataflow::trace::cursor::MyTrait;
                 let oks = inner
                     .as_collection(|k, v| (k.into_owned(), v.into_owned()))
                     .leave()
@@ -704,7 +704,6 @@ where
                     .mz_arrange::<ErrSpine<_, _>>("Arrange recursive err")
                     .mz_reduce_abelian::<_, _, _, ErrSpine<_, _>>(
                         "Distinct recursive err",
-                        Clone::clone,
                         move |_k, _s, t| t.push(((), 1)),
                     )
                     .as_collection(|k, _| k.clone());

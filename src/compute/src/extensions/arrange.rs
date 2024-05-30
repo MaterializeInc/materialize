@@ -11,14 +11,16 @@ use std::rc::Rc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::arrangement::arrange_core;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
 use timely::container::columnation::Columnation;
-use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
+use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::Timestamp;
+use timely::Container;
 
 use crate::logging::compute::ComputeEvent;
 use crate::typedefs::{KeyAgent, KeyValAgent, RowAgent, RowRowAgent, RowValAgent};
@@ -30,6 +32,8 @@ where
 {
     /// The current scope.
     type Scope: Scope;
+    /// The data input container type.
+    type Input: Container;
     /// The key type.
     type Key: Data;
     /// The value type.
@@ -49,14 +53,7 @@ where
         Self::R: ExchangeData,
         Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<
-            Input = Vec<(
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            )>,
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-        >,
+        Tr::Batcher: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp>,
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
 
     /// Arranges a stream of `(Key, Val)` updates by `Key` into a trace of type `Tr`. Partitions
@@ -67,24 +64,10 @@ where
     /// is the correct way to determine that times in the shared trace are committed.
     fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<
-            <Self::Scope as ScopeParent>::Timestamp,
-            Vec<(
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            )>,
-        >,
+        P: ParallelizationContract<<Self::Scope as ScopeParent>::Timestamp, Self::Input>,
         Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<
-            Input = Vec<(
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            )>,
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-        >,
+        Tr::Batcher: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp>,
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
 }
 
@@ -94,9 +77,10 @@ where
     G::Timestamp: Lattice,
     K: Data + Columnation,
     V: Data + Columnation,
-    R: Semigroup,
+    R: Data + Semigroup,
 {
     type Scope = G;
+    type Input = Vec<((K, V), G::Timestamp, R)>;
     type Key = K;
     type Val = V;
     type R = R;
@@ -108,36 +92,25 @@ where
         R: ExchangeData,
         Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input = Vec<((K, V), G::Timestamp, R)>, Time = G::Timestamp>,
+        Tr::Batcher: Batcher<Input = Self::Input>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
-        // Allow access to `arrange_named` because we're within Mz's wrapper.
-        #[allow(clippy::disallowed_methods)]
-        self.arrange_named(name).log_arrangement_size()
+        let exchange =
+            Exchange::new(move |update: &((K, V), G::Timestamp, R)| (update.0).0.hashed().into());
+        self.mz_arrange_core(exchange, name)
     }
 
     fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, Vec<((K, V), G::Timestamp, R)>>,
+        P: ParallelizationContract<G::Timestamp, Self::Input>,
         Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<
-            Input = Vec<(
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            )>,
-        >,
+        Tr::Batcher: Batcher<Input = Self::Input>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
-        differential_dataflow::operators::arrange::arrangement::arrange_core(
-            &self.inner,
-            pact,
-            name,
-        )
-        .log_arrangement_size()
+        arrange_core(&self.inner, pact, name).log_arrangement_size()
     }
 }
 
@@ -157,9 +130,10 @@ where
     G: Scope,
     K: Data + Columnation,
     G::Timestamp: Lattice,
-    R: Semigroup,
+    R: Data + Semigroup + Ord,
 {
     type Scope = G;
+    type Input = Vec<((K, ()), G::Timestamp, R)>;
     type Key = K;
     type Val = ();
     type R = R;
@@ -170,7 +144,7 @@ where
         R: ExchangeData,
         Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input = Vec<((K, ()), G::Timestamp, R)>, Time = G::Timestamp>,
+        Tr::Batcher: Batcher<Input = Self::Input, Time = G::Timestamp>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         self.0.map(|d| (d, ())).mz_arrange(name)
@@ -178,10 +152,10 @@ where
 
     fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, Vec<((K, ()), G::Timestamp, R)>>,
+        P: ParallelizationContract<G::Timestamp, Self::Input>,
         Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Input = Vec<((K, ()), G::Timestamp, R)>, Time = G::Timestamp>,
+        Tr::Batcher: Batcher<Input = Self::Input, Time = G::Timestamp>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         self.0.map(|d| (d, ())).mz_arrange_core(pact, name)
@@ -281,7 +255,7 @@ where
     K: Data + Columnation,
     V: Data + Columnation,
     T: Lattice + Timestamp,
-    R: Semigroup + Columnation,
+    R: Semigroup + Ord + Columnation + 'static,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
@@ -296,7 +270,8 @@ where
                 batch.storage.keys_offs.heap_size(&mut callback);
                 batch.storage.vals.heap_size(&mut callback);
                 batch.storage.vals_offs.heap_size(&mut callback);
-                batch.storage.updates.heap_size(&mut callback);
+                batch.storage.times.heap_size(&mut callback);
+                batch.storage.diffs.heap_size(&mut callback);
             });
             (size, capacity, allocations)
         })
@@ -309,7 +284,7 @@ where
     G::Timestamp: Lattice + Ord,
     K: Data + Columnation,
     T: Lattice + Timestamp + Columnation,
-    R: Semigroup + Columnation,
+    R: Semigroup + Ord + Columnation + 'static,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
@@ -322,7 +297,8 @@ where
             trace.map_batches(|batch| {
                 batch.storage.keys.heap_size(&mut callback);
                 batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.updates.heap_size(&mut callback);
+                batch.storage.times.heap_size(&mut callback);
+                batch.storage.diffs.heap_size(&mut callback);
             });
             (size, capacity, allocations)
         })
@@ -335,7 +311,7 @@ where
     G::Timestamp: Lattice + Ord + Columnation,
     V: Data + Columnation,
     T: Lattice + Timestamp,
-    R: Semigroup + Columnation,
+    R: Semigroup + Ord + Columnation + 'static,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
@@ -350,7 +326,8 @@ where
                 batch.storage.keys_offs.heap_size(&mut callback);
                 batch.storage.vals.heap_size(&mut callback);
                 batch.storage.vals_offs.heap_size(&mut callback);
-                batch.storage.updates.heap_size(&mut callback);
+                batch.storage.times.heap_size(&mut callback);
+                batch.storage.diffs.heap_size(&mut callback);
             });
             (size, capacity, allocations)
         })
@@ -362,7 +339,7 @@ where
     G: Scope<Timestamp = T>,
     G::Timestamp: Lattice + Ord + Columnation,
     T: Lattice + Timestamp,
-    R: Semigroup + Columnation,
+    R: Semigroup + Ord + Columnation + 'static,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
@@ -377,7 +354,8 @@ where
                 batch.storage.keys_offs.heap_size(&mut callback);
                 batch.storage.vals.heap_size(&mut callback);
                 batch.storage.vals_offs.heap_size(&mut callback);
-                batch.storage.updates.heap_size(&mut callback);
+                batch.storage.times.heap_size(&mut callback);
+                batch.storage.diffs.heap_size(&mut callback);
             });
             (size, capacity, allocations)
         })
@@ -389,7 +367,7 @@ where
     G: Scope<Timestamp = T>,
     G::Timestamp: Lattice + Ord + Columnation,
     T: Lattice + Timestamp,
-    R: Semigroup + Columnation,
+    R: Semigroup + Ord + Columnation + 'static,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
@@ -402,7 +380,8 @@ where
             trace.map_batches(|batch| {
                 batch.storage.keys.heap_size(&mut callback);
                 batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.updates.heap_size(&mut callback);
+                batch.storage.times.heap_size(&mut callback);
+                batch.storage.diffs.heap_size(&mut callback);
             });
             (size, capacity, allocations)
         })

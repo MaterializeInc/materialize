@@ -337,7 +337,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
     fn debug_sep<'a, T: Debug + 'a>(sep: &str, xs: impl IntoIterator<Item = &'a T>) -> String {
         xs.into_iter().fold(String::new(), |mut output, x| {
@@ -401,7 +401,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
     let name = name();
     let empty: &[((&K, &V), &T, D)] = &[];
@@ -447,7 +447,7 @@ async fn apply_caa<K, V, T, D>(
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     let mut batches = batch_raws
         .into_iter()

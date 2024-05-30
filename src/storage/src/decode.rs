@@ -18,7 +18,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
-use differential_dataflow::capture::{Message, Progress, YieldingIter};
+use differential_dataflow::capture::{Message, Progress};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
@@ -159,6 +159,47 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
         std::future::pending::<()>().await;
     });
     (stream.as_collection(), button.press_on_drop())
+}
+
+/// An iterator that yields with a `None` every so often.
+pub struct YieldingIter<I> {
+    /// When set, a time after which we should return `None`.
+    start: Option<std::time::Instant>,
+    after: Duration,
+    iter: I,
+}
+
+impl<I> YieldingIter<I> {
+    /// Construct a yielding iterator from an inter-yield duration.
+    pub fn new_from(iter: I, yield_after: Duration) -> Self {
+        Self {
+            start: None,
+            after: yield_after,
+            iter,
+        }
+    }
+}
+
+impl<I: Iterator> Iterator for YieldingIter<I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start.is_none() {
+            self.start = Some(std::time::Instant::now());
+        }
+        let start = self.start.as_ref().unwrap();
+        if start.elapsed() > self.after {
+            self.start = None;
+            None
+        } else {
+            match self.iter.next() {
+                Some(x) => Some(x),
+                None => {
+                    self.start = None;
+                    None
+                }
+            }
+        }
+    }
 }
 
 // These don't know how to find delimiters --

@@ -134,7 +134,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     pub(crate) fn new(
         cfg: PersistConfig,

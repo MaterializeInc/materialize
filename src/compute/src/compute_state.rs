@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
 use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::{Data, Hashable};
 use mz_compute_client::logging::LoggingConfig;
@@ -1130,7 +1131,7 @@ impl IndexPeek {
             SpecializedTraceHandle::RowRow(oks_handle) => {
                 // Explicit types required due to Rust type inference limitations.
                 use crate::typedefs::RowRowSpine;
-                Self::collect_ok_finished_data::<RowRowSpine<_, _>>(
+                Self::collect_ok_finished_data::<RowRowSpine<_, _>, Row>(
                     peek,
                     oks_handle,
                     max_result_size,
@@ -1140,16 +1141,17 @@ impl IndexPeek {
     }
 
     /// Collects data for a known-complete peek from the ok stream.
-    fn collect_ok_finished_data<Tr>(
+    fn collect_ok_finished_data<Tr, K>(
         peek: &mut Peek<Timestamp>,
         oks_handle: &mut TraceAgent<Tr>,
         max_result_size: u64,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
-        Tr: TraceReader<Time = Timestamp, Diff = Diff>,
-        for<'a> Tr::Key<'a>: ToDatumIter,
+        for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
+        for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = K> + Eq,
         for<'a> Tr::Val<'a>: ToDatumIter,
-        Tr::KeyOwned: Columnation + Data + FromDatumIter + ToDatumIter,
+        K: Columnation + Data + FromDatumIter + ToDatumIter + Default,
+        for<'a> Tr::TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
     {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = std::mem::size_of::<NonZeroUsize>();
@@ -1176,7 +1178,7 @@ impl IndexPeek {
         let mut datum_vec = DatumVec::new();
         let mut l_datum_vec = DatumVec::new();
         let mut r_datum_vec = DatumVec::new();
-        let mut key_buf = Tr::KeyOwned::default();
+        let mut key_buf = K::default();
 
         // We have to sort the literal constraints because cursor.seek_key can seek only forward.
         peek.literal_constraints
@@ -1198,12 +1200,13 @@ impl IndexPeek {
                             // NOTE(vmarcos): We expect the extra allocations below to be manageable
                             // since we only perform as many of them as there are literals.
                             let current_literal = key_buf.from_datum_iter(current_literal.iter());
-                            cursor.seek_key_owned(&storage, &current_literal);
+                            cursor.seek_key(&storage, IntoOwned::borrow_as(&current_literal));
                             if !cursor.key_valid(&storage) {
                                 return Ok(results);
                             }
-                            use differential_dataflow::trace::cursor::MyTrait;
-                            if cursor.get_key(&storage).unwrap().equals(&current_literal) {
+                            if cursor.get_key(&storage).unwrap()
+                                == IntoOwned::borrow_as(&current_literal)
+                            {
                                 // The cursor found a record whose key matches the current literal.
                                 // We break from the inner loop, and process this key.
                                 break;

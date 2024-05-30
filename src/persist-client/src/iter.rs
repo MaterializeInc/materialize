@@ -277,7 +277,11 @@ pub(crate) const SPLIT_OLD_RUNS: Config<bool> = Config::new(
     "If set, split up runs that were written by older versions of Materialize and may not truly be consolidated."
 );
 
-impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D> {
+impl<T, D> Consolidator<T, D>
+where
+    T: Timestamp + Codec64 + Lattice,
+    D: Codec64 + Semigroup + Ord,
+{
     /// Create a new [Self] instance with the given prefetch budget. This budget is a "soft limit"
     /// on the size of the parts that the consolidator will fetch... we'll try and stay below the
     /// limit, but may burst above it if that's necessary to make progress.
@@ -788,7 +792,7 @@ pub(crate) struct ConsolidatingIter<'a, T: Timestamp, D> {
 impl<'a, T, D> ConsolidatingIter<'a, T, D>
 where
     T: Timestamp + Codec64 + Lattice,
-    D: Codec64 + Semigroup,
+    D: Codec64 + Semigroup + Ord,
 {
     pub fn new(
         context: &'a str,
@@ -887,7 +891,7 @@ where
 impl<'a, T, D> Iterator for ConsolidatingIter<'a, T, D>
 where
     T: Timestamp + Codec64 + Lattice,
-    D: Codec64 + Semigroup,
+    D: Codec64 + Semigroup + Ord,
 {
     type Item = TupleRef<'a, T, D>;
 

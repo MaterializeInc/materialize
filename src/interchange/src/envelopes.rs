@@ -12,6 +12,7 @@ use std::iter;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Batch, BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use itertools::{EitherOrBoth, Itertools};
@@ -44,6 +45,7 @@ where
             Diff = Diff,
         >,
     Tr::Batch: Batch,
+    for<'a> Tr::TimeGat<'a>: Ord,
 {
     let mut rows_buf = vec![];
     let x: Stream<G, ((Option<Row>, Vec<DiffPair<Row>>), G::Timestamp, Diff)> = arranged
@@ -65,9 +67,13 @@ where
                             // and insertions (afters).
                             while cursor.val_valid(&batch) {
                                 let v = cursor.val(&batch);
-                                cursor.map_times(&batch, |&t, &diff| {
-                                    let update =
-                                        (t, v.clone(), usize::cast_from(diff.unsigned_abs()));
+                                cursor.map_times(&batch, |t, diff| {
+                                    let diff = diff.into_owned();
+                                    let update = (
+                                        t.into_owned(),
+                                        v.clone(),
+                                        usize::cast_from(diff.unsigned_abs()),
+                                    );
                                     if diff < 0 {
                                         befores.push(update);
                                     } else {

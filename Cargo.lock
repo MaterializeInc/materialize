@@ -1902,7 +1902,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#8d077e51068d4c6a073b3b34d66351c789a49a0d"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#05a27dafa809c7f561a5a445d623db68559a95b4"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1958,7 +1958,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#8d077e51068d4c6a073b3b34d66351c789a49a0d"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#05a27dafa809c7f561a5a445d623db68559a95b4"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -2317,9 +2317,9 @@ dependencies = [
 
 [[package]]
 name = "flatcontainer"
-version = "0.1.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3c781a27f1f232edc758a11be8eb2e391831fd4a264d6b954b7e7c3ed802758"
+checksum = "48bf7552d4ab459c1fc6894d9895b5d21485fddf9885190c6ae690cbfca24a79"
 dependencies = [
  "cfg-if",
  "paste",
@@ -9189,7 +9189,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -9206,12 +9206,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -9227,7 +9227,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -9237,7 +9237,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
 
 [[package]]
 name = "tiny-keccak"

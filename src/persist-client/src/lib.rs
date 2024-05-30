@@ -304,7 +304,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         Ok((
             self.open_writer(
@@ -530,7 +530,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));

@@ -145,14 +145,14 @@ pub mod tests {
         // Repeated write_ts calls advance the timestamp.
         let timeline = uuid::Uuid::new_v4().to_string();
         let oracle = new_fn(timeline, NowFn::from(|| 0u64), Timestamp::MIN).await;
-        assert_eq!(oracle.write_ts().await.timestamp, 1u64.into());
-        assert_eq!(oracle.write_ts().await.timestamp, 2u64.into());
+        assert_eq!(oracle.write_ts().await.timestamp, Timestamp::from(1u64));
+        assert_eq!(oracle.write_ts().await.timestamp, Timestamp::from(2u64));
 
         // Repeated peek_write_ts calls _DON'T_ advance the timestamp.
         let timeline = uuid::Uuid::new_v4().to_string();
         let oracle = new_fn(timeline, NowFn::from(|| 0u64), Timestamp::MIN).await;
-        assert_eq!(oracle.peek_write_ts().await, 0u64.into());
-        assert_eq!(oracle.peek_write_ts().await, 0u64.into());
+        assert_eq!(oracle.peek_write_ts().await, Timestamp::from(0u64));
+        assert_eq!(oracle.peek_write_ts().await, Timestamp::from(0u64));
 
         // Interesting scenarios around apply_write, from its rustdoc.
         //
@@ -161,32 +161,32 @@ pub mod tests {
         let timeline = uuid::Uuid::new_v4().to_string();
         let oracle = new_fn(timeline, NowFn::from(|| 0u64), 10u64.into()).await;
         oracle.apply_write(5u64.into()).await;
-        assert_eq!(oracle.peek_write_ts().await, 10u64.into());
-        assert_eq!(oracle.read_ts().await, 10u64.into());
+        assert_eq!(oracle.peek_write_ts().await, Timestamp::from(10u64));
+        assert_eq!(oracle.read_ts().await, Timestamp::from(10u64));
 
         // Scenario #2:
         // r_0 <= input <= w_0 -> r_1 = input and w_1 = w_0
         let timeline = uuid::Uuid::new_v4().to_string();
         let oracle = new_fn(timeline, NowFn::from(|| 0u64), 0u64.into()).await;
         // Have to bump the write_ts up manually:
-        assert_eq!(oracle.write_ts().await.timestamp, 1u64.into());
-        assert_eq!(oracle.write_ts().await.timestamp, 2u64.into());
-        assert_eq!(oracle.write_ts().await.timestamp, 3u64.into());
-        assert_eq!(oracle.write_ts().await.timestamp, 4u64.into());
+        assert_eq!(oracle.write_ts().await.timestamp, Timestamp::from(1u64));
+        assert_eq!(oracle.write_ts().await.timestamp, Timestamp::from(2u64));
+        assert_eq!(oracle.write_ts().await.timestamp, Timestamp::from(3u64));
+        assert_eq!(oracle.write_ts().await.timestamp, Timestamp::from(4u64));
         oracle.apply_write(2u64.into()).await;
-        assert_eq!(oracle.peek_write_ts().await, 4u64.into());
-        assert_eq!(oracle.read_ts().await, 2u64.into());
+        assert_eq!(oracle.peek_write_ts().await, Timestamp::from(4u64));
+        assert_eq!(oracle.read_ts().await, Timestamp::from(2u64));
 
         // Scenario #3:
         // r_0 <= w_0 <= input -> r_1 = input and w_1 = input
         let timeline = uuid::Uuid::new_v4().to_string();
         let oracle = new_fn(timeline, NowFn::from(|| 0u64), 0u64.into()).await;
         oracle.apply_write(2u64.into()).await;
-        assert_eq!(oracle.peek_write_ts().await, 2u64.into());
-        assert_eq!(oracle.read_ts().await, 2u64.into());
+        assert_eq!(oracle.peek_write_ts().await, Timestamp::from(2u64));
+        assert_eq!(oracle.read_ts().await, Timestamp::from(2u64));
         oracle.apply_write(4u64.into()).await;
-        assert_eq!(oracle.peek_write_ts().await, 4u64.into());
-        assert_eq!(oracle.read_ts().await, 4u64.into());
+        assert_eq!(oracle.peek_write_ts().await, Timestamp::from(4u64));
+        assert_eq!(oracle.read_ts().await, Timestamp::from(4u64));
 
         Ok(())
     }

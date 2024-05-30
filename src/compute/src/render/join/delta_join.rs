@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection, ExchangeData, Hashable};
 use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
@@ -329,7 +330,7 @@ where
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
-        MzArrangement::RowRow(inner) => build_halfjoin::<_, RowRowAgent<_, _>, _>(
+        MzArrangement::RowRow(inner) => build_halfjoin::<_, RowRowAgent<_, _>, Row, _>(
             updates,
             inner,
             prev_key,
@@ -361,7 +362,7 @@ where
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
-        MzArrangementImport::RowRow(inner) => build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
+        MzArrangementImport::RowRow(inner) => build_halfjoin::<_, RowRowEnter<_, _, _>, Row, _>(
             updates,
             inner,
             prev_key,
@@ -383,7 +384,7 @@ where
 /// the time of the update. This operator may manipulate `time` as part of this pair, but will not manipulate
 /// the time of the update. This is crucial for correctness, as the total order on times of updates is used
 /// to ensure that any two updates are matched at most once.
-fn build_halfjoin<G, Tr, CF>(
+fn build_halfjoin<G, Tr, K, CF>(
     updates: Collection<G, (Row, G::Timestamp), Diff>,
     trace: Arranged<G, Tr>,
     prev_key: Vec<MirScalarExpr>,
@@ -399,16 +400,17 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
     Tr: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-    Tr::KeyOwned: ExchangeData + Hashable + Default + FromDatumIter + ToDatumIter,
+    K: ExchangeData + Hashable + Default + FromDatumIter + ToDatumIter,
+    for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = K>,
     for<'a> Tr::Val<'a>: ToDatumIter,
-    CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
+    CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
 {
     let name = "DeltaJoinKeyPreparation";
     type CB<C> = CapacityContainerBuilder<C>;
     let (updates, errs) = updates.map_fallible::<CB<_>, CB<_>, _, _, _>(name, {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
-        let mut key_buf = Tr::KeyOwned::default();
+        let mut key_buf = K::default();
         move |(row, time)| {
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
@@ -604,10 +606,11 @@ where
                             while let Some(key) = cursor.get_key(batch) {
                                 while let Some(val) = cursor.get_val(batch) {
                                     cursor.map_times(batch, |time, diff| {
+                                        let time = time.into_owned();
                                         // note: only the delta path for the first relation will see
                                         // updates at start-up time
                                         if source_relation == 0
-                                            || !inner_as_of.elements().contains(time)
+                                            || !inner_as_of.elements().contains(&time)
                                         {
                                             let temp_storage = RowArena::new();
 
@@ -629,13 +632,13 @@ where
                                                 {
                                                     Some(Ok(row)) => ok_session.give((
                                                         row,
-                                                        time.clone(),
-                                                        diff.clone(),
+                                                        time,
+                                                        diff.into_owned(),
                                                     )),
                                                     Some(Err(err)) => err_session.give((
                                                         err,
-                                                        time.clone(),
-                                                        diff.clone(),
+                                                        time,
+                                                        diff.into_owned(),
                                                     )),
                                                     None => {}
                                                 }
@@ -644,7 +647,7 @@ where
                                                     row_builder.packer().extend(&*datums_local);
                                                     row_builder.clone()
                                                 };
-                                                ok_session.give((row, time.clone(), diff.clone()));
+                                                ok_session.give((row, time, diff.into_owned()));
                                             }
                                         }
                                     });

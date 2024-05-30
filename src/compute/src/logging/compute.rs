@@ -991,7 +991,7 @@ where
 impl<G, B> LogDataflowErrors for Stream<G, B>
 where
     G: Scope,
-    B: BatchReader<Diff = Diff> + Clone + 'static,
+    for<'a> B: BatchReader<DiffGat<'a> = &'a Diff> + Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.unary(Pipeline, "LogDataflowErrorsStream", |_cap, _info| {
@@ -1018,7 +1018,7 @@ where
 /// batches might become large.
 fn sum_batch_diffs<B>(batch: &B) -> Diff
 where
-    B: BatchReader<Diff = Diff>,
+    for<'a> B: BatchReader<DiffGat<'a> = &'a Diff>,
 {
     let mut sum = 0;
     let mut cursor = batch.cursor();

@@ -80,7 +80,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
     pub(crate) fn new() -> Self {
         Txn {
@@ -357,7 +357,7 @@ impl<T> TxnApply<T> {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
@@ -372,7 +372,7 @@ impl<T> TxnApply<T> {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
