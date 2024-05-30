@@ -41,15 +41,6 @@ def print_annotation_match(
     use_regex: bool,
     short_result_presentation: bool,
 ) -> None:
-    matched_snippet = trim_match(
-        input=annotation.title_and_text, search_value=search_value, use_regex=use_regex
-    )
-    matched_snippet = highlight_match(
-        input=matched_snippet,
-        search_value=search_value,
-        use_regex=use_regex,
-    )
-
     print(
         with_formatting(
             f"Match in build #{build_number} (pipeline {build_pipeline} on {branch}):",
@@ -62,6 +53,17 @@ def print_annotation_match(
         print(f"Annotation: {with_formatting(annotation.title, COLOR_CYAN)}")
 
     if not short_result_presentation:
+        matched_snippet = trim_match(
+            input=annotation.title_and_text,
+            search_value=search_value,
+            use_regex=use_regex,
+        )
+        matched_snippet = highlight_match(
+            input=matched_snippet,
+            search_value=search_value,
+            use_regex=use_regex,
+        )
+
         print(SHORT_SEPARATOR)
         print(matched_snippet)
 
