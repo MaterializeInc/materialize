@@ -123,7 +123,7 @@ Next, you must attach the policy you just created to a Snowflake-specific
 1. In **Add permissions**, select the IAM policy you created in [Create an IAM policy](#create-an-iam-policy),
    and click **Next**.
 
-1. Enter a name for the role (e.g. `SnowS3Importer`), and click **Create role**.
+1. Enter a name for the role, and click **Create role**.
 
 1. Click **View role** to see the role summary page, and note down the
    role **ARN**. You will need it in the next step to create a Snowflake storage
@@ -138,14 +138,15 @@ can execute this step.
 {{< /note >}}
 
 1. In [Snowsight](https://app.snowflake.com/), or your preferred SQL client
-   connected to Snowflake, create a [storage integration](https://docs.snowflake.com/en/sql-reference/sql/create-storage-integration):
+connected to Snowflake, create a [storage integration](https://docs.snowflake.com/en/sql-reference/sql/create-storage-integration),
+replacing `<role>` with the name of the role you created in the previous step:
 
    ```sql
    CREATE STORAGE INTEGRATION s3_int
      TYPE = EXTERNAL_STAGE
      STORAGE_PROVIDER = 'S3'
      ENABLED = TRUE
-     STORAGE_AWS_ROLE_ARN = 'arn:aws:iam::400121260767:role/SnowS3Importer'
+     STORAGE_AWS_ROLE_ARN = 'arn:aws:iam::001234567890:role/<role>'
      STORAGE_ALLOWED_LOCATIONS = ('*');
    ```
 
@@ -180,7 +181,7 @@ CREATE STAGE s3_stage
 ```
 
 {{< note >}}
-To create a stage that using a storage integration, the active user must have a
+To create a stage that uses a storage integration, the active user must have a
 role with the [`CREATE STAGE` privilege](https://docs.snowflake.com/en/sql-reference/sql/create-stage)
 for the active schema, as well as the [`USAGE` privilege](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege#syntax)
 on the relevant storage integration.
