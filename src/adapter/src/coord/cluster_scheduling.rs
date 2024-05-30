@@ -64,7 +64,7 @@ pub enum ReplicaCreateDropReason {
     Manual,
     /// The automated cluster scheduling initiated the replica create or drop, e.g., a
     /// materialized view is needing a refresh on a SCHEDULE ON REFRESH cluster.
-    ClusterScheduling(SchedulingDecisionsWithReasonsV1),
+    ClusterScheduling(Vec<SchedulingDecision>),
 }
 
 impl ReplicaCreateDropReason {
@@ -81,18 +81,21 @@ impl ReplicaCreateDropReason {
                 Some(scheduling_decisions),
             ),
         };
-        (reason, scheduling_policies)
+        (
+            reason,
+            scheduling_policies
+                .as_ref()
+                .map(SchedulingDecision::reasons_to_audit_log_reasons),
+        )
     }
 }
 
 impl SchedulingDecision {
-    pub fn reasons_to_audit_log_reasons<'a, I>(
-        reasons: I,
-    ) -> mz_audit_log::SchedulingDecisionsWithReasonsV1
+    pub fn reasons_to_audit_log_reasons<'a, I>(reasons: I) -> SchedulingDecisionsWithReasonsV1
     where
         I: IntoIterator<Item = &'a SchedulingDecision>,
     {
-        mz_audit_log::SchedulingDecisionsWithReasonsV1 {
+        SchedulingDecisionsWithReasonsV1 {
             on_refresh: reasons
                 .into_iter()
                 .filter_map(|r| match r {
@@ -332,9 +335,7 @@ impl Coordinator {
                             &cluster_config,
                             new_config.clone(),
                             ReplicaCreateDropReason::ClusterScheduling(
-                                SchedulingDecision::reasons_to_audit_log_reasons(
-                                    decisions.values(),
-                                ),
+                                decisions.values().cloned().collect(),
                             ),
                         )
                         .await
