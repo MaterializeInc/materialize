@@ -71,7 +71,7 @@ _val_         | The value for the option.
 
 Name             | Values          | Default value | Description                       |
 -----------------|-----------------|---------------|-----------------------------------|
-`MAX FILE SIZE`  | `int`           |               | Sets the approximate maximum file size of each file uploaded to the S3 bucket. |
+`MAX FILE SIZE`  | `int`           |               | Sets the approximate maximum file size (in bytes) of each file uploaded to the S3 bucket. |
 
 ### Supported formats {#copy-to-s3-supported-formats}
 
