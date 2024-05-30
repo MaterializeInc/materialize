@@ -677,21 +677,17 @@ where
         self_collections: &mut BTreeMap<GlobalId, CollectionState<T>>,
         id: GlobalId,
     ) -> Result<(), StorageError<T>> {
-        let (deps, collection_implied_capability) = match self_collections.get(&id) {
-            Some(CollectionState {
-                storage_dependencies: deps,
-                implied_capability,
-                ..
-            }) => (deps.clone(), implied_capability),
+        let (deps, read_frontier) = match self_collections.get(&id) {
+            Some(
+                state @ CollectionState {
+                    storage_dependencies: deps,
+                    ..
+                },
+            ) => (deps.clone(), state.read_frontier()),
             _ => return Ok(()),
         };
 
-        self.install_read_capabilities_inner(
-            self_collections,
-            id,
-            &deps,
-            collection_implied_capability.clone(),
-        )?;
+        self.install_read_capabilities_inner(self_collections, id, &deps, read_frontier)?;
 
         Ok(())
     }
@@ -1869,6 +1865,11 @@ impl<T: TimelyTimestamp> CollectionState<T> {
             write_frontier,
             collection_metadata: metadata,
         }
+    }
+
+    /// The read policy applied to the write frontier
+    pub fn read_frontier(&self) -> Antichain<T> {
+        self.read_policy.frontier(self.write_frontier.borrow())
     }
 
     /// Returns whether the collection was dropped.
