@@ -22,7 +22,6 @@ use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL
 use mz_ore::cast::CastFrom;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, ObjectType};
-use mz_sql::names::ObjectId;
 use mz_sql::plan::{
     AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterClusterSwapPlan,
     AlterOptionParameter, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
@@ -771,10 +770,11 @@ impl Coordinator {
                 .map(managed_cluster_replica_name)
                 .filter_map(|name| cluster.replica_id(&name))
                 .map(|replica_id| {
-                    (
-                        ObjectId::ClusterReplica((cluster.id(), replica_id)),
+                    catalog::DropObjectInfo::ClusterReplica((
+                        cluster.id(),
+                        replica_id,
                         reason.clone(),
-                    )
+                    ))
                 })
                 .collect();
             ops.push(catalog::Op::DropObjects(replica_ids_and_reasons));
@@ -801,10 +801,11 @@ impl Coordinator {
                 .map(managed_cluster_replica_name)
                 .filter_map(|name| cluster.replica_id(&name))
                 .map(|replica_id| {
-                    (
-                        ObjectId::ClusterReplica((cluster.id(), replica_id)),
+                    catalog::DropObjectInfo::ClusterReplica((
+                        cluster.id(),
+                        replica_id,
                         reason.clone(),
-                    )
+                    ))
                 })
                 .collect();
             ops.push(catalog::Op::DropObjects(replica_ids));

@@ -24,7 +24,7 @@ use mz_repr::Datum;
 use mz_repr::Row;
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
-use mz_sql::names::{ObjectId, ResolvedIds};
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
@@ -34,7 +34,6 @@ use timely::progress::Antichain;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
-use crate::coord::cluster_scheduling::ReplicaCreateDropReason;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, CreateMaterializedViewExplain, CreateMaterializedViewFinish,
@@ -604,7 +603,7 @@ impl Coordinator {
             catalog::Op::DropObjects(
                 drop_ids
                     .into_iter()
-                    .map(|id| (ObjectId::Item(id), ReplicaCreateDropReason::Manual))
+                    .map(catalog::DropObjectInfo::Item)
                     .collect(),
             ),
             catalog::Op::CreateItem {

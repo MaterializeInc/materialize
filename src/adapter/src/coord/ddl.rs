@@ -36,7 +36,7 @@ use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogCluster, CatalogSchema};
-use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
+use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
     self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
@@ -53,9 +53,8 @@ use serde_json::json;
 use tracing::{event, info_span, warn, Instrument, Level};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{Op, TransactionResult};
+use crate::catalog::{DropObjectInfo, Op, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
-use crate::coord::cluster_scheduling::ReplicaCreateDropReason;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::{Session, Transaction, TransactionOps};
@@ -213,11 +212,10 @@ impl Coordinator {
 
         for op in &ops {
             match op {
-                catalog::Op::DropObjects(object_ids_and_reasons) => {
-                    let object_ids = object_ids_and_reasons.iter().map(|(id, _reason)| id);
-                    for object_id in object_ids {
-                        match &object_id {
-                            ObjectId::Item(id) => {
+                catalog::Op::DropObjects(drop_object_infos) => {
+                    for drop_object_info in drop_object_infos {
+                        match &drop_object_info {
+                            catalog::DropObjectInfo::Item(id) => {
                                 match self.catalog().get_entry(id).item() {
                                     CatalogItem::Table(_) => {
                                         tables_to_drop.push(*id);
@@ -293,7 +291,7 @@ impl Coordinator {
                                     _ => (),
                                 }
                             }
-                            ObjectId::Cluster(id) => {
+                            catalog::DropObjectInfo::Cluster(id) => {
                                 clusters_to_drop.push(*id);
                                 log_indexes_to_drop.extend(
                                     self.catalog()
@@ -303,7 +301,11 @@ impl Coordinator {
                                         .cloned(),
                                 );
                             }
-                            ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                            catalog::DropObjectInfo::ClusterReplica((
+                                cluster_id,
+                                replica_id,
+                                _reason,
+                            )) => {
                                 // Drop the cluster replica itself.
                                 cluster_replicas_to_drop.push((*cluster_id, *replica_id));
                             }
@@ -939,7 +941,7 @@ impl Coordinator {
         let op = Op::DropObjects(
             all_items
                 .into_iter()
-                .map(|id| (id, ReplicaCreateDropReason::Manual))
+                .map(DropObjectInfo::manual_drop_from_object_id)
                 .collect(),
         );
 
@@ -1208,13 +1210,13 @@ impl Coordinator {
                         | CatalogItem::Func(_) => {}
                     }
                 }
-                Op::DropObjects(object_ids) => {
-                    for (id, _reason) in object_ids {
-                        match id {
-                            ObjectId::Cluster(_) => {
+                Op::DropObjects(drop_object_infos) => {
+                    for drop_object_info in drop_object_infos {
+                        match drop_object_info {
+                            DropObjectInfo::Cluster(_) => {
                                 new_clusters -= 1;
                             }
-                            ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                            DropObjectInfo::ClusterReplica((cluster_id, replica_id, _reason)) => {
                                 *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
                                 let cluster =
                                     self.catalog().get_cluster_replica(*cluster_id, *replica_id);
@@ -1232,18 +1234,18 @@ impl Coordinator {
                                         replica_allocation.credits_per_hour
                                 }
                             }
-                            ObjectId::Database(_) => {
+                            DropObjectInfo::Database(_) => {
                                 new_databases -= 1;
                             }
-                            ObjectId::Schema((database_spec, _)) => {
+                            DropObjectInfo::Schema((database_spec, _)) => {
                                 if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
                                     *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
                                 }
                             }
-                            ObjectId::Role(_) => {
+                            DropObjectInfo::Role(_) => {
                                 new_roles -= 1;
                             }
-                            ObjectId::Item(id) => {
+                            DropObjectInfo::Item(id) => {
                                 let entry = self.catalog().get_entry(id);
                                 *new_objects_per_schema
                                     .entry((

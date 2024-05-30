@@ -83,7 +83,7 @@ use timely::progress::Antichain;
 use tokio::sync::{oneshot, OwnedMutexGuard};
 use tracing::{warn, Instrument, Span};
 
-use crate::catalog::{self, Catalog, ConnCatalog, UpdatePrivilegeVariant};
+use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -122,7 +122,6 @@ macro_rules! return_if_err {
     };
 }
 
-use crate::coord::cluster_scheduling::ReplicaCreateDropReason;
 pub(super) use return_if_err;
 
 struct DropOps {
@@ -1538,7 +1537,7 @@ impl Coordinator {
             ))
             .chain(iter::once(catalog::Op::DropObjects(
                 ids.into_iter()
-                    .map(|id| (id, ReplicaCreateDropReason::Manual))
+                    .map(DropObjectInfo::manual_drop_from_object_id)
                     .collect(),
             )))
             .collect();

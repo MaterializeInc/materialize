@@ -16,13 +16,12 @@ use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{Datum, RelationDesc, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
-use mz_sql::names::{ObjectId, ResolvedIds};
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self};
 use mz_sql::session::metadata::SessionMetadata;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
-use crate::coord::cluster_scheduling::ReplicaCreateDropReason;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, CreateViewExplain, CreateViewFinish, CreateViewOptimize, CreateViewStage,
@@ -380,7 +379,7 @@ impl Coordinator {
             catalog::Op::DropObjects(
                 drop_ids
                     .iter()
-                    .map(|id| (ObjectId::Item(*id), ReplicaCreateDropReason::Manual))
+                    .map(|id| catalog::DropObjectInfo::Item(*id))
                     .collect(),
             ),
             catalog::Op::CreateItem {

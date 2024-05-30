@@ -108,9 +108,7 @@ pub enum Op {
         sub_component: Option<usize>,
         comment: Option<String>,
     },
-    /// SchedulingDecisionsWithReasons is forwarded to mz_audit_events.details (only for replica
-    /// drops).
-    DropObjects(Vec<(ObjectId, ReplicaCreateDropReason)>),
+    DropObjects(Vec<DropObjectInfo>),
     GrantRole {
         role_id: RoleId,
         member_id: RoleId,
@@ -197,6 +195,53 @@ pub enum Op {
     TransactionDryRun,
 }
 
+/// Almost the same as `ObjectId`, but the `ClusterReplica` case has an extra
+/// `ReplicaCreateDropReason` field. This is forwarded to `mz_audit_events.details` when applying
+/// the `Op::DropObjects`.
+#[derive(Debug, Clone)]
+pub enum DropObjectInfo {
+    Cluster(ClusterId),
+    ClusterReplica((ClusterId, ReplicaId, ReplicaCreateDropReason)),
+    Database(DatabaseId),
+    Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
+    Role(RoleId),
+    Item(GlobalId),
+}
+
+impl DropObjectInfo {
+    /// Creates a `DropObjectInfo` from an `ObjectId`.
+    /// If it is a `ClusterReplica`, the reason will be set to `ReplicaCreateDropReason::Manual`.
+    pub(crate) fn manual_drop_from_object_id(id: ObjectId) -> Self {
+        match id {
+            ObjectId::Cluster(cluster_id) => DropObjectInfo::Cluster(cluster_id),
+            ObjectId::ClusterReplica((cluster_id, replica_id)) => DropObjectInfo::ClusterReplica((
+                cluster_id,
+                replica_id,
+                ReplicaCreateDropReason::Manual,
+            )),
+            ObjectId::Database(database_id) => DropObjectInfo::Database(database_id),
+            ObjectId::Schema(schema) => DropObjectInfo::Schema(schema),
+            ObjectId::Role(role_id) => DropObjectInfo::Role(role_id),
+            ObjectId::Item(global_id) => DropObjectInfo::Item(global_id),
+        }
+    }
+
+    /// Creates an `ObjectId` from a `DropObjectInfo`.
+    /// Loses the `ReplicaCreateDropReason` if there is one!
+    fn to_object_id(&self) -> ObjectId {
+        match &self {
+            DropObjectInfo::Cluster(cluster_id) => ObjectId::Cluster(cluster_id.clone()),
+            DropObjectInfo::ClusterReplica((cluster_id, replica_id, _reason)) => {
+                ObjectId::ClusterReplica((cluster_id.clone(), replica_id.clone()))
+            }
+            DropObjectInfo::Database(database_id) => ObjectId::Database(database_id.clone()),
+            DropObjectInfo::Schema(schema) => ObjectId::Schema(schema.clone()),
+            DropObjectInfo::Role(role_id) => ObjectId::Role(role_id.clone()),
+            DropObjectInfo::Item(global_id) => ObjectId::Item(global_id.clone()),
+        }
+    }
+}
+
 pub struct TransactionResult {
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
     pub audit_events: Vec<VersionedEvent>,
@@ -262,10 +307,10 @@ impl Catalog {
         let drop_ids: BTreeSet<GlobalId> = ops
             .iter()
             .filter_map(|op| match op {
-                Op::DropObjects(ids_and_reasons) => {
-                    let ids = ids_and_reasons.iter().map(|(id, _reason)| id);
+                Op::DropObjects(drop_object_infos) => {
+                    let ids = drop_object_infos.iter().map(|info| info.to_object_id());
                     let item_ids = ids.filter_map(|id| match id {
-                        ObjectId::Item(id) => Some(*id),
+                        ObjectId::Item(id) => Some(id),
                         _ => None,
                     });
                     Some(item_ids)
@@ -982,9 +1027,9 @@ impl Catalog {
                         ));
                     }
                 }
-                Op::DropObjects(ids_and_reasons) => {
+                Op::DropObjects(drop_object_infos) => {
                     // Generate all of the objects that need to get dropped.
-                    let delta = ObjectsToDrop::generate(ids_and_reasons, state, session)?;
+                    let delta = ObjectsToDrop::generate(drop_object_infos, state, session)?;
 
                     // Drop any associated comments.
                     let deleted = tx.drop_comments(&delta.comments)?;
@@ -2399,14 +2444,14 @@ pub(crate) struct ObjectsToDrop {
 
 impl ObjectsToDrop {
     pub fn generate(
-        objects_and_reasons: impl IntoIterator<Item = (ObjectId, ReplicaCreateDropReason)>,
+        drop_object_infos: impl IntoIterator<Item = DropObjectInfo>,
         state: &CatalogState,
         session: Option<&ConnMeta>,
     ) -> Result<Self, AdapterError> {
         let mut delta = ObjectsToDrop::default();
 
-        for (object_id, reason) in objects_and_reasons {
-            delta.add_item(object_id, reason, state, session)?;
+        for drop_object_info in drop_object_infos {
+            delta.add_item(drop_object_info, state, session)?;
         }
 
         Ok(delta)
@@ -2414,16 +2459,15 @@ impl ObjectsToDrop {
 
     fn add_item(
         &mut self,
-        object_id: ObjectId,
-        reason: ReplicaCreateDropReason,
+        drop_object_info: DropObjectInfo,
         state: &CatalogState,
         session: Option<&ConnMeta>,
     ) -> Result<(), AdapterError> {
         self.comments
-            .insert(state.get_comment_id(object_id.clone()));
+            .insert(state.get_comment_id(drop_object_info.to_object_id()));
 
-        match object_id {
-            ObjectId::Database(database_id) => {
+        match drop_object_info {
+            DropObjectInfo::Database(database_id) => {
                 let database = &state.database_by_id[&database_id];
                 if database_id.is_system() {
                     return Err(AdapterError::Catalog(Error::new(
@@ -2433,7 +2477,7 @@ impl ObjectsToDrop {
 
                 self.databases.insert(database_id);
             }
-            ObjectId::Schema((database_spec, schema_spec)) => {
+            DropObjectInfo::Schema((database_spec, schema_spec)) => {
                 let schema = state.get_schema(
                     &database_spec,
                     &schema_spec,
@@ -2452,7 +2496,7 @@ impl ObjectsToDrop {
 
                 self.schemas.insert(schema_spec, database_spec);
             }
-            ObjectId::Role(role_id) => {
+            DropObjectInfo::Role(role_id) => {
                 let name = state.get_role(&role_id).name().to_string();
                 if role_id.is_system() || role_id.is_predefined() {
                     return Err(AdapterError::Catalog(Error::new(
@@ -2463,7 +2507,7 @@ impl ObjectsToDrop {
 
                 self.roles.insert(role_id);
             }
-            ObjectId::Cluster(cluster_id) => {
+            DropObjectInfo::Cluster(cluster_id) => {
                 let cluster = state.get_cluster(cluster_id);
                 let name = &cluster.name;
                 if cluster_id.is_system() {
@@ -2474,14 +2518,14 @@ impl ObjectsToDrop {
 
                 self.clusters.insert(cluster_id);
             }
-            ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+            DropObjectInfo::ClusterReplica((cluster_id, replica_id, reason)) => {
                 let cluster = state.get_cluster(cluster_id);
                 let replica = cluster.replica(replica_id).expect("Must exist");
 
                 self.replicas
                     .insert(replica.replica_id, (cluster.id, reason));
             }
-            ObjectId::Item(item_id) => {
+            DropObjectInfo::Item(item_id) => {
                 let entry = state.get_entry(&item_id);
                 if item_id.is_system() {
                     let name = entry.name();
