@@ -2231,8 +2231,12 @@ pub enum BinaryFunc {
     Gt,
     Gte,
     LikeEscape,
-    IsLikeMatch { case_insensitive: bool },
-    IsRegexpMatch { case_insensitive: bool },
+    IsLikeMatch {
+        case_insensitive: bool,
+    },
+    IsRegexpMatch {
+        case_insensitive: bool,
+    },
     ToCharTimestamp,
     ToCharTimestampTz,
     DateBinTimestamp,
@@ -2256,9 +2260,15 @@ pub enum BinaryFunc {
     TimezoneIntervalTime,
     TimezoneOffset,
     TextConcat,
-    JsonbGetInt64 { stringify: bool },
-    JsonbGetString { stringify: bool },
-    JsonbGetPath { stringify: bool },
+    JsonbGetInt64 {
+        stringify: bool,
+    },
+    JsonbGetString {
+        stringify: bool,
+    },
+    JsonbGetPath {
+        stringify: bool,
+    },
     JsonbContainsString,
     JsonbConcat,
     JsonbContainsJsonb,
@@ -2278,7 +2288,9 @@ pub enum BinaryFunc {
     TrimLeading,
     TrimTrailing,
     EncodedBytesCharLength,
-    ListLengthMax { max_layer: usize },
+    ListLengthMax {
+        max_layer: usize,
+    },
     ArrayContains,
     ArrayLength,
     ArrayLower,
@@ -2300,8 +2312,13 @@ pub enum BinaryFunc {
     GetByte,
     ConstantTimeEqBytes,
     ConstantTimeEqString,
-    RangeContainsElem { elem_type: ScalarType, rev: bool },
-    RangeContainsRange { rev: bool },
+    RangeContainsElem {
+        elem_type: ScalarType,
+        rev: bool,
+    },
+    RangeContainsRange {
+        rev: bool,
+    },
     RangeOverlaps,
     RangeAfter,
     RangeBefore,
