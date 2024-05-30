@@ -55,6 +55,7 @@ use tracing::{event, info_span, warn, Instrument, Level};
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::{Op, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
+use crate::coord::cluster_scheduling::ReplicaCreateDropReason;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::{Session, Transaction, TransactionOps};
@@ -935,7 +936,12 @@ impl Coordinator {
         if all_items.is_empty() {
             return;
         }
-        let op = Op::DropObjects(all_items.into_iter().map(|id| (id, None)).collect());
+        let op = Op::DropObjects(
+            all_items
+                .into_iter()
+                .map(|id| (id, ReplicaCreateDropReason::Manual))
+                .collect(),
+        );
 
         self.catalog_transact_conn(Some(conn_id), vec![op])
             .await

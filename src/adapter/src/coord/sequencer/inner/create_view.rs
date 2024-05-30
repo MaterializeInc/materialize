@@ -22,6 +22,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
+use crate::coord::cluster_scheduling::ReplicaCreateDropReason;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, CreateViewExplain, CreateViewFinish, CreateViewOptimize, CreateViewStage,
@@ -379,7 +380,7 @@ impl Coordinator {
             catalog::Op::DropObjects(
                 drop_ids
                     .iter()
-                    .map(|id| (ObjectId::Item(*id), None))
+                    .map(|id| (ObjectId::Item(*id), ReplicaCreateDropReason::Manual))
                     .collect(),
             ),
             catalog::Op::CreateItem {

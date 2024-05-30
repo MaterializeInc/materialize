@@ -122,6 +122,7 @@ macro_rules! return_if_err {
     };
 }
 
+use crate::coord::cluster_scheduling::ReplicaCreateDropReason;
 pub(super) use return_if_err;
 
 struct DropOps {
@@ -1536,7 +1537,9 @@ impl Coordinator {
                 },
             ))
             .chain(iter::once(catalog::Op::DropObjects(
-                ids.into_iter().map(|id| (id, None)).collect(),
+                ids.into_iter()
+                    .map(|id| (id, ReplicaCreateDropReason::Manual))
+                    .collect(),
             )))
             .collect();
 

@@ -34,6 +34,7 @@ use timely::progress::Antichain;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
+use crate::coord::cluster_scheduling::ReplicaCreateDropReason;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, CreateMaterializedViewExplain, CreateMaterializedViewFinish,
@@ -603,7 +604,7 @@ impl Coordinator {
             catalog::Op::DropObjects(
                 drop_ids
                     .into_iter()
-                    .map(|id| (ObjectId::Item(id), None))
+                    .map(|id| (ObjectId::Item(id), ReplicaCreateDropReason::Manual))
                     .collect(),
             ),
             catalog::Op::CreateItem {

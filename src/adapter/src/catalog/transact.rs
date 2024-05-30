@@ -11,10 +11,7 @@
 
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_audit_log::{
-    EventDetails, EventType, IdFullNameV1, ObjectType, SchedulingDecisionsWithReasonsV1,
-    VersionedEvent,
-};
+use mz_audit_log::{EventDetails, EventType, IdFullNameV1, ObjectType, VersionedEvent};
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::Transaction;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
@@ -54,6 +51,7 @@ use crate::catalog::{
     object_type_to_audit_object_type, system_object_type_to_audit_object_type, BuiltinTableUpdate,
     Catalog, CatalogState, UpdatePrivilegeVariant,
 };
+use crate::coord::cluster_scheduling::ReplicaCreateDropReason;
 use crate::coord::ConnMeta;
 use crate::util::ResultExt;
 use crate::AdapterError;
@@ -97,7 +95,7 @@ pub enum Op {
         name: String,
         config: ReplicaConfig,
         owner_id: RoleId,
-        scheduling_decisions_with_reasons: Option<SchedulingDecisionsWithReasonsV1>,
+        reason: ReplicaCreateDropReason,
     },
     CreateItem {
         id: GlobalId,
@@ -112,7 +110,7 @@ pub enum Op {
     },
     /// SchedulingDecisionsWithReasons is forwarded to mz_audit_events.details (only for replica
     /// drops).
-    DropObjects(Vec<(ObjectId, Option<SchedulingDecisionsWithReasonsV1>)>),
+    DropObjects(Vec<(ObjectId, ReplicaCreateDropReason)>),
     GrantRole {
         role_id: RoleId,
         member_id: RoleId,
@@ -752,7 +750,7 @@ impl Catalog {
                     name,
                     config,
                     owner_id,
-                    scheduling_decisions_with_reasons,
+                    reason,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
@@ -775,10 +773,7 @@ impl Catalog {
                         ..
                     }) = &config.location
                     {
-                        let reason = match scheduling_decisions_with_reasons {
-                            None => mz_audit_log::CreateOrDropClusterReplicaReasonV1::Manual,
-                            Some(..) => mz_audit_log::CreateOrDropClusterReplicaReasonV1::Schedule,
-                        };
+                        let (reason, scheduling_policies) = reason.into_audit_log();
                         let details = EventDetails::CreateClusterReplicaV2(
                             mz_audit_log::CreateClusterReplicaV2 {
                                 cluster_id: cluster_id.to_string(),
@@ -790,7 +785,7 @@ impl Catalog {
                                 billed_as: billed_as.clone(),
                                 internal: *internal,
                                 reason,
-                                scheduling_policies: scheduling_decisions_with_reasons,
+                                scheduling_policies,
                             },
                         );
                         state.add_to_audit_log(
@@ -1158,7 +1153,7 @@ impl Catalog {
                     let replicas = delta.replicas.keys().copied().collect();
                     tx.remove_cluster_replicas(&replicas)?;
 
-                    for (replica_id, (cluster_id, scheduling_decision_reasons)) in delta.replicas {
+                    for (replica_id, (cluster_id, reason)) in delta.replicas {
                         let cluster = state.get_cluster(cluster_id);
                         let replica = cluster.replica(replica_id).expect("Must exist");
 
@@ -1178,10 +1173,7 @@ impl Catalog {
                             -1,
                         ));
 
-                        let reason = match scheduling_decision_reasons {
-                            None => mz_audit_log::CreateOrDropClusterReplicaReasonV1::Manual,
-                            Some(..) => mz_audit_log::CreateOrDropClusterReplicaReasonV1::Schedule,
-                        };
+                        let (reason, scheduling_policies) = reason.into_audit_log();
                         let details = EventDetails::DropClusterReplicaV2(
                             mz_audit_log::DropClusterReplicaV2 {
                                 cluster_id: cluster_id.to_string(),
@@ -1189,7 +1181,7 @@ impl Catalog {
                                 replica_id: Some(replica_id.to_string()),
                                 replica_name: replica.name.clone(),
                                 reason,
-                                scheduling_policies: scheduling_decision_reasons,
+                                scheduling_policies,
                             },
                         );
                         state.add_to_audit_log(
@@ -2400,23 +2392,21 @@ pub(crate) struct ObjectsToDrop {
     pub databases: BTreeSet<DatabaseId>,
     pub schemas: BTreeMap<SchemaSpecifier, ResolvedDatabaseSpecifier>,
     pub clusters: BTreeSet<ClusterId>,
-    pub replicas: BTreeMap<ReplicaId, (ClusterId, Option<SchedulingDecisionsWithReasonsV1>)>,
+    pub replicas: BTreeMap<ReplicaId, (ClusterId, ReplicaCreateDropReason)>,
     pub roles: BTreeSet<RoleId>,
     pub items: Vec<GlobalId>,
 }
 
 impl ObjectsToDrop {
     pub fn generate(
-        objects_and_reasons: impl IntoIterator<
-            Item = (ObjectId, Option<SchedulingDecisionsWithReasonsV1>),
-        >,
+        objects_and_reasons: impl IntoIterator<Item = (ObjectId, ReplicaCreateDropReason)>,
         state: &CatalogState,
         session: Option<&ConnMeta>,
     ) -> Result<Self, AdapterError> {
         let mut delta = ObjectsToDrop::default();
 
-        for (object_id, scheduling_decisions_with_reasons) in objects_and_reasons {
-            delta.add_item(object_id, scheduling_decisions_with_reasons, state, session)?;
+        for (object_id, reason) in objects_and_reasons {
+            delta.add_item(object_id, reason, state, session)?;
         }
 
         Ok(delta)
@@ -2425,7 +2415,7 @@ impl ObjectsToDrop {
     fn add_item(
         &mut self,
         object_id: ObjectId,
-        reason: Option<SchedulingDecisionsWithReasonsV1>,
+        reason: ReplicaCreateDropReason,
         state: &CatalogState,
         session: Option<&ConnMeta>,
     ) -> Result<(), AdapterError> {

@@ -9,6 +9,7 @@
 
 use crate::coord::{Coordinator, Message};
 use itertools::Itertools;
+use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, SchedulingDecisionsWithReasonsV1};
 use mz_catalog::memory::objects::{CatalogItem, ClusterVariant, ClusterVariantManaged};
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
@@ -37,9 +38,7 @@ impl SchedulingDecision {
     /// Extract the On/Off decision from the policy-specific structs.
     pub fn cluster_on(&self) -> bool {
         match &self {
-            SchedulingDecision::Refresh(RefreshDecision {
-                cluster_on, ..
-            }) => cluster_on.clone(),
+            SchedulingDecision::Refresh(RefreshDecision { cluster_on, .. }) => cluster_on.clone(),
         }
     }
 }
@@ -53,6 +52,37 @@ pub struct RefreshDecision {
     objects_needing_refresh: Vec<GlobalId>,
     /// The REHYDRATION TIME ESTIMATE setting of the cluster.
     rehydration_time_estimate: Duration,
+}
+
+/// The reason for creating or dropping a replica.
+#[derive(Debug, Clone)]
+pub enum ReplicaCreateDropReason {
+    /// The user initiated the replica create or drop, e.g., by
+    /// - creating/dropping a cluster,
+    /// - ALTERing various options on a managed cluster,
+    /// - CREATE/DROP CLUSTER REPLICA on an unmanaged cluster.
+    Manual,
+    /// The automated cluster scheduling initiated the replica create or drop, e.g., a
+    /// materialized view is needing a refresh on a SCHEDULE ON REFRESH cluster.
+    ClusterScheduling(SchedulingDecisionsWithReasonsV1),
+}
+
+impl ReplicaCreateDropReason {
+    pub fn into_audit_log(
+        self,
+    ) -> (
+        CreateOrDropClusterReplicaReasonV1,
+        Option<SchedulingDecisionsWithReasonsV1>,
+    ) {
+        let (reason, scheduling_policies) = match self {
+            ReplicaCreateDropReason::Manual => (CreateOrDropClusterReplicaReasonV1::Manual, None),
+            ReplicaCreateDropReason::ClusterScheduling(scheduling_decisions) => (
+                CreateOrDropClusterReplicaReasonV1::Schedule,
+                Some(scheduling_decisions),
+            ),
+        };
+        (reason, scheduling_policies)
+    }
 }
 
 impl SchedulingDecision {
@@ -301,9 +331,11 @@ impl Coordinator {
                             cluster_id,
                             &cluster_config,
                             new_config.clone(),
-                            Some(SchedulingDecision::reasons_to_audit_log_reasons(
-                                decisions.values(),
-                            )),
+                            ReplicaCreateDropReason::ClusterScheduling(
+                                SchedulingDecision::reasons_to_audit_log_reasons(
+                                    decisions.values(),
+                                ),
+                            ),
                         )
                         .await
                     {

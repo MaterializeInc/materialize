@@ -33,6 +33,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 
 use crate::catalog::Op;
+use crate::coord::cluster_scheduling::ReplicaCreateDropReason;
 use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
@@ -153,7 +154,7 @@ impl Coordinator {
                 },
                 disk,
                 *session.current_role_id(),
-                None,
+                ReplicaCreateDropReason::Manual,
             )?;
         }
 
@@ -175,7 +176,7 @@ impl Coordinator {
         azs: Option<&[String]>,
         disk: bool,
         owner_id: RoleId,
-        scheduling_decision_reasons: Option<mz_audit_log::SchedulingDecisionsWithReasonsV1>,
+        reason: ReplicaCreateDropReason,
     ) -> Result<(), AdapterError> {
         let location = mz_catalog::durable::ReplicaLocation::Managed {
             availability_zone: None,
@@ -211,7 +212,7 @@ impl Coordinator {
             name,
             config,
             owner_id,
-            scheduling_decisions_with_reasons: scheduling_decision_reasons,
+            reason,
         });
         Ok(())
     }
@@ -343,7 +344,7 @@ impl Coordinator {
                 name: replica_name.clone(),
                 config,
                 owner_id: *session.current_role_id(),
-                scheduling_decisions_with_reasons: None,
+                reason: ReplicaCreateDropReason::Manual,
             });
         }
 
@@ -499,7 +500,7 @@ impl Coordinator {
             name: name.clone(),
             config,
             owner_id,
-            scheduling_decisions_with_reasons: None,
+            reason: ReplicaCreateDropReason::Manual,
         };
 
         self.catalog_transact(Some(session), vec![op]).await?;
@@ -664,7 +665,7 @@ impl Coordinator {
                     cluster_id,
                     config,
                     new_config,
-                    None,
+                    ReplicaCreateDropReason::Manual,
                 )
                 .await?;
             }
@@ -699,7 +700,7 @@ impl Coordinator {
         cluster_id: ClusterId,
         config: &ClusterVariantManaged,
         new_config: ClusterVariantManaged,
-        scheduling_decision_reasons: Option<mz_audit_log::SchedulingDecisionsWithReasonsV1>,
+        reason: ReplicaCreateDropReason,
     ) -> Result<(), AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
         let name = cluster.name().to_string();
@@ -772,7 +773,7 @@ impl Coordinator {
                 .map(|replica_id| {
                     (
                         ObjectId::ClusterReplica((cluster.id(), replica_id)),
-                        scheduling_decision_reasons.clone(),
+                        reason.clone(),
                     )
                 })
                 .collect();
@@ -790,7 +791,7 @@ impl Coordinator {
                     Some(new_availability_zones.as_ref()),
                     *new_disk,
                     owner_id,
-                    scheduling_decision_reasons.clone(),
+                    reason.clone(),
                 )?;
                 create_cluster_replicas.push((cluster_id, id))
             }
@@ -802,7 +803,7 @@ impl Coordinator {
                 .map(|replica_id| {
                     (
                         ObjectId::ClusterReplica((cluster.id(), replica_id)),
-                        scheduling_decision_reasons.clone(),
+                        reason.clone(),
                     )
                 })
                 .collect();
@@ -825,7 +826,7 @@ impl Coordinator {
                     Some(new_availability_zones.as_ref()),
                     *new_disk,
                     owner_id,
-                    scheduling_decision_reasons.clone(),
+                    reason.clone(),
                 )?;
                 create_cluster_replicas.push((cluster_id, id))
             }
