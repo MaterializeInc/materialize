@@ -13,6 +13,7 @@ use std::fmt::{self, Write};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
+use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::CheckedMul;
 use once_cell::sync::Lazy;
@@ -824,20 +825,18 @@ impl Arbitrary for Interval {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PackedInterval([u8; Self::SIZE]);
 
-impl PackedInterval {
+// `as` conversions are okay here because we're doing bit level logic to make
+// sure the sort order of the packed binary is correct. This is implementation
+// is proptest-ed below.
+#[allow(clippy::as_conversions)]
+impl FixedSizeCodec<Interval> for PackedInterval {
     const SIZE: usize = 16;
 
-    /// Returns the encoded bytes of the [`PackedInterval`].
-    pub fn as_bytes(&self) -> &[u8] {
+    fn as_bytes(&self) -> &[u8] {
         &self.0[..]
     }
 
-    /// Interprets a slice of bytes as a [`PackedInterval`], returns an error
-    /// if the size of the slice is incorrect.
-    ///
-    /// Note: It is the responsibility of the caller to make sure the provided
-    /// data is a valid [`PackedInterval`].
-    pub fn from_bytes(slice: &[u8]) -> Result<Self, String> {
+    fn from_bytes(slice: &[u8]) -> Result<Self, String> {
         let buf: [u8; Self::SIZE] = slice.try_into().map_err(|_| {
             format!(
                 "size for PackedInterval is {} bytes, got {}",
@@ -847,15 +846,9 @@ impl PackedInterval {
         })?;
         Ok(PackedInterval(buf))
     }
-}
 
-// `as` conversions are okay here because we're doing bit level logic to make
-// sure the sort order of the packed binary is correct. This is implementation
-// is proptest-ed below.
-#[allow(clippy::as_conversions)]
-impl From<Interval> for PackedInterval {
     #[inline]
-    fn from(value: Interval) -> Self {
+    fn from_value(value: Interval) -> Self {
         let mut buf = [0u8; 16];
 
         // Note: We XOR the values to get correct sorting of negative values.
@@ -870,26 +863,21 @@ impl From<Interval> for PackedInterval {
 
         PackedInterval(buf)
     }
-}
 
-// `as` conversions are okay here because we're doing bit level logic to make
-// sure the sort order of the packed binary is correct. This is implementation
-// is proptest-ed below.
-#[allow(clippy::as_conversions)]
-impl From<PackedInterval> for Interval {
-    fn from(value: PackedInterval) -> Self {
+    #[inline]
+    fn into_value(self) -> Interval {
         // Note: We XOR the values to get correct sorting of negative values.
 
         let mut months = [0; 4];
-        months.copy_from_slice(&value.0[..4]);
+        months.copy_from_slice(&self.0[..4]);
         let months = u32::from_be_bytes(months) ^ 0x8000_0000u32;
 
         let mut days = [0; 4];
-        days.copy_from_slice(&value.0[4..8]);
+        days.copy_from_slice(&self.0[4..8]);
         let days = u32::from_be_bytes(days) ^ 0x8000_0000u32;
 
         let mut micros = [0; 8];
-        micros.copy_from_slice(&value.0[8..]);
+        micros.copy_from_slice(&self.0[8..]);
         let micros = u64::from_be_bytes(micros) ^ 0x8000_0000_0000_0000u64;
 
         Interval {
@@ -1402,8 +1390,8 @@ mod test {
     #[mz_ore::test]
     fn proptest_packed_interval_roundtrips() {
         fn roundtrip_interval(og: Interval) {
-            let packed = PackedInterval::from(og);
-            let rnd = Interval::from(packed);
+            let packed = PackedInterval::from_value(og);
+            let rnd = packed.into_value();
 
             assert_eq!(og, rnd);
         }
@@ -1416,12 +1404,12 @@ mod test {
     #[mz_ore::test]
     fn proptest_packed_interval_sorts() {
         fn sort_intervals(mut og: Vec<Interval>) {
-            let mut packed: Vec<_> = og.iter().copied().map(PackedInterval::from).collect();
+            let mut packed: Vec<_> = og.iter().copied().map(PackedInterval::from_value).collect();
 
             og.sort();
             packed.sort();
 
-            let rnd: Vec<_> = packed.into_iter().map(Interval::from).collect();
+            let rnd: Vec<_> = packed.into_iter().map(PackedInterval::into_value).collect();
 
             assert_eq!(og, rnd);
         }

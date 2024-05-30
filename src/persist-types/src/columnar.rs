@@ -259,6 +259,28 @@ pub trait Schema<T>: Debug + Send + Sync {
     fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String>;
 }
 
+/// A __stable__ encoding for a type that gets durably persisted in an
+/// [`arrow::array::FixedSizeBinaryArray`].
+pub trait FixedSizeCodec<T>: Debug + PartialEq + Eq + PartialOrd + Ord {
+    /// Number of bytes the encoded format requires.
+    const SIZE: usize;
+
+    /// Returns the encoded bytes as a slice.
+    fn as_bytes(&self) -> &[u8];
+    /// Create an instance of `self` from a slice.
+    ///
+    /// Note: It is the responsibility of the caller to make sure the provided
+    /// data is valid for `self`.
+    fn from_bytes(val: &[u8]) -> Result<Self, String>
+    where
+        Self: Sized;
+
+    /// Encode a type of `T` into this format.
+    fn from_value(value: T) -> Self;
+    /// Decode an instance of `T` from this format.
+    fn into_value(self) -> T;
+}
+
 /// A helper for writing tests that validate that a piece of data roundtrips
 /// through the columnar format.
 pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(

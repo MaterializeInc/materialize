@@ -9,26 +9,53 @@
 
 use chrono::NaiveTime;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use mz_persist_types::columnar::FixedSizeCodec;
+use mz_proto::chrono::ProtoNaiveTime;
+use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::datetime::PackedNaiveTime;
-use mz_repr::adt::interval::{Interval, PackedInterval};
+use mz_repr::adt::interval::{Interval, PackedInterval, ProtoInterval};
+use mz_repr::adt::mz_acl_item::{
+    AclItem, AclMode, MzAclItem, PackedAclItem, PackedMzAclItem, ProtoAclItem, ProtoMzAclItem,
+};
+use mz_repr::adt::system::Oid;
+use mz_repr::role_id::RoleId;
+use prost::Message;
 
 fn bench_interval(c: &mut Criterion) {
-    let mut group = c.benchmark_group("PackedInterval");
+    let mut group = c.benchmark_group("Interval");
     group.throughput(Throughput::Elements(1));
 
     const INTERVAL: Interval = Interval::new(1, 1, 0);
     group.bench_function("encode", |b| {
+        let mut buf = vec![0u8; 32];
         b.iter(|| {
-            let packed = PackedInterval::from(std::hint::black_box(INTERVAL));
-            std::hint::black_box(packed);
+            let packed = PackedInterval::from_value(std::hint::black_box(INTERVAL));
+            std::hint::black_box(&mut buf[..PackedInterval::SIZE])
+                .copy_from_slice(packed.as_bytes());
         })
+    });
+    group.bench_function("encode/proto", |b| {
+        let mut buf = vec![0u8; 64];
+        b.iter(|| {
+            let proto = std::hint::black_box(INTERVAL).into_proto();
+            proto.encode(std::hint::black_box(&mut buf)).unwrap();
+            buf.clear();
+        });
     });
 
     const PACKED: [u8; 16] = [128, 0, 0, 1, 128, 0, 0, 1, 128, 0, 0, 0, 0, 0, 0, 0];
     group.bench_function("decode", |b| {
-        let packed = PackedInterval::from_bytes(&PACKED).unwrap();
         b.iter(|| {
-            let normal = Interval::from(std::hint::black_box(packed));
+            let packed = PackedInterval::from_bytes(std::hint::black_box(&PACKED)).unwrap();
+            let normal = std::hint::black_box(packed).into_value();
+            std::hint::black_box(normal);
+        })
+    });
+    const ENCODED: [u8; 4] = [8, 1, 16, 1];
+    group.bench_function("decode/proto", |b| {
+        b.iter(|| {
+            let proto = ProtoInterval::decode(std::hint::black_box(&ENCODED[..])).unwrap();
+            let normal: Interval = std::hint::black_box(proto).into_rust().unwrap();
             std::hint::black_box(normal);
         })
     });
@@ -37,22 +64,40 @@ fn bench_interval(c: &mut Criterion) {
 }
 
 fn bench_time(c: &mut Criterion) {
-    let mut group = c.benchmark_group("PackedNaiveTime");
+    let mut group = c.benchmark_group("NaiveTime");
     group.throughput(Throughput::Elements(1));
 
+    let naive_time = NaiveTime::from_hms_opt(1, 1, 1).unwrap();
     group.bench_function("encode", |b| {
-        let naive_time = NaiveTime::from_hms_opt(1, 1, 1).unwrap();
+        let mut buf = vec![0u8; 32];
         b.iter(|| {
-            let packed = PackedNaiveTime::from(std::hint::black_box(naive_time));
-            std::hint::black_box(packed);
+            let packed = PackedNaiveTime::from_value(std::hint::black_box(naive_time));
+            std::hint::black_box(&mut buf[..PackedNaiveTime::SIZE])
+                .copy_from_slice(packed.as_bytes());
         })
+    });
+    group.bench_function("encode/proto", |b| {
+        let mut buf = vec![0u8; 64];
+        b.iter(|| {
+            let proto = std::hint::black_box(naive_time).into_proto();
+            proto.encode(std::hint::black_box(&mut buf)).unwrap();
+            buf.clear();
+        });
     });
 
     const PACKED: [u8; 8] = [0, 0, 14, 77, 0, 0, 0, 0];
     group.bench_function("decode", |b| {
-        let packed = PackedNaiveTime::from_bytes(&PACKED).unwrap();
         b.iter(|| {
-            let normal = NaiveTime::from(std::hint::black_box(packed));
+            let packed = PackedNaiveTime::from_bytes(std::hint::black_box(&PACKED)).unwrap();
+            let normal = std::hint::black_box(packed).into_value();
+            std::hint::black_box(normal);
+        })
+    });
+    const ENCODED: [u8; 3] = [8, 205, 28];
+    group.bench_function("decode/proto", |b| {
+        b.iter(|| {
+            let proto = ProtoNaiveTime::decode(std::hint::black_box(&ENCODED[..])).unwrap();
+            let normal: NaiveTime = std::hint::black_box(proto).into_rust().unwrap();
             std::hint::black_box(normal);
         })
     });
@@ -60,5 +105,106 @@ fn bench_time(c: &mut Criterion) {
     group.finish()
 }
 
-criterion_group!(benches, bench_interval, bench_time);
+fn bench_acl_item(c: &mut Criterion) {
+    let mut group = c.benchmark_group("AclItem");
+    group.throughput(Throughput::Elements(1));
+
+    let acl_item = AclItem {
+        grantee: Oid(1),
+        grantor: Oid(2),
+        acl_mode: AclMode::all(),
+    };
+    group.bench_function("encode", |b| {
+        let mut buf = vec![0u8; 32];
+        b.iter(|| {
+            let packed = PackedAclItem::from_value(std::hint::black_box(acl_item));
+            std::hint::black_box(&mut buf[..PackedAclItem::SIZE])
+                .copy_from_slice(packed.as_bytes());
+        })
+    });
+    group.bench_function("encode/proto", |b| {
+        let mut buf = vec![0u8; 64];
+        b.iter(|| {
+            let proto = std::hint::black_box(acl_item).into_proto();
+            proto.encode(std::hint::black_box(&mut buf)).unwrap();
+            buf.clear();
+        })
+    });
+
+    const PACKED: [u8; 16] = [0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 0, 224, 0, 3, 15];
+    group.bench_function("decode", |b| {
+        b.iter(|| {
+            let packed = PackedAclItem::from_bytes(std::hint::black_box(&PACKED)).unwrap();
+            let normal = std::hint::black_box(packed).into_value();
+            std::hint::black_box(normal);
+        })
+    });
+    const ENCODED: [u8; 12] = [8, 1, 16, 2, 26, 6, 8, 143, 134, 128, 128, 14];
+    group.bench_function("decode/proto", |b| {
+        b.iter(|| {
+            let proto = ProtoAclItem::decode(std::hint::black_box(&ENCODED[..])).unwrap();
+            let normal: AclItem = std::hint::black_box(proto).into_rust().unwrap();
+            std::hint::black_box(normal);
+        })
+    });
+
+    group.finish();
+}
+
+fn bench_mz_acl_item(c: &mut Criterion) {
+    let mut group = c.benchmark_group("MzAclItem");
+    group.throughput(Throughput::Elements(1));
+
+    let acl_item = MzAclItem {
+        grantee: RoleId::User(1),
+        grantor: RoleId::User(2),
+        acl_mode: AclMode::all(),
+    };
+    group.bench_function("encode", |b| {
+        let mut buf = vec![0u8; 32];
+        b.iter(|| {
+            let packed = PackedMzAclItem::from_value(std::hint::black_box(acl_item));
+            std::hint::black_box(&mut buf[..PackedMzAclItem::SIZE])
+                .copy_from_slice(packed.as_bytes());
+        })
+    });
+    group.bench_function("encode/proto", |b| {
+        let mut buf = vec![0u8; 64];
+        b.iter(|| {
+            let proto = std::hint::black_box(acl_item).into_proto();
+            proto.encode(std::hint::black_box(&mut buf)).unwrap();
+            buf.clear();
+        });
+    });
+
+    const PACKED: [u8; 32] = [
+        0, 0, 1, 44, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 44, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 224,
+        0, 3, 15,
+    ];
+    group.bench_function("decode", |b| {
+        b.iter(|| {
+            let packed = PackedMzAclItem::from_bytes(std::hint::black_box(&PACKED)).unwrap();
+            let normal = std::hint::black_box(packed).into_value();
+            std::hint::black_box(normal);
+        })
+    });
+    const ENCODED: [u8; 16] = [10, 2, 16, 1, 18, 2, 16, 2, 26, 6, 8, 143, 134, 128, 128, 14];
+    group.bench_function("decode/proto", |b| {
+        b.iter(|| {
+            let proto = ProtoMzAclItem::decode(std::hint::black_box(&ENCODED[..])).unwrap();
+            let normal: MzAclItem = std::hint::black_box(proto).into_rust().unwrap();
+            std::hint::black_box(normal);
+        })
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_interval,
+    bench_time,
+    bench_acl_item,
+    bench_mz_acl_item
+);
 criterion_main!(benches);
