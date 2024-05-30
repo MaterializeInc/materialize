@@ -1268,7 +1268,7 @@ mod tests {
     fn parquet_roundtrip() {
         let (schema, row) = schema_and_row();
         assert_eq!(
-            mz_persist_types::parquet::validate_roundtrip(&schema, &row),
+            mz_persist_types::parquet::validate_roundtrip(&schema, &[row]),
             Ok(())
         );
     }

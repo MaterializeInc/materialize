@@ -719,6 +719,7 @@ macro_rules! arrowable_primitive {
     ($data:ident, $arrow_type:ident) => {
         impl ColumnGet<$data> for PrimitiveArray<$arrow_type> {
             fn get<'a>(&'a self, idx: usize) -> $data {
+                assert!(self.is_valid(idx));
                 self.value(idx)
             }
         }
@@ -832,7 +833,7 @@ impl ColumnRef<()> for BinaryArray {
 
 impl ColumnGet<Vec<u8>> for BinaryArray {
     fn get<'a>(&'a self, idx: usize) -> &'a [u8] {
-        assert!(self.logical_nulls().is_none());
+        assert!(self.is_valid(idx));
         self.value(idx)
     }
 }
@@ -905,7 +906,7 @@ impl ColumnRef<()> for StringArray {
 
 impl ColumnGet<String> for StringArray {
     fn get<'a>(&'a self, idx: usize) -> &'a str {
-        assert!(self.logical_nulls().is_none());
+        assert!(self.is_valid(idx));
         self.value(idx)
     }
 }
@@ -956,7 +957,7 @@ impl ColumnPush<Option<String>> for StringBuilder {
 
 impl ColumnGet<OpaqueData> for BinaryArray {
     fn get<'a>(&'a self, idx: usize) -> <OpaqueData as Data>::Ref<'a> {
-        assert!(self.logical_nulls().is_none());
+        assert!(self.is_valid(idx));
         self.value(idx)
     }
 }
