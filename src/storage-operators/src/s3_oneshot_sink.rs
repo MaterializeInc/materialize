@@ -18,6 +18,7 @@ use aws_types::sdk_config::SdkConfig;
 use differential_dataflow::{Collection, Hashable};
 use http::Uri;
 use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::task::JoinHandleExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -267,7 +268,7 @@ where
             Ok::<(), anyhow::Error>(())
         };
 
-        let res = leader_work.await.map_err(|e| e.to_string());
+        let res = leader_work.await.map_err(|e| e.to_string_with_causes());
         start_handle.give(&start_cap, res).await;
     });
 
@@ -357,7 +358,7 @@ fn render_completion_operator<G, F>(
             Ok::<u64, anyhow::Error>(row_count)
         };
 
-        worker_callback(fallible_logic.await.map_err(|e| e.to_string()));
+        worker_callback(fallible_logic.await.map_err(|e| e.to_string_with_causes()));
     });
 }
 
@@ -475,7 +476,7 @@ where
         .await;
 
         completion_handle
-            .give(&completion_cap, res.map_err(|e| e.to_string()))
+            .give(&completion_cap, res.map_err(|e| e.to_string_with_causes()))
             .await;
     });
 
