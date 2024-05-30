@@ -162,7 +162,6 @@ in a region supported by Materialize: `us-east-1`,`us-west-2`, or `eu-west-1`.
     CLOUD_CLIENT_ID="<your-redpanda-client-id>"
     CLOUD_CLIENT_SECRET="<your-redpanda-client-secret>"
     CLUSTER_ID="<your-redpanda-cluster-id>"
-    NAMESPACE_ID="<your-redpanda-namespace-id>"
 
     AUTH_TOKEN=$(
       curl -s -X POST 'https://auth.prd.cloud.redpanda.com/oauth/token' \
@@ -175,11 +174,9 @@ in a region supported by Materialize: `us-east-1`,`us-west-2`, or `eu-west-1`.
 
     CLUSTER_PATCH_BODY="$(cat <<EOF
      {
-       "private_link": {
+       "aws_private_link": {
          "enabled": true,
-         "aws": {
-           "allowed_principals": [ ]
-         }
+         "allowed_principals": [ ]
        }
      }
     EOF
@@ -189,13 +186,13 @@ in a region supported by Materialize: `us-east-1`,`us-west-2`, or `eu-west-1`.
        -H "Content-Type: application/json" \
        -H "Authorization: Bearer $AUTH_TOKEN" \
        -d "$CLUSTER_PATCH_BODY" \
-        $PUBLIC_API_ENDPOINT/v1beta1/clusters/$CLUSTER_ID
+        $PUBLIC_API_ENDPOINT/v1beta2/clusters/$CLUSTER_ID
 
     curl -X GET \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $AUTH_TOKEN" \
-        $PUBLIC_API_ENDPOINT/v1beta1/clusters/$CLUSTER_ID | jq \
-        '.private_link'
+        $PUBLIC_API_ENDPOINT/v1beta2/clusters/$CLUSTER_ID | jq \
+        '.cluster.aws_private_link'
     ```
 
 1. In the Materialize [SQL shell](https://console.materialize.com/), or your
@@ -236,7 +233,6 @@ principal:
     CLOUD_CLIENT_ID="<your-redpanda-client-id>"
     CLOUD_CLIENT_SECRET="<your-redpanda-client-secret>"
     CLUSTER_ID="<your-redpanda-cluster-id>"
-    NAMESPACE_ID="<your-redpanda-namespace-id>"
 
     MATERIALIZE_CONNECTION_ARN="<arn-created-for-materialize-aws-privatelink-connection>"
 
@@ -251,9 +247,9 @@ principal:
 
     CLUSTER_PATCH_BODY="$(cat <<EOF
      {
-       "private_link": {
+       "aws_private_link": {
          "enabled": true,
-         "aws": { "allowed_principals": ["$MATERIALIZE_CONNECTION_ARN"] }
+         "allowed_principals": ["$MATERIALIZE_CONNECTION_ARN"]
        }
      }
     EOF
@@ -263,7 +259,7 @@ principal:
        -H "Content-Type: application/json" \
        -H "Authorization: Bearer $AUTH_TOKEN" \
        -d "$CLUSTER_PATCH_BODY" \
-       $PUBLIC_API_ENDPOINT/v1beta1/clusters/$CLUSTER_ID
+       $PUBLIC_API_ENDPOINT/v1beta2/clusters/$CLUSTER_ID
     ```
 
 1. In Materialize, validate the AWS PrivateLink connection you created using the
