@@ -268,6 +268,9 @@ pub trait ColumnarCodec<T>: Debug + PartialEq + Eq + PartialOrd + Ord {
     /// Returns the encoded bytes as a slice.
     fn as_bytes(&self) -> &[u8];
     /// Create an instance of `self` from a slice.
+    ///
+    /// Note: It is the responsibility of the caller to make sure the provided
+    /// data is valid for `self`.
     fn from_bytes(val: &[u8]) -> Result<Self, String>
     where
         Self: Sized;

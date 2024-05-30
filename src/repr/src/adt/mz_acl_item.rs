@@ -397,6 +397,7 @@ impl PackedMzAclItem {
     pub const USER_TAG: u32 = 300;
     pub const PUBLIC_TAG: u32 = 400;
 
+    #[inline]
     fn encode_role(buf: &mut [u8], role: RoleId) {
         soft_assert_no_log!(buf.len() == 12);
 
@@ -419,6 +420,7 @@ impl PackedMzAclItem {
         }
     }
 
+    #[inline]
     fn decode_role(buf: &[u8]) -> RoleId {
         soft_assert_no_log!(buf.len() == 12);
 
@@ -442,7 +444,7 @@ impl PackedMzAclItem {
     }
 }
 
-impl mz_persist_types::columnar::ColumnarCodec<MzAclItem> for PackedMzAclItem {
+impl ColumnarCodec<MzAclItem> for PackedMzAclItem {
     const SIZE: usize = 32;
 
     fn as_bytes(&self) -> &[u8] {
@@ -464,6 +466,7 @@ impl mz_persist_types::columnar::ColumnarCodec<MzAclItem> for PackedMzAclItem {
         Ok(PackedMzAclItem(buf))
     }
 
+    #[inline]
     fn from_value(value: MzAclItem) -> Self {
         let mut buf = [0u8; 32];
 
@@ -474,6 +477,7 @@ impl mz_persist_types::columnar::ColumnarCodec<MzAclItem> for PackedMzAclItem {
         PackedMzAclItem(buf)
     }
 
+    #[inline]
     fn into_value(self) -> MzAclItem {
         let grantee = PackedMzAclItem::decode_role(&self.0[..12]);
         let grantor = PackedMzAclItem::decode_role(&self.0[12..24]);
@@ -639,7 +643,7 @@ impl Columnation for AclItem {
 #[repr(align(8))]
 pub struct PackedAclItem([u8; Self::SIZE]);
 
-impl mz_persist_types::columnar::ColumnarCodec<AclItem> for PackedAclItem {
+impl ColumnarCodec<AclItem> for PackedAclItem {
     const SIZE: usize = 16;
 
     fn as_bytes(&self) -> &[u8] {
@@ -657,6 +661,7 @@ impl mz_persist_types::columnar::ColumnarCodec<AclItem> for PackedAclItem {
         Ok(PackedAclItem(buf))
     }
 
+    #[inline]
     fn from_value(value: AclItem) -> Self {
         let mut buf = [0u8; 16];
 
@@ -667,6 +672,7 @@ impl mz_persist_types::columnar::ColumnarCodec<AclItem> for PackedAclItem {
         PackedAclItem(buf)
     }
 
+    #[inline]
     fn into_value(self) -> AclItem {
         let mut grantee = [0; 4];
         grantee.copy_from_slice(&self.0[..4]);
