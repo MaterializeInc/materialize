@@ -14,6 +14,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 use std::{cmp, fmt};
 
+use ::arrow::array::StructArray;
 use ::arrow::datatypes::ArrowNativeType;
 use bytes::Bytes;
 use mz_ore::bytes::MaybeLgBytes;
@@ -542,6 +543,26 @@ impl ColumnarRecords {
             .map_err(TryFromProtoError::InvalidPersistState)?;
         Ok(ret)
     }
+}
+
+/// An "extension" to [`ColumnarRecords`] that duplicates the "key" (`K`) and "val" (`V`) columns
+/// as structured Arrow data.
+///
+/// [`ColumnarRecords`] stores the key and value columns as binary blobs encoded with the [`Codec`]
+/// trait. We're migrating to instead store the key and value columns as structured Parquet data,
+/// which we interface with via Arrow.
+///
+/// [`Codec`]: mz_persist_types::Codec
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnarRecordsStructuredExt {
+    /// The structured `k` column.
+    ///
+    /// [`arrow`] does not allow empty [`StructArray`]s so we model an empty `key` column as None.
+    pub key: Option<StructArray>,
+    /// The structured `v` column.
+    ///
+    /// [`arrow`] does not allow empty [`StructArray`]s so we model an empty `val` column as None.
+    pub val: Option<StructArray>,
 }
 
 #[cfg(test)]

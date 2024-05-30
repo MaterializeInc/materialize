@@ -9,11 +9,13 @@
 
 //! Implementation-specific metrics for persist blobs and consensus
 
+use std::time::Instant;
+
 use mz_dyncfg::ConfigSet;
 use mz_ore::lgbytes::{LgBytesMetrics, LgBytesOpMetrics};
 use mz_ore::metric;
-use mz_ore::metrics::{IntCounter, MetricsRegistry};
-use prometheus::IntCounterVec;
+use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
+use prometheus::{CounterVec, IntCounterVec};
 
 /// Metrics specific to S3Blob's internal workings.
 #[derive(Debug, Clone)]
@@ -78,13 +80,172 @@ impl S3BlobMetrics {
 /// Metrics specific to our usage of Arrow and Parquet.
 #[derive(Debug, Clone)]
 pub struct ArrowMetrics {
-    // TODO(parkmycar): Add some metrics here.
+    pub(crate) key: ArrowColumnMetrics,
+    pub(crate) val: ArrowColumnMetrics,
+    pub(crate) part_build_seconds: Counter,
+    pub(crate) part_build_count: IntCounter,
 }
 
 impl ArrowMetrics {
     /// Returns a new [ArrowMetrics] instance connected to the given registry.
-    pub fn new(_registry: &MetricsRegistry) -> Self {
-        ArrowMetrics {}
+    pub fn new(registry: &MetricsRegistry) -> Self {
+        let op_count: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_columnar_op_count",
+            help: "number of rows we've run the specified op on in our structured columnar format",
+            var_labels: ["op", "column", "result"],
+        ));
+        let op_seconds: CounterVec = registry.register(metric!(
+            name: "mz_persist_columnar_op_seconds",
+            help: "numer of seconds we've spent running the specified op on our structured columnar format",
+            var_labels: ["op", "column"],
+        ));
+
+        let part_build_seconds: Counter = registry.register(metric!(
+            name: "mz_persist_columnar_part_build_seconds",
+            help: "number of seconds we've spent encoding our structured columnar format",
+        ));
+        let part_build_count: IntCounter = registry.register(metric!(
+            name: "mz_persist_columnar_part_build_count",
+            help: "number of times we've encoded our structured columnar format",
+        ));
+
+        ArrowMetrics {
+            key: ArrowColumnMetrics::new(&op_count, &op_seconds, "key"),
+            val: ArrowColumnMetrics::new(&op_count, &op_seconds, "val"),
+            part_build_seconds,
+            part_build_count,
+        }
+    }
+
+    /// Metrics for the top-level 'k_s' column.
+    pub fn key(&self) -> &ArrowColumnMetrics {
+        &self.key
+    }
+
+    /// Metrics for the top-level 'v_s' column.
+    pub fn val(&self) -> &ArrowColumnMetrics {
+        &self.val
+    }
+
+    /// Measure and report how long building a Part takes.
+    pub fn measure_part_build<R, F: FnOnce() -> R>(&self, f: F) -> R {
+        let start = Instant::now();
+        let r = f();
+        let duration = start.elapsed();
+
+        self.part_build_count.inc();
+        self.part_build_seconds.inc_by(duration.as_secs_f64());
+
+        r
+    }
+}
+
+/// Metrics for a top-level [`arrow`] column in our structured representation.
+#[derive(Debug, Clone)]
+pub struct ArrowColumnMetrics {
+    decoding_count: IntCounter,
+    decoding_seconds: Counter,
+    correct_count: IntCounter,
+    invalid_count: IntCounter,
+}
+
+impl ArrowColumnMetrics {
+    fn new(count: &IntCounterVec, duration: &CounterVec, col: &'static str) -> Self {
+        ArrowColumnMetrics {
+            decoding_count: count.with_label_values(&["decode", col, "success"]),
+            decoding_seconds: duration.with_label_values(&["decode", col]),
+            correct_count: count.with_label_values(&["validation", col, "correct"]),
+            invalid_count: count.with_label_values(&["validation", col, "invalid"]),
+        }
+    }
+
+    /// Measure and report how long decoding takes.
+    pub fn measure_decoding<R, F: FnOnce() -> R>(&self, decode: F) -> R {
+        let start = Instant::now();
+        let result = decode();
+        let duration = start.elapsed();
+
+        self.decoding_count.inc();
+        self.decoding_seconds.inc_by(duration.as_secs_f64());
+
+        result
+    }
+
+    /// Measure and report statistics for validation.
+    pub fn report_valid<F: FnOnce() -> bool>(&self, f: F) -> bool {
+        let is_valid = f();
+        if is_valid {
+            self.correct_count.inc();
+        } else {
+            self.invalid_count.inc();
+        }
+        is_valid
+    }
+}
+
+/// Metrics for a Parquet file that we write to S3.
+#[derive(Debug, Clone)]
+pub struct ParquetMetrics {
+    pub(crate) encoded_size: IntCounterVec,
+    pub(crate) num_row_groups: IntCounterVec,
+    pub(crate) k_metrics: ParquetColumnMetrics,
+    pub(crate) v_metrics: ParquetColumnMetrics,
+    pub(crate) t_metrics: ParquetColumnMetrics,
+    pub(crate) d_metrics: ParquetColumnMetrics,
+    pub(crate) k_s_metrics: ParquetColumnMetrics,
+    pub(crate) v_s_metrics: ParquetColumnMetrics,
+}
+
+impl ParquetMetrics {
+    pub(crate) fn new(registry: &MetricsRegistry) -> Self {
+        let encoded_size: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_parquet_encoded_size",
+            help: "encoded size of a parquet file that we write to S3",
+            var_labels: ["format"],
+        ));
+        let num_row_groups: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_parquet_row_group_count",
+            help: "count of row groups in a parquet file",
+            var_labels: ["format"],
+        ));
+
+        let column_size: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_parquet_column_size",
+            help: "size in bytes of a column within a parquet file",
+            var_labels: ["col", "compressed"],
+        ));
+
+        ParquetMetrics {
+            encoded_size,
+            num_row_groups,
+            k_metrics: ParquetColumnMetrics::new("k", &column_size),
+            v_metrics: ParquetColumnMetrics::new("v", &column_size),
+            t_metrics: ParquetColumnMetrics::new("t", &column_size),
+            d_metrics: ParquetColumnMetrics::new("d", &column_size),
+            k_s_metrics: ParquetColumnMetrics::new("k_s", &column_size),
+            v_s_metrics: ParquetColumnMetrics::new("v_s", &column_size),
+        }
+    }
+}
+
+/// Metrics for a column within a Parquet file that we write to S3.
+#[derive(Debug, Clone)]
+pub struct ParquetColumnMetrics {
+    pub(crate) uncompressed_size: IntCounter,
+    pub(crate) compressed_size: IntCounter,
+}
+
+impl ParquetColumnMetrics {
+    pub(crate) fn new(col: &'static str, size: &IntCounterVec) -> Self {
+        ParquetColumnMetrics {
+            uncompressed_size: size.with_label_values(&[col, "uncompressed"]),
+            compressed_size: size.with_label_values(&[col, "compressed"]),
+        }
+    }
+
+    pub(crate) fn report_sizes(&self, uncompressed: u64, compressed: u64) {
+        self.uncompressed_size.inc_by(uncompressed);
+        self.compressed_size.inc_by(compressed);
     }
 }
 
@@ -92,8 +253,8 @@ impl ArrowMetrics {
 #[derive(Debug)]
 pub struct ColumnarMetrics {
     pub(crate) lgbytes_arrow: LgBytesOpMetrics,
-    #[allow(dead_code)] // TODO(parkmycar): In a follow up PR I'll be adding metrics.
-    pub(crate) arrow_metrics: ArrowMetrics,
+    pub(crate) parquet: ParquetMetrics,
+    pub(crate) arrow: ArrowMetrics,
     // TODO: Having these two here isn't quite the right thing to do, but it
     // saves a LOT of plumbing.
     pub(crate) cfg: ConfigSet,
@@ -109,11 +270,22 @@ impl ColumnarMetrics {
         is_cc_active: bool,
     ) -> Self {
         ColumnarMetrics {
+            parquet: ParquetMetrics::new(registry),
+            arrow: ArrowMetrics::new(registry),
             lgbytes_arrow: lgbytes.persist_arrow.clone(),
-            arrow_metrics: ArrowMetrics::new(registry),
             cfg,
             is_cc_active,
         }
+    }
+
+    /// Returns a reference to the [`arrow`] metrics for our structured data representation.
+    pub fn arrow(&self) -> &ArrowMetrics {
+        &self.arrow
+    }
+
+    /// Returns a reference to the [`parquet`] metrics for our structured data representation.
+    pub fn parquet(&self) -> &ParquetMetrics {
+        &self.parquet
     }
 
     /// Returns a [ColumnarMetrics] disconnected from any metrics registry.

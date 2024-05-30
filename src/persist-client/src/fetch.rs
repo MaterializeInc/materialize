@@ -9,7 +9,7 @@
 
 //! Fetching batches of data from persist's backing store
 
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Instant;
@@ -18,11 +18,14 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_ore::{soft_assert_eq_no_log, soft_panic_no_log, soft_panic_or_log};
+use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::columnar::{PartDecoder, Schema};
+use mz_persist_types::dyn_struct::DynStructCol;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -36,6 +39,7 @@ use crate::batch::{
     proto_fetch_batch_filter, ProtoFetchBatchFilter, ProtoFetchBatchFilterListen, ProtoLease,
     ProtoLeasedBatchPart,
 };
+use crate::cfg::PersistConfig;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
@@ -67,6 +71,29 @@ pub(crate) const FETCH_SEMAPHORE_PERMIT_ADJUSTMENT: Config<f64> = Config::new(
     replicas.",
 );
 
+pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
+    "persist_part_decode_format",
+    PartDecodeFormat::default().as_str(),
+    "Format we'll use to decode a Persist Part, either 'row' or 'row_with_validate' (Materialize).",
+);
+
+#[derive(Debug, Clone)]
+pub(crate) struct BatchFetcherConfig {
+    pub(crate) part_decode_format: ConfigValHandle<String>,
+}
+
+impl BatchFetcherConfig {
+    pub fn new(value: &PersistConfig) -> Self {
+        BatchFetcherConfig {
+            part_decode_format: PART_DECODE_FORMAT.handle(value),
+        }
+    }
+
+    pub fn part_decode_format(&self) -> PartDecodeFormat {
+        PartDecodeFormat::from_str(self.part_decode_format.get().as_str())
+    }
+}
+
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
 #[derive(Debug)]
 pub struct BatchFetcher<K, V, T, D>
@@ -77,6 +104,7 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
 {
+    pub(crate) cfg: BatchFetcherConfig,
     pub(crate) blob: Arc<dyn Blob>,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_metrics: Arc<ShardMetrics>,
@@ -169,6 +197,7 @@ where
             schemas: self.schemas.clone(),
             filter: part.filter.clone(),
             filter_pushdown_audit: part.filter_pushdown_audit,
+            structured_part_audit: self.cfg.part_decode_format(),
             fetch_permit,
             _phantom: PhantomData,
         };
@@ -268,6 +297,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoFetchBatchFilter> for FetchBatchFilte
 /// Note to check the `LeasedBatchPart` documentation for how to handle the
 /// returned value.
 pub(crate) async fn fetch_leased_part<K, V, T, D>(
+    cfg: &PersistConfig,
     part: &LeasedBatchPart<T>,
     blob: &dyn Blob,
     metrics: Arc<Metrics>,
@@ -303,12 +333,14 @@ where
         // process.
         panic!("{} could not fetch batch part: {}", reader_id, blob_key)
     });
+    let part_cfg = BatchFetcherConfig::new(cfg);
     FetchedPart::new(
         metrics,
         encoded_part,
         schemas,
         part.filter.clone(),
         part.filter_pushdown_audit,
+        part_cfg.part_decode_format(),
         part.part.stats(),
     )
 }
@@ -530,6 +562,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     schemas: Schemas<K, V>,
     filter: FetchBatchFilter<T>,
     filter_pushdown_audit: bool,
+    structured_part_audit: PartDecodeFormat,
     fetch_permit: Option<Arc<MetricsPermits>>,
     _phantom: PhantomData<fn() -> D>,
 }
@@ -558,6 +591,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
             filter: self.filter.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             fetch_permit: self.fetch_permit.clone(),
+            structured_part_audit: self.structured_part_audit.clone(),
             _phantom: self._phantom.clone(),
         }
     }
@@ -631,6 +665,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
             self.schemas.clone(),
             self.filter.clone(),
             self.filter_pushdown_audit,
+            self.structured_part_audit,
             stats,
         );
         ShardSourcePart {
@@ -657,6 +692,10 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     metrics: Arc<Metrics>,
     ts_filter: FetchBatchFilter<T>,
     part: EncodedPart<T>,
+    structured_part: (
+        Option<Arc<<K::Schema as Schema<K>>::Decoder>>,
+        Option<Arc<<V::Schema as Schema<V>>::Decoder>>,
+    ),
     schemas: Schemas<K, V>,
     filter_pushdown_audit: Option<LazyPartStats>,
     part_cursor: Cursor,
@@ -672,6 +711,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
             metrics: Arc::clone(&self.metrics),
             ts_filter: self.ts_filter.clone(),
             part: self.part.clone(),
+            structured_part: self.structured_part.clone(),
             schemas: self.schemas.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             part_cursor: self.part_cursor.clone(),
@@ -689,6 +729,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         schemas: Schemas<K, V>,
         ts_filter: FetchBatchFilter<T>,
         filter_pushdown_audit: bool,
+        structured_part_audit: PartDecodeFormat,
         stats: Option<&LazyPartStats>,
     ) -> Self {
         let filter_pushdown_audit = if filter_pushdown_audit {
@@ -696,10 +737,66 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         } else {
             None
         };
+
+        // TODO(parkmycar): We should probably refactor this since these columns are duplicated
+        // (via a smart pointer) in EncodedPart.
+        //
+        // For structured columnar data we need to downcast from `dyn Array`s to concrete types.
+        // Downcasting is relatively expensive so we want to do this once, which is why we do it
+        // when creating a FetchedPart.
+        let structured_part = match (&part.part.updates, structured_part_audit) {
+            // Only downcast and create decoders if we have structured data AND
+            // an audit of the data is requested.
+            (
+                BlobTraceUpdates::Both(_codec, structured),
+                PartDecodeFormat::Row {
+                    validate_structured: true,
+                },
+            ) => {
+                let maybe_key = structured
+                    .key
+                    .as_ref()
+                    .map(|col| {
+                        let col = DynStructCol::from_arrow(schemas.key.columns(), col)?;
+                        let decoder = schemas.key.decoder(col.as_ref())?;
+                        Ok::<_, String>(Arc::new(decoder))
+                    })
+                    .transpose();
+                let key = match maybe_key {
+                    Ok(key) => key,
+                    Err(err) => {
+                        tracing::error!(?err, "failed to create key decoder");
+                        None
+                    }
+                };
+
+                let maybe_val = structured
+                    .val
+                    .as_ref()
+                    .map(|col| {
+                        let col = DynStructCol::from_arrow(schemas.val.columns(), col)?;
+                        let decoder = schemas.val.decoder(col.as_ref())?;
+                        Ok::<_, String>(Arc::new(decoder))
+                    })
+                    .transpose();
+                let val = match maybe_val {
+                    Ok(val) => val,
+                    Err(err) => {
+                        tracing::error!(?err, "failed to create val decoder");
+                        None
+                    }
+                };
+
+                (key, val)
+            }
+            _ => (None, None),
+        };
+
         FetchedPart {
             metrics,
             ts_filter,
             part,
+            structured_part,
             schemas,
             filter_pushdown_audit,
             part_cursor: Cursor::default(),
@@ -747,7 +844,7 @@ where
         val: &mut Option<V>,
         result_override: Option<(K, V)>,
     ) -> Option<((Result<K, String>, Result<V, String>), T, D)> {
-        while let Some((k, v, mut t, d)) = self.part_cursor.pop(&self.part) {
+        while let Some(((k, v, mut t, d), (part_idx, idx))) = self.part_cursor.pop(&self.part) {
             if !self.ts_filter.filter_ts(&mut t) {
                 continue;
             }
@@ -796,6 +893,39 @@ where
                     },
                     None => V::decode(v),
                 });
+
+                // Note: We only provide structured columns, if they were originally written, and a
+                // dyncfg was specified to run validation.
+                if let Some(key_structured) = self.structured_part.0.as_ref() {
+                    // Structured data should always have at most 1 part.
+                    soft_assert_eq_no_log!(part_idx, 0);
+                    let key_metrics = self.metrics.columnar.arrow().key();
+
+                    let mut k_s = K::default();
+                    key_metrics.measure_decoding(|| key_structured.decode(idx, &mut k_s));
+
+                    // Purposefully do not trace to prevent blowing up Sentry.
+                    let is_valid = key_metrics.report_valid(|| Ok(k_s) == k);
+                    if !is_valid {
+                        soft_panic_no_log!("structured key did not match");
+                    }
+                }
+
+                if let Some(val_structured) = self.structured_part.1.as_ref() {
+                    // Structured data should always have at most 1 part.
+                    soft_assert_eq_no_log!(part_idx, 0);
+                    let val_metrics = self.metrics.columnar.arrow().val();
+
+                    let mut v_s = V::default();
+                    val_metrics.measure_decoding(|| val_structured.decode(idx, &mut v_s));
+
+                    // Purposefully do not trace to prevent blowing up Sentry.
+                    let is_valid = val_metrics.report_valid(|| Ok(v_s) == v);
+                    if !is_valid {
+                        soft_panic_no_log!("structured val did not match");
+                    }
+                }
+
                 return Some(((k, v), t, d));
             }
         }
@@ -1030,15 +1160,17 @@ impl Cursor {
     }
 
     /// Similar to peek, but advance the cursor just past the end of the most recent update.
+    /// Returns the update and the `(part_idx, idx)` that is was popped at.
     pub fn pop<'a, T: Timestamp + Lattice + Codec64>(
         &mut self,
         part: &'a EncodedPart<T>,
-    ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
+    ) -> Option<((&'a [u8], &'a [u8], T, [u8; 8]), (usize, usize))> {
         while !self.is_exhausted(part) {
             let current = self.get(part);
+            let popped_idx = (self.part_idx, self.idx);
             self.advance(part);
             if current.is_some() {
-                return current;
+                return current.map(|p| (p, popped_idx));
             }
         }
         None
@@ -1046,7 +1178,7 @@ impl Cursor {
 
     /// Returns true if the cursor is past the end of the part data.
     pub fn is_exhausted<T: Timestamp + Codec64>(&self, part: &EncodedPart<T>) -> bool {
-        self.part_idx >= part.part.updates.len()
+        self.part_idx >= part.part.updates.num_row_groups()
     }
 
     /// Advance the cursor just past the end of the most recent update, if there is one.
@@ -1132,6 +1264,65 @@ impl<T: Timestamp + Codec64> RustType<(ProtoLeasedBatchPart, Arc<Metrics>)> for 
             lease: None,
             filter_pushdown_audit: proto.filter_pushdown_audit,
         })
+    }
+}
+
+/// Format we'll use when decoding a [`Part`].
+///
+/// [`Part`]: mz_persist_types::part::Part
+#[derive(Debug, Copy, Clone)]
+pub enum PartDecodeFormat {
+    /// Decode from opaque `Codec` data.
+    Row {
+        /// Will also decode the structured data, and validate it matches.
+        validate_structured: bool,
+    },
+}
+
+impl PartDecodeFormat {
+    /// Returns a default value for [`PartDecodeFormat`].
+    pub const fn default() -> Self {
+        // IMPORTANT: By default we will not decode or validate our structured format until it's
+        // more stable.
+        PartDecodeFormat::Row {
+            validate_structured: false,
+        }
+    }
+
+    /// Parses a [`PartDecodeFormat`] from the provided string, falling back to the default if the
+    /// provided value is unrecognized.
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "row" => PartDecodeFormat::Row {
+                validate_structured: false,
+            },
+            "row_with_validate" => PartDecodeFormat::Row {
+                validate_structured: true,
+            },
+            x => {
+                let default = PartDecodeFormat::default();
+                soft_panic_or_log!("Invalid part decode format: '{x}', falling back to {default}");
+                default
+            }
+        }
+    }
+
+    /// Returns a string representation of [`PartDecodeFormat`].
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            PartDecodeFormat::Row {
+                validate_structured: false,
+            } => "row",
+            PartDecodeFormat::Row {
+                validate_structured: true,
+            } => "row_with_validate",
+        }
+    }
+}
+
+impl fmt::Display for PartDecodeFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

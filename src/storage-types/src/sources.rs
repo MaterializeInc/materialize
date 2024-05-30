@@ -1232,9 +1232,11 @@ impl PartEncoder<SourceData> for SourceDataEncoder {
 
     fn finish(self) -> (usize, Vec<DynColumnMut>) {
         // Collect all of the columns from the inner RowEncoder to a single 'ok' column.
-        let (_, ok_validity) = self.ok_validity.into_parts();
-        let (ok_len, ok_cols) = self.ok.finish();
-        let ok_col = DynStructMut::from_parts(self.ok_cfg, ok_len, ok_validity, ok_cols);
+        let (ok_len_1, ok_validity) = self.ok_validity.into_parts();
+        let (ok_len_2, ok_cols) = self.ok.finish();
+        let ok_col = DynStructMut::from_parts(self.ok_cfg, ok_len_1, ok_validity, ok_cols);
+
+        assert_eq!(ok_len_1, ok_len_2, "mismatched length for 'ok' column");
 
         let ok_col = DynColumnMut::new::<Option<DynStruct>>(Box::new(ok_col));
         let err_col = DynColumnMut::new::<Option<Vec<u8>>>(self.err);
@@ -1532,7 +1534,7 @@ impl<'a> SubsourceResolver {
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::ScalarType;
+    use mz_repr::{arb_datum_for_scalar, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
@@ -1553,11 +1555,16 @@ mod tests {
         assert!("".parse::<Timeline>().is_err());
     }
 
-    fn scalar_type_columnar_roundtrip(scalar_type: ScalarType) {
-        use mz_persist_types::columnar::validate_roundtrip;
+    #[track_caller]
+    fn scalar_type_parquet_roundtrip<'a>(
+        scalar_type: ScalarType,
+        datums: impl IntoIterator<Item = Datum<'a>>,
+    ) {
+        use mz_persist_types::parquet::validate_roundtrip;
+
         let mut rows = Vec::new();
-        for datum in scalar_type.interesting_datums() {
-            rows.push(SourceData(Ok(Row::pack(std::iter::once(datum)))));
+        for datum in datums {
+            rows.push(SourceData(Ok(Row::pack_slice(&[datum]))));
         }
         rows.push(SourceData(Err(EnvelopeError::Flat("foo".into()).into())));
 
@@ -1569,7 +1576,7 @@ mod tests {
 
         // Nullable version of the column.
         let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
-        rows.push(SourceData(Ok(Row::pack(std::iter::once(Datum::Null)))));
+        rows.push(SourceData(Ok(Row::pack_slice(&[Datum::Null]))));
         for row in rows.iter() {
             assert_eq!(validate_roundtrip(&schema, row), Ok(()));
         }
@@ -1577,10 +1584,26 @@ mod tests {
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
-    fn all_scalar_types_columnar_roundtrip() {
+    fn all_scalar_types_parquet_roundtrip() {
         proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
-            scalar_type_columnar_roundtrip(scalar_type)
+            let datums = scalar_type.interesting_datums();
+            scalar_type_parquet_roundtrip(scalar_type, datums);
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn all_datums_parquet_roundtrip() {
+        let datums = any::<ScalarType>().prop_flat_map(|ty| {
+            prop::collection::vec(arb_datum_for_scalar(&ty), 0..128)
+                .prop_map(move |datums| (ty.clone(), datums))
+        });
+
+        proptest!(|((ty, datums) in datums)| {
+            // The proptest! macro interferes with rustfmt.
+            let datums = datums.iter().map(Datum::from);
+            scalar_type_parquet_roundtrip(ty, datums);
         });
     }
 

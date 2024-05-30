@@ -32,6 +32,12 @@ message ProtoBatchPartInline {
     // be only one trace batch with the same description and index.
     ProtoU64Description desc = 2;
     uint64 index = 3;
+
+    // Optional metadata for the `format`.
+    oneof format_metadata {
+        // Metadata for the structured format with `[(K, V, T, D, K_S, V_S)]`.
+        uint64 structured_migration = 4;
+    }
 }
 
 enum ProtoBatchFormat {
@@ -63,6 +69,15 @@ enum ProtoBatchFormat {
     // compression, and I'd like to exhaust that direction first before dealing
     // with a trie-like column structure.
     ParquetKvtd = 2;
+    // Parquet format that understands the structure of the inner data. See the
+    // `metadata` field on `ProtoBatchPartInline` for more information about
+    // how this data is structured in Parquet.
+    //
+    // For example, the initial use of this format will contain the columns
+    // `[(K, V, T, D, K_S, V_S)]` where `K_S` and `V_S` are structured versions
+    // of the opaque data stored in `K` and `V`, respectively. Eventually we'll
+    // stop writing `K` and `V` and migrate entirely to `K_S` and `V_S`.
+    ParquetStructured = 3;
 }
 
 message ProtoColumnarRecords {

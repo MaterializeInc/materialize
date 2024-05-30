@@ -55,6 +55,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=Materialized.Size.DEFAULT_SIZE,
         help="Use SIZE 'N-N' for replicas and SIZE 'N' for sources",
     )
+    parser.add_argument(
+        "--system-param",
+        type=str,
+        action="append",
+        nargs="*",
+        help="System parameters to set in Materialize, i.e. what you would set with `ALTER SYSTEM SET`",
+    )
 
     parser.add_argument("--replicas", type=int, default=1, help="use multiple replicas")
 
@@ -90,9 +97,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         fivetran_destination_files_path="/share/tmp",
     )
 
+    sysparams = args.system_param
+    if not args.system_param:
+        sysparams = []
+
+    additional_system_parameter_defaults = {}
+    for val in sysparams:
+        x = val[0].split("=", maxsplit=1)
+        assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
+        key = x[0]
+        val = x[1]
+
+        additional_system_parameter_defaults[key] = val
+
     materialized = Materialized(
         default_size=args.default_size,
         external_minio=True,
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
     )
 
     with c.override(testdrive, materialized):

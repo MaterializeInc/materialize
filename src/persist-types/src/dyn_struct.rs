@@ -224,11 +224,15 @@ impl DynStructCol {
         if fields.is_empty() {
             return None;
         }
-        // TODO(parkmycar): We need to pass the validity bitmap here.
-        Some(StructArray::new(Fields::from(fields), arrays, None))
+        Some(StructArray::new(
+            Fields::from(fields),
+            arrays,
+            self.validity.clone(),
+        ))
     }
 
-    pub(crate) fn from_arrow(cfg: DynStructCfg, array: &dyn Array) -> Result<Self, String> {
+    /// Create a [`DynStructCol`] from an [`arrow::array::Array`].
+    pub fn from_arrow(cfg: DynStructCfg, array: &dyn Array) -> Result<Self, String> {
         let array = array
             .as_any()
             .downcast_ref::<StructArray>()

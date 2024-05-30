@@ -220,6 +220,16 @@ macro_rules! soft_panic_or_log {
     }}
 }
 
+/// Panics if soft assertions are enabled.
+#[macro_export]
+macro_rules! soft_panic_no_log {
+    ($($arg:tt)+) => {{
+        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+            panic!($($arg)+);
+        }
+    }}
+}
+
 /// Asserts that the left expression contains the right expression.
 ///
 /// Containment is determined by the `contains` method on the left type. If the

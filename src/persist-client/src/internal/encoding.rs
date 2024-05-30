@@ -19,7 +19,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::halt;
 use mz_persist::indexed::columnar::ColumnarRecords;
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::stats::{PartStats, ProtoStructStats};
@@ -1392,7 +1392,7 @@ impl ProtoInlineBatchPart {
         Ok(BlobTraceBatchPart {
             desc: proto.desc.into_rust_if_some("ProtoInlineBatchPart::desc")?,
             index: proto.index.into_rust()?,
-            updates: vec![updates],
+            updates: BlobTraceUpdates::Row(vec![updates]),
         })
     }
 }

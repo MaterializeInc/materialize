@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, Int64Array, PrimitiveArray};
+use arrow::array::{Array, Int64Array, PrimitiveArray, StructArray};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{Field, Int64Type};
 use mz_ore::iter::IteratorExt;
@@ -56,7 +56,24 @@ impl Part {
         Ok(stats.some)
     }
 
-    pub(crate) fn to_arrow(&self) -> (Vec<Field>, Vec<Arc<dyn Array>>) {
+    /// Returns an [`arrow`] array representing the `key` column.
+    pub fn to_key_arrow(&self) -> Option<(Field, StructArray)> {
+        self.key.to_arrow_struct().map(|array| {
+            let field = Field::new("k_s", array.data_type().clone(), false);
+            (field, array)
+        })
+    }
+
+    /// Returns an [`arrow`] array representing the `val` column.
+    pub fn to_val_arrow(&self) -> Option<(Field, StructArray)> {
+        self.val.to_arrow_struct().map(|array| {
+            let field = Field::new("v_s", array.data_type().clone(), false);
+            (field, array)
+        })
+    }
+
+    /// Returns [`arrow`] types representing this [`Part`].
+    pub fn to_arrow(&self) -> (Vec<Field>, Vec<Arc<dyn Array>>) {
         let (mut fields, mut arrays) = (Vec::new(), Vec::<Arc<dyn Array>>::new());
 
         {
@@ -65,8 +82,8 @@ impl Part {
             // model this as a missing column (rather than something like
             // NullArray). This also matches how we'd do the same for nested
             // structs.
-            if let Some(key_array) = self.key.to_arrow_struct() {
-                fields.push(Field::new("k", key_array.data_type().clone(), false));
+            if let Some((field, key_array)) = self.to_key_arrow() {
+                fields.push(field);
                 arrays.push(Arc::new(key_array));
             }
         }
@@ -77,8 +94,8 @@ impl Part {
             // model this as a missing column (rather than something like
             // NullArray). This also matches how we'd do the same for nested
             // structs.
-            if let Some(val_array) = self.val.to_arrow_struct() {
-                fields.push(Field::new("v", val_array.data_type().clone(), false));
+            if let Some((field, val_array)) = self.to_val_arrow() {
+                fields.push(field);
                 arrays.push(Arc::new(val_array));
             }
         }

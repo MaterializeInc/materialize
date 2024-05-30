@@ -359,7 +359,7 @@ pub async fn blob_batch_part(
         updates: Vec::new(),
     };
     let mut cursor = Cursor::default();
-    while let Some((k, v, t, d)) = cursor.pop(&encoded_part) {
+    while let Some(((k, v, t, d), _)) = cursor.pop(&encoded_part) {
         if out.updates.len() > limit {
             break;
         }
@@ -404,7 +404,7 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
             .await
             .expect("part exists");
             let mut cursor = Cursor::default();
-            while let Some((k, v, mut t, d)) = cursor.pop(&encoded_part) {
+            while let Some(((k, v, mut t, d), _)) = cursor.pop(&encoded_part) {
                 t.advance_by(as_of);
                 let d = <i64 as Codec64>::decode(d);
                 updates.push(((k.to_owned(), v.to_owned()), t, d));
@@ -680,11 +680,11 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
 /// return static Codec names, and rebind the names if/when we get a CodecMismatch, so we can convince
 /// the type system and our safety checks that we really can read the data.
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct K;
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct V;
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 struct T;
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 struct D(i64);
