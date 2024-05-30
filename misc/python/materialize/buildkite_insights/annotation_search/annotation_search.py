@@ -49,6 +49,7 @@ def search_build(
     fetch_mode: FetchMode,
     max_entries_to_print: int,
     short_result_presentation: bool,
+    one_line_match_presentation: bool,
 ) -> int:
     assert max_entries_to_print >= 0
 
@@ -86,6 +87,7 @@ def search_build(
             search_value=search_value,
             use_regex=use_regex,
             short_result_presentation=short_result_presentation,
+            one_line_match_presentation=one_line_match_presentation,
         )
 
     return len(matched_annotations)
@@ -181,6 +183,7 @@ def main(
     pattern: str,
     use_regex: bool,
     short_result_presentation: bool,
+    one_line_match_presentation: bool,
 ) -> None:
     assert len(pattern) > 0, "pattern must not be empty"
 
@@ -231,6 +234,7 @@ def main(
                 fetch_mode=fetch_annotations_mode,
                 max_entries_to_print=max_entries_to_print,
                 short_result_presentation=short_result_presentation,
+                one_line_match_presentation=one_line_match_presentation,
             )
         except RateLimitExceeded:
             print("Aborting due to exceeded rate limit!")
@@ -297,6 +301,11 @@ if __name__ == "__main__":
         action="store_true",
     )
     parser.add_argument(
+        "--oneline",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
         "--only-failed-build-step-key", action="append", default=[], type=str
     )
     parser.add_argument(
@@ -304,6 +313,9 @@ if __name__ == "__main__":
         action="store_true",
     )
     args = parser.parse_args()
+
+    if args.short and args.oneline:
+        print("Note: --oneline will be ignored if --short is set")
 
     main(
         args.pipeline,
@@ -319,4 +331,5 @@ if __name__ == "__main__":
         args.pattern,
         args.use_regex,
         args.short,
+        args.oneline,
     )

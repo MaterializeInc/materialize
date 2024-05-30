@@ -40,6 +40,7 @@ def print_annotation_match(
     search_value: str,
     use_regex: bool,
     short_result_presentation: bool,
+    one_line_match_presentation: bool,
 ) -> None:
     print(
         with_formatting(
@@ -57,6 +58,7 @@ def print_annotation_match(
             input=annotation.title_and_text,
             search_value=search_value,
             use_regex=use_regex,
+            one_line_match_presentation=one_line_match_presentation,
         )
         matched_snippet = highlight_match(
             input=matched_snippet,

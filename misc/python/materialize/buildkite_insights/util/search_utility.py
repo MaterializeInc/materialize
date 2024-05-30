@@ -39,6 +39,7 @@ def trim_match(
     input: str,
     search_value: str,
     use_regex: bool,
+    one_line_match_presentation: bool,
     max_chars_before_match: int = 300,
     max_chars_after_match: int = 300,
     search_offset: int = 0,
@@ -51,6 +52,19 @@ def trim_match(
 
     match_begin_index = match.start()
     match_end_index = match.end()
+
+    if one_line_match_presentation:
+        cut_off_index_begin = input.rfind("\n", 0, match_begin_index)
+
+        if cut_off_index_begin == -1:
+            cut_off_index_begin = 0
+
+        cut_off_index_end = input.find("\n", match_end_index)
+
+        if cut_off_index_end == -1:
+            cut_off_index_end = len(input)
+
+        input = input[cut_off_index_begin:cut_off_index_end]
 
     # identify cut-off point before first match
     if match_begin_index > max_chars_before_match:

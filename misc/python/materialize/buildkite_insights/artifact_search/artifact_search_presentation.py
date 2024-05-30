@@ -40,6 +40,7 @@ def print_artifact_match(
         search_value=search_value,
         use_regex=use_regex,
         search_offset=search_offset,
+        one_line_match_presentation=False,
     )
     matched_snippet = highlight_match(
         input=matched_snippet,
