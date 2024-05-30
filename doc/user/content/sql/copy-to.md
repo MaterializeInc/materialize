@@ -1,12 +1,12 @@
 ---
 title: "COPY TO"
-description: "`COPY TO` outputs results from Materialize using the PostgreSQL `COPY` protocol."
+description: "`COPY TO` outputs results from Materialize to standard output or object storage."
 menu:
     main:
         parent: "commands"
 ---
 
-`COPY TO` outputs results from Materialize using the [PostgreSQL `COPY` protocol](https://www.postgresql.org/docs/current/sql-copy.html).
+`COPY TO` outputs results from Materialize to standard output or object storage.
 This command is useful to output [`SUBSCRIBE`](/sql/subscribe/) results
 [to `stdout`](#copy-to-stdout), or perform [bulk exports to Amazon s3](#copy-to-s3).
 
@@ -62,7 +62,7 @@ Field         | Use
 _query_       | The [`SELECT`](/sql/select) query to copy results out for.
 _object_name_ | The name of the object to copy results out for.
 **AWS CONNECTION** _connection_name_ | The name of the AWS connection to use in the `COPY TO` command. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#aws) documentation page.
-_s3_uri_      | The unique resource identifier (URI) of the Amazon s3 bucket to store the output results in.
+_s3_uri_      | The unique resource identifier (URI) of the Amazon s3 bucket (and prefix) to store the output results in.
 **FORMAT**    | The file format to write.
 _field_       | The name of the option you want to set.
 _val_         | The value for the option.
@@ -153,13 +153,31 @@ Materialize type | Arrow extension name | [Arrow type](https://github.com/apache
 
 ### Examples {#copy-to-s3-examples}
 
+{{< tabs >}}
+{{< tab "Parquet">}}
+
 ```sql
-COPY some_view TO 's3://mz-to-snow/'
+COPY some_view TO 's3://mz-to-snow/parquet/'
 WITH (
     AWS CONNECTION = aws_role_assumption,
     FORMAT = 'parquet'
   );
 ```
+
+{{< /tab >}}
+
+{{< tab "CSV">}}
+
+```sql
+COPY some_view TO 's3://mz-to-snow/csv/'
+WITH (
+    AWS CONNECTION = aws_role_assumption,
+    FORMAT = 'csv'
+  );
+```
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Privileges
 
