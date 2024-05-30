@@ -77,3 +77,20 @@ contains:AccessDenied
     AWS CONNECTION = user_readwritedelete_aws_conn,
     FORMAT = 'csv'
   );
+
+
+# Test broken AWS connection error message at copy time
+
+> CREATE CONNECTION broken_aws_conn
+  TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/MZS3Exporter',
+    ENDPOINT = '${arg.aws-endpoint}',
+    REGION = 'us-east-1'
+  );
+
+! COPY (SELECT generate_series(1, 100)) TO 's3://copytos3/auth_test'
+  WITH (
+    AWS CONNECTION = broken_aws_conn,
+    FORMAT = 'csv'
+  );
+contains: dispatch failure: other: an error occurred while loading credentials
