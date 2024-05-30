@@ -85,12 +85,14 @@ pub fn decode_part<R: ChunkReader + 'static, K, KS: Schema<K>, V, VS: Schema<V>>
 
 /// A helper for writing tests that validate that a piece of data roundtrips
 /// through the parquet serialization format.
-pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
+pub fn validate_roundtrip<T: Default + Clone + PartialEq + Debug, S: Schema<T>>(
     schema: &S,
-    value: &T,
+    values: &[T],
 ) -> Result<(), String> {
     let mut builder = PartBuilder::new(schema, &UnitSchema)?;
-    builder.push(value, &(), 1u64, 1i64);
+    for value in values {
+        builder.push(value, &(), 1u64, 1i64);
+    }
     let part = builder.finish();
 
     // Sanity check that we can compute stats.
@@ -102,16 +104,21 @@ pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
     let encoded = bytes::Bytes::from(encoded);
     let part = decode_part(encoded, schema, &UnitSchema).map_err(|err| err.to_string())?;
 
-    let mut actual = T::default();
-    assert_eq!(part.len(), 1);
+    assert_eq!(part.len(), values.len());
     let part = part.key_ref();
-    schema.decoder(part)?.decode(0, &mut actual);
-    if &actual != value {
-        Err(format!(
-            "validate_roundtrip expected {:?} but got {:?}",
-            value, actual
-        ))
-    } else {
-        Ok(())
+    let decoder = schema.decoder(part)?;
+
+    let mut decoded = vec![T::default(); values.len()];
+    for (idx, val) in decoded.iter_mut().enumerate() {
+        decoder.decode(idx, val);
     }
+
+    if decoded != values {
+        return Err(format!(
+            "validate_roundtrip expected {:?} but got {:?}",
+            values, decoded
+        ));
+    }
+
+    Ok(())
 }

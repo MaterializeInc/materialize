@@ -1570,16 +1570,12 @@ mod tests {
 
         // Non-nullable version of the column.
         let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
-        for row in rows.iter() {
-            assert_eq!(validate_roundtrip(&schema, row), Ok(()));
-        }
+        assert_eq!(validate_roundtrip(&schema, &rows), Ok(()));
 
         // Nullable version of the column.
         let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
         rows.push(SourceData(Ok(Row::pack_slice(&[Datum::Null]))));
-        for row in rows.iter() {
-            assert_eq!(validate_roundtrip(&schema, row), Ok(()));
-        }
+        assert_eq!(validate_roundtrip(&schema, &rows), Ok(()));
     }
 
     #[mz_ore::test]
