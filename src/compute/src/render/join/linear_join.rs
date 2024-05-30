@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
+use differential_dataflow::operators::join::JoinSession;
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::{AsCollection, Collection, Data};
+use differential_dataflow::{Collection, Data};
 use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_types::plan::join::JoinClosure;
@@ -27,10 +28,9 @@ use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
-use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::OkErr;
+use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushContainer};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, ScopeParent};
+use timely::dataflow::{Scope, ScopeParent, StreamCore};
 use timely::progress::timestamp::{Refines, Timestamp};
 
 use crate::extensions::arrange::MzArrange;
@@ -92,13 +92,13 @@ impl LinearJoinSpec {
     }
 
     /// Render a join operator according to this specification.
-    fn render<G, Tr1, Tr2, L, I>(
+    fn render<G, Tr1, Tr2, L, I, C, CB>(
         &self,
         arranged1: &Arranged<G, Tr1>,
         arranged2: &Arranged<G, Tr2>,
         shutdown_token: ShutdownToken,
         result: L,
-    ) -> Collection<G, I::Item, Diff>
+    ) -> StreamCore<G, C>
     where
         G: Scope,
         G::Timestamp: Lattice,
@@ -106,7 +106,14 @@ impl LinearJoinSpec {
         Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
             + Clone
             + 'static,
-        L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
+        L: FnMut(
+                Tr1::Key<'_>,
+                Tr1::Val<'_>,
+                Tr2::Val<'_>,
+                &mut JoinSession<Tr1::Time, CB, CB::Container>,
+            ) + 'static,
+        C: PushContainer,
+        CB: ContainerBuilder + 'static,
         I: IntoIterator,
         I::Item: Data,
     {
@@ -121,19 +128,59 @@ impl LinearJoinSpec {
             (Materialize, Some(work_limit), Some(time_limit)) => {
                 let yield_fn =
                     move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, ConsolidatingContainerBuilder<_>>(
+                    arranged1,
+                    arranged2,
+                    shutdown_token,
+                    move |k, v1, v2, s| {
+                        for datum in result(k, v1, v2, s) {
+                            s.give(datum);
+                        }
+                    },
+                    yield_fn,
+                )
             }
             (Materialize, Some(work_limit), None) => {
                 let yield_fn = move |_start, work| work >= work_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, ConsolidatingContainerBuilder<_>>(
+                    arranged1,
+                    arranged2,
+                    shutdown_token,
+                    move |k, v1, v2, c| {
+                        for datum in result(k, v1, v2, c) {
+                            c.give(datum);
+                        }
+                    },
+                    yield_fn,
+                )
             }
             (Materialize, None, Some(time_limit)) => {
                 let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, ConsolidatingContainerBuilder<_>>(
+                    arranged1,
+                    arranged2,
+                    shutdown_token,
+                    move |k, v1, v2, c| {
+                        for datum in result(k, v1, v2, c) {
+                            c.give(datum);
+                        }
+                    },
+                    yield_fn,
+                )
             }
             (Materialize, None, None) => {
                 let yield_fn = |_start, _work| false;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, ConsolidatingContainerBuilder<_>>(
+                    arranged1,
+                    arranged2,
+                    shutdown_token,
+                    move |k, v1, v2, c| {
+                        for datum in result(k, v1, v2, c) {
+                            c.give(datum);
+                        }
+                    },
+                    yield_fn,
+                )
             }
         }
     }
