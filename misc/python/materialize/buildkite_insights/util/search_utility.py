@@ -36,22 +36,59 @@ def highlight_match(
 
 
 def trim_match(
-    input: str,
+    match_text: str,
     search_value: str,
     use_regex: bool,
+    one_line_match_presentation: bool,
     max_chars_before_match: int = 300,
     max_chars_after_match: int = 300,
     search_offset: int = 0,
 ) -> str:
-    input = input.strip()
+    match_text = match_text.strip()
     case_insensitive_pattern = _search_value_to_pattern(search_value, use_regex)
 
-    match = case_insensitive_pattern.search(input, pos=search_offset)
+    match = case_insensitive_pattern.search(match_text, pos=search_offset)
     assert match is not None
 
     match_begin_index = match.start()
     match_end_index = match.end()
 
+    if one_line_match_presentation:
+        match_text = _trim_match_to_one_line(
+            match_text, match_begin_index, match_end_index
+        )
+
+    match_text = _trim_match_to_max_length(
+        match_text,
+        match_begin_index,
+        match_end_index,
+        max_chars_after_match,
+        max_chars_before_match,
+    )
+
+    return match_text
+
+
+def _trim_match_to_one_line(
+    input: str, match_begin_index: int, match_end_index: int
+) -> str:
+    cut_off_index_begin = input.rfind("\n", 0, match_begin_index)
+    if cut_off_index_begin == -1:
+        cut_off_index_begin = 0
+    cut_off_index_end = input.find("\n", match_end_index)
+    if cut_off_index_end == -1:
+        cut_off_index_end = len(input)
+    input = input[cut_off_index_begin:cut_off_index_end]
+    return input
+
+
+def _trim_match_to_max_length(
+    input: str,
+    match_begin_index: int,
+    match_end_index: int,
+    max_chars_after_match: int,
+    max_chars_before_match: int,
+) -> str:
     # identify cut-off point before first match
     if match_begin_index > max_chars_before_match:
         cut_off_index_begin = input.find(
@@ -79,7 +116,6 @@ def trim_match(
 
     if cut_off_index_begin > 0:
         result = f"[...] {result}"
-
     if cut_off_index_end != len(input):
         result = f"{result} [...]"
 

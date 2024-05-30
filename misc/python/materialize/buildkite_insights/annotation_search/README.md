@@ -15,6 +15,7 @@ usage: buildkite-annotation-search [-h]
                                    [--only-failed-builds]
                                    [--only-failed-build-step-key ONLY_FAILED_BUILD_STEP_KEY]
                                    [--short]
+                                   [--oneline]
                                    [--use-regex]
                                    {cleanup,coverage,deploy,deploy-mz-lsp-server,deploy-mz,deploy-website,license,nightly,release-qualification,security,slt,test,www}
                                    pattern
