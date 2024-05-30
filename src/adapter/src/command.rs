@@ -595,7 +595,8 @@ impl ExecuteResponse {
             | AlterSchemaSwap
             | AlterSecret
             | AlterConnection
-            | AlterSource => &[AlteredObject],
+            | AlterSource
+            | AlterSink => &[AlteredObject],
             AlterDefaultPrivileges => &[AlteredDefaultPrivileges],
             AlterSetCluster => &[AlteredObject],
             AlterRole => &[AlteredRole],

@@ -4920,9 +4920,20 @@ impl<'a> Parser<'a> {
 
         Ok(
             match self
-                .expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])
+                .expect_one_of_keywords(&[FROM, RESET, SET, RENAME, OWNER])
                 .map_no_statement_parser_err()?
             {
+                FROM => {
+                    let from = self
+                        .parse_raw_name()
+                        .map_parser_err(StatementKind::AlterSink)?;
+
+                    Statement::AlterSink(AlterSinkStatement {
+                        sink_name: name,
+                        if_exists,
+                        action: AlterSinkAction::ChangeRelation(from),
+                    })
+                }
                 RESET => {
                     self.expect_token(&Token::LParen)
                         .map_parser_err(StatementKind::AlterSink)?;

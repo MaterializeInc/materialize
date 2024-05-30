@@ -1478,6 +1478,13 @@ ALTER SINK name RESET (SIZE)
                        ^
 
 parse-statement
+ALTER SINK name FROM foobar
+----
+ALTER SINK name FROM foobar
+=>
+AlterSink(AlterSinkStatement { sink_name: UnresolvedItemName([Ident("name")]), if_exists: false, action: ChangeRelation(Name(UnresolvedItemName([Ident("foobar")]))) })
+
+parse-statement
 ALTER INDEX name RENAME TO name2
 ----
 ALTER INDEX name RENAME TO name2

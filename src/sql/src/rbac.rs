@@ -980,7 +980,25 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
-
+        Plan::AlterSink(plan::AlterSinkPlan {
+            id,
+            sink,
+            with_snapshot: _,
+            in_cluster,
+        }) => {
+            let mut privileges = generate_read_privileges(catalog, iter::once(sink.from), role_id);
+            privileges.push((
+                SystemObjectId::Object(in_cluster.into()),
+                AclMode::CREATE,
+                role_id,
+            ));
+            RbacRequirements {
+                ownership: vec![ObjectId::Item(*id)],
+                privileges,
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::AlterClusterRename(plan::AlterClusterRenamePlan {
             id,
             name: _,

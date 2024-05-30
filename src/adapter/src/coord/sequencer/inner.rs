@@ -45,6 +45,7 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
+use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::mysql::{MySqlSourceDetails, ProtoMySqlSourceDetails};
 use mz_storage_types::sources::postgres::{
     PostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetails,
@@ -77,7 +78,9 @@ use mz_sql_parser::ast::{
     WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
+use mz_storage_client::controller::{
+    CollectionDescription, DataSource, DataSourceOther, ExportDescription,
+};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::AlterCompatible;
@@ -93,9 +96,10 @@ use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timestamp_selection::{TimestampDetermination, TimestampSource};
 use crate::coord::{
-    AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, ExecuteContext,
-    ExplainContext, Message, PeekStage, PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn,
-    PendingTxnResponse, PlanValidity, RealTimeRecencyContext, StageResult, Staged, TargetCluster,
+    AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
+    CreateConnectionValidationReady, ExecuteContext, ExplainContext, Message, PeekStage,
+    PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
+    RealTimeRecencyContext, StageResult, Staged, TargetCluster, WatchSetResponse,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
@@ -106,7 +110,8 @@ use crate::session::{
 };
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{
-    guard_write_critical_section, PeekResponseUnary, TimelineContext, TimestampExplanation,
+    guard_write_critical_section, PeekResponseUnary, ReadHolds, TimelineContext,
+    TimestampExplanation,
 };
 
 mod create_index;
@@ -3096,6 +3101,156 @@ impl Coordinator {
         self.secrets_controller.ensure(id, &payload).await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_alter_sink_prepare(
+        &mut self,
+        ctx: ExecuteContext,
+        plan: plan::AlterSinkPlan,
+    ) {
+        // 1. Put a read hold on the new relation
+        let id_bundle = crate::CollectionIdBundle {
+            storage_ids: BTreeSet::from_iter([plan.sink.from]),
+            compute_ids: BTreeMap::new(),
+        };
+        let read_hold = self.acquire_read_holds(&id_bundle);
+
+        let Some(read_ts) = read_hold.least_valid_read().into_option() else {
+            ctx.retire(Err(AdapterError::UnreadableSinkCollection));
+            return;
+        };
+
+        let otel_ctx = OpenTelemetryContext::obtain();
+
+        let plan_validity = PlanValidity {
+            transient_revision: self.catalog().transient_revision(),
+            dependency_ids: BTreeSet::from_iter([plan.sink.from]),
+            cluster_id: Some(plan.in_cluster),
+            replica_id: None,
+            role_metadata: ctx.session().role_metadata().clone(),
+        };
+
+        // Re-resolve items in the altered statement
+        // Parse statement.
+        let create_sink_stmt = match mz_sql::parse::parse(&plan.sink.create_sql)
+            .expect("invalid create sink sql")
+            .into_element()
+            .ast
+        {
+            Statement::CreateSink(stmt) => stmt,
+            _ => unreachable!("invalid statment kind for sink"),
+        };
+        let catalog = self.catalog().for_system_session();
+        let (_, resolved_ids) = match mz_sql::names::resolve(&catalog, create_sink_stmt) {
+            Ok(ok) => ok,
+            Err(e) => {
+                ctx.retire(Err(AdapterError::internal("ALTER SINK", e)));
+                return;
+            }
+        };
+
+        // Now we must wait for the sink to make enough progress such that there is overlap between
+        // the new `from` collection's read hold and the sink's write frontier.
+        self.install_storage_watch_set(
+            ctx.session().conn_id().clone(),
+            BTreeSet::from_iter([plan.id]),
+            read_ts,
+            WatchSetResponse::AlterSinkReady(AlterSinkReadyContext {
+                ctx,
+                otel_ctx,
+                plan,
+                plan_validity,
+                resolved_ids,
+                read_hold,
+            }),
+        );
+    }
+
+    #[instrument]
+    pub async fn sequence_alter_sink_finish(
+        &mut self,
+        session: &mut Session,
+        plan: plan::AlterSinkPlan,
+        resolved_ids: ResolvedIds,
+        read_hold: ReadHolds<Timestamp>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::AlterSinkPlan {
+            id,
+            sink,
+            with_snapshot,
+            in_cluster,
+        } = plan;
+
+        // Assert that we can recover the updates that happened the timestamps of the write
+        // frontier. This must be true in this call.
+        let write_frontier = &self
+            .controller
+            .storage
+            .export(id)
+            .expect("sink known to exist")
+            .write_frontier;
+        let as_of = read_hold.least_valid_read();
+        assert!(write_frontier.iter().all(|t| as_of.less_than(t)));
+
+        let catalog_sink = Sink {
+            create_sql: sink.create_sql,
+            from: sink.from,
+            connection: sink.connection.clone(),
+            envelope: sink.envelope,
+            version: sink.version,
+            with_snapshot,
+            resolved_ids,
+            cluster_id: in_cluster,
+        };
+
+        let ops = vec![catalog::Op::UpdateItem {
+            id,
+            name: self.catalog.get_entry(&id).name().clone(),
+            to_item: CatalogItem::Sink(catalog_sink),
+        }];
+
+        self.catalog_transact(Some(session), ops).await?;
+
+        let status_id = Some(
+            self.catalog()
+                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
+        );
+
+        let from_entry = self.catalog().get_entry(&sink.from);
+        let storage_sink_desc = StorageSinkDesc {
+            from: sink.from,
+            from_desc: from_entry
+                .desc_opt()
+                .expect("sinks can only be built on items with descs")
+                .into_owned(),
+            connection: sink
+                .connection
+                .clone()
+                .into_inline_connection(self.catalog().state()),
+            envelope: sink.envelope,
+            as_of,
+            with_snapshot,
+            version: sink.version,
+            status_id,
+            from_storage_metadata: (),
+        };
+
+        self.controller
+            .storage
+            .alter_export(
+                id,
+                ExportDescription {
+                    sink: storage_sink_desc,
+                    instance_id: in_cluster,
+                },
+            )
+            .await?;
+
+        // The storage controller will have its own read hold by now so we can safely drop ours.
+        drop(read_hold);
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Sink))
     }
 
     #[instrument]
