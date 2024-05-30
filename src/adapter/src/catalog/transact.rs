@@ -816,11 +816,14 @@ impl Catalog {
                         storage_collections_to_create.insert(id);
                     }
 
-                    if let Some(id @ ClusterId::System(_)) = item.cluster_id() {
-                        let cluster_name = state.clusters_by_id[&id].name.clone();
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlyCluster(cluster_name),
-                        )));
+                    let system_user = session.map_or(false, |s| s.user().is_system_user());
+                    if !system_user {
+                        if let Some(id @ ClusterId::System(_)) = item.cluster_id() {
+                            let cluster_name = state.clusters_by_id[&id].name.clone();
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyCluster(cluster_name),
+                            )));
+                        }
                     }
 
                     let owner_privileges = vec![rbac::owner_privilege(item.typ().into(), owner_id)];
@@ -876,7 +879,9 @@ impl Catalog {
                                 ),
                             )));
                         }
-                        if let ResolvedDatabaseSpecifier::Ambient = name.qualifiers.database_spec {
+                        if name.qualifiers.database_spec == ResolvedDatabaseSpecifier::Ambient
+                            && !system_user
+                        {
                             let schema_name = state
                                 .resolve_full_name(&name, session.map(|session| session.conn_id()))
                                 .schema;
