@@ -33,7 +33,9 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExplainFormat, ExprHumanizer};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowArena, RowIterator, Timestamp};
-use mz_sql::ast::{CreateSubsourceStatement, Ident, UnresolvedItemName, Value};
+use mz_sql::ast::{
+    CreateSubsourceStatement, Ident, MySqlConfigOptionName, UnresolvedItemName, Value,
+};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
@@ -43,6 +45,7 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
+use mz_storage_types::sources::mysql::{MySqlSourceDetails, ProtoMySqlSourceDetails};
 use mz_storage_types::sources::postgres::{
     PostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetails,
 };
@@ -70,7 +73,8 @@ use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ConnectionOption, ConnectionOptionName, CreateSourceConnection, DeferredItemName,
-    PgConfigOption, PgConfigOptionName, Statement, TransactionMode, WithOptionValue,
+    MySqlConfigOption, PgConfigOption, PgConfigOptionName, Statement, TransactionMode,
+    WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
@@ -3570,6 +3574,142 @@ impl Coordinator {
                             curr_options.push(PgConfigOption {
                                 name: PgConfigOptionName::TextColumns,
                                 value: Some(WithOptionValue::Sequence(new_text_columns)),
+                            });
+                        }
+                    }
+                    CreateSourceConnection::MySql {
+                        options: curr_options,
+                        ..
+                    } => {
+                        let mz_sql::plan::MySqlConfigOptionExtracted {
+                            details,
+                            mut text_columns,
+                            mut ignore_columns,
+                            ..
+                        } = curr_options.clone().try_into()?;
+
+                        // Drop both details and text columns; we will add them back in
+                        // as appropriate below.
+                        curr_options.retain(|o| {
+                            !matches!(
+                                o.name,
+                                MySqlConfigOptionName::Details
+                                    | MySqlConfigOptionName::TextColumns
+                                    | MySqlConfigOptionName::IgnoreColumns
+                            )
+                        });
+
+                        let gen_details =
+                            |details: Option<String>| -> Result<MySqlSourceDetails, AdapterError> {
+                                let details = details.as_ref().ok_or_else(|| {
+                                    AdapterError::internal(
+                                        ALTER_SOURCE,
+                                        "MySQL source missing details",
+                                    )
+                                })?;
+
+                                let details = hex::decode(details)
+                                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+                                let details = ProtoMySqlSourceDetails::decode(&*details)
+                                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+
+                                MySqlSourceDetails::from_proto(details)
+                                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
+                            };
+
+                        let mut curr_details = gen_details(details)?;
+                        let mut new_details = gen_details(new_details)?;
+
+                        // this doesn't check table names, so we must do that separately.
+                        curr_details
+                            .alter_compatible(cur_entry.id(), &new_details)
+                            .map_err(StorageError::InvalidAlter)?;
+
+                        // Trim any unreferred-to tables.
+                        curr_details.tables.retain(|table| {
+                            let name = UnresolvedItemName(vec![
+                                // Unchecked is fine beause we have previously verified
+                                // that these are valid idents.
+                                Ident::new_unchecked(table.schema_name.clone()),
+                                Ident::new_unchecked(table.name.clone()),
+                            ]);
+
+                            curr_references.contains(&name)
+                        });
+
+                        mz_ore::soft_assert_eq_or_log!(
+                            curr_details.tables.len(),
+                            curr_references.len(),
+                            "MySqlSourceDetails must have entry for every reference"
+                        );
+
+                        // Ensure that new tables are distinct from the current tables.
+                        for table in new_details.tables.iter() {
+                            let name = UnresolvedItemName(vec![
+                                // Unchecked is fine beause we have previously verified
+                                // that these are valid idents.
+                                Ident::new_unchecked(table.schema_name.clone()),
+                                Ident::new_unchecked(table.name.clone()),
+                            ]);
+                            if curr_references.contains(&name) {
+                                Err(AdapterError::SubsourceAlreadyReferredTo { name })?;
+                            }
+                        }
+
+                        // Merge the current table definitions into new tables. Note
+                        // this changes the output indexes of the subsources.
+                        new_details.tables.extend(curr_details.tables);
+
+                        curr_options.push(MySqlConfigOption {
+                            name: MySqlConfigOptionName::Details,
+                            value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                                new_details.into_proto().encode_to_vec(),
+                            )))),
+                        });
+
+                        // Drop all text / ignore columns that are not currently referred to.
+                        let column_referenced =
+                            |column_qualified_reference: &UnresolvedItemName| {
+                                mz_ore::soft_assert_eq_or_log!(
+                                column_qualified_reference.0.len(),
+                                3,
+                                "all TEXT COLUMNS & IGNORE COLUMNS values must be column-qualified references"
+                            );
+                                let mut table = column_qualified_reference.clone();
+                                table.0.truncate(2);
+                                curr_references.contains(&table)
+                            };
+                        text_columns.retain(column_referenced);
+                        ignore_columns.retain(column_referenced);
+
+                        // Merge the current text / ignore columns into the new text / ignore columns.
+                        new_text_columns.extend(text_columns);
+                        new_ignore_columns.extend(ignore_columns);
+
+                        // If we have text columns, add them to the options.
+                        if !new_text_columns.is_empty() {
+                            new_text_columns.sort();
+                            let new_text_columns = new_text_columns
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect();
+
+                            curr_options.push(MySqlConfigOption {
+                                name: MySqlConfigOptionName::TextColumns,
+                                value: Some(WithOptionValue::Sequence(new_text_columns)),
+                            });
+                        }
+                        // If we have ignore columns, add them to the options.
+                        if !new_ignore_columns.is_empty() {
+                            new_ignore_columns.sort();
+                            let new_ignore_columns = new_ignore_columns
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect();
+
+                            curr_options.push(MySqlConfigOption {
+                                name: MySqlConfigOptionName::IgnoreColumns,
+                                value: Some(WithOptionValue::Sequence(new_ignore_columns)),
                             });
                         }
                     }

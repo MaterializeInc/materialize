@@ -97,8 +97,8 @@ pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{
-    AlterSourceAddSubsourceOptionExtracted, PgConfigOptionExtracted, PlannedAlterRoleOption,
-    PlannedRoleVariable,
+    AlterSourceAddSubsourceOptionExtracted, MySqlConfigOptionExtracted, PgConfigOptionExtracted,
+    PlannedAlterRoleOption, PlannedRoleVariable,
 };
 pub use statement::{
     describe, plan, plan_copy_from, resolve_cluster_for_materialized_view, StatementContext,

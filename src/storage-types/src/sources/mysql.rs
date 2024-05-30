@@ -308,6 +308,25 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
     }
 }
 
+impl AlterCompatible for MySqlSourceDetails {
+    fn alter_compatible(
+        &self,
+        id: mz_repr::GlobalId,
+        other: &Self,
+    ) -> Result<(), crate::controller::AlterError> {
+        if self.initial_gtid_set == other.initial_gtid_set {
+            Ok(())
+        } else {
+            tracing::warn!(
+                "MySqlSourceDetails incompatible at initial_gtid_set:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(crate::controller::AlterError { id })
+        }
+    }
+}
+
 /// Represents a MySQL transaction id
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum GtidState {
