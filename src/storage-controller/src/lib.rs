@@ -1173,6 +1173,7 @@ where
                     connection: description.sink.connection,
                     envelope: description.sink.envelope,
                     as_of: description.sink.as_of,
+                    version: description.sink.version,
                     status_id,
                     from_storage_metadata,
                     with_snapshot: description.sink.with_snapshot,
@@ -1255,6 +1256,7 @@ where
                     connection: new_export_description.sink.connection.clone(),
                     envelope: new_export_description.sink.envelope,
                     with_snapshot: new_export_description.sink.with_snapshot,
+                    version: new_export_description.sink.version,
                     // Here we are about to send a RunSinkCommand with the current read capaibility
                     // held by this sink. However, clusters are already running a version of the
                     // sink and nothing guarantees that by the time this command arrives at the

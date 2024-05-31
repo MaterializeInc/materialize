@@ -34,14 +34,14 @@ use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
-    ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkStatement,
-    CreateSubsourceOption, CreateSubsourceOptionName, CsrConfigOption, CsrConfigOptionName,
-    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, Expr, Function, FunctionArgs, Ident, KafkaSourceConfigOption,
-    KafkaSourceConfigOptionName, MaterializedViewOption, MaterializedViewOptionName,
-    MySqlConfigOption, MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, RawItemName,
-    ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue,
-    RefreshOptionValue, SourceEnvelope, Statement, UnresolvedItemName,
+    ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOptionName,
+    CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema,
+    DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function, FunctionArgs, Ident,
+    KafkaSourceConfigOption, KafkaSourceConfigOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
+    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, Statement, UnresolvedItemName,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -373,8 +373,28 @@ async fn purify_create_sink(
     add_materialize_comments(&catalog, &mut create_sink_stmt)?;
     // General purification
     let CreateSinkStatement {
-        connection, format, ..
+        connection,
+        format,
+        with_options,
+        name: _,
+        in_cluster: _,
+        if_not_exists: _,
+        from: _,
+        envelope: _,
     } = &create_sink_stmt;
+
+    // The list of options that the user is allowed to specify.
+    const USER_ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[CreateSinkOptionName::Snapshot];
+
+    if let Some(op) = with_options
+        .iter()
+        .find(|op| !USER_ALLOWED_WITH_OPTIONS.contains(&op.name))
+    {
+        sql_bail!(
+            "CREATE SINK...WITH ({}..) is not allowed",
+            op.name.to_ast_string(),
+        )
+    }
 
     match &connection {
         CreateSinkConnection::Kafka {

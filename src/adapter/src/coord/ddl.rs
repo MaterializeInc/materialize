@@ -1089,6 +1089,7 @@ impl Coordinator {
             envelope: sink.envelope,
             as_of,
             with_snapshot: sink.with_snapshot,
+            version: sink.version,
             status_id,
             from_storage_metadata: (),
         };
