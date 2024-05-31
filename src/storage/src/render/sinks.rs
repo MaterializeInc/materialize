@@ -69,13 +69,15 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         None,
         async {},
         move |error| {
-            let error = format!("storage_sink: {error}");
-            tracing::info!("{error}");
-            let mut command_tx = command_tx.borrow_mut();
-            command_tx.broadcast(InternalStorageCommand::SuspendAndRestart {
-                id: sink_id,
-                reason: error,
-            });
+            Box::pin(async move {
+                let error = format!("storage_sink: {error}");
+                tracing::info!("{error}");
+                let mut command_tx = command_tx.borrow_mut();
+                command_tx.broadcast(InternalStorageCommand::SuspendAndRestart {
+                    id: sink_id,
+                    reason: error,
+                });
+            })
         },
     );
     tokens.extend(persist_tokens);

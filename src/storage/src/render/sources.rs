@@ -306,6 +306,7 @@ where
                                 } else {
                                     (None, None, None)
                                 };
+
                             let (stream, tok) = persist_source::persist_source_core(
                                 scope,
                                 id,
@@ -318,7 +319,9 @@ where
                                 flow_control,
                                 false.then_some(|| unreachable!()),
                                 async {},
-                                |error| panic!("upsert_rehydration: {error}"),
+                                |error| {
+                                    Box::pin(async move { panic!("upsert_rehydration: {error}") })
+                                },
                             );
                             (
                                 stream.as_collection(),
