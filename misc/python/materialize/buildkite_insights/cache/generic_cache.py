@@ -17,6 +17,7 @@ from materialize.buildkite_insights.cache.cache_constants import (
 )
 from materialize.buildkite_insights.util.data_io import (
     FilePath,
+    exists_file,
     exists_file_with_recent_data,
     read_results_from_file,
     write_results_to_file,
@@ -51,6 +52,9 @@ def get_or_query_data(
     ensure_dir_exists(cache_file_path.get_path_to_directory())
 
     no_fetch = fetch_mode == FetchMode.NEVER
+
+    if no_fetch and not exists_file(cache_file_path):
+        raise RuntimeError(f"File missing: {cache_file_path}")
 
     if fetch_mode == FetchMode.AUTO and exists_file_with_recent_data(
         cache_file_path, max_allowed_cache_age_in_hours
