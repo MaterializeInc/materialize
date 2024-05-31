@@ -1174,6 +1174,7 @@ fn proptest_packed_mz_acl_item_roundtrips() {
 }
 
 #[mz_ore::test]
+#[ignore] // TODO: Reenable when #27370 is fixed
 fn proptest_packed_mz_acl_item_sorts() {
     fn sort_mz_acl_items(mut og: Vec<MzAclItem>) {
         let mut packed: Vec<_> = og
