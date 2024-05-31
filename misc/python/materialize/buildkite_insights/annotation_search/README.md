@@ -17,6 +17,7 @@ usage: buildkite-annotation-search [-h]
                                    [--short]
                                    [--oneline]
                                    [--use-regex]
+                                   [--verbose]
                                    {cleanup,coverage,deploy,deploy-mz-lsp-server,deploy-mz,deploy-website,license,nightly,release-qualification,security,slt,test,www}
                                    pattern
 ```
