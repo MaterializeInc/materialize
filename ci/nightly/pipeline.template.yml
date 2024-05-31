@@ -1608,7 +1608,7 @@ steps:
         agents:
           queue: linux-aarch64-small
 
-  # TODO(parkmycar): Re-enable when we auto-generate BUILD.bazel files for Cargo.toml.
+  # TODO(#27381): Re-enable when we auto-generate BUILD.bazel files for Cargo.toml.
   # - group: ":bazel: Bazel"
   #   key: bazel
   #   steps:
