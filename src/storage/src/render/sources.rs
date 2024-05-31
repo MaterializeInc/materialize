@@ -41,6 +41,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
+use crate::internal_control::InternalStorageCommand;
 use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
 use crate::source::{self, RawSourceCreationConfig};
 use crate::upsert::UpsertKey;
@@ -306,6 +307,9 @@ where
                                 } else {
                                     (None, None, None)
                                 };
+
+                            let command_tx = Rc::clone(&storage_state.internal_cmd_tx);
+
                             let (stream, tok) = persist_source::persist_source_core(
                                 scope,
                                 id,
@@ -318,7 +322,17 @@ where
                                 flow_control,
                                 false.then_some(|| unreachable!()),
                                 async {},
-                                |error| panic!("upsert_rehydration: {error}"),
+                                move |error| {
+                                    let error = format!("upsert_rehydration: {error}");
+                                    tracing::info!("{error}");
+                                    let mut command_tx = command_tx.borrow_mut();
+                                    command_tx.broadcast(
+                                        InternalStorageCommand::SuspendAndRestart {
+                                            id,
+                                            reason: error,
+                                        },
+                                    );
+                                },
                             );
                             (
                                 stream.as_collection(),
