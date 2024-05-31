@@ -58,7 +58,7 @@ ERROR_RE = re.compile(
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     | SUMMARY:\ .*Sanitizer
     # for miri test summary
-    | FAIL\ \[\s*\d+\.\d+s\]
+    | (FAIL|TIMEOUT)\s+\[\s*\d+\.\d+s\]
     )
     .* $
     """,
