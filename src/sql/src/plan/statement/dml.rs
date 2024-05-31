@@ -1155,24 +1155,27 @@ pub fn plan_copy(
         "parquet" => CopyFormat::Parquet,
         _ => sql_bail!("unknown FORMAT: {}", options.format),
     };
-    if let CopyDirection::To = direction {
-        if options.delimiter.is_some() {
-            sql_bail!("COPY TO does not support DELIMITER option yet");
-        }
-        if options.null.is_some() {
-            sql_bail!("COPY TO does not support NULL option yet");
-        }
-    }
     match (&direction, &target) {
-        (CopyDirection::To, CopyTarget::Stdout) => match relation {
-            CopyRelation::Named { .. } => sql_bail!("named with COPY TO STDOUT unsupported"),
-            CopyRelation::Select(stmt) => {
-                Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
+        (CopyDirection::To, CopyTarget::Stdout) => {
+            if options.delimiter.is_some() {
+                sql_bail!("COPY TO does not support DELIMITER option yet");
             }
-            CopyRelation::Subscribe(stmt) => {
-                Ok(plan_subscribe(scx, stmt, &Params::empty(), Some(format))?)
+            if options.quote.is_some() {
+                sql_bail!("COPY TO does not support QUOTE option yet");
             }
-        },
+            if options.null.is_some() {
+                sql_bail!("COPY TO does not support NULL option yet");
+            }
+            match relation {
+                CopyRelation::Named { .. } => sql_bail!("named with COPY TO STDOUT unsupported"),
+                CopyRelation::Select(stmt) => {
+                    Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
+                }
+                CopyRelation::Subscribe(stmt) => {
+                    Ok(plan_subscribe(scx, stmt, &Params::empty(), Some(format))?)
+                }
+            }
+        }
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
             CopyRelation::Named { name, columns } => {
                 plan_copy_from(scx, name, columns, format, options)
