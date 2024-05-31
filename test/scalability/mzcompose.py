@@ -25,6 +25,7 @@ from materialize.scalability.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.benchmark_executor import BenchmarkExecutor
 from materialize.scalability.benchmark_result import BenchmarkResult
 from materialize.scalability.comparison_outcome import ComparisonOutcome
+from materialize.scalability.df import df_totals_cols
 from materialize.scalability.df.df_totals import DfTotalsExtended
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
@@ -47,6 +48,7 @@ from materialize.scalability.plot.plot import (
 from materialize.scalability.regression_assessment import RegressionAssessment
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
+from materialize.scalability.scalability_versioning import SCALABILITY_FRAMEWORK_VERSION
 from materialize.scalability.schema import Schema, TransactionIsolation
 from materialize.scalability.workload import (
     Workload,
@@ -56,6 +58,16 @@ from materialize.scalability.workloads.connection_workloads import *  # noqa: F4
 from materialize.scalability.workloads.ddl_workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads.dml_dql_workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads.self_test_workloads import *  # noqa: F401 F403
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_test_analytics_config,
+)
+from materialize.test_analytics.connection.test_analytics_connection import (
+    create_cursor,
+)
+from materialize.test_analytics.data import build_data_storage
+from materialize.test_analytics.data.scalability_framework import (
+    scalability_framework_result_storage,
+)
 from materialize.util import YesNoOnce, all_subclasses
 from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS,
@@ -255,7 +267,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     report_assessment(regression_assessment)
 
-    if regression_assessment.has_unjustified_regressions():
+    is_failure = regression_assessment.has_unjustified_regressions()
+    upload_results_to_test_analytics(
+        c, other_endpoints, benchmark_result, not is_failure
+    )
+
+    if is_failure:
         raise FailedTestExecutionError(
             error_summary="At least one regression occurred",
             errors=regression_assessment.to_failure_details(),
@@ -532,6 +549,68 @@ def upload_plots_to_buildkite() -> None:
         f"{paths.plot_dir().relative_to(paths.RESULTS_DIR)}/*.png",
         cwd=paths.RESULTS_DIR,
     )
+
+
+def upload_results_to_test_analytics(
+    c: Composition,
+    endpoints: list[Endpoint],
+    benchmark_result: BenchmarkResult,
+    was_successful: bool,
+) -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    try:
+        head_target_endpoint = _get_head_target_endpoint(endpoints)
+
+        if head_target_endpoint is None:
+            print(
+                "Not uploading results because not HEAD version included in endpoints"
+            )
+            return
+
+        endpoint_version_info = head_target_endpoint.try_load_version()
+        results_of_endpoint = benchmark_result.df_total_by_endpoint_name_and_workload[
+            endpoint_version_info
+        ]
+
+        cursor = create_cursor(create_test_analytics_config(c))
+        build_data_storage.insert_build(cursor)
+        build_data_storage.insert_build_step(cursor, was_successful=was_successful)
+
+        result_entries = []
+
+        for workload_name, result in results_of_endpoint.items():
+            workload_version = benchmark_result.workload_version_by_name[workload_name]
+            for index, row in result.data.iterrows():
+                result_entries.append(
+                    scalability_framework_result_storage.ScalabilityFrameworkResultEntry(
+                        workload_name=workload_name,
+                        workload_version=str(workload_version),
+                        concurrency=row[df_totals_cols.CONCURRENCY],
+                        count=row[df_totals_cols.COUNT],
+                        tps=row[df_totals_cols.TPS],
+                    )
+                )
+
+        scalability_framework_result_storage.insert_result(
+            cursor,
+            framework_version=SCALABILITY_FRAMEWORK_VERSION,
+            results=result_entries,
+        )
+
+        print("Uploaded results.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        print(f"Uploading results failed! {e}")
+
+
+def _get_head_target_endpoint(endpoints: list[Endpoint]) -> Endpoint | None:
+    for endpoint in endpoints:
+        if endpoint.specified_target() == TARGET_HEAD:
+            return endpoint
+
+    return None
 
 
 def workflow_lab(c: Composition) -> None:
