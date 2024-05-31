@@ -11,6 +11,7 @@
 
 use std::future::Future;
 use std::hash::{BuildHasher, Hash, Hasher};
+use std::marker::PhantomData;
 use std::rc::Weak;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
@@ -18,7 +19,8 @@ use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder};
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushContainer, PushInto};
+use timely::container::columnation::{Columnation, TimelyStack};
+use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
@@ -27,7 +29,7 @@ use timely::dataflow::operators::generic::{InputHandle, OperatorInfo, OutputHand
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::{Antichain, Timestamp};
-use timely::{Data, ExchangeData, PartialOrder};
+use timely::{Container, Data, ExchangeData, PartialOrder};
 
 use crate::builder_async::{
     AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
@@ -139,11 +141,11 @@ where
     ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
     where
         DCB: ContainerBuilder,
-        DCB::Container: PushContainer,
+        DCB::Container: SizableContainer,
         ECB: ContainerBuilder,
-        ECB::Container: PushContainer,
-        D2: PushInto<DCB::Container>,
-        E: PushInto<ECB::Container>,
+        ECB::Container: SizableContainer,
+        DCB::Container: PushInto<D2>,
+        ECB::Container: PushInto<E>,
         L: FnMut(D1) -> Result<D2, E> + 'static,
     {
         self.flat_map_fallible::<DCB, ECB, _, _, _, _>(name, move |record| Some(logic(record)))
@@ -160,11 +162,11 @@ where
     ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
     where
         DCB: ContainerBuilder,
-        DCB::Container: PushContainer,
+        DCB::Container: SizableContainer,
         ECB: ContainerBuilder,
-        ECB::Container: PushContainer,
-        D2: PushInto<DCB::Container>,
-        E: PushInto<ECB::Container>,
+        ECB::Container: SizableContainer,
+        DCB::Container: PushInto<D2>,
+        ECB::Container: PushInto<E>,
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
 
@@ -263,24 +265,24 @@ where
     /// untouched otherwise.
     fn consolidate_named_if<Ba>(self, must_consolidate: bool, name: &str) -> Self
     where
-        D1: differential_dataflow::ExchangeData + Hash,
-        R: Semigroup + differential_dataflow::ExchangeData,
-        G::Timestamp: Lattice,
+        D1: differential_dataflow::ExchangeData + Hash + Columnation,
+        R: Semigroup + differential_dataflow::ExchangeData + Columnation,
+        G::Timestamp: Lattice + Columnation,
         Ba: Batcher<
                 Input = Vec<((D1, ()), G::Timestamp, R)>,
-                Output = ((D1, ()), G::Timestamp, R),
+                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
                 Time = G::Timestamp,
             > + 'static;
 
     /// Consolidates the collection.
     fn consolidate_named<Ba>(self, name: &str) -> Self
     where
-        D1: differential_dataflow::ExchangeData + Hash,
-        R: Semigroup + differential_dataflow::ExchangeData,
-        G::Timestamp: Lattice,
+        D1: differential_dataflow::ExchangeData + Hash + Columnation,
+        R: Semigroup + differential_dataflow::ExchangeData + Columnation,
+        G::Timestamp: Lattice + Columnation,
         Ba: Batcher<
                 Input = Vec<((D1, ()), G::Timestamp, R)>,
-                Output = ((D1, ()), G::Timestamp, R),
+                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
                 Time = G::Timestamp,
             > + 'static;
 }
@@ -437,11 +439,11 @@ where
     ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
     where
         DCB: ContainerBuilder,
-        DCB::Container: PushContainer,
+        DCB::Container: SizableContainer,
         ECB: ContainerBuilder,
-        ECB::Container: PushContainer,
-        D2: PushInto<DCB::Container>,
-        E: PushInto<ECB::Container>,
+        ECB::Container: SizableContainer,
+        DCB::Container: PushInto<D2>,
+        ECB::Container: PushInto<E>,
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static,
     {
@@ -514,7 +516,7 @@ where
     G: Scope,
     G::Timestamp: Data,
     D1: Data,
-    R: Semigroup,
+    R: Semigroup + 'static,
 {
     fn empty(scope: &G) -> Collection<G, D1, R> {
         operator::empty(scope).as_collection()
@@ -609,12 +611,12 @@ where
 
     fn consolidate_named_if<Ba>(self, must_consolidate: bool, name: &str) -> Self
     where
-        D1: differential_dataflow::ExchangeData + Hash,
-        R: Semigroup + differential_dataflow::ExchangeData,
-        G::Timestamp: Lattice + Ord,
+        D1: differential_dataflow::ExchangeData + Hash + Columnation,
+        R: Semigroup + differential_dataflow::ExchangeData + Columnation,
+        G::Timestamp: Lattice + Ord + Columnation,
         Ba: Batcher<
                 Input = Vec<((D1, ()), G::Timestamp, R)>,
-                Output = ((D1, ()), G::Timestamp, R),
+                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
                 Time = G::Timestamp,
             > + 'static,
     {
@@ -658,12 +660,12 @@ where
 
     fn consolidate_named<Ba>(self, name: &str) -> Self
     where
-        D1: differential_dataflow::ExchangeData + Hash,
-        R: Semigroup + differential_dataflow::ExchangeData,
-        G::Timestamp: Lattice + Ord,
+        D1: differential_dataflow::ExchangeData + Hash + Columnation,
+        R: Semigroup + differential_dataflow::ExchangeData + Columnation,
+        G::Timestamp: Lattice + Ord + Columnation,
         Ba: Batcher<
                 Input = Vec<((D1, ()), G::Timestamp, R)>,
-                Output = ((D1, ()), G::Timestamp, R),
+                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
                 Time = G::Timestamp,
             > + 'static,
     {
@@ -723,11 +725,9 @@ where
     K: Data,
     V: Data,
     R: Data + Semigroup,
-    B: Batcher<
-            Input = Vec<((K, V), G::Timestamp, R)>,
-            Output = ((K, V), G::Timestamp, R),
-            Time = G::Timestamp,
-        > + 'static,
+    B: Batcher<Input = Vec<((K, V), G::Timestamp, R)>, Time = G::Timestamp> + 'static,
+    B::Output: Container,
+    for<'a> Vec<((K, V), G::Timestamp, R)>: PushInto<<B::Output as Container>::Item<'a>>,
     P: ParallelizationContract<G::Timestamp, Vec<((K, V), G::Timestamp, R)>>,
 {
     collection
@@ -778,8 +778,8 @@ where
                                 // send the batch to downstream consumers, empty or not.
                                 let mut session = output.session(&capabilities.elements()[index]);
                                 // Extract updates not in advance of `upper`.
-                                let output =
-                                    batcher.seal::<ConsolidateBuilder<_, _, _, _>>(upper.clone());
+                                let output = batcher
+                                    .seal::<ConsolidateBuilder<_, _, _, _, _>>(upper.clone());
                                 for mut batch in output {
                                     session.give_container(&mut batch);
                                 }
@@ -816,19 +816,29 @@ where
 }
 
 /// A builder that wraps a session for direct output to a stream.
-struct ConsolidateBuilder<K: Data, V: Data, T: Timestamp, R: Data> {
+struct ConsolidateBuilder<K: Data, V: Data, T: Timestamp, R: Data, O> {
     // Session<'a, T, Vec<((K, V), T, R)>, Counter<T, ((K, V), T, R), Tee<T, ((K, V), T, R)>>>,
     buffer: Vec<Vec<((K, V), T, R)>>,
+    _marker: PhantomData<O>,
 }
 
-impl<K: Data, V: Data, T: Timestamp, R: Data> Builder for ConsolidateBuilder<K, V, T, R> {
-    type Input = ((K, V), T, R);
+impl<K, V, T, R, O> Builder for ConsolidateBuilder<K, V, T, R, O>
+where
+    K: Data,
+    V: Data,
+    T: Timestamp,
+    R: Data,
+    O: Container,
+    for<'a> Vec<((K, V), T, R)>: PushInto<O::Item<'a>>,
+{
+    type Input = O;
     type Time = T;
-    type Output = Vec<Vec<Self::Input>>;
+    type Output = Vec<Vec<((K, V), T, R)>>;
 
     fn new() -> Self {
         Self {
             buffer: Vec::default(),
+            _marker: PhantomData,
         }
     }
 
@@ -836,21 +846,24 @@ impl<K: Data, V: Data, T: Timestamp, R: Data> Builder for ConsolidateBuilder<K, 
         Self::new()
     }
 
-    fn push(&mut self, element: Self::Input) {
-        if let Some(last) = self.buffer.last_mut() {
-            if last.len() < last.capacity() {
-                last.push(element);
-                return;
+    fn push(&mut self, chunk: &mut Self::Input) {
+        // TODO(mh): This is less efficient than it could be because it extracts each item
+        // individually and then pushes it. However, it is not a regression over the previous
+        // implementation. In the future, we want to either clone many elements in one go,
+        // or ensure that `Vec<Input>` == `Output`, which would avoid looking at the container
+        // contents at all.
+        'element: for element in chunk.drain() {
+            if let Some(last) = self.buffer.last_mut() {
+                if last.len() < last.capacity() {
+                    last.push_into(element);
+                    continue 'element;
+                }
             }
+            let mut new =
+                Vec::with_capacity(timely::container::buffer::default_capacity::<Self::Input>());
+            new.push_into(element);
+            self.buffer.push(new);
         }
-        let mut new =
-            Vec::with_capacity(timely::container::buffer::default_capacity::<Self::Input>());
-        new.push(element);
-        self.buffer.push(new);
-    }
-
-    fn copy(&mut self, element: &Self::Input) {
-        self.push(element.clone())
     }
 
     fn done(

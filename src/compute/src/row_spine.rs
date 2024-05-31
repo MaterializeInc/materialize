@@ -11,7 +11,15 @@ pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{RowRowSpine, RowSpine, RowValSpine};
-use differential_dataflow::trace::implementations::OffsetList;
+use crate::row_spine::spines::{RowLayout, RowRowLayout, RowValLayout};
+use crate::typedefs::spines::MzStack;
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::cursor::IntoOwned;
+use differential_dataflow::trace::implementations::{BuilderInput, OffsetList};
+use mz_repr::Row;
+use timely::container::columnation::{Columnation, TimelyStack};
+use timely::progress::Timestamp;
 
 /// Spines specialized to contain `Row` types in keys and values.
 mod spines {
@@ -24,7 +32,7 @@ mod spines {
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
-    use timely::container::columnation::Columnation;
+    use timely::container::columnation::{Columnation, TimelyStack};
 
     use crate::containers::stack::StackWrapper;
     use crate::row_spine::{DatumContainer, OffsetOptimized};
@@ -33,17 +41,17 @@ mod spines {
     pub type RowRowSpine<T, R> = Spine<
         Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>,
         KeyValBatcher<Row, Row, T, R>,
-        RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>>>,
+        RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, TimelyStack<((Row, Row), T, R)>>>,
     >;
     pub type RowValSpine<V, T, R> = Spine<
         Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>,
         KeyValBatcher<Row, V, T, R>,
-        RcBuilder<OrdValBuilder<RowValLayout<((Row, V), T, R)>>>,
+        RcBuilder<OrdValBuilder<RowValLayout<((Row, V), T, R)>, TimelyStack<((Row, V), T, R)>>>,
     >;
     pub type RowSpine<T, R> = Spine<
         Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>,
         KeyBatcher<Row, T, R>,
-        RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>>>,
+        RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>, TimelyStack<((Row, ()), T, R)>>>,
     >;
 
     /// A layout based on timely stacks
@@ -65,7 +73,8 @@ mod spines {
         type Target = U;
         type KeyContainer = DatumContainer;
         type ValContainer = DatumContainer;
-        type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
+        type TimeContainer = StackWrapper<U::Time>;
+        type DiffContainer = StackWrapper<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
@@ -77,7 +86,8 @@ mod spines {
         type Target = U;
         type KeyContainer = DatumContainer;
         type ValContainer = StackWrapper<U::Val>;
-        type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
+        type TimeContainer = StackWrapper<U::Time>;
+        type DiffContainer = StackWrapper<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
@@ -88,19 +98,124 @@ mod spines {
         type Target = U;
         type KeyContainer = DatumContainer;
         type ValContainer = StackWrapper<()>;
-        type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
+        type TimeContainer = StackWrapper<U::Time>;
+        type DiffContainer = StackWrapper<U::Diff>;
         type OffsetContainer = OffsetOptimized;
+    }
+}
+
+impl<T, R> BuilderInput<RowLayout<((Row, ()), T, R)>> for TimelyStack<((Row, ()), T, R)>
+where
+    T: Timestamp + Lattice + Columnation + Clone + 'static,
+    R: Semigroup + Ord + Columnation + Clone + 'static,
+{
+    type Key<'a> = &'a Row;
+    type Val<'a> = &'a ();
+    type Time = T;
+    type Diff = R;
+
+    fn into_parts<'a>(
+        ((key, val), time, diff): Self::Item<'a>,
+    ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
+        (key, val, time.clone(), diff.clone())
+    }
+
+    fn key_eq(this: &&Row, other: DatumSeq<'_>) -> bool {
+        DatumSeq::borrow_as(this) == other
+    }
+
+    fn val_eq(this: &&(), other: &()) -> bool {
+        *this == other
+    }
+}
+
+impl<T, R> BuilderInput<RowRowLayout<((Row, Row), T, R)>> for TimelyStack<((Row, Row), T, R)>
+where
+    T: Timestamp + Lattice + Columnation + Clone + 'static,
+    R: Semigroup + Ord + Columnation + Clone + 'static,
+{
+    type Key<'a> = &'a Row;
+    type Val<'a> = &'a Row;
+    type Time = T;
+    type Diff = R;
+
+    fn into_parts<'a>(
+        ((key, val), time, diff): Self::Item<'a>,
+    ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
+        (key, val, time.clone(), diff.clone())
+    }
+
+    fn key_eq(this: &&Row, other: DatumSeq<'_>) -> bool {
+        DatumSeq::borrow_as(this) == other
+    }
+
+    fn val_eq(this: &&Row, other: DatumSeq<'_>) -> bool {
+        DatumSeq::borrow_as(this) == other
+    }
+}
+
+impl<V, T, R> BuilderInput<RowValLayout<((Row, V), T, R)>> for TimelyStack<((Row, V), T, R)>
+where
+    V: Columnation + Ord + Clone + 'static,
+    T: Timestamp + Lattice + Columnation + Clone + 'static,
+    R: Semigroup + Ord + Columnation + Clone + 'static,
+{
+    type Key<'a> = &'a Row;
+    type Val<'a> = &'a V;
+    type Time = T;
+    type Diff = R;
+
+    fn into_parts<'a>(
+        ((key, val), time, diff): Self::Item<'a>,
+    ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
+        (key, val, time.clone(), diff.clone())
+    }
+
+    fn key_eq(this: &&Row, other: DatumSeq<'_>) -> bool {
+        DatumSeq::borrow_as(this) == other
+    }
+
+    fn val_eq(this: &&V, other: &V) -> bool {
+        *this == other
+    }
+}
+
+impl<K, V, T, R> BuilderInput<MzStack<((K, V), T, R)>> for TimelyStack<((K, V), T, R)>
+where
+    K: Columnation + Ord + Clone + 'static,
+    V: Columnation + Ord + Clone + 'static,
+    T: Timestamp + Lattice + Columnation + Clone + 'static,
+    R: Semigroup + Ord + Columnation + Clone + 'static,
+{
+    type Key<'a> = &'a K;
+    type Val<'a> = &'a V;
+    type Time = T;
+    type Diff = R;
+
+    fn into_parts<'a>(
+        ((key, val), time, diff): Self::Item<'a>,
+    ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
+        (key, val, time.clone(), diff.clone())
+    }
+
+    fn key_eq(this: &&K, other: &K) -> bool {
+        *this == other
+    }
+
+    fn val_eq(this: &&V, other: &V) -> bool {
+        *this == other
     }
 }
 
 /// A `Row`-specialized container using dictionary compression.
 mod container {
+    use differential_dataflow::trace::cursor::IntoOwned;
     use std::cmp::Ordering;
 
-    use differential_dataflow::trace::cursor::MyTrait;
     use differential_dataflow::trace::implementations::BatchContainer;
     use mz_ore::region::Region;
     use mz_repr::{read_datum, Datum, Row, RowPacker};
+    use timely::container::PushInto;
 
     /// A slice container with four bytes overhead per slice.
     pub struct DatumContainer {
@@ -124,7 +239,7 @@ mod container {
     }
 
     impl BatchContainer for DatumContainer {
-        type PushItem = Row;
+        type Owned = Row;
         type ReadItem<'a> = DatumSeq<'a>;
 
         fn copy(&mut self, item: Self::ReadItem<'_>) {
@@ -163,6 +278,10 @@ mod container {
             }
         }
 
+        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
+            item
+        }
+
         fn index(&self, mut index: usize) -> Self::ReadItem<'_> {
             for batch in self.batches.iter() {
                 if index < batch.len() {
@@ -181,6 +300,18 @@ mod container {
                 result += batch.len();
             }
             result
+        }
+    }
+
+    impl PushInto<Row> for DatumContainer {
+        fn push_into(&mut self, item: Row) {
+            self.copy(IntoOwned::borrow_as(&item));
+        }
+    }
+
+    impl PushInto<&Row> for DatumContainer {
+        fn push_into(&mut self, item: &Row) {
+            self.copy(IntoOwned::borrow_as(item));
         }
     }
 
@@ -207,7 +338,7 @@ mod container {
         fn index(&self, index: usize) -> &[u8] {
             let lower = self.offsets.index(index);
             let upper = self.offsets.index(index + 1);
-            &self.storage[*lower..*upper]
+            &self.storage[lower..upper]
         }
         fn len(&self) -> usize {
             self.offsets.len() - 1
@@ -216,7 +347,7 @@ mod container {
         fn with_capacities(item_cap: usize, byte_cap: usize) -> Self {
             // TODO: be wary of `byte_cap` greater than 2^32.
             let mut offsets = crate::row_spine::OffsetOptimized::with_capacity(item_cap + 1);
-            offsets.push(0);
+            offsets.copy(0);
             Self {
                 offsets,
                 storage: Region::new_auto(byte_cap.next_power_of_two()),
@@ -263,18 +394,15 @@ mod container {
             }
         }
     }
-    impl<'a> MyTrait<'a> for DatumSeq<'a> {
+    impl<'a> IntoOwned<'a> for DatumSeq<'a> {
         type Owned = Row;
         fn into_owned(self) -> Self::Owned {
             // SAFETY: `bytes` contains a valid row.
             unsafe { Row::from_bytes_unchecked(self.bytes) }
         }
-        fn clone_onto(&self, other: &mut Self::Owned) {
+        fn clone_onto(self, other: &mut Self::Owned) {
             let mut packer = other.packer();
             self.copy_into(&mut packer);
-        }
-        fn compare(&self, other: &Self::Owned) -> std::cmp::Ordering {
-            self.cmp(&DatumSeq::borrow_as(other))
         }
         fn borrow_as(other: &'a Self::Owned) -> Self {
             Self {
@@ -320,7 +448,7 @@ mod container {
                 let row = Row::pack(datums.clone());
 
                 let mut container = DatumContainer::with_capacity(row.byte_len());
-                container.copy_push(&row);
+                container.push(&row);
 
                 // When run under miri this catches undefined bytes written to data
                 // eg by calling push_copy! on a type which contains undefined padding values
@@ -380,13 +508,9 @@ mod container {
 }
 
 mod offset_opt {
-
-    use std::cmp::Ordering;
-    use std::ops::Deref;
-
-    use differential_dataflow::trace::cursor::MyTrait;
     use differential_dataflow::trace::implementations::BatchContainer;
     use differential_dataflow::trace::implementations::OffsetList;
+    use timely::container::PushInto;
 
     enum OffsetStride {
         Empty,
@@ -466,16 +590,16 @@ mod offset_opt {
     }
 
     impl BatchContainer for OffsetOptimized {
-        type PushItem = usize;
-        type ReadItem<'a> = Wrapper<usize>;
+        type Owned = usize;
+        type ReadItem<'a> = usize;
 
         fn copy(&mut self, item: Self::ReadItem<'_>) {
             if !self.spilled.is_empty() {
-                self.spilled.push(*item);
+                self.spilled.push(item);
             } else {
-                let inserted = self.strided.push(*item);
+                let inserted = self.strided.push(item);
                 if !inserted {
-                    self.spilled.push(*item);
+                    self.spilled.push(item);
                 }
             }
         }
@@ -494,11 +618,15 @@ mod offset_opt {
             }
         }
 
+        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
+            item
+        }
+
         fn index(&self, index: usize) -> Self::ReadItem<'_> {
             if index < self.strided.len() {
-                Wrapper(self.strided.index(index))
+                self.strided.index(index)
             } else {
-                Wrapper(self.spilled.index(index - self.strided.len()))
+                self.spilled.index(index - self.strided.len())
             }
         }
 
@@ -507,41 +635,15 @@ mod offset_opt {
         }
     }
 
+    impl PushInto<usize> for OffsetOptimized {
+        fn push_into(&mut self, item: usize) {
+            self.copy(item);
+        }
+    }
+
     impl OffsetOptimized {
         pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
             crate::row_spine::offset_list_size(&self.spilled, callback);
-        }
-    }
-
-    /// Helper struct to provide `MyTrait` for `Copy` types.
-    #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
-    pub struct Wrapper<T: Copy>(T);
-
-    impl<T: Copy> Deref for Wrapper<T> {
-        type Target = T;
-
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    impl<'a, T: Copy + Ord> MyTrait<'a> for Wrapper<T> {
-        type Owned = T;
-
-        fn into_owned(self) -> Self::Owned {
-            self.0
-        }
-
-        fn clone_onto(&self, other: &mut Self::Owned) {
-            *other = self.0;
-        }
-
-        fn compare(&self, other: &Self::Owned) -> Ordering {
-            self.0.cmp(other)
-        }
-
-        fn borrow_as(other: &'a Self::Owned) -> Self {
-            Self(*other)
         }
     }
 }

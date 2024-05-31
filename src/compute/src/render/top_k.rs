@@ -18,7 +18,7 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::cursor::MyTrait;
+use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use mz_compute_types::plan::top_k::{
@@ -31,7 +31,7 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, DatumVec, Diff, Row, ScalarType, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
-use timely::container::columnation::Columnation;
+use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
@@ -399,10 +399,9 @@ where
         // If validating: demux errors, otherwise we cannot produce errors.
         let (input, oks, errs) = if validating {
             // Build topk stage, produce errors for invalid multiplicities.
-            let from = |v: &Result<Row, Row>| v.into_owned();
             let (input, stage) =
-                build_topk_negated_stage::<S, _, _, RowValSpine<Result<Row, Row>, _, _>>(
-                    &input, from, order_key, offset, limit, arity,
+                build_topk_negated_stage::<S, _, RowValSpine<Result<Row, Row>, _, _>>(
+                    &input, order_key, offset, limit, arity,
                 );
             let stage = stage.as_collection(|k, v| (k.into_owned(), v.clone()));
 
@@ -426,9 +425,8 @@ where
             (input, oks, Some(errs))
         } else {
             // Build non-validating topk stage.
-            let from = |v: DatumSeq| v.into_owned();
-            let (input, stage) = build_topk_negated_stage::<S, _, _, RowRowSpine<_, _>>(
-                &input, from, order_key, offset, limit, arity,
+            let (input, stage) = build_topk_negated_stage::<S, _, RowRowSpine<_, _>>(
+                &input, order_key, offset, limit, arity,
             );
             // Turn arrangement into collection.
             let stage = stage.as_collection(|k, v| (k.into_owned(), v.into_owned()));
@@ -495,7 +493,6 @@ where
             .mz_arrange::<RowSpine<_, _>>("Arranged MonotonicTop1 partial [val: empty]")
             .mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>(
                 "MonotonicTop1",
-                |v| v.into_owned(),
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
                     output.push((accum.row.clone(), 1));
@@ -513,9 +510,8 @@ where
 /// Returns two arrangements:
 /// * The arranged input data without modifications, and
 /// * the maintained negated output data.
-fn build_topk_negated_stage<G, V, F, Tr>(
+fn build_topk_negated_stage<G, V, Tr>(
     input: &Collection<G, (Row, Row), Diff>,
-    from: F,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
     limit: Option<mz_expr::MirScalarExpr>,
@@ -527,13 +523,13 @@ fn build_topk_negated_stage<G, V, F, Tr>(
 where
     G: Scope,
     G::Timestamp: Lattice + Columnation,
-    F: Fn(Tr::Val<'_>) -> V + 'static,
     V: MaybeValidatingRow<Row, Row>,
     Tr: Trace
         + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
         + 'static,
+    for<'a> Tr::Val<'a>: IntoOwned<'a, Owned = V>,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Input = ((Row, V), G::Timestamp, Diff)>,
+    Tr::Builder: Builder<Input = TimelyStack<((Row, V), G::Timestamp, Diff)>>,
     Arranged<G, TraceAgent<Tr>>: ArrangementSize,
 {
     let mut datum_vec = mz_repr::DatumVec::new();
@@ -544,7 +540,7 @@ where
     // built-in view mz_internal.mz_expected_group_size_advice.
     let arranged = input.mz_arrange::<RowRowSpine<_, _>>("Arranged TopK input");
 
-    let reduced = arranged.mz_reduce_abelian::<_, _, _, Tr>("Reduced TopK input", from, {
+    let reduced = arranged.mz_reduce_abelian::<_, _, _, Tr>("Reduced TopK input", {
         move |mut hash_key, source, target: &mut Vec<(V, Diff)>| {
             // Unpack the limit, either into an integer literal or an expression to evaluate.
             let limit: Option<i64> = limit.as_ref().map(|l| {
@@ -834,7 +830,7 @@ pub mod monoids {
     use std::hash::{Hash, Hasher};
     use std::rc::Rc;
 
-    use differential_dataflow::difference::{Multiply, Semigroup};
+    use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
     use mz_expr::ColumnOrder;
     use mz_repr::{DatumVec, Diff, Row};
     use serde::{Deserialize, Serialize};
@@ -885,7 +881,9 @@ pub mod monoids {
                 self.clone_from(rhs);
             }
         }
+    }
 
+    impl IsZero for Top1Monoid {
         fn is_zero(&self) -> bool {
             false
         }
@@ -1010,7 +1008,9 @@ pub mod monoids {
                 self.clone_from(rhs);
             }
         }
+    }
 
+    impl IsZero for Top1MonoidLocal {
         fn is_zero(&self) -> bool {
             false
         }

@@ -16,6 +16,7 @@ use std::sync::atomic::AtomicBool;
 
 use differential_dataflow::trace::implementations::BatchContainer;
 use timely::container::columnation::{Columnation, Region, TimelyStack};
+use timely::container::PushInto;
 
 use crate::containers::array::Array;
 
@@ -46,9 +47,9 @@ impl<T: Columnation> StackWrapper<T> {
 
 // The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
 // be presented with the actual contained type, rather than a type that borrows into it.
-impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for StackWrapper<T> {
-    type PushItem = T;
-    type ReadItem<'a> = &'a Self::PushItem;
+impl<T: Ord + Columnation + Clone + 'static> BatchContainer for StackWrapper<T> {
+    type Owned = T;
+    type ReadItem<'a> = &'a Self::Owned;
 
     #[inline]
     fn copy(&mut self, item: &T) {
@@ -111,6 +112,10 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for Sta
         }
     }
 
+    fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
+        item
+    }
+
     #[inline]
     fn index(&self, index: usize) -> Self::ReadItem<'_> {
         match self {
@@ -131,6 +136,24 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for Sta
         match self {
             StackWrapper::Legacy(stack) => stack.is_empty(),
             StackWrapper::Chunked(stack) => stack.is_empty(),
+        }
+    }
+}
+
+impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> PushInto<T> for StackWrapper<T> {
+    fn push_into(&mut self, item: T) {
+        match self {
+            StackWrapper::Legacy(stack) => stack.copy(&item),
+            StackWrapper::Chunked(stack) => stack.copy(&item),
+        }
+    }
+}
+
+impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> PushInto<&T> for StackWrapper<T> {
+    fn push_into(&mut self, item: &T) {
+        match self {
+            StackWrapper::Legacy(stack) => stack.copy(item),
+            StackWrapper::Chunked(stack) => stack.copy(item),
         }
     }
 }
@@ -275,8 +298,8 @@ impl<T: Columnation> ChunkedStack<T> {
 // The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
 // be presented with the actual contained type, rather than a type that borrows into it.
 impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for ChunkedStack<T> {
-    type PushItem = T;
-    type ReadItem<'a> = &'a Self::PushItem;
+    type Owned = T;
+    type ReadItem<'a> = &'a Self::Owned;
 
     #[inline]
     fn copy(&mut self, item: &T) {
@@ -300,6 +323,10 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for Chu
         let mut new = Self::with_capacity(cont1.length + cont2.length);
         new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
         new
+    }
+
+    fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
+        item
     }
 
     #[inline]

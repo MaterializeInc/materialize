@@ -17,6 +17,7 @@ use std::sync::mpsc;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{Collection, Data};
 use mz_compute_types::dataflows::DataflowDescription;
@@ -310,7 +311,7 @@ where
         let mut datums = DatumVec::new();
         match self {
             MzArrangement::RowRow(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowRowSpine<_, _>>, _, _, _>(
+                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowRowSpine<_, _>>, Row, _, _, _>(
                     inner,
                     key,
                     move |k, v, t, d| {
@@ -417,19 +418,23 @@ where
     {
         let mut datums = DatumVec::new();
         match self {
-            MzArrangementImport::RowRow(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<RowRowEnter<T, Diff, S::Timestamp>, _, _, _>(
-                    inner,
-                    key,
-                    move |k, v, t, d| {
-                        let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.to_datum_iter());
-                        datums_borrow.extend(v.to_datum_iter());
-                        logic(&mut datums_borrow, t, d)
-                    },
-                    refuel,
-                )
-            }
+            MzArrangementImport::RowRow(inner) => CollectionBundle::<S, T>::flat_map_core::<
+                RowRowEnter<T, Diff, S::Timestamp>,
+                Row,
+                _,
+                _,
+                _,
+            >(
+                inner,
+                key,
+                move |k, v, t, d| {
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(k.to_datum_iter());
+                    datums_borrow.extend(v.to_datum_iter());
+                    logic(&mut datums_borrow, t, d)
+                },
+                refuel,
+            ),
         }
     }
 }
@@ -783,16 +788,17 @@ where
     ///
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
     /// where key and value are potentially specialized, but convertible into rows.
-    fn flat_map_core<Tr, D, I, L>(
+    fn flat_map_core<Tr, K, D, I, L>(
         trace: &Arranged<S, Tr>,
-        key: Option<Tr::KeyOwned>,
+        key: Option<K>,
         mut logic: L,
         refuel: usize,
     ) -> timely::dataflow::Stream<S, I::Item>
     where
-        for<'a> Tr::Key<'a>: ToDatumIter,
+        for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = K>,
         for<'a> Tr::Val<'a>: ToDatumIter,
         Tr: TraceReader<Time = S::Timestamp, Diff = mz_repr::Diff> + Clone + 'static,
+        K: PartialEq + 'static,
         I: IntoIterator<Item = (D, Tr::Time, Tr::Diff)>,
         D: Data,
         L: for<'a, 'b> FnMut(Tr::Key<'_>, Tr::Val<'_>, &'a S::Timestamp, &'a mz_repr::Diff) -> I
@@ -1051,7 +1057,6 @@ where
 impl<C> PendingWork<C>
 where
     C: Cursor,
-    C::KeyOwned: PartialEq + Sized,
     C::Time: Timestamp,
 {
     /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
@@ -1063,9 +1068,9 @@ where
         }
     }
     /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to `output`.
-    fn do_work<I, D, L>(
+    fn do_work<I, D, L, K>(
         &mut self,
-        key: &Option<C::KeyOwned>,
+        key: &Option<K>,
         logic: &mut L,
         fuel: &mut usize,
         output: &mut OutputHandleCore<
@@ -1078,6 +1083,8 @@ where
         I: IntoIterator<Item = (D, C::Time, C::Diff)>,
         D: Data,
         L: for<'a, 'b> FnMut(C::Key<'_>, C::Val<'b>, &'a C::Time, &'a C::Diff) -> I + 'static,
+        K: PartialEq + Sized,
+        for<'a> C::Key<'a>: IntoOwned<'a, Owned = K>,
     {
         use differential_dataflow::consolidation::consolidate;
 
@@ -1086,15 +1093,24 @@ where
         let mut session = output.session_with_builder(&self.capability);
         let mut buffer = Vec::new();
         if let Some(key) = key {
-            use differential_dataflow::trace::cursor::MyTrait;
-            if self.cursor.get_key(&self.batch).map(|k| k.equals(key)) != Some(true) {
-                self.cursor.seek_key_owned(&self.batch, key);
+            if self
+                .cursor
+                .get_key(&self.batch)
+                .map(|k| k == IntoOwned::borrow_as(key))
+                != Some(true)
+            {
+                self.cursor.seek_key(&self.batch, IntoOwned::borrow_as(key));
             }
-            if self.cursor.get_key(&self.batch).map(|k| k.equals(key)) == Some(true) {
+            if self
+                .cursor
+                .get_key(&self.batch)
+                .map(|k| k == IntoOwned::borrow_as(key))
+                == Some(true)
+            {
                 let key = self.cursor.key(&self.batch);
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
-                        buffer.push((time.clone(), diff.clone()));
+                        buffer.push((time.into_owned(), diff.into_owned()));
                     });
                     consolidate(&mut buffer);
                     for (time, diff) in buffer.drain(..) {
@@ -1114,7 +1130,7 @@ where
             while let Some(key) = self.cursor.get_key(&self.batch) {
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
-                        buffer.push((time.clone(), diff.clone()));
+                        buffer.push((time.into_owned(), diff.into_owned()));
                     });
                     consolidate(&mut buffer);
                     for (time, diff) in buffer.drain(..) {

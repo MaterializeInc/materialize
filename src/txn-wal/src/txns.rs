@@ -121,7 +121,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
     O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
@@ -760,7 +760,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     async fn open_data_write(&self, data_id: ShardId) -> WriteHandle<K, V, T, D> {
         self.client

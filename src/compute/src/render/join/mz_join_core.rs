@@ -44,10 +44,11 @@ use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::difference::Multiply;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
+use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::Data;
 use mz_repr::Diff;
-use timely::container::{CapacityContainerBuilder, PushContainer, PushInto};
+use timely::container::{CapacityContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::Tee;
@@ -84,8 +85,7 @@ where
     I: IntoIterator,
     I::Item: Data,
     YFn: Fn(Instant, usize) -> bool + 'static,
-    C: PushContainer,
-    (I::Item, G::Timestamp, Diff): PushInto<C>,
+    C: SizableContainer + PushInto<(I::Item, G::Timestamp, Diff)>,
 {
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
@@ -586,8 +586,7 @@ where
         I: IntoIterator<Item = D>,
         L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I,
         YFn: Fn(usize) -> bool,
-        C: PushContainer,
-        (D, T, Diff): PushInto<C>,
+        C: SizableContainer + PushInto<(D, T, Diff)>,
     {
         let meet = self.capability.time();
 
@@ -631,11 +630,14 @@ where
                             if let Some(first) = result.next() {
                                 // Join times.
                                 cursor1.map_times(storage1, |time1, diff1| {
-                                    let time1 = time1.join(meet);
+                                    let mut time1 = time1.into_owned();
+                                    time1.join_assign(meet);
+                                    let diff1 = diff1.into_owned();
                                     cursor2.map_times(storage2, |time2, diff2| {
-                                        let time = time1.join(time2);
-                                        let diff = diff1.multiply(diff2);
-                                        buffer.push((time, diff));
+                                        let mut time2 = time2.into_owned();
+                                        time2.join_assign(&time1);
+                                        let diff = diff1.multiply(&diff2.into_owned());
+                                        buffer.push((time2, diff));
                                     });
                                 });
                                 consolidate(&mut buffer);

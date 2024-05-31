@@ -66,7 +66,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
     {
         debug!(
             "unblock_read latest_write={:?} as_of={:?} for {:.9}",
@@ -145,7 +145,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
@@ -163,7 +163,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
@@ -180,7 +180,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     where
         K: Debug + Codec + Ord + Default,
         V: Debug + Codec + Ord + Default,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
@@ -228,7 +228,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
@@ -323,7 +323,7 @@ where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
     async fn unblock_read(self: Box<Self>, snapshot: DataSnapshot<T>) {
         snapshot.unblock_read(*self).await;

@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
 use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Cursor, TraceReader};
-use differential_dataflow::{Data, Hashable};
+use differential_dataflow::Hashable;
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
@@ -41,7 +42,7 @@ use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
+use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, RowCollection, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::controller::CollectionMetadata;
@@ -49,7 +50,6 @@ use mz_storage_types::sources::SourceData;
 use mz_txn_wal::operator::TxnsContext;
 use mz_txn_wal::txn_cache::TxnsCache;
 use timely::communication::Allocate;
-use timely::container::columnation::Columnation;
 use timely::dataflow::operators::probe;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -1146,10 +1146,10 @@ impl IndexPeek {
         max_result_size: u64,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
-        Tr: TraceReader<Time = Timestamp, Diff = Diff>,
-        for<'a> Tr::Key<'a>: ToDatumIter,
+        for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
+        for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
         for<'a> Tr::Val<'a>: ToDatumIter,
-        Tr::KeyOwned: Columnation + Data + FromDatumIter + ToDatumIter,
+        for<'a> Tr::TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
     {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = std::mem::size_of::<NonZeroUsize>();
@@ -1176,14 +1176,13 @@ impl IndexPeek {
         let mut datum_vec = DatumVec::new();
         let mut l_datum_vec = DatumVec::new();
         let mut r_datum_vec = DatumVec::new();
-        let mut key_buf = Tr::KeyOwned::default();
 
         // We have to sort the literal constraints because cursor.seek_key can seek only forward.
         peek.literal_constraints
             .iter_mut()
             .for_each(|vec| vec.sort());
         let has_literal_constraints = peek.literal_constraints.is_some();
-        let mut literals = peek.literal_constraints.iter().flat_map(|l| l);
+        let mut literals = peek.literal_constraints.iter().flatten();
         let mut current_literal = None;
 
         while cursor.key_valid(&storage) {
@@ -1197,13 +1196,13 @@ impl IndexPeek {
                         Some(current_literal) => {
                             // NOTE(vmarcos): We expect the extra allocations below to be manageable
                             // since we only perform as many of them as there are literals.
-                            let current_literal = key_buf.from_datum_iter(current_literal.iter());
-                            cursor.seek_key_owned(&storage, &current_literal);
+                            cursor.seek_key(&storage, IntoOwned::borrow_as(current_literal));
                             if !cursor.key_valid(&storage) {
                                 return Ok(results);
                             }
-                            use differential_dataflow::trace::cursor::MyTrait;
-                            if cursor.get_key(&storage).unwrap().equals(&current_literal) {
+                            if cursor.get_key(&storage).unwrap()
+                                == IntoOwned::borrow_as(current_literal)
+                            {
                                 // The cursor found a record whose key matches the current literal.
                                 // We break from the inner loop, and process this key.
                                 break;

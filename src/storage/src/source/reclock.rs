@@ -258,7 +258,11 @@ where
                 .remap_trace
                 .iter()
                 .filter(|(from_ts, _, _)| PartialOrder::less_equal(from_ts, src_ts))
-                .map(|(_, into_ts, diff)| (into_ts.clone(), diff.negate())),
+                .map(|(_, into_ts, diff)| {
+                    let mut diff = *diff;
+                    diff.negate();
+                    (into_ts.clone(), diff)
+                }),
         );
         Ok(into_times.frontier().to_owned())
     }
@@ -630,7 +634,6 @@ mod tests {
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
-    use mz_persist_client::critical::CriticalReaderId;
     use mz_persist_client::rpc::PubSubClientConnection;
     use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;

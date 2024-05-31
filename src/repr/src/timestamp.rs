@@ -40,6 +40,18 @@ pub struct Timestamp {
     internal: u64,
 }
 
+impl PartialEq<&Timestamp> for Timestamp {
+    fn eq(&self, other: &&Timestamp) -> bool {
+        self.eq(*other)
+    }
+}
+
+impl PartialEq<Timestamp> for &Timestamp {
+    fn eq(&self, other: &Timestamp) -> bool {
+        self.internal.eq(&other.internal)
+    }
+}
+
 impl RustType<ProtoTimestamp> for Timestamp {
     fn into_proto(&self) -> ProtoTimestamp {
         ProtoTimestamp {
@@ -287,6 +299,18 @@ impl<'de> Deserialize<'de> for Timestamp {
 
 impl timely::order::PartialOrder for Timestamp {
     fn less_equal(&self, other: &Self) -> bool {
+        self.internal.less_equal(&other.internal)
+    }
+}
+
+impl timely::order::PartialOrder<&Timestamp> for Timestamp {
+    fn less_equal(&self, other: &&Self) -> bool {
+        self.internal.less_equal(&other.internal)
+    }
+}
+
+impl timely::order::PartialOrder<Timestamp> for &Timestamp {
+    fn less_equal(&self, other: &Timestamp) -> bool {
         self.internal.less_equal(&other.internal)
     }
 }

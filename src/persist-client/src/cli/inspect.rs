@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use bytes::BufMut;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
@@ -771,7 +771,9 @@ impl Codec64 for D {
 
 impl Semigroup for D {
     fn plus_equals(&mut self, _rhs: &Self) {}
+}
 
+impl IsZero for D {
     fn is_zero(&self) -> bool {
         false
     }

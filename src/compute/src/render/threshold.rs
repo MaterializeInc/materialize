@@ -13,13 +13,13 @@
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::cursor::MyTrait;
+use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::Data;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
 use mz_repr::Diff;
-use timely::container::columnation::Columnation;
+use timely::container::columnation::{Columnation, TimelyStack};
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
@@ -29,22 +29,21 @@ use crate::extensions::reduce::MzReduce;
 use crate::render::context::{
     ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport,
 };
-use crate::row_spine::DatumSeq;
 
 /// Shared function to compute an arrangement of values matching `logic`.
-fn threshold_arrangement<G, V, F, T1, T2, L>(
+fn threshold_arrangement<G, K, V, T1, T2, L>(
     arrangement: &Arranged<G, T1>,
     name: &str,
-    from: F,
     logic: L,
 ) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope,
     G::Timestamp: Lattice + Columnation,
-    F: Fn(T2::Val<'_>) -> V + Clone + 'static,
-    V: Data,
+    V: Data + Columnation,
     T1: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-    T1::KeyOwned: Columnation + Data,
+    for<'a> T1::Key<'a>: IntoOwned<'a, Owned = K>,
+    for<'a> T1::Val<'a>: IntoOwned<'a, Owned = V>,
+    K: Columnation + Data,
     T2: for<'a> Trace<
             Key<'a> = T1::Key<'a>,
             Val<'a> = T1::Val<'a>,
@@ -52,14 +51,14 @@ where
             Diff = Diff,
         > + 'static,
     T2::Batch: Batch,
-    T2::Builder: Builder<Input = ((T1::KeyOwned, V), G::Timestamp, Diff)>,
+    for<'a> T2::Builder: Builder<Input = TimelyStack<((K, V), G::Timestamp, Diff)>>,
     L: Fn(&Diff) -> bool + 'static,
     Arranged<G, TraceAgent<T2>>: ArrangementSize,
 {
-    arrangement.mz_reduce_abelian(name, from.clone(), move |_key, s, t| {
+    arrangement.mz_reduce_abelian(name, move |_key, s, t| {
         for (record, count) in s.iter() {
             if logic(count) {
-                t.push((from(*record), *count));
+                t.push(((*record).into_owned(), *count));
             }
         }
     })
@@ -79,7 +78,7 @@ where
 {
     match oks {
         MzArrangement::RowRow(inner) => {
-            let oks = threshold_arrangement(inner, name, |v: DatumSeq| v.into_owned(), logic);
+            let oks = threshold_arrangement(inner, name, logic);
             MzArrangement::RowRow(oks)
         }
     }
@@ -99,7 +98,7 @@ where
 {
     match oks {
         MzArrangementImport::RowRow(inner) => {
-            let oks = threshold_arrangement(inner, name, |v: DatumSeq| v.into_owned(), logic);
+            let oks = threshold_arrangement(inner, name, logic);
             MzArrangement::RowRow(oks)
         }
     }

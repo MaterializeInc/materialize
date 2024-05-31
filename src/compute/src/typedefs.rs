@@ -33,7 +33,7 @@ pub(crate) mod spines {
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::implementations::{Layout, Update};
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
-    use timely::container::columnation::Columnation;
+    use timely::container::columnation::{Columnation, TimelyStack};
 
     use crate::containers::stack::StackWrapper;
     use crate::row_spine::OffsetOptimized;
@@ -43,14 +43,14 @@ pub(crate) mod spines {
     pub type ColValSpine<K, V, T, R> = Spine<
         Rc<OrdValBatch<MzStack<((K, V), T, R)>>>,
         KeyValBatcher<K, V, T, R>,
-        RcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>>>,
+        RcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>, TimelyStack<((K, V), T, R)>>>,
     >;
 
     /// A spine for generic keys
     pub type ColKeySpine<K, T, R> = Spine<
         Rc<OrdKeyBatch<MzStack<((K, ()), T, R)>>>,
         KeyBatcher<K, T, R>,
-        RcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>>>,
+        RcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>, TimelyStack<((K, ()), T, R)>>>,
     >;
 
     /// A layout based on chunked timely stacks
@@ -68,7 +68,8 @@ pub(crate) mod spines {
         type Target = U;
         type KeyContainer = StackWrapper<U::Key>;
         type ValContainer = StackWrapper<U::Val>;
-        type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
+        type TimeContainer = StackWrapper<U::Time>;
+        type DiffContainer = StackWrapper<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
 }
