@@ -113,48 +113,59 @@ where
         // shard has advanced too far.
         fail_point!("invalid_remap_as_of");
         assert!(
-            PartialOrder::less_equal(since, &as_of),
-            "invalid as_of: as_of({as_of:?}) < since({since:?}), \
-            source {id}, \
-            remap_shard: {:?}",
-            metadata.remap_shard
-        );
-
-        assert!(
             as_of.elements() == [IntoTime::minimum()] || PartialOrder::less_than(&as_of, upper),
             "invalid as_of: upper({upper:?}) <= as_of({as_of:?})",
         );
 
-        tracing::info!(
-            ?since,
-            ?as_of,
-            ?upper,
-            "{operator}({id}) {worker_id}/{worker_count} initializing PersistHandle"
-        );
+        let events = if since.is_empty() {
+            // We never advance the since to empty in the source itself...
+            // this code is only reachable once the source has been dropped.
+            tracing::info!(
+                ?since,
+                ?as_of,
+                ?upper,
+                "{operator}({id}) {worker_id}/{worker_count} already dropped"
+            );
+            futures::stream::pending().boxed_local()
+        } else {
+            tracing::info!(
+                ?since,
+                ?as_of,
+                ?upper,
+                "{operator}({id}) {worker_id}/{worker_count} initializing PersistHandle"
+            );
+            assert!(
+                PartialOrder::less_equal(since, &as_of),
+                "invalid as_of: as_of({as_of:?}) < since({since:?}), \
+                source {id}, \
+                remap_shard: {:?}",
+                metadata.remap_shard
+            );
 
-        use futures::stream;
-        let events = stream::once(async move {
-            let updates = read_handle
-                .snapshot_and_fetch(as_of.clone())
-                .await
-                .expect("since <= as_of asserted");
-            let snapshot = stream::once(std::future::ready(ListenEvent::Updates(updates)));
+            use futures::stream;
+            stream::once(async move {
+                let updates = read_handle
+                    .snapshot_and_fetch(as_of.clone())
+                    .await
+                    .expect("since <= as_of asserted");
+                let snapshot = stream::once(std::future::ready(ListenEvent::Updates(updates)));
 
-            let listener = read_handle
-                .listen(as_of.clone())
-                .await
-                .expect("since <= as_of asserted");
+                let listener = read_handle
+                    .listen(as_of.clone())
+                    .await
+                    .expect("since <= as_of asserted");
 
-            let listen_stream = stream::unfold(listener, |mut listener| async move {
-                let events = stream::iter(listener.fetch_next().await);
-                Some((events, listener))
+                let listen_stream = stream::unfold(listener, |mut listener| async move {
+                    let events = stream::iter(listener.fetch_next().await);
+                    Some((events, listener))
+                })
+                .flatten();
+
+                snapshot.chain(listen_stream)
             })
-            .flatten();
-
-            snapshot.chain(listen_stream)
-        })
-        .flatten()
-        .boxed_local();
+            .flatten()
+            .boxed_local()
+        };
 
         Ok(Self {
             events,
