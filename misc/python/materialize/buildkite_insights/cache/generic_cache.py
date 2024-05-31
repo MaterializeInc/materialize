@@ -19,6 +19,7 @@ from materialize.buildkite_insights.util.data_io import (
     FilePath,
     exists_file,
     exists_file_with_recent_data,
+    get_last_modification_date,
     read_results_from_file,
     write_results_to_file,
 )
@@ -63,7 +64,10 @@ def get_or_query_data(
 
     if no_fetch:
         if not quiet_mode:
-            print(f"Using existing data: {cache_file_path}")
+            last_modified_date = get_last_modification_date(cache_file_path)
+            print(
+                f"Using existing data: {cache_file_path} (downloaded: {last_modified_date})"
+            )
         return read_results_from_file(cache_file_path, quiet_mode=quiet_mode)
 
     fetched_data = fetch_action()
