@@ -50,6 +50,7 @@ def search_build(
     max_entries_to_print: int,
     short_result_presentation: bool,
     one_line_match_presentation: bool,
+    verbose: bool = False,
 ) -> int:
     assert max_entries_to_print >= 0
 
@@ -61,11 +62,15 @@ def search_build(
 
     is_completed_build_state = build_state in BUILDKITE_COMPLETED_BUILD_STATES
 
+    if verbose:
+        print(f"Searching build #{build_number}...")
+
     annotations = annotations_cache.get_or_query_annotations(
         fetch_mode=fetch_mode,
         pipeline_slug=build_pipeline,
         build_number=build_number,
         add_to_cache_if_not_present=is_completed_build_state,
+        quiet_mode=not verbose,
     )
 
     matched_annotations = search_annotations(
@@ -184,6 +189,7 @@ def main(
     use_regex: bool,
     short_result_presentation: bool,
     one_line_match_presentation: bool,
+    verbose: bool,
 ) -> None:
     assert len(pattern) > 0, "pattern must not be empty"
 
@@ -235,6 +241,7 @@ def main(
                 max_entries_to_print=max_entries_to_print,
                 short_result_presentation=short_result_presentation,
                 one_line_match_presentation=one_line_match_presentation,
+                verbose=verbose,
             )
         except RateLimitExceeded:
             print("Aborting due to exceeded rate limit!")
@@ -309,6 +316,11 @@ if __name__ == "__main__":
         "--only-failed-build-step-key", action="append", default=[], type=str
     )
     parser.add_argument(
+        "--verbose",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
         "--use-regex",
         action="store_true",
     )
@@ -332,4 +344,5 @@ if __name__ == "__main__":
         args.use_regex,
         args.short,
         args.oneline,
+        args.verbose,
     )

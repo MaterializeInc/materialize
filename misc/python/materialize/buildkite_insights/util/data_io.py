@@ -51,17 +51,25 @@ def read_results_from_file(file_path: FilePath, quiet_mode: bool = False) -> lis
 def exists_file_with_recent_data(
     file_path: FilePath, max_allowed_cache_age_in_hours: int | None
 ) -> bool:
-    if not os.path.isfile(file_path.get()):
+    if not exists_file(file_path):
         return False
 
     if max_allowed_cache_age_in_hours is None:
         return True
 
-    modification_date_as_sec_since_epoch = os.path.getmtime(file_path.get())
-    modification_date = datetime.utcfromtimestamp(modification_date_as_sec_since_epoch)
+    modification_date = get_last_modification_date(file_path)
 
     max_modification_date = datetime.now() - timedelta(
         hours=max_allowed_cache_age_in_hours
     )
 
     return modification_date > max_modification_date
+
+
+def exists_file(file_path: FilePath) -> bool:
+    return os.path.isfile(file_path.get())
+
+
+def get_last_modification_date(file_path: FilePath) -> datetime:
+    modification_date_as_sec_since_epoch = os.path.getmtime(file_path.get())
+    return datetime.utcfromtimestamp(modification_date_as_sec_since_epoch)
