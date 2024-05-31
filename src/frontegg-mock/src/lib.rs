@@ -100,12 +100,14 @@ impl FronteggMockServer {
         let roles = roles.unwrap_or_else(|| {
             vec![
                 UserRole {
-                    id: "1".to_string(),
+                    id: uuid::Uuid::new_v4().to_string(),
                     name: "Organization Admin".to_string(),
+                    key: "MaterializePlatformAdmin".to_string(),
                 },
                 UserRole {
-                    id: "2".to_string(),
+                    id: uuid::Uuid::new_v4().to_string(),
                     name: "Organization Member".to_string(),
+                    key: "MaterializePlatform".to_string(),
                 },
             ]
         });
@@ -255,6 +257,7 @@ fn get_user_roles(
                 .unwrap_or_else(|| UserRole {
                     id: id_or_name.clone(),
                     name: id_or_name.clone(),
+                    key: id_or_name.clone(),
                 })
         })
         .collect()
@@ -467,17 +470,15 @@ async fn handle_create_user(
     let default_tenant_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
 
-    let role_names: Vec<String> = new_user
-        .role_ids
-        .as_ref()
-        .unwrap_or(&Vec::new())
-        .iter()
-        .map(|role_id| {
-            role_mapping
-                .get(role_id)
-                .map_or_else(|| role_id.clone(), |role| role.name.clone())
-        })
-        .collect();
+    let role_ids = new_user.role_ids.as_deref().unwrap_or(&[]);
+    let mut role_names = Vec::new();
+
+    for role_id in role_ids {
+        match role_mapping.get(role_id) {
+            Some(role) => role_names.push(role.name.clone()),
+            None => return Err(StatusCode::BAD_REQUEST),
+        }
+    }
 
     let user_config = UserConfig {
         id: Some(user_id),
@@ -485,7 +486,7 @@ async fn handle_create_user(
         password: Uuid::new_v4().to_string(),
         tenant_id: default_tenant_id,
         initial_api_tokens: vec![],
-        roles: role_names,
+        roles: role_names.clone(),
         auth_provider: None,
         verified: Some(false),
         metadata: None,
@@ -493,10 +494,10 @@ async fn handle_create_user(
 
     users.insert(new_user.email.clone(), user_config);
 
-    let user_roles = get_user_roles(
-        new_user.role_ids.as_ref().unwrap_or(&Vec::new()),
-        &role_mapping,
-    );
+    let user_roles = role_ids
+        .iter()
+        .map(|role_id| role_mapping.get(role_id).unwrap().clone())
+        .collect();
 
     let user_response = UserResponse {
         id: user_id,
@@ -514,20 +515,20 @@ async fn handle_create_user(
 async fn handle_delete_user(
     State(context): State<Arc<Context>>,
     Path(user_id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> StatusCode {
     let mut users = context.users.lock().unwrap();
     let initial_count = users.len();
     users.retain(|_, user| user.id != Some(user_id));
 
     if users.len() < initial_count {
-        StatusCode::OK.into_response()
+        StatusCode::OK
     } else {
-        StatusCode::NOT_FOUND.into_response()
+        StatusCode::NOT_FOUND
     }
 }
 
 // https://docs.frontegg.com/reference/permissionscontrollerv2_getallroles
-async fn handle_roles_request(State(context): State<Arc<Context>>) -> impl IntoResponse {
+async fn handle_roles_request(State(context): State<Arc<Context>>) -> Json<UserRolesResponse> {
     let roles = Arc::<Vec<UserRole>>::clone(&context.roles);
 
     let response = UserRolesResponse {
@@ -624,6 +625,7 @@ pub struct UserCreate {
 pub struct UserRole {
     pub id: String,
     pub name: String,
+    pub key: String,
 }
 
 #[derive(Serialize, Deserialize)]
