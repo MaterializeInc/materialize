@@ -1,9 +1,11 @@
 [package]
 name = "cargo-gazelle"
-version = "0.1.0"
+description = "BUILD file generator for Bazel projects."
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
+authors = ["Materialize, Inc."]
 
 [lints]
 workspace = true
