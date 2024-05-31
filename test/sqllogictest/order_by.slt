@@ -881,6 +881,8 @@ Explained Query:
     TopK limit=10000
       ReadStorage materialize.public.t
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF

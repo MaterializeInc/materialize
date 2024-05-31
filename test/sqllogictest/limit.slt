@@ -125,6 +125,7 @@ Explained Query:
                   Filter (#0{person_id}) IS NOT NULL // { arity: 3 }
                     ReadStorage materialize.public.preferred_fruits // { arity: 3 }
 
+Source materialize.public.people
 Source materialize.public.preferred_fruits
   filter=((#0{person_id}) IS NOT NULL)
 
@@ -204,6 +205,8 @@ Explained Query:
     TopK group_by=[#0{state}] limit=integer_to_bigint((ascii(substr(#0{state}, 1, 1)) - 64)) // { arity: 2 }
       Project (#1{name}, #0{state}) // { arity: 2 }
         ReadStorage materialize.public.cities // { arity: 3 }
+
+Source materialize.public.cities
 
 Target cluster: quickstart
 
@@ -289,6 +292,7 @@ Explained Query:
           Project (#1) // { arity: 1 }
             ReadStorage materialize.public.cities // { arity: 3 }
 
+Source materialize.public.cities
 Source materialize.public.limits
   filter=((#0{sl}) IS NOT NULL)
 
@@ -327,6 +331,8 @@ Explained Query:
       TopK limit=1 // { arity: 1 }
         Project (#0{name}) // { arity: 1 }
           ReadStorage materialize.public.cities // { arity: 3 }
+
+Source materialize.public.cities
 
 Target cluster: quickstart
 
@@ -389,6 +395,8 @@ Explained Query:
     cte l0 =
       Project (#0{name}, #1{state}) // { arity: 2 }
         ReadStorage materialize.public.cities // { arity: 3 }
+
+Source materialize.public.cities
 
 Target cluster: quickstart
 
@@ -496,6 +504,8 @@ Explained Query:
     ArrangeBy keys=[[]] // { arity: 1 }
       Project (#0{name}) // { arity: 1 }
         ReadStorage materialize.public.cities // { arity: 3 }
+
+Source materialize.public.cities
 
 Target cluster: quickstart
 

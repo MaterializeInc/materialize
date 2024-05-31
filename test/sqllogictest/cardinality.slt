@@ -607,6 +607,15 @@ Explained Query:
       ArrangeBy keys=[[#0]]
         ReadStorage materialize.public.t10
 
+Source materialize.public.t3
+Source materialize.public.t4
+Source materialize.public.t5
+Source materialize.public.t6
+Source materialize.public.t7
+Source materialize.public.t8
+Source materialize.public.t9
+Source materialize.public.t10
+
 Used Indexes:
   - materialize.public.t_x (delta join 1st input (full scan))
   - materialize.public.tt_x (delta join lookup)

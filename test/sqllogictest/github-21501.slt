@@ -56,6 +56,8 @@ materialize.public.distinct_on_group_by_limit:
         Project (#0..=#2)
           ReadStorage materialize.public.sections
 
+Source materialize.public.sections
+
 Target cluster: quickstart
 
 EOF

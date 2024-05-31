@@ -137,6 +137,8 @@ Explained Query:
   Finish limit=1000 output=[#0]
     ReadStorage materialize.public.numbers
 
+Source materialize.public.numbers
+
 Target cluster: quickstart
 
 EOF
@@ -147,6 +149,8 @@ EXPLAIN SELECT * from numbers ORDER BY value LIMIT 10;
 Explained Query:
   Finish order_by=[#0 asc nulls_last] limit=10 output=[#0]
     ReadStorage materialize.public.numbers
+
+Source materialize.public.numbers
 
 Target cluster: quickstart
 

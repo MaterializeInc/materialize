@@ -58,6 +58,8 @@ materialize.public.mv_fusable_mfp_accumulable:
     Get::PassArrangements materialize.public.t
       raw=true
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -97,6 +99,8 @@ materialize.public.mv_complex_mfp_accumulable:
         map=((#2 + 1))
       Get::PassArrangements materialize.public.t
         raw=true
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
