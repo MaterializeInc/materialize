@@ -232,6 +232,8 @@ Explained Query:
     Map (integer_to_bigint(#1)) // { arity: 4 }
       ReadStorage materialize.public.agg_pk // { arity: 3 }
 
+Source materialize.public.agg_pk
+
 Target cluster: quickstart
 
 EOF
@@ -250,6 +252,8 @@ Explained Query:
   Project (#0, #3) // { arity: 2 }
     Map (bigint_to_numeric(#2)) // { arity: 4 }
       ReadStorage materialize.public.agg_pk // { arity: 3 }
+
+Source materialize.public.agg_pk
 
 Target cluster: quickstart
 
@@ -735,6 +739,8 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
         ReadStorage materialize.public.t_variance
+
+Source materialize.public.t_variance
 
 Target cluster: quickstart
 

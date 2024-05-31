@@ -983,6 +983,8 @@ Explained Query:
     Map (coalesce(#0, 0)) // { types: "(integer?, integer?, integer, integer)" }
       ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
+Source materialize.public.t1
+
 Target cluster: quickstart
 
 EOF
@@ -996,6 +998,8 @@ Explained Query:
   Project (#3) // { types: "(integer)" }
     Map (coalesce(#0, #2)) // { types: "(integer?, integer?, integer, integer)" }
       ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+Source materialize.public.t1
 
 Target cluster: quickstart
 
@@ -1014,6 +1018,8 @@ Explained Query:
         Project (#0, #1) // { types: "(integer?, integer?)" }
           ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
+Source materialize.public.t1
+
 Target cluster: quickstart
 
 EOF
@@ -1029,6 +1035,8 @@ Explained Query:
     Map (coalesce(#0, #1)) // { types: "(integer?, integer?, integer, integer?)" }
       ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
+Source materialize.public.t1
+
 Target cluster: quickstart
 
 EOF
@@ -1042,6 +1050,8 @@ Explained Query:
   Project (#3) // { types: "(integer?)" }
     Map (coalesce(#0, (#1 + 5))) // { types: "(integer?, integer?, integer, integer?)" }
       ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+Source materialize.public.t1
 
 Target cluster: quickstart
 

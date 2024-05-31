@@ -170,17 +170,23 @@ class MaterializedViewsAssertNotNull(Check):
             Explained Query:
               ReadStorage materialize.public.not_null_view1
 
+            Source materialize.public.not_null_view1
+
             Target cluster: quickstart
 
             ? EXPLAIN SELECT * FROM not_null_view2 WHERE y IS NOT NULL
             Explained Query:
               ReadStorage materialize.public.not_null_view2
 
+            Source materialize.public.not_null_view2
+
             Target cluster: quickstart
 
             ? EXPLAIN SELECT * FROM not_null_view3 WHERE z IS NOT NULL
             Explained Query:
               ReadStorage materialize.public.not_null_view3
+
+            Source materialize.public.not_null_view3
 
             Target cluster: quickstart
 

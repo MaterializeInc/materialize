@@ -273,6 +273,8 @@ Explained Query:
                 Filter (#0) IS NOT NULL
                   Get l0
 
+Source materialize.public.edges
+
 Target cluster: quickstart
 
 EOF
@@ -551,6 +553,8 @@ Explained Query:
               ArrangeBy keys=[[#0]]
                 Filter (#0) IS NOT NULL
                   Get l0
+
+Source materialize.public.edges
 
 Target cluster: quickstart
 

@@ -167,6 +167,8 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 2 }
           ReadStorage materialize.public.baz // { arity: 2 }
 
+Source materialize.public.baz
+
 Used Indexes:
   - materialize.public.foo_idx (delta join 1st input (full scan))
   - materialize.public.bar_idx (*** full scan ***)

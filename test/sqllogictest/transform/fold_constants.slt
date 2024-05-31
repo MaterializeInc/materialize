@@ -146,6 +146,8 @@ Explained Query:
             ReadStorage materialize.public.edges // { arity: 2 }
           Get l0 // { arity: 1 }
 
+Source materialize.public.edges
+
 Target cluster: quickstart
 
 EOF

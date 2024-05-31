@@ -81,6 +81,8 @@ Explained Query:
         Filter (#0 = 5) // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
 
+Source materialize.public.people
+
 Target cluster: quickstart
 
 EOF
@@ -105,6 +107,8 @@ Explained Query:
         Filter (#3) IS NOT NULL // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
 
+Source materialize.public.people
+
 Target cluster: quickstart
 
 EOF
@@ -126,6 +130,8 @@ Explained Query:
         Project (#1) // { non_negative: true }
           Filter (#0 > 1) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
+
+Source materialize.public.people
 
 Target cluster: quickstart
 
@@ -152,6 +158,8 @@ Explained Query:
             Project (#0, #1) // { non_negative: true }
               Filter (#0 > 1) // { non_negative: true }
                 ReadStorage materialize.public.people // { non_negative: true }
+
+Source materialize.public.people
 
 Target cluster: quickstart
 
@@ -194,6 +202,8 @@ Explained Query:
       Project (#0, #1) // { non_negative: true }
         ReadStorage materialize.public.people // { non_negative: true }
 
+Source materialize.public.people
+
 Target cluster: quickstart
 
 EOF
@@ -235,6 +245,8 @@ Explained Query:
       Project (#0, #1) // { non_negative: true }
         ReadStorage materialize.public.people // { non_negative: true }
 
+Source materialize.public.people
+
 Target cluster: quickstart
 
 EOF
@@ -262,6 +274,9 @@ Explained Query:
           Project () // { non_negative: true }
             ReadStorage materialize.public.bands // { non_negative: true }
 
+Source materialize.public.bands
+Source materialize.public.people
+
 Target cluster: quickstart
 
 EOF
@@ -284,6 +299,8 @@ Explained Query:
       Distinct project=[#0] // { non_negative: true }
         Project (#1) // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
+
+Source materialize.public.people
 
 Target cluster: quickstart
 
@@ -311,6 +328,8 @@ Explained Query:
       Reduce group_by=[extract_year_d(#0)] aggregates=[count(*)] // { non_negative: true }
         Project (#2) // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
+
+Source materialize.public.people
 
 Target cluster: quickstart
 
@@ -352,6 +371,8 @@ Explained Query:
             Filter like["J%"](#1) // { non_negative: true }
               ReadStorage materialize.public.people // { non_negative: true }
 
+Source materialize.public.people
+
 Target cluster: quickstart
 
 EOF
@@ -380,6 +401,8 @@ Explained Query:
         Project (#1) // { non_negative: true }
           Filter (#0 = 2) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
+
+Source materialize.public.people
 
 Target cluster: quickstart
 
@@ -426,6 +449,8 @@ Explained Query:
           Project (#0, #2) // { non_negative: false }
             Map ((#1 || "_iter")) // { non_negative: false }
               Get l0 // { non_negative: false }
+
+Source materialize.public.people
 
 Target cluster: quickstart
 
@@ -478,6 +503,8 @@ Explained Query:
                   Filter (#0 > 1) // { non_negative: false }
                     Get l1 // { non_negative: false }
 
+Source materialize.public.people
+
 Target cluster: quickstart
 
 EOF
@@ -513,6 +540,8 @@ Explained Query:
             Distinct project=[#0, (#1 || "_iter")] // { non_negative: false }
               Filter (#0 > 1) // { non_negative: false }
                 Get l0 // { non_negative: false }
+
+Source materialize.public.people
 
 Target cluster: quickstart
 

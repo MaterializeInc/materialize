@@ -262,6 +262,9 @@ Explained Query:
         Project () // { arity: 0 }
           ReadStorage materialize.public.t2 // { arity: 1 }
 
+Source materialize.public.t1
+Source materialize.public.t2
+
 Target cluster: quickstart
 
 EOF
@@ -285,6 +288,10 @@ Explained Query:
           Project () // { arity: 0 }
             ReadStorage materialize.public.t2 // { arity: 1 }
 
+Source materialize.public.t1
+Source materialize.public.t2
+Source materialize.public.t3
+
 Target cluster: quickstart
 
 EOF
@@ -306,6 +313,10 @@ Explained Query:
       ArrangeBy keys=[[#0]] // { arity: 1 }
         Distinct project=[#0] // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 1 }
+
+Source materialize.public.t1
+Source materialize.public.t2
+Source materialize.public.t3
 
 Target cluster: quickstart
 
@@ -494,6 +505,9 @@ Explained Query:
       Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.y // { arity: 1 }
 
+Source materialize.public.x
+Source materialize.public.y
+
 Target cluster: quickstart
 
 EOF
@@ -533,6 +547,9 @@ Explained Query:
     cte l0 =
       Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.y // { arity: 1 }
+
+Source materialize.public.x
+Source materialize.public.y
 
 Target cluster: quickstart
 
@@ -575,6 +592,9 @@ Explained Query:
     cte l0 =
       Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.y // { arity: 1 }
+
+Source materialize.public.x
+Source materialize.public.y
 
 Target cluster: quickstart
 
@@ -681,6 +701,9 @@ Explained Query:
     Distinct project=[] // { arity: 0 }
       Project () // { arity: 0 }
         ReadStorage materialize.public.y // { arity: 1 }
+
+Source materialize.public.x
+Source materialize.public.y
 
 Target cluster: quickstart
 

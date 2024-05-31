@@ -247,6 +247,8 @@ Explained Query:
     Map (date_trunc_day_ts(#0)) // { arity: 2 }
       ReadStorage materialize.public.date_trunc_timestamps // { arity: 1 }
 
+Source materialize.public.date_trunc_timestamps
+
 Target cluster: quickstart
 
 EOF
@@ -264,6 +266,9 @@ Explained Query:
           ReadStorage materialize.public.date_trunc_fields // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 1 }
           ReadStorage materialize.public.date_trunc_timestamps // { arity: 1 }
+
+Source materialize.public.date_trunc_fields
+Source materialize.public.date_trunc_timestamps
 
 Target cluster: quickstart
 
@@ -749,6 +754,8 @@ Explained Query:
     Map ((#0) IS NULL) // { arity: 3 }
       ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -761,6 +768,8 @@ Explained Query:
     Map ((#0) IS NULL) // { arity: 3 }
       ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -772,6 +781,8 @@ Explained Query:
   Project (#2) // { arity: 1 }
     Map ((#0) IS NULL) // { arity: 3 }
       ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -788,6 +799,8 @@ Explained Query:
   Project (#2) // { arity: 1 }
     Map (((integer_to_boolean(#0) AND integer_to_boolean(#1))) IS NULL) // { arity: 3 }
       ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 

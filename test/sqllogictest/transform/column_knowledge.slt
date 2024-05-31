@@ -314,6 +314,7 @@ Explained Query:
                 Project () // { arity: 0 }
                   ReadStorage materialize.public.t1 // { arity: 2 }
 
+Source materialize.public.t1
 Source materialize.public.t2
   filter=((#0 = 123))
 
@@ -421,6 +422,9 @@ Explained Query:
               Project () // { arity: 0 }
                 ReadStorage materialize.public.t2 // { arity: 2 }
 
+Source materialize.public.t1
+Source materialize.public.t2
+
 Target cluster: quickstart
 
 EOF
@@ -448,6 +452,7 @@ Explained Query:
 
 Source materialize.public.t1
   filter=((#0 = 123))
+Source materialize.public.t2
 
 Target cluster: quickstart
 
@@ -584,6 +589,7 @@ Explained Query:
 
 Source materialize.public.double_table
   filter=((#0) IS NOT NULL)
+Source materialize.public.int_table
 
 Target cluster: quickstart
 
@@ -601,6 +607,8 @@ Explained Query:
   Project (#1) // { arity: 1, types: "(text)" }
     Map (coalesce((#0 ->> "field"), "")) // { arity: 2, types: "(jsonb?, text)" }
       ReadStorage materialize.public.json_table // { arity: 1, types: "(jsonb?)" }
+
+Source materialize.public.json_table
 
 Target cluster: quickstart
 
@@ -739,6 +747,8 @@ Explained Query:
           Filter (#1) IS NOT NULL // { arity: 2, types: "(integer, integer)" }
             Get l0 // { arity: 2, types: "(integer, integer?)" }
 
+Source materialize.public.t1
+
 Target cluster: quickstart
 
 EOF
@@ -784,6 +794,8 @@ Explained Query:
               Get l0 // { arity: 1, types: "(integer)" }
             Constant // { arity: 0, types: "()" }
               - ()
+
+Source materialize.public.t1
 
 Target cluster: quickstart
 
@@ -835,6 +847,8 @@ Explained Query:
               Get l0 // { arity: 1, types: "(integer)" }
             Constant // { arity: 0, types: "()" }
               - ()
+
+Source materialize.public.t1
 
 Target cluster: quickstart
 

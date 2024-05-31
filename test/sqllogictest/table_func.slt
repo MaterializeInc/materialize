@@ -240,6 +240,8 @@ Explained Query:
         - (9)
         - (10)
 
+Source materialize.public.x
+
 Target cluster: quickstart
 
 EOF
@@ -250,6 +252,8 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM x, generate_series(1, a)
 Explained Query:
   FlatMap generate_series(1, #0, 1) // { arity: 3 }
     ReadStorage materialize.public.x // { arity: 2 }
+
+Source materialize.public.x
 
 Target cluster: quickstart
 
@@ -1420,6 +1424,8 @@ Explained Query:
   Project (#1) // { arity: 1 }
     FlatMap jsonb_object_keys(#0) // { arity: 2 }
       ReadStorage materialize.public.y // { arity: 1 }
+
+Source materialize.public.y
 
 Target cluster: quickstart
 

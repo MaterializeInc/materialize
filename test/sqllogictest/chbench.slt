@@ -415,6 +415,8 @@ Explained Query:
             ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
               ReadIndex on=orderline fk_orderline_order=[delta join lookup] // { arity: 10 }
 
+Source materialize.public.neworder
+
 Used Indexes:
   - materialize.public.fk_customer_district (*** full scan ***)
   - materialize.public.fk_order_customer (*** full scan ***)
@@ -1083,6 +1085,8 @@ Explained Query:
                 ArrangeBy keys=[[#0]] // { arity: 2 }
                   Project (#0, #4) // { arity: 2 }
                     ReadStorage materialize.public.item // { arity: 5 }
+
+Source materialize.public.item
 
 Used Indexes:
   - materialize.public.fk_orderline_item (differential join)

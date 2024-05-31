@@ -1287,6 +1287,8 @@ Explained Query:
           Project () // { arity: 0 }
             ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
 
+Source materialize.public.t2
+
 Used Indexes:
   - materialize.public.i1 (*** full scan ***, lookup)
 
@@ -1318,6 +1320,8 @@ Explained Query:
     cte l0 =
       Project (#0) // { arity: 1 }
         ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+
+Source materialize.public.t2
 
 Used Indexes:
   - materialize.public.i1 (lookup)

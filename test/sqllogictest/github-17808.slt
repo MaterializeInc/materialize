@@ -47,6 +47,8 @@ Explained Query:
     cte l0 =
       Get l1
 
+Source materialize.public.foo
+
 Target cluster: quickstart
 
 EOF

@@ -239,6 +239,7 @@ Explained Query:
         Get::Collection materialize.public.right1
           raw=true
 
+Source materialize.public.left
 Source materialize.public.right1
   filter=((#0) IS NOT NULL)
 Source materialize.public.right2

@@ -38,6 +38,8 @@ materialize.public.distinct_on_group_by_limit:
         Project (#0..=#2)
           ReadStorage materialize.public.sections
 
+Source materialize.public.sections
+
 Target cluster: quickstart
 
 EOF
@@ -75,6 +77,8 @@ materialize.public.distinct_on_group_by_limit:
         Project (#0..=#2)
           ReadStorage materialize.public.sections
 
+Source materialize.public.sections
+
 Target cluster: quickstart
 
 EOF
@@ -111,6 +115,8 @@ materialize.public.distinct_on_group_by_limit:
         Project (#0..=#2)
           ReadStorage materialize.public.sections
 
+Source materialize.public.sections
+
 Target cluster: quickstart
 
 EOF
@@ -140,6 +146,8 @@ materialize.public.distinct_on_group_by_limit:
       Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
         Project (#0..=#2)
           ReadStorage materialize.public.sections
+
+Source materialize.public.sections
 
 Target cluster: quickstart
 
@@ -171,6 +179,8 @@ materialize.public.distinct_on_group_by_limit:
         Project (#0..=#2)
           ReadStorage materialize.public.sections
 
+Source materialize.public.sections
+
 Target cluster: quickstart
 
 EOF
@@ -200,6 +210,8 @@ materialize.public.distinct_on_group_by_limit:
       Reduce group_by=[#0, #1] aggregates=[max(#2)]
         Project (#0..=#2)
           ReadStorage materialize.public.sections
+
+Source materialize.public.sections
 
 Target cluster: quickstart
 
@@ -256,6 +268,7 @@ materialize.public.sections_of_top_3_courses_per_teacher:
                     Filter (#1) IS NOT NULL
                       ReadStorage materialize.public.sections
 
+Source materialize.public.teachers
 Source materialize.public.sections
   filter=((#1) IS NOT NULL)
 
@@ -305,6 +318,7 @@ materialize.public.max_sections_of_top_3_courses_per_teacher:
                       Filter (#1) IS NOT NULL
                         ReadStorage materialize.public.sections
 
+Source materialize.public.teachers
 Source materialize.public.sections
   filter=((#1) IS NOT NULL)
 

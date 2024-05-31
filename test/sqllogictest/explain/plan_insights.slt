@@ -43,7 +43,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
     },
     "optimized": {
       "global": {
-        "text": "Explained Query:\n  ReadStorage materialize.public.t\n\nTarget cluster: quickstart\n",
+        "text": "Explained Query:\n  ReadStorage materialize.public.t\n\nSource materialize.public.t\n\nTarget cluster: quickstart\n",
         "json": {
           "plans": [
             {
@@ -69,7 +69,14 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
               }
             }
           ],
-          "sources": []
+          "sources": [
+            {
+              "id": {
+                "User": 1
+              },
+              "op": null
+            }
+          ]
         }
       },
       "fast_path": {
@@ -157,7 +164,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
     },
     "optimized": {
       "global": {
-        "text": "Explained Query:\n  Return\n    CrossJoin type=differential\n      Get l0\n      Get l0\n  With\n    cte l0 =\n      ArrangeBy keys=[[]]\n        ReadStorage materialize.public.t\n\nTarget cluster: quickstart\n",
+        "text": "Explained Query:\n  Return\n    CrossJoin type=differential\n      Get l0\n      Get l0\n  With\n    cte l0 =\n      ArrangeBy keys=[[]]\n        ReadStorage materialize.public.t\n\nSource materialize.public.t\n\nTarget cluster: quickstart\n",
         "json": {
           "plans": [
             {
@@ -278,7 +285,14 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
               }
             }
           ],
-          "sources": []
+          "sources": [
+            {
+              "id": {
+                "User": 1
+              },
+              "op": null
+            }
+          ]
         }
       },
       "fast_path": {

@@ -233,4 +233,6 @@ Explained Query:
     Get::PassArrangements materialize.public.m1
       raw=true
 
+Source materialize.public.m1
+
 Target cluster: quickstart

@@ -29,6 +29,8 @@ Explained Query:
             Filter (#0 > 1) // { arity: 2 }
               ReadStorage materialize.public.t1 // { arity: 2 }
 
+Source materialize.public.t1
+
 Target cluster: quickstart
 
 EOF

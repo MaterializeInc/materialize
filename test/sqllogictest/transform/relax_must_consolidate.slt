@@ -75,6 +75,8 @@ Explained Query:
         Get::PassArrangements materialize.public.t
           raw=true
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -197,6 +199,8 @@ Explained Query:
             project=(#1, #2)
           Get::PassArrangements materialize.public.t
             raw=true
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -618,6 +622,8 @@ Explained Query:
           Get::PassArrangements materialize.public.t
             raw=true
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -678,6 +684,8 @@ Explained Query:
             project=(#1, #0)
           Get::PassArrangements materialize.public.t
             raw=true
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -862,6 +870,8 @@ Explained Query:
           Get::PassArrangements materialize.public.t
             raw=true
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -924,6 +934,8 @@ Explained Query:
           Get::PassArrangements materialize.public.t
             raw=true
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -972,6 +984,8 @@ Explained Query:
             project=(#1)
           Get::PassArrangements materialize.public.t
             raw=true
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -1056,6 +1070,8 @@ Explained Query:
                   project=(#1)
                 Get::PassArrangements materialize.public.t
                   raw=true
+
+Source materialize.public.t
 
 Target cluster: quickstart
 

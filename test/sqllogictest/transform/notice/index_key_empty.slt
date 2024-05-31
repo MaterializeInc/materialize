@@ -41,6 +41,8 @@ materialize.public.t_idx_empty_key:
   ArrangeBy keys=[[]]
     ReadStorage materialize.public.t
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 Notices:

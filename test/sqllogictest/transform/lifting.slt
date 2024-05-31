@@ -34,6 +34,8 @@ Explained Query:
       Constant // { arity: 2 }
         - (null, 1)
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -53,6 +55,8 @@ Explained Query:
       ReadStorage materialize.public.t // { arity: 2 }
       Constant // { arity: 2 }
         - (null, 1)
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -74,6 +78,8 @@ Explained Query:
       ReadStorage materialize.public.t // { arity: 2 }
     Constant // { arity: 3 }
       - (null, 1, 2)
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -136,6 +142,8 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 2 }
           ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -156,6 +164,8 @@ Explained Query:
               ReadStorage materialize.public.t // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 2 }
           ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -178,6 +188,8 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 2 }
           ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -191,6 +203,8 @@ Explained Query:
     Map (2) // { arity: 3 }
       ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -203,6 +217,8 @@ Explained Query:
   Project (#2) // { arity: 1 }
     Map (2) // { arity: 3 }
       ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -225,6 +241,8 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 1 }
           Project (#0) // { arity: 1 }
             ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -261,6 +279,8 @@ Explained Query:
           Project () // { types: "()" }
             ReadStorage materialize.public.t // { types: "(integer?, integer?)" }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -288,6 +308,8 @@ Explained Query:
           Project () // { types: "()" }
             ReadStorage materialize.public.t // { types: "(integer?, integer?)" }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -302,6 +324,8 @@ Explained Query:
       FlatMap generate_series(2, 4, 1) // { arity: 1 }
         Project () // { arity: 0 }
           ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -320,6 +344,8 @@ Explained Query:
     Map (123) // { arity: 3 }
       ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -332,6 +358,8 @@ Explained Query:
     Distinct project=[] // { arity: 0 }
       Project () // { arity: 0 }
         ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -346,6 +374,8 @@ Explained Query:
       Project () // { arity: 0 }
         ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -358,6 +388,8 @@ Explained Query:
     Distinct project=[] // { arity: 0 }
       Project () // { arity: 0 }
         ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -374,6 +406,8 @@ Explained Query:
       Project () // { arity: 0 }
         ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -386,6 +420,8 @@ Explained Query:
     Distinct project=[] // { arity: 0 }
       Project () // { arity: 0 }
         ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -401,6 +437,8 @@ Explained Query:
     Map (123) // { arity: 3 }
       ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -415,6 +453,8 @@ Explained Query:
         Project (#0) // { arity: 1 }
           ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -428,6 +468,8 @@ Explained Query:
       Project () // { arity: 0 }
         ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -440,6 +482,8 @@ Explained Query:
     Distinct project=[] // { arity: 0 }
       Project () // { arity: 0 }
         ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -456,18 +500,7 @@ Explained Query:
       Project (#0) // { arity: 1 }
         ReadStorage materialize.public.t // { arity: 2 }
 
-Target cluster: quickstart
-
-EOF
-
-query T multiline
-explain with(arity, join implementations) select a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
-----
-Explained Query:
-  Map (123) // { arity: 2 }
-    Distinct project=[#0] // { arity: 1 }
-      Project (#0) // { arity: 1 }
-        ReadStorage materialize.public.t // { arity: 2 }
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -481,6 +514,23 @@ Explained Query:
     Distinct project=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
         ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
+----
+Explained Query:
+  Map (123) // { arity: 2 }
+    Distinct project=[#0] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -494,6 +544,8 @@ Explained Query:
     Distinct project=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
         ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -510,6 +562,8 @@ Explained Query:
       Project (#0) // { arity: 1 }
         ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -522,6 +576,8 @@ Explained Query:
     Distinct project=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
         ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -536,6 +592,8 @@ Explained Query:
     Project (#0) // { arity: 1 }
       ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -548,6 +606,8 @@ Explained Query:
     Distinct project=[(#0 + 1)] // { arity: 1 }
       Project (#0) // { arity: 1 }
         ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -562,6 +622,8 @@ Explained Query:
       Project (#0) // { arity: 1 }
         ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -575,6 +637,8 @@ Explained Query:
     Distinct project=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
         ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -595,6 +659,8 @@ Explained Query:
   Map (123) // { arity: 3 }
     ReadStorage materialize.public.t_pk // { arity: 2 }
 
+Source materialize.public.t_pk
+
 Target cluster: quickstart
 
 EOF
@@ -605,6 +671,8 @@ explain with(arity, join implementations) select distinct a1.*, 123 from t_pk as
 Explained Query:
   Map (123) // { arity: 3 }
     ReadStorage materialize.public.t_pk // { arity: 2 }
+
+Source materialize.public.t_pk
 
 Target cluster: quickstart
 
@@ -688,6 +756,8 @@ Explained Query:
         Project () // { arity: 0 }
           ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -711,6 +781,8 @@ Explained Query:
       Distinct project=[] // { arity: 0 }
         Project () // { arity: 0 }
           ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
 
 Target cluster: quickstart
 
@@ -793,6 +865,8 @@ Explained Query:
                         Filter (#0 = 1308) // { arity: 2 }
                           ReadStorage materialize.public.t // { arity: 2 }
 
+Source materialize.public.t
+
 Target cluster: quickstart
 
 EOF
@@ -853,6 +927,8 @@ Explained Query:
           Reduce aggregates=[count(*)] // { arity: 1 }
             Project () // { arity: 0 }
               ReadStorage materialize.public.t1 // { arity: 2 }
+
+Source materialize.public.t1
 
 Target cluster: quickstart
 
