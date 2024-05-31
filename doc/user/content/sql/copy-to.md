@@ -43,10 +43,10 @@ COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
 
 {{< private-preview />}}
 
-Copying results to Amazon S3 is useful to perform tasks like periodic backups
-for auditing, or downstream processing in analytical data warehouses like
-Snowflake, Databricks or BigQuery. For step-by-step instructions, see the
-integration guide for [Amazon S3](/serve-results/s3/).
+Copying results to Amazon S3 (or S3-compatible services) is useful to perform
+tasks like periodic backups for auditing, or downstream processing in
+analytical data warehouses like Snowflake, Databricks or BigQuery. For
+step-by-step instructions, see the integration guide for [Amazon S3](/serve-results/s3/).
 
 The `COPY TO` command is _one-shot_: every time you want to export results, you
 must run the command. To automate exporting results on a regular basis, you can
@@ -62,7 +62,7 @@ Field         | Use
 _query_       | The [`SELECT`](/sql/select) query to copy results out for.
 _object_name_ | The name of the object to copy results out for.
 **AWS CONNECTION** _connection_name_ | The name of the AWS connection to use in the `COPY TO` command. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#aws) documentation page.
-_S3_uri_      | The unique resource identifier (URI) of the Amazon S3 bucket (and prefix) to store the output results in.
+_s3_uri_      | The unique resource identifier (URI) of the Amazon S3 bucket (and prefix) to store the output results in.
 **FORMAT**    | The file format to write.
 _field_       | The name of the option you want to set.
 _val_         | The value for the option.
@@ -71,7 +71,7 @@ _val_         | The value for the option.
 
 Name             | Values          | Default value | Description                       |
 -----------------|-----------------|---------------|-----------------------------------|
-`MAX FILE SIZE`  | `int`           |               | Sets the approximate maximum file size (in bytes) of each file uploaded to the S3 bucket. |
+`MAX FILE SIZE`  | `integer`       |               | Sets the approximate maximum file size (in bytes) of each file uploaded to the S3 bucket. |
 
 ### Supported formats {#copy-to-s3-supported-formats}
 
@@ -107,7 +107,7 @@ Dictionary data page encoding | `RLE_DICTIONARY`
 
 If you run into a snag trying to ingest Parquet files produced by Materialize
 into your downstream systems, please [contact our team](https://materialize.com/docs/support/)
-or [open an issue](https://github.com/MaterializeInc/demos/issues/new)!
+or [open an issue](https://github.com/MaterializeInc/materialize/issues/new)!
 
 ##### Data types {#copy-to-s3-parquet-data-types}
 

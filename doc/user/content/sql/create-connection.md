@@ -35,7 +35,7 @@ use AWS connections to perform [bulk exports to Amazon s3](/serve-results/s3/).
 
 | <div style="min-width:240px">Field</div>  | Value            | Description
 |-------------------------------------------|------------------|------------------------------
-| `ENDPOINT`                                | `text`           | *Advanced.* Override the default AWS endpoint URL. Allows targeting AWS-compatible services like MinIO.
+| `ENDPOINT`                                | `text`           | *Advanced.* Override the default AWS endpoint URL. Allows targeting S3-compatible services like MinIO.
 | `REGION`                                  | `text`           | The AWS region to connect to.
 | `ACCESS KEY ID`                           | secret or `text` | The access key ID to connect with. Triggers credentials-based authentication.<br><br><strong>Warning!</strong> Use of credentials-based authentication is deprecated. AWS strongly encourages the use of role assumption-based authentication instead.
 | `SECRET ACCESS KEY`                       | secret           | The secret access key corresponding to the specified access key ID.<br><br>Required and only valid when `ACCESS KEY ID` is specified.
