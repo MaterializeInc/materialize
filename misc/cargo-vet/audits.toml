@@ -852,6 +852,12 @@ user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-03-26"
 end = "2024-11-16"
 
+[[trusted.compact_bytes]]
+criteria = "safe-to-deploy"
+user-id = 75844 # Parker Timmerman (ParkMyCar)
+start = "2023-10-31"
+end = "2025-05-31"
+
 [[trusted.csv]]
 criteria = "safe-to-deploy"
 user-id = 189 # Andrew Gallant (BurntSushi)
