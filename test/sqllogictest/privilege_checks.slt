@@ -1791,7 +1791,6 @@ Source materialize.public.t
 
 Target cluster: quickstart
 
-COMPLETE 1
 EOF
 COMPLETE 1
 
@@ -1805,7 +1804,6 @@ Source materialize.public.t
 
 Target cluster: quickstart
 
-COMPLETE 1
 EOF
 COMPLETE 1
 
@@ -1974,7 +1972,6 @@ Source materialize.public.t
 
 Target cluster: quickstart
 
-COMPLETE 1
 EOF
 COMPLETE 1
 
@@ -1988,7 +1985,6 @@ Source materialize.public.t
 
 Target cluster: quickstart
 
-COMPLETE 1
 EOF
 COMPLETE 1
 
