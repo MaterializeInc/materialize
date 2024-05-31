@@ -14,13 +14,15 @@ use guppy::graph::feature::FeatureLabel;
 use guppy::graph::{BuildTarget, BuildTargetId, BuildTargetKind, PackageMetadata};
 use guppy::DependencyKind;
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt::{self, Write};
+use std::str::FromStr;
 
+use crate::config::{CrateConfig, GlobalConfig};
 use crate::context::CrateContext;
-use crate::metadata::CrateMetadata;
 use crate::rules::Rule;
-use crate::{Config, Field, FileGroup, List, QuotedString};
+use crate::{Dict, Field, FileGroup, List, QuotedString};
 
 use super::{AutoIndentingWriter, ToBazelDefinition};
 
@@ -39,10 +41,13 @@ pub struct RustLibrary {
     name: Field<QuotedString>,
     is_proc_macro: bool,
     features: Field<List<QuotedString>>,
-    compile_data: Field<List<QuotedString>>,
     aliases: Field<Aliases>,
     deps: Field<List<QuotedString>>,
     proc_macro_deps: Field<List<QuotedString>>,
+    data: Field<List<QuotedString>>,
+    compile_data: Field<List<QuotedString>>,
+    rustc_flags: Field<List<QuotedString>>,
+    rustc_env: Field<Dict<QuotedString, QuotedString>>,
     unit_test: RustTest,
     doc_tests: RustDocTest,
 }
@@ -61,8 +66,9 @@ impl RustTarget for RustLibrary {
 
 impl RustLibrary {
     pub fn generate(
-        config: &Config,
+        config: &GlobalConfig,
         metadata: &PackageMetadata,
+        crate_config: &CrateConfig,
         build_script: Option<&CargoBuildScript>,
     ) -> Result<Self, anyhow::Error> {
         let name = metadata.name().to_case(Case::Snake);
@@ -70,13 +76,15 @@ impl RustLibrary {
 
         // Collect all of the crate features.
         //
-        // Note: Cargo features and Bazel don't work together very well, so we
-        // just enable all features.
-        //
-        // TODO(parkmcar): Add crate level feature disablement.
-        let features: List<_> = crate_features(config, metadata)?
-            .map(QuotedString)
-            .collect();
+        // Note: Cargo features and Bazel don't work together very well, so by
+        // default we just enable all features.
+        let features: List<_> = if let Some(x) = crate_config.lib().features_override() {
+            x.into_iter().map(QuotedString::from).collect()
+        } else {
+            crate_features(config, metadata)?
+                .map(QuotedString::from)
+                .collect()
+        };
 
         // Collect all dependencies.
         let all_deps = WorkspaceDependencies::new(config, metadata);
@@ -98,28 +106,27 @@ impl RustLibrary {
         }
 
         // For every library we also generate the tests targets.
-        let unit_test = RustTest::library(config, metadata)?;
+        let unit_test = RustTest::library(config, metadata, crate_config)?;
         let doc_tests = RustDocTest::generate(config, metadata)?;
 
-        // Check for any metadata specified in the Cargo.toml.
-        let mut compile_data = List::empty();
-        let extra_metadata = CrateMetadata::new(metadata);
-        if let Some(library_metadata) = extra_metadata.as_ref().and_then(|m| m.lib()) {
-            let extra_data = library_metadata
-                .compile_data()
-                .iter()
-                .map(|p| QuotedString::new(p.to_string()));
-            compile_data.extend(extra_data);
-        }
+        // Extend with any extra config specified in the Cargo.toml.
+        let lib_common = crate_config.lib().common();
+        let data = List::new(lib_common.data());
+        let compile_data = List::new(lib_common.compile_data());
+        let rustc_flags = List::new(lib_common.rustc_flags());
+        let rustc_env = Dict::new(lib_common.rustc_env());
 
         Ok(RustLibrary {
             name: Field::new("name", name),
             is_proc_macro: metadata.is_proc_macro(),
             features: Field::new("crate_features", features),
-            compile_data: Field::new("compile_data", compile_data),
             aliases: Field::new("aliases", Aliases::default().normal().proc_macro()),
             deps: Field::new("deps", deps),
             proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
+            data: Field::new("data", data),
+            compile_data: Field::new("compile_data", compile_data),
+            rustc_flags: Field::new("rustc_flags", rustc_flags),
+            rustc_env: Field::new("rustc_env", rustc_env),
             unit_test,
             doc_tests,
         })
@@ -149,6 +156,9 @@ impl ToBazelDefinition for RustLibrary {
             self.deps.format(&mut w)?;
             self.proc_macro_deps.format(&mut w)?;
             self.compile_data.format(&mut w)?;
+            self.data.format(&mut w)?;
+            self.rustc_flags.format(&mut w)?;
+            self.rustc_env.format(&mut w)?;
         }
         writeln!(w, ")\n")?;
 
@@ -169,6 +179,10 @@ pub struct RustTest {
     deps: Field<List<QuotedString>>,
     proc_macro_deps: Field<List<QuotedString>>,
     size: Field<RustTestSize>,
+    data: Field<List<QuotedString>>,
+    compile_data: Field<List<QuotedString>>,
+    rustc_flags: Field<List<QuotedString>>,
+    rustc_env: Field<Dict<QuotedString, QuotedString>>,
 }
 
 impl RustTarget for RustTest {
@@ -179,13 +193,17 @@ impl RustTarget for RustTest {
 
 impl RustTest {
     fn common(
-        config: &Config,
+        config: &GlobalConfig,
         metadata: &PackageMetadata,
-        name: impl Into<String>,
+        crate_config: &CrateConfig,
+        name: &str,
         kind: RustTestKind,
+        size: RustTestSize,
     ) -> Result<Self, anyhow::Error> {
+        let test_config = crate_config.test(name);
+
         let crate_name = metadata.name().to_case(Case::Snake);
-        let name = QuotedString::new(format!("{crate_name}_{}", name.into()));
+        let name = QuotedString::new(format!("{crate_name}_{}_tests", name));
 
         let all_deps = WorkspaceDependencies::new(config, metadata);
         let mut deps = all_deps
@@ -213,7 +231,15 @@ impl RustTest {
             .normal_dev()
             .proc_macro()
             .proc_macro_dev();
-        let size = RustTestSize::Small;
+
+        // Extend with any extra config specified in the Cargo.toml.
+        let data = List::new(test_config.common().data());
+        let compile_data = List::new(test_config.common().compile_data());
+        let rustc_flags = List::new(test_config.common().rustc_flags());
+        let rustc_env = Dict::new(test_config.common().rustc_env());
+
+        // Use the size provided from the config, if one was provided.
+        let size = test_config.size().copied().unwrap_or(size);
 
         Ok(RustTest {
             name: Field::new("name", name),
@@ -222,22 +248,33 @@ impl RustTest {
             deps: Field::new("deps", deps),
             proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
             size: Field::new("size", size),
+            data: Field::new("data", data),
+            compile_data: Field::new("compile_data", compile_data),
+            rustc_flags: Field::new("rustc_flags", rustc_flags),
+            rustc_env: Field::new("rustc_env", rustc_env),
         })
     }
 
-    pub fn library(config: &Config, metadata: &PackageMetadata) -> Result<Self, anyhow::Error> {
+    pub fn library(
+        config: &GlobalConfig,
+        metadata: &PackageMetadata,
+        crate_config: &CrateConfig,
+    ) -> Result<Self, anyhow::Error> {
         let crate_name = metadata.name().to_case(Case::Snake);
         Self::common(
             config,
             metadata,
-            "lib_tests",
+            crate_config,
+            "lib",
             RustTestKind::library(crate_name),
+            RustTestSize::Small,
         )
     }
 
     pub fn integration(
-        config: &Config,
+        config: &GlobalConfig,
         metadata: &PackageMetadata,
+        crate_config: &CrateConfig,
         target: &BuildTarget,
     ) -> Result<Self, anyhow::Error> {
         let crate_root_path = metadata
@@ -258,8 +295,10 @@ impl RustTest {
         Self::common(
             config,
             metadata,
-            format!("{}_test", target.name()),
+            crate_config,
+            target.name(),
             RustTestKind::integration([test_target.to_string()]),
+            RustTestSize::Medium,
         )
     }
 }
@@ -278,6 +317,11 @@ impl ToBazelDefinition for RustTest {
             self.deps.format(&mut w)?;
             self.proc_macro_deps.format(&mut w)?;
             self.size.format(&mut w)?;
+
+            self.compile_data.format(&mut w)?;
+            self.data.format(&mut w)?;
+            self.rustc_flags.format(&mut w)?;
+            self.rustc_env.format(&mut w)?;
         }
         writeln!(w, ")")?;
 
@@ -316,7 +360,7 @@ impl ToBazelDefinition for RustTestKind {
 /// Size of the Bazel Test.
 ///
 /// <https://bazel.build/reference/be/common-definitions#common-attributes-tests>
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum RustTestSize {
     Small,
     #[default]
@@ -338,6 +382,31 @@ impl ToBazelDefinition for RustTestSize {
     }
 }
 
+impl FromStr for RustTestSize {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let size = match s {
+            "small" => RustTestSize::Small,
+            "medium" => RustTestSize::Medium,
+            "large" => RustTestSize::Large,
+            "enormous" => RustTestSize::Enormous,
+            other => return Err(other.to_string()),
+        };
+        Ok(size)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for RustTestSize {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        RustTestSize::from_str(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 /// [`rust_doc_test`](http://bazelbuild.github.io/rules_rust/rust_doc.html#rust_doc_test).
 #[derive(Debug)]
 pub struct RustDocTest {
@@ -347,7 +416,10 @@ pub struct RustDocTest {
 }
 
 impl RustDocTest {
-    pub fn generate(config: &Config, metadata: &PackageMetadata) -> Result<Self, anyhow::Error> {
+    pub fn generate(
+        config: &GlobalConfig,
+        metadata: &PackageMetadata,
+    ) -> Result<Self, anyhow::Error> {
         let crate_name = metadata.name().to_case(Case::Snake);
         let name = QuotedString::new(format!("{crate_name}_doc_test"));
         let crate_ = QuotedString::new(format!(":{crate_name}"));
@@ -391,7 +463,11 @@ pub struct CargoBuildScript {
     pub script_src: Field<List<QuotedString>>,
     pub deps: Field<List<QuotedString>>,
     pub proc_macro_deps: Field<List<QuotedString>>,
+    pub build_script_env: Field<List<QuotedString>>,
     pub data: Field<List<QuotedString>>,
+    pub compile_data: Field<List<QuotedString>>,
+    pub rustc_flags: Field<List<QuotedString>>,
+    pub rustc_env: Field<Dict<QuotedString, QuotedString>>,
     pub extras: Vec<Box<dyn ToBazelDefinition>>,
 }
 
@@ -403,8 +479,9 @@ impl RustTarget for CargoBuildScript {
 
 impl CargoBuildScript {
     pub fn generate(
-        config: &Config,
+        config: &GlobalConfig,
         context: &CrateContext,
+        crate_config: &CrateConfig,
         metadata: &PackageMetadata,
     ) -> Result<Option<Self>, anyhow::Error> {
         let crate_name = metadata.name().to_case(Case::Snake);
@@ -445,7 +522,7 @@ impl CargoBuildScript {
 
         // Generate any extra targets that we need.
         let mut extras: Vec<Box<dyn ToBazelDefinition>> = Vec::new();
-        let mut data = Vec::new();
+        let mut data: List<QuotedString> = List::empty();
 
         // Generate a filegroup for any files this build script depends on.
         let protos = context
@@ -458,7 +535,7 @@ impl CargoBuildScript {
             extras.push(Box::new(proto_filegroup));
 
             // Make sure to include this file group in the build script data!
-            data.push(QuotedString::new(format!(":{PROTO_FILEGROUP_NAME}")));
+            data.push_back(format!(":{PROTO_FILEGROUP_NAME}"));
         }
 
         // Add any protobuf dependencies to the data group.
@@ -480,28 +557,29 @@ impl CargoBuildScript {
             // TODO(parkmcar): This is a bit hacky, we need to consider where
             // we are relative to the workspace root.
             for dep in deps {
-                data.push(QuotedString::new(format!(
-                    "//src/{dep}:{PROTO_FILEGROUP_NAME}"
-                )));
+                data.push_back(format!("//src/{dep}:{PROTO_FILEGROUP_NAME}"));
             }
         }
 
         // Check for any metadata specified in the Cargo.toml.
-        let extra_metadata = CrateMetadata::new(metadata);
-        if let Some(build_metadata) = extra_metadata.as_ref().and_then(|m| m.build()) {
-            let extra_data = build_metadata
-                .data()
-                .iter()
-                .map(|p| QuotedString::new(p.to_string()));
-            data.extend(extra_data);
-        }
+        let build_common = crate_config.build().common();
+        data.extend(build_common.data());
+
+        let compile_data = List::new(build_common.compile_data());
+        let rustc_flags = List::new(build_common.rustc_flags());
+        let rustc_env = Dict::new(build_common.rustc_env());
+        let build_script_env = List::new(crate_config.build().build_script_env());
 
         Ok(Some(CargoBuildScript {
             name: Field::new("name", name),
             script_src,
             deps: Field::new("deps", deps),
             proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
-            data: Field::new("data", List::new(data)),
+            build_script_env: Field::new("build_script_env", build_script_env),
+            data: Field::new("data", data),
+            compile_data: Field::new("compile_data", compile_data),
+            rustc_flags: Field::new("rustc_flags", rustc_flags),
+            rustc_env: Field::new("rustc_env", rustc_env),
             extras,
         }))
     }
@@ -525,7 +603,12 @@ impl ToBazelDefinition for CargoBuildScript {
             self.script_src.format(&mut w)?;
             self.deps.format(&mut w)?;
             self.proc_macro_deps.format(&mut w)?;
+            self.build_script_env.format(&mut w)?;
+
             self.data.format(&mut w)?;
+            self.compile_data.format(&mut w)?;
+            self.rustc_flags.format(&mut w)?;
+            self.rustc_env.format(&mut w)?;
         }
         writeln!(w, ")")?;
 
@@ -533,16 +616,41 @@ impl ToBazelDefinition for CargoBuildScript {
     }
 }
 
-type AllCrateDeps = RulesRustMacro<AllCrateDeps_>;
-type Aliases = RulesRustMacro<Aliases_>;
+/// An opaque blob of text that we treat as a target.
+#[derive(Debug)]
+pub struct AdditiveContent<'a>(Cow<'a, str>);
 
+impl<'a> AdditiveContent<'a> {
+    pub fn new(s: &'a str) -> Self {
+        AdditiveContent(s.into())
+    }
+}
+
+impl<'a> ToBazelDefinition for AdditiveContent<'a> {
+    fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
+        writeln!(writer, "{}", self.0)?;
+        Ok(())
+    }
+}
+
+impl<'a> RustTarget for AdditiveContent<'a> {
+    fn rules(&self) -> Vec<Rule> {
+        vec![]
+    }
+}
+
+type AllCrateDeps = CratesUniverseMacro<AllCrateDeps_>;
+type Aliases = CratesUniverseMacro<Aliases_>;
+
+/// [`crates_universe`](http://bazelbuild.github.io/rules_rust/crate_universe.html) exposes a few
+/// macros that make it easier to define depedencies and aliases.
 #[derive(Default, Debug)]
-struct RulesRustMacro<Name> {
+struct CratesUniverseMacro<Name> {
     name: Name,
     fields: Vec<MacroOption>,
 }
 
-impl<Name> RulesRustMacro<Name> {
+impl<Name> CratesUniverseMacro<Name> {
     pub fn normal(mut self) -> Self {
         self.fields.push(MacroOption::Normal);
         self
@@ -574,7 +682,7 @@ impl<Name> RulesRustMacro<Name> {
     }
 }
 
-impl<N: Named> ToBazelDefinition for RulesRustMacro<N> {
+impl<N: Named> ToBazelDefinition for CratesUniverseMacro<N> {
     fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
         let mut w = AutoIndentingWriter::new(writer);
 
@@ -641,12 +749,12 @@ impl Named for Aliases_ {
 }
 
 struct WorkspaceDependencies<'a> {
-    config: &'a Config,
+    config: &'a GlobalConfig,
     package: &'a PackageMetadata<'a>,
 }
 
 impl<'a> WorkspaceDependencies<'a> {
-    pub fn new(config: &'a Config, package: &'a PackageMetadata<'a>) -> Self {
+    pub fn new(config: &'a GlobalConfig, package: &'a PackageMetadata<'a>) -> Self {
         WorkspaceDependencies { config, package }
     }
 
@@ -675,7 +783,7 @@ impl<'a> WorkspaceDependencies<'a> {
 }
 
 pub fn crate_features<'a>(
-    config: &'a Config,
+    config: &'a GlobalConfig,
     package: &'a PackageMetadata<'a>,
 ) -> Result<impl Iterator<Item = String>, anyhow::Error> {
     let features = package

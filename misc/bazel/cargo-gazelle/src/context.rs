@@ -19,7 +19,7 @@ use camino::Utf8PathBuf;
 use guppy::graph::{BuildTargetId, PackageMetadata};
 use quote::ToTokens;
 
-use crate::Config;
+use crate::config::GlobalConfig;
 
 #[derive(Default, Debug, Clone)]
 pub struct CrateContext {
@@ -30,7 +30,7 @@ pub struct CrateContext {
 impl CrateContext {
     /// Generates necessary external (non-`Cargo.toml`) context for a crate.
     pub fn generate(
-        config: &Config,
+        config: &GlobalConfig,
         metadata: &PackageMetadata<'_>,
     ) -> Result<CrateContext, anyhow::Error> {
         tracing::debug!(name = metadata.name(), "generating context");
@@ -57,7 +57,7 @@ pub struct BuildScriptContext {
 
 impl BuildScriptContext {
     pub fn generate(
-        config: &Config,
+        config: &GlobalConfig,
         build_script_path: impl AsRef<Path>,
     ) -> Result<BuildScriptContext, anyhow::Error> {
         let build_script_path = build_script_path.as_ref();
@@ -123,7 +123,7 @@ impl BuildScriptContext {
 }
 
 // TODO(parkmycar): There is almost definitely a better way to do this AST parsing.
-fn find_proto_build(config: &Config, expr: &syn::Expr) -> bool {
+fn find_proto_build(config: &GlobalConfig, expr: &syn::Expr) -> bool {
     match expr {
         syn::Expr::Path(func_path) => {
             let calls_proto_gen = func_path.path.segments.iter().any(|segment| {
@@ -145,7 +145,7 @@ fn find_proto_build(config: &Config, expr: &syn::Expr) -> bool {
     }
 }
 
-fn find_proto_files(_config: &Config, tokens: proc_macro2::TokenStream) -> Vec<String> {
+fn find_proto_files(_config: &GlobalConfig, tokens: proc_macro2::TokenStream) -> Vec<String> {
     let mut files = Vec::new();
     for token in tokens {
         match token {

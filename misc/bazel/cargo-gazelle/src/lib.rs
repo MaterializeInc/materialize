@@ -7,41 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Debug, Write};
 
 use crate::targets::RustTarget;
 
 pub mod args;
+pub mod config;
 pub mod context;
 pub mod header;
-pub mod metadata;
 pub mod rules;
 pub mod targets;
-
-/// Global configuration for generating `BUILD` files.
-#[derive(Debug, Clone)]
-pub struct Config {
-    ignored_crates: Vec<Cow<'static, str>>,
-    proto_build_crates: Vec<Cow<'static, str>>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            ignored_crates: vec!["workspace-hack".into()],
-            proto_build_crates: vec!["prost_build".into(), "tonic_build".into()],
-        }
-    }
-}
-
-impl Config {
-    /// Returns `true` if the named dependency should be included, `false` if it should be ignored.
-    pub fn include_dep(&self, name: &str) -> bool {
-        !self.ignored_crates.contains(&Cow::Borrowed(name))
-    }
-}
 
 /// An entire `BUILD.bazel` file.
 ///
@@ -137,7 +113,7 @@ impl<'w> fmt::Write for AutoIndentingWriter<'w> {
 /// let deps = QuotedString::new("json");
 /// assert_eq!(deps.to_bazel_definition(), "\"json\"");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct QuotedString(String);
 
 impl QuotedString {
@@ -158,14 +134,8 @@ impl ToBazelDefinition for QuotedString {
     }
 }
 
-impl From<String> for QuotedString {
-    fn from(value: String) -> Self {
-        QuotedString(value)
-    }
-}
-
-impl<'a> From<&'a str> for QuotedString {
-    fn from(value: &'a str) -> Self {
+impl<T: ToString> From<T> for QuotedString {
+    fn from(value: T) -> Self {
         QuotedString(value.to_string())
     }
 }
@@ -222,15 +192,15 @@ pub struct List<T> {
 }
 
 impl<T> List<T> {
-    pub fn new(items: impl IntoIterator<Item = T>) -> Self {
+    pub fn new<E: Into<T>, I: IntoIterator<Item = E>>(items: I) -> Self {
         List {
-            items: items.into_iter().collect(),
+            items: items.into_iter().map(Into::into).collect(),
             objects: Vec::new(),
         }
     }
 
     pub fn empty() -> Self {
-        List::new(VecDeque::new())
+        List::new(VecDeque::<T>::new())
     }
 
     /// Concatenate another Bazel object to this list.
@@ -245,18 +215,18 @@ impl<T> List<T> {
     }
 
     /// Push a value of `T` to the front of the list.
-    pub fn push_front(&mut self, val: T) {
-        self.items.insert(0, val)
+    pub fn push_front<E: Into<T>>(&mut self, val: E) {
+        self.items.insert(0, val.into())
     }
 
     /// Push a value of `T` to the back of the list.
-    pub fn push_back(&mut self, val: T) {
-        self.items.push(val)
+    pub fn push_back<E: Into<T>>(&mut self, val: E) {
+        self.items.push(val.into())
     }
 
     /// Extend `self` with the values from `vals`.
-    pub fn extend(&mut self, vals: impl IntoIterator<Item = T>) {
-        self.items.extend(vals)
+    pub fn extend<E: Into<T>, I: IntoIterator<Item = E>>(&mut self, vals: I) {
+        self.items.extend(vals.into_iter().map(Into::into))
     }
 }
 
@@ -290,6 +260,79 @@ impl<T: ToBazelDefinition> ToBazelDefinition for List<T> {
         for o in &self.objects {
             write!(w, " + ")?;
             o.format(&mut w)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Helper for formatting a dictionary.
+///
+/// ```
+/// use cargo_gazelle::{Dict, QuotedString, ToBazelDefinition};
+///
+/// let entry = (QuotedString::new("RUST_LOG"), QuotedString::new("INFO"));
+/// let deps = Dict::new(vec![entry]);
+/// assert_eq!(deps.to_bazel_definition(), "{ \"RUST_LOG\": \"INFO\" }");
+/// ```
+#[derive(Debug)]
+pub struct Dict<K, V> {
+    items: BTreeMap<K, V>,
+}
+
+impl<K, V> Dict<K, V> {
+    pub fn new<M, N, I>(vals: I) -> Self
+    where
+        M: Into<K>,
+        N: Into<V>,
+        I: IntoIterator<Item = (M, N)>,
+        K: Ord,
+    {
+        Dict {
+            items: vals
+                .into_iter()
+                .map(|(m, n)| (m.into(), n.into()))
+                .collect(),
+        }
+    }
+
+    pub fn insert(&mut self, key: K, val: V)
+    where
+        K: Ord,
+    {
+        self.items.insert(key, val);
+    }
+}
+
+impl<K: ToBazelDefinition, V: ToBazelDefinition> ToBazelDefinition for Dict<K, V> {
+    fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
+        let mut w = AutoIndentingWriter::new(writer);
+
+        match self.items.len() {
+            0 => write!(w, "{{}}")?,
+            1 => {
+                let (key, val) = self.items.iter().next().expect("checked length");
+                write!(
+                    w,
+                    "{{ {}: {} }}",
+                    key.to_bazel_definition(),
+                    val.to_bazel_definition()
+                )?;
+            }
+            _ => {
+                write!(w, "{{")?;
+                for (key, val) in &self.items {
+                    let mut w = w.indent();
+                    writeln!(w)?;
+                    write!(
+                        w,
+                        "{{ {}: {} }}",
+                        key.to_bazel_definition(),
+                        val.to_bazel_definition()
+                    )?;
+                }
+                write!(w, "\n}}")?;
+            }
         }
 
         Ok(())

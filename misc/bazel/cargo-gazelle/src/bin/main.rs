@@ -14,16 +14,17 @@ use cargo_toml::Manifest;
 use clap::Parser;
 
 use cargo_gazelle::args::Args;
+use cargo_gazelle::config::{CrateConfig, GlobalConfig};
 use cargo_gazelle::context::CrateContext;
 use cargo_gazelle::header::BazelHeader;
 use cargo_gazelle::targets::{CargoBuildScript, RustLibrary, RustTarget, RustTest};
-use cargo_gazelle::{BazelBuildFile, Config};
+use cargo_gazelle::BazelBuildFile;
 use guppy::graph::{BuildTargetId, PackageMetadata};
-use tracing::Level;
+use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<(), anyhow::Error> {
     tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
+        .with_env_filter(EnvFilter::from_default_env())
         .init();
 
     let args = Args::try_parse()?;
@@ -44,21 +45,30 @@ fn main() -> Result<(), anyhow::Error> {
         None => Box::new(graph.workspace().iter()),
     };
 
-    let config = Config::default();
+    let config = GlobalConfig::default();
 
     for package in packages {
-        tracing::debug!(path = ?package.manifest_path(), "generating");
+        let crate_config = CrateConfig::new(&package);
+        let additive_content = crate_config.additive_content();
+        if crate_config.skip_generating() {
+            tracing::info!(path = ?package.manifest_path(), "skipping, because crate config");
+            continue;
+        }
+
+        tracing::info!(path = ?package.manifest_path(), "generating");
 
         let error_context = format!("generating {}", package.name());
         let crate_context = CrateContext::generate(&config, &package).context(error_context)?;
 
-        let build_script = CargoBuildScript::generate(&config, &crate_context, &package)?;
-        let library = RustLibrary::generate(&config, &package, build_script.as_ref())?;
+        let build_script =
+            CargoBuildScript::generate(&config, &crate_context, &crate_config, &package)?;
+        let library =
+            RustLibrary::generate(&config, &package, &crate_config, build_script.as_ref())?;
 
         let integration_tests: Vec<_> = package
             .build_targets()
             .filter(|target| matches!(target.id(), BuildTargetId::Test(_)))
-            .map(|target| RustTest::integration(&config, &package, &target))
+            .map(|target| RustTest::integration(&config, &package, &crate_config, &target))
             .collect::<Result<_, _>>()?;
 
         #[allow(clippy::as_conversions)]
@@ -66,6 +76,7 @@ fn main() -> Result<(), anyhow::Error> {
             .into_iter()
             .chain(build_script.iter().map(|x| x as &dyn RustTarget))
             .chain(integration_tests.iter().map(|x| x as &dyn RustTarget))
+            .chain(additive_content.as_ref().map(|x| x as &dyn RustTarget))
             .collect();
 
         let bazel_file = BazelBuildFile {

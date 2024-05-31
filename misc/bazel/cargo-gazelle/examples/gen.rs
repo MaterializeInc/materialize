@@ -10,10 +10,11 @@
 use anyhow::Context;
 use cargo_toml::Manifest;
 
+use cargo_gazelle::config::{CrateConfig, GlobalConfig};
 use cargo_gazelle::context::CrateContext;
 use cargo_gazelle::header::BazelHeader;
 use cargo_gazelle::targets::{CargoBuildScript, RustLibrary, RustTarget};
-use cargo_gazelle::{BazelBuildFile, Config};
+use cargo_gazelle::BazelBuildFile;
 
 pub fn main() -> Result<(), anyhow::Error> {
     let path = "../../../src/proto/Cargo.toml";
@@ -27,12 +28,14 @@ pub fn main() -> Result<(), anyhow::Error> {
     let package = graph
         .workspace()
         .member_by_name(manifest.package().name())?;
-    let config = Config::default();
+    let config = GlobalConfig::default();
 
     let crate_context = CrateContext::generate(&config, &package)?;
+    let crate_config = CrateConfig::new(&package);
 
-    let build_script = CargoBuildScript::generate(&config, &crate_context, &package)?.unwrap();
-    let library = RustLibrary::generate(&config, &package, Some(&build_script))?;
+    let build_script =
+        CargoBuildScript::generate(&config, &crate_context, &crate_config, &package)?.unwrap();
+    let library = RustLibrary::generate(&config, &package, &crate_config, Some(&build_script))?;
 
     #[allow(clippy::as_conversions)]
     let targets = vec![&library as &dyn RustTarget, &build_script];
