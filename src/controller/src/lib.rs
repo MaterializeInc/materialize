@@ -21,7 +21,6 @@
 //! Consult the `StorageController` and `ComputeController` documentation for more information
 //! about each of these interfaces.
 
-use std::any::Any;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
@@ -123,7 +122,7 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// Notification that a watch set has finished. See
     /// [`Controller::install_compute_watch_set`] and
     /// [`Controller::install_storage_watch_set`] for details.
-    WatchSetFinished(Vec<Box<dyn Any>>),
+    WatchSetFinished(Vec<WatchSetId>),
 }
 
 /// Whether one of the underlying controllers is ready for their `process`
@@ -185,7 +184,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     // timestamp), the corresponding entry will be removed from the set.
     unfulfilled_watch_sets_by_object: BTreeMap<GlobalId, BTreeSet<WatchSetId>>,
     /// A map of installed watch sets indexed by id.
-    unfulfilled_watch_sets: BTreeMap<WatchSetId, (BTreeSet<GlobalId>, T, Box<dyn Any>)>,
+    unfulfilled_watch_sets: BTreeMap<WatchSetId, (BTreeSet<GlobalId>, T)>,
     /// A sequence of numbers used to mint unique WatchSetIds.
     watch_set_id_gen: Gen<WatchSetId>,
 
@@ -194,7 +193,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     /// client on the next call to [`self.process`].
     ///
     /// See [`self.install_watch_set`] for a description of watch sets.
-    immediate_watch_sets: Vec<Box<dyn Any>>,
+    immediate_watch_sets: Vec<WatchSetId>,
 }
 
 impl<T: ComputeControllerTimestamp> Controller<T> {
@@ -352,15 +351,14 @@ where
     /// all of the frontiers of a particular set of objects have advanced at
     /// least to a particular timestamp.
     ///
-    /// When all the objects in `objects` have advanced to `t`, the object
-    /// `token` is returned to the client on the next call to [`Self::process`].
+    /// When all the objects in `objects` have advanced to `t`, the watchset id
+    /// is returned to the client on the next call to [`Self::process`].
     pub fn install_compute_watch_set(
         &mut self,
         mut objects: BTreeSet<GlobalId>,
         t: T,
-        token: Box<dyn Any>,
     ) -> WatchSetId {
-        let watchset_id = self.watch_set_id_gen.allocate_id();
+        let ws_id = self.watch_set_id_gen.allocate_id();
 
         objects.retain(|id| {
             let frontier = self
@@ -371,19 +369,18 @@ where
             frontier.less_equal(&t)
         });
         if objects.is_empty() {
-            self.immediate_watch_sets.push(token);
+            self.immediate_watch_sets.push(ws_id);
         } else {
             for id in objects.iter() {
                 self.unfulfilled_watch_sets_by_object
                     .entry(*id)
                     .or_default()
-                    .insert(watchset_id.clone());
+                    .insert(ws_id);
             }
-            self.unfulfilled_watch_sets
-                .insert(watchset_id.clone(), (objects, t, token));
+            self.unfulfilled_watch_sets.insert(ws_id, (objects, t));
         }
 
-        watchset_id
+        ws_id
     }
 
     /// Install a _watch set_ in the controller.
@@ -392,15 +389,14 @@ where
     /// all of the frontiers of a particular set of objects have advanced at
     /// least to a particular timestamp.
     ///
-    /// When all the objects in `objects` have advanced to `t`, the object
-    /// `token` is returned to the client on the next call to [`Self::process`].
+    /// When all the objects in `objects` have advanced to `t`, the watchset id
+    /// is returned to the client on the next call to [`Self::process`].
     pub fn install_storage_watch_set(
         &mut self,
         mut objects: BTreeSet<GlobalId>,
         t: T,
-        token: Box<dyn Any>,
     ) -> WatchSetId {
-        let watchset_id = self.watch_set_id_gen.allocate_id();
+        let ws_id = self.watch_set_id_gen.allocate_id();
 
         let uppers = self
             .storage
@@ -415,18 +411,17 @@ where
             upper.less_equal(&t)
         });
         if objects.is_empty() {
-            self.immediate_watch_sets.push(token);
+            self.immediate_watch_sets.push(ws_id);
         } else {
             for id in objects.iter() {
                 self.unfulfilled_watch_sets_by_object
                     .entry(*id)
                     .or_default()
-                    .insert(watchset_id.clone());
+                    .insert(ws_id);
             }
-            self.unfulfilled_watch_sets
-                .insert(watchset_id.clone(), (objects, t, token));
+            self.unfulfilled_watch_sets.insert(ws_id, (objects, t));
         }
-        watchset_id
+        ws_id
     }
 
     /// Uninstalls a previously installed WatchSetId. The method is a no-op if the watch set has
@@ -435,7 +430,7 @@ where
     /// # Panics
     /// This method panics if called with a WatchSetId that was never returned by the function.
     pub fn uninstall_watch_set(&mut self, ws_id: &WatchSetId) {
-        if let Some((obj_ids, _, _)) = self.unfulfilled_watch_sets.remove(ws_id) {
+        if let Some((obj_ids, _)) = self.unfulfilled_watch_sets.remove(ws_id) {
             for obj_id in obj_ids {
                 let mut entry = match self.unfulfilled_watch_sets_by_object.entry(obj_id) {
                     Entry::Occupied(entry) => entry,
@@ -538,8 +533,8 @@ where
                         entry.get_mut().0.remove(obj_id);
                         // 2. Mark the watchset as finished if this was the last watched object
                         if entry.get().0.is_empty() {
-                            let (_, _, token) = entry.remove();
-                            finished.push(token);
+                            entry.remove();
+                            finished.push(*ws_id);
                         }
                         // 3. Remove the watchset from the set of pending watchsets for the object
                         false

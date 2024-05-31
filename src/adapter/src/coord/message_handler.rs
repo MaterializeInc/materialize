@@ -38,14 +38,12 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::command::Command;
 use crate::coord::appends::Deferred;
-use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
     AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, Message,
     PeekStage, PeekStageTimestampReadHold, PlanValidity, PurifiedStatementReady,
     RealTimeRecencyContext,
 };
 use crate::session::Session;
-use crate::statement_logging::StatementLifecycleEvent;
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice, TimestampContext};
@@ -434,13 +432,19 @@ impl Coordinator {
                     self.builtin_table_update().background(updates);
                 }
             }
-            ControllerResponse::WatchSetFinished(sets) => {
+            ControllerResponse::WatchSetFinished(ws_ids) => {
                 let now = self.now();
-                for set in sets {
-                    let (id, ev) = set
-                        .downcast_ref::<(StatementLoggingId, StatementLifecycleEvent)>()
-                        .expect("we currently log all watch sets with this type");
-                    self.record_statement_lifecycle_event(id, ev, now);
+                for ws_id in ws_ids {
+                    if let Some((conn_id, (id, ev))) = self.installed_watch_sets.remove(&ws_id) {
+                        self.connection_watch_sets
+                            .get_mut(&conn_id)
+                            .expect("corrupted coordinator state: unknown connection id")
+                            .remove(&ws_id);
+                        if self.connection_watch_sets[&conn_id].is_empty() {
+                            self.connection_watch_sets.remove(&conn_id);
+                        }
+                        self.record_statement_lifecycle_event(&id, &ev, now);
+                    }
                 }
             }
         }
