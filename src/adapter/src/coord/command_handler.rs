@@ -1007,6 +1007,7 @@ impl Coordinator {
         }
 
         self.cancel_pending_peeks(&conn_id);
+        self.cancel_pending_watchsets(&conn_id);
         self.cancel_compute_sinks_for_conn(&conn_id).await;
     }
 
@@ -1038,6 +1039,7 @@ impl Coordinator {
             .with_label_values(&[session_type])
             .dec();
         self.cancel_pending_peeks(conn.conn_id());
+        self.cancel_pending_watchsets(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());
 
         // Queue the builtin table update, but do not wait for it to complete. We explicitly do

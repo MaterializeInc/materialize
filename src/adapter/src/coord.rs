@@ -2757,6 +2757,15 @@ impl Coordinator {
         self.installed_watch_sets.insert(ws_id, (conn_id, state));
     }
 
+    /// Cancels pending watchsets associated with the provided connection id.
+    pub fn cancel_pending_watchsets(&mut self, conn_id: &ConnectionId) {
+        if let Some(ws_ids) = self.connection_watch_sets.remove(conn_id) {
+            for ws_id in ws_ids {
+                self.installed_watch_sets.remove(&ws_id);
+            }
+        }
+    }
+
     /// Returns the state of the [`Coordinator`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
