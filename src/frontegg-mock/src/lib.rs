@@ -439,7 +439,7 @@ async fn handle_get_user(
             let user_response = UserResponse {
                 id: user.id.unwrap_or_default(),
                 email: user.email.clone(),
-                verified: user.verified.unwrap_or(false),
+                verified: user.verified.unwrap_or(true),
                 metadata: user.metadata.clone().unwrap_or_default(),
                 provider: user.auth_provider.clone().unwrap_or_default(),
                 roles,
@@ -488,7 +488,7 @@ async fn handle_create_user(
         initial_api_tokens: vec![],
         roles: role_names.clone(),
         auth_provider: None,
-        verified: Some(false),
+        verified: Some(true),
         metadata: None,
     };
 
@@ -502,7 +502,7 @@ async fn handle_create_user(
     let user_response = UserResponse {
         id: user_id,
         email: new_user.email.clone(),
-        verified: false,
+        verified: true,
         metadata: String::new(),
         provider: String::new(),
         roles: user_roles,
