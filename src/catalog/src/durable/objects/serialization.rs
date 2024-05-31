@@ -11,11 +11,13 @@
 
 use mz_audit_log::{
     AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
-    CreateClusterReplicaV1, CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3,
-    DropClusterReplicaV1, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
-    GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, RenameClusterReplicaV1, RenameClusterV1,
-    RenameItemV1, RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, SchemaV1, SchemaV2, StorageUsageV1,
-    ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
+    CreateClusterReplicaV1, CreateClusterReplicaV2, CreateOrDropClusterReplicaReasonV1,
+    CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3, DropClusterReplicaV1,
+    DropClusterReplicaV2, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
+    GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, RefreshDecisionWithReasonV1,
+    RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
+    RevokeRoleV2, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1, SchemaV1, SchemaV2,
+    StorageUsageV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
     VersionedStorageUsage,
 };
 use mz_compute_client::controller::ComputeReplicaLogging;
@@ -1666,6 +1668,36 @@ impl RustType<proto::audit_log_event_v1::DropClusterReplicaV1> for DropClusterRe
     }
 }
 
+impl RustType<proto::audit_log_event_v1::DropClusterReplicaV2> for DropClusterReplicaV2 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::DropClusterReplicaV2 {
+        proto::audit_log_event_v1::DropClusterReplicaV2 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            replica_id: self.replica_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            replica_name: self.replica_name.to_string(),
+            reason: Some(self.reason.into_proto()),
+            scheduling_policies: self.scheduling_policies.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::DropClusterReplicaV2,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(DropClusterReplicaV2 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            replica_id: proto.replica_id.map(|s| s.inner),
+            replica_name: proto.replica_name,
+            reason: proto
+                .reason
+                .into_rust_if_some("DropClusterReplicaV2::reason")?,
+            scheduling_policies: proto.scheduling_policies.into_rust()?,
+        })
+    }
+}
+
 impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV1> for CreateClusterReplicaV1 {
     fn into_proto(&self) -> proto::audit_log_event_v1::CreateClusterReplicaV1 {
         proto::audit_log_event_v1::CreateClusterReplicaV1 {
@@ -1694,6 +1726,136 @@ impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV1> for CreateClust
             disk: proto.disk,
             billed_as: proto.billed_as,
             internal: proto.internal,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV2> for CreateClusterReplicaV2 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateClusterReplicaV2 {
+        proto::audit_log_event_v1::CreateClusterReplicaV2 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            replica_id: self.replica_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            replica_name: self.replica_name.to_string(),
+            logical_size: self.logical_size.to_string(),
+            disk: self.disk,
+            billed_as: self.billed_as.clone(),
+            internal: self.internal,
+            reason: Some(self.reason.into_proto()),
+            scheduling_policies: self.scheduling_policies.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateClusterReplicaV2,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateClusterReplicaV2 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            replica_id: proto.replica_id.map(|id| id.inner),
+            replica_name: proto.replica_name,
+            logical_size: proto.logical_size,
+            disk: proto.disk,
+            billed_as: proto.billed_as,
+            internal: proto.internal,
+            reason: proto
+                .reason
+                .into_rust_if_some("DropClusterReplicaV2::reason")?,
+            scheduling_policies: proto.scheduling_policies.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1>
+    for CreateOrDropClusterReplicaReasonV1
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
+        match self {
+            CreateOrDropClusterReplicaReasonV1::Manual => proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
+                reason: Some(proto::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::Manual(Empty {}))
+            },
+            CreateOrDropClusterReplicaReasonV1::Schedule => proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
+                reason: Some(proto::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::Schedule(Empty {}))
+            },
+            CreateOrDropClusterReplicaReasonV1::System => proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
+                reason: Some(proto::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::System(Empty {}))
+            },
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1,
+    ) -> Result<Self, TryFromProtoError> {
+        match proto.reason {
+            None => Err(TryFromProtoError::missing_field("CreateOrDropClusterReplicaReasonV1::reason")),
+            Some(proto::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::Manual(Empty {})) => Ok(CreateOrDropClusterReplicaReasonV1::Manual),
+            Some(proto::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::Schedule(Empty {})) => Ok(CreateOrDropClusterReplicaReasonV1::Schedule),
+            Some(proto::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::System(Empty {})) => Ok(CreateOrDropClusterReplicaReasonV1::System),
+        }
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV1>
+    for SchedulingDecisionsWithReasonsV1
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV1 {
+        proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV1 {
+            on_refresh: Some(self.on_refresh.into_proto()),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::SchedulingDecisionsWithReasonsV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(SchedulingDecisionsWithReasonsV1 {
+            on_refresh: proto
+                .on_refresh
+                .into_rust_if_some("SchedulingDecisionsWithReasonsV1::on_refresh")?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RefreshDecisionWithReasonV1>
+    for RefreshDecisionWithReasonV1
+{
+    fn into_proto(&self) -> proto::audit_log_event_v1::RefreshDecisionWithReasonV1 {
+        let decision = match &self.decision {
+            SchedulingDecisionV1::On => {
+                proto::audit_log_event_v1::refresh_decision_with_reason_v1::Decision::On(Empty {})
+            }
+            SchedulingDecisionV1::Off => {
+                proto::audit_log_event_v1::refresh_decision_with_reason_v1::Decision::Off(Empty {})
+            }
+        };
+        proto::audit_log_event_v1::RefreshDecisionWithReasonV1 {
+            decision: Some(decision),
+            objects_needing_refresh: self.objects_needing_refresh.clone(),
+            rehydration_time_estimate: self.rehydration_time_estimate.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RefreshDecisionWithReasonV1,
+    ) -> Result<Self, TryFromProtoError> {
+        let decision = match proto.decision {
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "CreateOrDropClusterReplicaReasonV1::reason",
+                ));
+            }
+            Some(proto::audit_log_event_v1::refresh_decision_with_reason_v1::Decision::On(
+                Empty {},
+            )) => SchedulingDecisionV1::On,
+            Some(proto::audit_log_event_v1::refresh_decision_with_reason_v1::Decision::Off(
+                Empty {},
+            )) => SchedulingDecisionV1::Off,
+        };
+        Ok(RefreshDecisionWithReasonV1 {
+            decision,
+            objects_needing_refresh: proto.objects_needing_refresh,
+            rehydration_time_estimate: proto.rehydration_time_estimate,
         })
     }
 }
@@ -2108,8 +2270,14 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             EventDetails::CreateClusterReplicaV1(details) => {
                 CreateClusterReplicaV1(details.into_proto())
             }
+            EventDetails::CreateClusterReplicaV2(details) => {
+                CreateClusterReplicaV2(details.into_proto())
+            }
             EventDetails::DropClusterReplicaV1(details) => {
                 DropClusterReplicaV1(details.into_proto())
+            }
+            EventDetails::DropClusterReplicaV2(details) => {
+                DropClusterReplicaV2(details.into_proto())
             }
             EventDetails::CreateSourceSinkV1(details) => CreateSourceSinkV1(details.into_proto()),
             EventDetails::CreateSourceSinkV2(details) => CreateSourceSinkV2(details.into_proto()),
@@ -2151,8 +2319,14 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             CreateClusterReplicaV1(details) => {
                 Ok(EventDetails::CreateClusterReplicaV1(details.into_rust()?))
             }
+            CreateClusterReplicaV2(details) => {
+                Ok(EventDetails::CreateClusterReplicaV2(details.into_rust()?))
+            }
             DropClusterReplicaV1(details) => {
                 Ok(EventDetails::DropClusterReplicaV1(details.into_rust()?))
+            }
+            DropClusterReplicaV2(details) => {
+                Ok(EventDetails::DropClusterReplicaV2(details.into_rust()?))
             }
             CreateSourceSinkV1(details) => {
                 Ok(EventDetails::CreateSourceSinkV1(details.into_rust()?))

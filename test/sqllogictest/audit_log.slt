@@ -105,7 +105,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 11  create  cluster  {"id":"u1","name":"quickstart"}  NULL
 12  grant  cluster  {"grantee_id":"p","grantor_id":"s1","object_id":"Cu1","privileges":"U"}  NULL
 13  grant  cluster  {"grantee_id":"u1","grantor_id":"s1","object_id":"Cu1","privileges":"UC"}  NULL
-14  create  cluster-replica  {"billed_as":null,"cluster_id":"u1","cluster_name":"quickstart","disk":false,"internal":false,"logical_size":"2","replica_id":"u1","replica_name":"r1"}  NULL
+14  create  cluster-replica  {"billed_as":null,"cluster_id":"u1","cluster_name":"quickstart","disk":false,"internal":false,"logical_size":"2","reason":"system","replica_id":"u1","replica_name":"r1"}  NULL
 15  grant  system  {"grantee_id":"s1","grantor_id":"s1","object_id":"SYSTEM","privileges":"RBN"}  NULL
 16  grant  system  {"grantee_id":"u1","grantor_id":"s1","object_id":"SYSTEM","privileges":"RBN"}  NULL
 17  create  database  {"id":"u2","name":"test"}  materialize
@@ -119,7 +119,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 25  create  role  {"id":"u2","name":"foo"}  materialize
 26  drop  role  {"id":"u2","name":"foo"}  materialize
 27  create  cluster  {"id":"u2","name":"foo"}  materialize
-28  create  cluster-replica  {"billed_as":null,"cluster_id":"u2","cluster_name":"foo","disk":true,"internal":false,"logical_size":"1","replica_id":"u2","replica_name":"r"}  materialize
+28  create  cluster-replica  {"billed_as":null,"cluster_id":"u2","cluster_name":"foo","disk":true,"internal":false,"logical_size":"1","reason":"manual","replica_id":"u2","replica_name":"r"}  materialize
 29  create  materialized-view  {"database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
 30  create  view  {"database":"materialize","id":"u2","item":"unmat","schema":"public"}  materialize
 31  create  table  {"database":"materialize","id":"u3","item":"t","schema":"public"}  materialize
@@ -143,7 +143,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 49  create  source  {"database":"materialize","id":"u15","item":"users","schema":"public","type":"subsource"}  materialize
 50  alter  cluster-replica  {"cluster_id":"u2","new_name":"s","old_name":"r","replica_id":"u2"}  materialize
 51  alter  cluster  {"id":"u2","new_name":"bar","old_name":"foo"}  materialize
-52  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"bar","replica_id":"u2","replica_name":"s"}  materialize
+52  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"bar","reason":"manual","replica_id":"u2","replica_name":"s"}  materialize
 53  drop  cluster  {"id":"u2","name":"bar"}  materialize
 54  alter  materialized-view  {"id":"u5","new_history":"'5m'","old_history":null}  materialize
 55  alter  materialized-view  {"id":"u5","new_history":null,"old_history":"FOR␠'5m'"}  materialize

@@ -150,8 +150,10 @@ serde_plain::derive_display_from_serialize!(ObjectType);
 pub enum EventDetails {
     #[serde(rename = "CreateComputeReplicaV1")] // historical name
     CreateClusterReplicaV1(CreateClusterReplicaV1),
+    CreateClusterReplicaV2(CreateClusterReplicaV2),
     #[serde(rename = "DropComputeReplicaV1")] // historical name
     DropClusterReplicaV1(DropClusterReplicaV1),
+    DropClusterReplicaV2(DropClusterReplicaV2),
     CreateSourceSinkV1(CreateSourceSinkV1),
     CreateSourceSinkV2(CreateSourceSinkV2),
     CreateSourceSinkV3(CreateSourceSinkV3),
@@ -231,6 +233,17 @@ pub struct DropClusterReplicaV1 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct DropClusterReplicaV2 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub replica_id: Option<String>,
+    pub replica_name: String,
+    pub reason: CreateOrDropClusterReplicaReasonV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct CreateClusterReplicaV1 {
     pub cluster_id: String,
     pub cluster_name: String,
@@ -242,6 +255,64 @@ pub struct CreateClusterReplicaV1 {
     pub disk: bool,
     pub billed_as: Option<String>,
     pub internal: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct CreateClusterReplicaV2 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub replica_id: Option<String>,
+    pub replica_name: String,
+    pub logical_size: String,
+    pub disk: bool,
+    pub billed_as: Option<String>,
+    pub internal: bool,
+    pub reason: CreateOrDropClusterReplicaReasonV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[serde(rename_all = "kebab-case")]
+pub enum CreateOrDropClusterReplicaReasonV1 {
+    Manual,
+    Schedule,
+    System,
+}
+
+/// The reason for the automated cluster scheduling to turn a cluster On or Off. Each existing
+/// policy's On/Off opinion should be recorded, along with their reasons. (Among the reasons there
+/// can be settings of the policy as well as other information about the state of the system.)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct SchedulingDecisionsWithReasonsV1 {
+    /// The reason for the refresh policy for wanting to turn a cluster On or Off.
+    pub on_refresh: RefreshDecisionWithReasonV1,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct RefreshDecisionWithReasonV1 {
+    pub decision: SchedulingDecisionV1,
+    /// Objects that currently need a refresh on the cluster (taking into account the rehydration
+    /// time estimate).
+    pub objects_needing_refresh: Vec<String>,
+    /// The REHYDRATION TIME ESTIMATE setting of the cluster.
+    pub rehydration_time_estimate: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[serde(rename_all = "kebab-case")]
+pub enum SchedulingDecisionV1 {
+    On,
+    Off,
+}
+
+impl From<bool> for SchedulingDecisionV1 {
+    fn from(value: bool) -> Self {
+        match value {
+            true => SchedulingDecisionV1::On,
+            false => SchedulingDecisionV1::Off,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -396,7 +467,13 @@ impl EventDetails {
             EventDetails::CreateClusterReplicaV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
+            EventDetails::CreateClusterReplicaV2(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
             EventDetails::DropClusterReplicaV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::DropClusterReplicaV2(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::IdFullNameV1(v) => serde_json::to_value(v).expect("must serialize"),

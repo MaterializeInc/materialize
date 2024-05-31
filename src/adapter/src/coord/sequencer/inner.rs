@@ -83,7 +83,7 @@ use timely::progress::Antichain;
 use tokio::sync::{oneshot, OwnedMutexGuard};
 use tracing::{warn, Instrument, Span};
 
-use crate::catalog::{self, Catalog, ConnCatalog, UpdatePrivilegeVariant};
+use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -1535,7 +1535,11 @@ impl Coordinator {
                     variant: UpdatePrivilegeVariant::Revoke,
                 },
             ))
-            .chain(std::iter::once(catalog::Op::DropObjects(ids)))
+            .chain(iter::once(catalog::Op::DropObjects(
+                ids.into_iter()
+                    .map(DropObjectInfo::manual_drop_from_object_id)
+                    .collect(),
+            )))
             .collect();
 
         Ok(DropOps {

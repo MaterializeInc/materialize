@@ -148,6 +148,7 @@ use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
+use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadHoldsInner;
@@ -183,7 +184,7 @@ pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
 mod appends;
-mod cluster_scheduling;
+pub mod cluster_scheduling;
 mod command_handler;
 pub mod consistency;
 mod ddl;
@@ -278,7 +279,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     /// `Vec<(policy name, Vec of decisions by the policy)>`
     /// A cluster will be On if and only if there is at least one On decision for it.
     /// Scheduling decisions for clusters that have `SCHEDULE = MANUAL` are ignored.
-    SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, bool)>)>),
+    SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>),
 }
 
 impl Message {
@@ -1421,7 +1422,7 @@ pub struct Coordinator {
     /// This keeps the last On/Off decision for each cluster and each scheduling policy.
     /// (Clusters that have been dropped or are otherwise out of scope for automatic scheduling are
     /// periodically cleaned up from this Map.)
-    cluster_scheduling_decisions: BTreeMap<ClusterId, BTreeMap<&'static str, bool>>,
+    cluster_scheduling_decisions: BTreeMap<ClusterId, BTreeMap<&'static str, SchedulingDecision>>,
 }
 
 impl Coordinator {

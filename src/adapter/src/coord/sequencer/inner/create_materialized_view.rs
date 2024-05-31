@@ -24,7 +24,7 @@ use mz_repr::Datum;
 use mz_repr::Row;
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
-use mz_sql::names::{ObjectId, ResolvedIds};
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
@@ -600,7 +600,12 @@ impl Coordinator {
         }
 
         let ops = vec![
-            catalog::Op::DropObjects(drop_ids.into_iter().map(ObjectId::Item).collect()),
+            catalog::Op::DropObjects(
+                drop_ids
+                    .into_iter()
+                    .map(catalog::DropObjectInfo::Item)
+                    .collect(),
+            ),
             catalog::Op::CreateItem {
                 id: sink_id,
                 name: name.clone(),

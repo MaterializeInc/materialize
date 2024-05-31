@@ -8,20 +8,87 @@
 // by the Apache License, Version 2.0.
 
 use crate::coord::{Coordinator, Message};
-use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_audit_log::SchedulingDecisionsWithReasonsV1;
 use mz_catalog::memory::objects::{CatalogItem, ClusterVariant, ClusterVariantManaged};
 use mz_controller_types::ClusterId;
+use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
+use mz_repr::adt::interval::Interval;
+use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::ClusterSchedule;
-use std::time::Instant;
-use timely::progress::Antichain;
+use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 const POLICIES: &[&str] = &[REFRESH_POLICY_NAME];
 
 const REFRESH_POLICY_NAME: &str = "refresh";
+
+/// A policy's decision for whether it wants a certain cluster to be On, along with its reason.
+/// (Among the reasons there can be settings of the policy as well as other information about the
+/// state of the system.)
+#[derive(Clone, Debug)]
+pub enum SchedulingDecision {
+    /// The reason for the refresh policy for wanting to turn a cluster On or Off.
+    Refresh(RefreshDecision),
+}
+
+impl SchedulingDecision {
+    /// Extract the On/Off decision from the policy-specific structs.
+    pub fn cluster_on(&self) -> bool {
+        match &self {
+            SchedulingDecision::Refresh(RefreshDecision { cluster_on, .. }) => cluster_on.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RefreshDecision {
+    /// Whether the ON REFRESH policy wants a certain cluster to be On.
+    cluster_on: bool,
+    /// Objects that currently need a refresh on the cluster (taking into account the rehydration
+    /// time estimate).
+    objects_needing_refresh: Vec<GlobalId>,
+    /// The REHYDRATION TIME ESTIMATE setting of the cluster.
+    rehydration_time_estimate: Duration,
+}
+
+impl SchedulingDecision {
+    pub fn reasons_to_audit_log_reasons<'a, I>(reasons: I) -> SchedulingDecisionsWithReasonsV1
+    where
+        I: IntoIterator<Item = &'a SchedulingDecision>,
+    {
+        SchedulingDecisionsWithReasonsV1 {
+            on_refresh: reasons
+                .into_iter()
+                .filter_map(|r| match r {
+                    SchedulingDecision::Refresh(RefreshDecision {
+                        cluster_on,
+                        objects_needing_refresh: mvs_needing_refresh,
+                        rehydration_time_estimate,
+                    }) => {
+                        let mut rehydration_time_estimate_str = String::new();
+                        mz_repr::strconv::format_interval(
+                            &mut rehydration_time_estimate_str,
+                            Interval::from_duration(rehydration_time_estimate).expect(
+                                "planning ensured that this is convertible back to Interval",
+                            ),
+                        );
+                        Some(mz_audit_log::RefreshDecisionWithReasonV1 {
+                            decision: (*cluster_on).into(),
+                            objects_needing_refresh: mvs_needing_refresh
+                                .iter()
+                                .map(|id| id.to_string())
+                                .collect(),
+                            rehydration_time_estimate: rehydration_time_estimate_str,
+                        })
+                    }
+                })
+                .into_element(), // Each policy should have exactly one opinion on each cluster.
+        }
+    }
+}
 
 impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
@@ -39,7 +106,7 @@ impl Coordinator {
         let start_time = Instant::now();
 
         // Collect the smallest REFRESH MV write frontiers per cluster.
-        let mut min_refresh_mv_write_frontiers = Vec::new();
+        let mut refresh_mv_write_frontiers = Vec::new();
         for cluster in self.catalog().clusters() {
             if let ClusterVariant::Managed(ref config) = cluster.config.variant {
                 match config.schedule {
@@ -49,7 +116,7 @@ impl Coordinator {
                     ClusterSchedule::Refresh {
                         rehydration_time_estimate,
                     } => {
-                        let refresh_mv_write_frontiers = cluster
+                        let mvs = cluster
                             .bound_objects()
                             .iter()
                             .filter_map(|id| {
@@ -62,7 +129,7 @@ impl Coordinator {
                                             .storage
                                               .collection_frontiers(*id)
                                             .expect("the storage controller should know about MVs that exist in the catalog");
-                                        Some(write_frontier)
+                                        Some((*id, write_frontier))
                                     } else {
                                         None
                                     }
@@ -72,12 +139,10 @@ impl Coordinator {
                             })
                             .collect_vec();
                         debug!(%cluster.id, ?refresh_mv_write_frontiers, "check_refresh_policy");
-                        min_refresh_mv_write_frontiers.push((
+                        refresh_mv_write_frontiers.push((
                             cluster.id,
                             rehydration_time_estimate,
-                            refresh_mv_write_frontiers
-                                .into_iter()
-                                .fold(Antichain::new(), |ac1, ac2| Lattice::meet(&ac1, &ac2)),
+                            mvs,
                         ));
                     }
                 }
@@ -94,11 +159,11 @@ impl Coordinator {
         mz_ore::task::spawn(|| "refresh policy get ts and make decisions", async move {
             let task_start_time = Instant::now();
             let local_read_ts = ts_oracle.read_ts().await;
-            debug!(%local_read_ts, ?min_refresh_mv_write_frontiers, "check_refresh_policy background task");
-            let decisions = min_refresh_mv_write_frontiers
+            debug!(%local_read_ts, ?refresh_mv_write_frontiers, "check_refresh_policy background task");
+            let decisions = refresh_mv_write_frontiers
                 .into_iter()
                 .map(
-                    |(cluster_id, rehydration_time_estimate, min_refresh_mv_write_frontier)| {
+                    |(cluster_id, rehydration_time_estimate, refresh_mv_write_frontiers)| {
                         // We are just checking that
                         // write_frontier < local_read_ts + rehydration_time_estimate
                         let rehydration_estimate = &rehydration_time_estimate
@@ -106,9 +171,25 @@ impl Coordinator {
                             .expect("checked during planning");
                         let local_read_ts_adjusted =
                             local_read_ts.step_forward_by(rehydration_estimate);
-                        let should_schedule =
-                            min_refresh_mv_write_frontier.less_than(&local_read_ts_adjusted);
-                        (cluster_id, should_schedule)
+                        let mvs_needing_refresh = refresh_mv_write_frontiers
+                            .into_iter()
+                            .filter_map(|(id, frontier)| {
+                                if frontier.less_than(&local_read_ts_adjusted) {
+                                    Some(id)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect_vec();
+                        let cluster_on = !mvs_needing_refresh.is_empty();
+                        (
+                            cluster_id,
+                            SchedulingDecision::Refresh(RefreshDecision {
+                                cluster_on,
+                                objects_needing_refresh: mvs_needing_refresh,
+                                rehydration_time_estimate,
+                            }),
+                        )
                     },
                 )
                 .collect();
@@ -139,7 +220,7 @@ impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_scheduling_decisions(
         &mut self,
-        decisions: Vec<(&'static str, Vec<(ClusterId, bool)>)>,
+        decisions: Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>,
     ) {
         let start_time = Instant::now();
 
@@ -149,7 +230,7 @@ impl Coordinator {
                 self.cluster_scheduling_decisions
                     .entry(*cluster_id)
                     .or_insert_with(Default::default)
-                    .insert(policy_name, *decision);
+                    .insert(policy_name, decision.clone());
             }
         }
 
@@ -197,7 +278,11 @@ impl Coordinator {
             // losing a hydrated state.
             if POLICIES.iter().all(|policy| decisions.contains_key(policy)) {
                 // Check whether the cluster's state matches the needed state.
-                let needs_replica = decisions.values().contains(&true);
+                // If any policy says On, then we need a replica.
+                let needs_replica = decisions
+                    .values()
+                    .map(|decision| decision.cluster_on())
+                    .contains(&true);
                 let cluster_config = self
                     .get_managed_cluster_config(cluster_id)
                     .expect("cleaned up non-existing and unmanaged clusters above");
@@ -213,6 +298,9 @@ impl Coordinator {
                             cluster_id,
                             &cluster_config,
                             new_config.clone(),
+                            crate::catalog::ReplicaCreateDropReason::ClusterScheduling(
+                                decisions.values().cloned().collect(),
+                            ),
                         )
                         .await
                     {

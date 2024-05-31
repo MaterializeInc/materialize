@@ -795,13 +795,13 @@ SELECT * FROM mv_assertion_plus_refresh_every ORDER BY x;
 10  11  12
 
 # Sleep for the refresh interval, so that we get a refresh.
-# Actually, we sleep one more second than the refresh interval, because we don't have real-time recency guarantees:
-# When we query the MV at a particular wall clock time time `t`, there is no guarantee that we see a refresh that
-# happened at, say, `t - 1ms`. Note that the test was actually failing sometimes when it was sleeping for only 8s.
+# Actually, we sleep a bit more than the refresh interval, because we don't have real-time recency guarantees:
+# When we query the MV at a particular wall clock time `t`, there is no guarantee that we see a refresh that
+# happened at, say, `t - 1ms`. Note that the test was actually failing sometimes when it was sleeping for only 8s or 9s.
 # A proper solution might be to add `AS OF now()` to the following SELECT, but calling `now()` seems to not be currently
 # allowed in `AS OF`.
 statement ok
-SELECT mz_unsafe.mz_sleep(8+1);
+SELECT mz_unsafe.mz_sleep(8+2);
 
 # Now we should see the NULL that should error out the MV.
 query error db error: ERROR: Evaluation error: column "x" must not be null
@@ -983,9 +983,9 @@ NULL  -1  -2
 100  100  100
 
 # Wait until we are past the second refresh, which is the last one.
-# (See the explanation for the `+1` above at a similar `mz_sleep`.)
+# (See the explanation for the `+2` above at a similar `mz_sleep`.)
 statement ok
-SELECT mz_unsafe.mz_sleep(2+1);
+SELECT mz_unsafe.mz_sleep(2+2);
 
 # This insert will happen after the last refresh.
 statement ok
@@ -1152,7 +1152,7 @@ UNION ALL
 30
 
 statement ok
-SELECT mz_unsafe.mz_sleep(8+1);
+SELECT mz_unsafe.mz_sleep(8+2);
 
 # Visible now.
 query I
@@ -1230,7 +1230,7 @@ UNION ALL
 
 # Check that it's still queryable after the last refresh, but new input changes are not taken into account.
 statement ok
-SELECT mz_unsafe.mz_sleep(2+1);
+SELECT mz_unsafe.mz_sleep(2+2);
 
 statement ok
 INSERT INTO t3 VALUES (-1);
@@ -1383,7 +1383,7 @@ statement ok
 INSERT INTO t2 VALUES (1, 0, 1);
 
 statement ok
-SELECT mz_unsafe.mz_sleep(8+1);
+SELECT mz_unsafe.mz_sleep(8+2);
 
 query I
 SELECT * FROM mv9;
@@ -1476,7 +1476,9 @@ CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMA
 statement error db error: ERROR: invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "1000000000000 days"
 CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1000000000000 days'));
 
-## Introspection
+# ----------------------------------------
+# Introspection
+# ----------------------------------------
 
 query TTTBB
 SELECT
@@ -1525,7 +1527,13 @@ mvi3  at  NULL  NULL  true
 mvi3  at  NULL  NULL  true
 
 statement ok
-CREATE CLUSTER c_rehydration_time_estimate (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));
+CREATE CLUSTER c_schedule_rehydration_time_estimate (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '995 seconds'));
+
+# Make the above cluster turn on, so that we can test how the REHYDRATION TIME ESTIMATE looks in `mz_audit_events`.
+statement ok
+CREATE MATERIALIZED VIEW mv_rte
+IN CLUSTER c_schedule_rehydration_time_estimate
+WITH (REFRESH EVERY '1 sec') AS SELECT * FROM t2;
 
 query TTT
 SELECT name, cs.type, cs.refresh_rehydration_time_estimate
@@ -1533,12 +1541,12 @@ FROM mz_internal.mz_cluster_schedules cs, mz_catalog.mz_clusters c
 WHERE c.id = cs.cluster_id
 ORDER BY name;
 ----
-c_rehydration_time_estimate  on-refresh  00:16:35
 c_schedule_1  on-refresh  00:00:00
 c_schedule_2  manual  NULL
 c_schedule_3  on-refresh  00:00:00
 c_schedule_4  manual  NULL
 c_schedule_5  manual  NULL
+c_schedule_rehydration_time_estimate  on-refresh  00:16:35
 mz_introspection  manual  NULL
 mz_probe  manual  NULL
 mz_support  manual  NULL
@@ -1546,16 +1554,19 @@ mz_system  manual  NULL
 quickstart  manual  NULL
 
 statement ok
-SELECT mz_unsafe.mz_sleep(3);
+SELECT mz_unsafe.mz_sleep(4);
 
 # If this fails with a recently created MV not yet being present, then bump the above sleep.
+# (Skip `mv_rte`, because it was created recently, and might not have been refreshed yet.)
 query TBB
 SELECT
   name,
   now() - INTERVAL '30 minutes' < last_completed_refresh,
   next_refresh > now() - INTERVAL '5 seconds'
 FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
-WHERE mv.id = mvr.materialized_view_id
+WHERE
+  mv.id = mvr.materialized_view_id AND
+  name != 'mv_rte'
 ORDER BY name;
 ----
 const_mv  true  NULL
@@ -1581,3 +1592,30 @@ mv_no_creation_refresh  true  true
 mvi1  true  true
 mvi2  true  true
 mvi3  true  NULL
+
+query TTTTBT
+SELECT DISTINCT
+  event_type,
+  object_type,
+  (details->'cluster_name')::text,
+  (details->'reason')::text,
+  (details->'scheduling_policies') IS NULL,
+  regexp_replace((details->'scheduling_policies'->'on_refresh')::text, '\["u.*"\]', '["uXXX"]')
+FROM mz_audit_events
+WHERE
+  event_type IN ('create', 'drop') AND
+  object_type = 'cluster-replica' AND
+  ((details->'cluster_name')::text LIKE '"c_schedule_%"' OR (details->'cluster_name')::text = '"other"');
+----
+drop  cluster-replica  "other"  "manual"  true  NULL
+create  cluster-replica  "other"  "manual"  true  NULL
+drop  cluster-replica  "c_schedule_4"  "manual"  true  NULL
+create  cluster-replica  "c_schedule_1"  "manual"  true  NULL
+create  cluster-replica  "c_schedule_2"  "manual"  true  NULL
+create  cluster-replica  "c_schedule_5"  "manual"  true  NULL
+drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","objects_needing_refresh":[],"rehydration_time_estimate":"00:00:00"}
+drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","objects_needing_refresh":[],"rehydration_time_estimate":"00:00:00"}
+create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:00:00"}
+create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:00:00"}
+create  cluster-replica  "c_schedule_4"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:00:00"}
+create  cluster-replica  "c_schedule_rehydration_time_estimate"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:16:35"}
