@@ -295,7 +295,6 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/recursion_limit.slt",
         "test/sqllogictest/recursive_type_unioning.slt",
         "test/sqllogictest/regclass.slt",
-        "test/sqllogictest/regex.slt",
         "test/sqllogictest/regproc.slt",
         "test/sqllogictest/regressions.slt",
         "test/sqllogictest/regtype.slt",

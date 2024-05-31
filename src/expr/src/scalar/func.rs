@@ -34,6 +34,7 @@ use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
 use mz_ore::soft_assert_eq_or_log;
+use mz_ore::str::StrExt;
 use mz_pgrepr::Type;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_proto::chrono::any_naive_datetime;
@@ -2112,33 +2113,6 @@ fn regexp_split_to_array_re<'a>(
     Ok(temp_storage.push_unary_row(row))
 }
 
-fn regexp_replace<'a>(
-    source: Datum<'a>,
-    pattern: Datum<'a>,
-    replacement: Datum<'a>,
-    flags: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let source = source.unwrap_str();
-    let pattern = pattern.unwrap_str();
-    let replacement = replacement.unwrap_str();
-    let flags = flags.unwrap_str();
-    // 'g' means to replace all instead of the first. Use a Cow to avoid allocating in the fast
-    // path. We could switch build_regex to take an iter which would also achieve that.
-    let (n, flags) = if flags.contains('g') {
-        let flags = flags.replace('g', "");
-        (0, Cow::Owned(flags))
-    } else {
-        (1, Cow::Borrowed(flags))
-    };
-    let regexp = build_regex(pattern, &flags)?;
-    let replaced = match regexp.replacen(source, n, replacement) {
-        Cow::Borrowed(s) => s,
-        Cow::Owned(s) => temp_storage.push_string(s),
-    };
-    Ok(Datum::String(replaced))
-}
-
 fn pretty_sql<'a>(
     sql: Datum<'a>,
     width: Datum<'a>,
@@ -2257,8 +2231,12 @@ pub enum BinaryFunc {
     Gt,
     Gte,
     LikeEscape,
-    IsLikeMatch { case_insensitive: bool },
-    IsRegexpMatch { case_insensitive: bool },
+    IsLikeMatch {
+        case_insensitive: bool,
+    },
+    IsRegexpMatch {
+        case_insensitive: bool,
+    },
     ToCharTimestamp,
     ToCharTimestampTz,
     DateBinTimestamp,
@@ -2282,9 +2260,15 @@ pub enum BinaryFunc {
     TimezoneIntervalTime,
     TimezoneOffset,
     TextConcat,
-    JsonbGetInt64 { stringify: bool },
-    JsonbGetString { stringify: bool },
-    JsonbGetPath { stringify: bool },
+    JsonbGetInt64 {
+        stringify: bool,
+    },
+    JsonbGetString {
+        stringify: bool,
+    },
+    JsonbGetPath {
+        stringify: bool,
+    },
     JsonbContainsString,
     JsonbConcat,
     JsonbContainsJsonb,
@@ -2304,7 +2288,9 @@ pub enum BinaryFunc {
     TrimLeading,
     TrimTrailing,
     EncodedBytesCharLength,
-    ListLengthMax { max_layer: usize },
+    ListLengthMax {
+        max_layer: usize,
+    },
     ArrayContains,
     ArrayLength,
     ArrayLower,
@@ -2326,8 +2312,13 @@ pub enum BinaryFunc {
     GetByte,
     ConstantTimeEqBytes,
     ConstantTimeEqString,
-    RangeContainsElem { elem_type: ScalarType, rev: bool },
-    RangeContainsRange { rev: bool },
+    RangeContainsElem {
+        elem_type: ScalarType,
+        rev: bool,
+    },
+    RangeContainsRange {
+        rev: bool,
+    },
     RangeOverlaps,
     RangeAfter,
     RangeBefore,
@@ -2341,6 +2332,9 @@ pub enum BinaryFunc {
     MzAclItemContainsPrivilege,
     ParseIdent,
     PrettySql,
+    RegexpReplace {
+        regex: Result<(Regex, usize), EvalError>,
+    },
 }
 
 impl BinaryFunc {
@@ -2603,6 +2597,10 @@ impl BinaryFunc {
             BinaryFunc::MzAclItemContainsPrivilege => mz_acl_item_contains_privilege(a, b),
             BinaryFunc::ParseIdent => parse_ident(a, b, temp_storage),
             BinaryFunc::PrettySql => pretty_sql(a, b, temp_storage),
+            BinaryFunc::RegexpReplace { regex } => match regex {
+                Ok((regex, limit)) => regexp_replace_static(a, b, regex, *limit, temp_storage),
+                Err(err) => Err(err.clone()),
+            },
         }
     }
 
@@ -2791,6 +2789,7 @@ impl BinaryFunc {
 
             ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable),
             PrettySql => ScalarType::String.nullable(in_nullable),
+            RegexpReplace { .. } => ScalarType::String.nullable(in_nullable),
         }
     }
 
@@ -2991,7 +2990,8 @@ impl BinaryFunc {
             | UuidGenerateV5
             | MzAclItemContainsPrivilege
             | ParseIdent
-            | PrettySql => false,
+            | PrettySql
+            | RegexpReplace { .. } => false,
 
             JsonbGetInt64 { .. }
             | JsonbGetString { .. }
@@ -3195,7 +3195,8 @@ impl BinaryFunc {
             | ConstantTimeEqBytes
             | ConstantTimeEqString
             | ParseIdent
-            | PrettySql => false,
+            | PrettySql
+            | RegexpReplace { .. } => false,
         }
     }
 
@@ -3462,6 +3463,7 @@ impl BinaryFunc {
             BinaryFunc::ParseIdent => (false, false),
             BinaryFunc::ConstantTimeEqBytes | BinaryFunc::ConstantTimeEqString => (false, false),
             BinaryFunc::PrettySql => (false, false),
+            BinaryFunc::RegexpReplace { .. } => (false, false),
         }
     }
 }
@@ -3669,6 +3671,16 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MzAclItemContainsPrivilege => f.write_str("mz_aclitem_contains_privilege"),
             BinaryFunc::ParseIdent => f.write_str("parse_ident"),
             BinaryFunc::PrettySql => f.write_str("pretty_sql"),
+            BinaryFunc::RegexpReplace { regex } => match regex {
+                Ok((regex, limit)) => write!(
+                    f,
+                    "regexp_replace[{}, case_insensitive={}, limit={}]",
+                    regex.pattern.quoted(),
+                    regex.case_insensitive,
+                    limit
+                ),
+                Err(err) => write!(f, "regexp_replace[EvalError]: {err}"),
+            },
         }
     }
 }
@@ -4081,6 +4093,20 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::ConstantTimeEqBytes => ConstantTimeEqBytes(()),
             BinaryFunc::ConstantTimeEqString => ConstantTimeEqString(()),
             BinaryFunc::PrettySql => PrettySql(()),
+            BinaryFunc::RegexpReplace { regex } => {
+                use crate::scalar::proto_binary_func::*;
+                RegexpReplace(ProtoRegexpReplaceResult {
+                    result: Some(match regex {
+                        Ok((regex, limit)) => {
+                            proto_regexp_replace_result::Result::Ok(ProtoRegexpReplace {
+                                regex: Some(regex.into_proto()),
+                                limit: limit.into_proto(),
+                            })
+                        }
+                        Err(err) => proto_regexp_replace_result::Result::Err(err.into_proto()),
+                    }),
+                })
+            }
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -4284,6 +4310,27 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 ConstantTimeEqBytes(()) => Ok(BinaryFunc::ConstantTimeEqBytes),
                 ConstantTimeEqString(()) => Ok(BinaryFunc::ConstantTimeEqString),
                 PrettySql(()) => Ok(BinaryFunc::PrettySql),
+                RegexpReplace(inner) => {
+                    use crate::scalar::proto_binary_func::*;
+                    Ok(BinaryFunc::RegexpReplace {
+                        regex: match inner.result {
+                            Some(proto_regexp_replace_result::Result::Ok(regexp_replace)) => Ok((
+                                regexp_replace
+                                    .regex
+                                    .into_rust_if_some("ProtoRegexReplace::regex")?,
+                                regexp_replace.limit.into_rust()?,
+                            )),
+                            Some(proto_regexp_replace_result::Result::Err(err)) => {
+                                Err(err.into_rust()?)
+                            }
+                            None => {
+                                return Err(TryFromProtoError::missing_field(
+                                    "ProtoRegexpReplaceResult::result",
+                                ))
+                            }
+                        },
+                    })
+                }
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
@@ -6370,6 +6417,50 @@ fn regexp_match_static<'a>(
     Ok(temp_storage.push_unary_row(row))
 }
 
+fn regexp_replace_dynamic<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let source = datums[0];
+    let pattern = datums[1];
+    let replacement = datums[2];
+    let flags = match datums.get(3) {
+        Some(d) => d.unwrap_str(),
+        None => "",
+    };
+    let (limit, flags) = regexp_replace_parse_flags(flags);
+    let regexp = build_regex(pattern.unwrap_str(), &flags)?;
+    regexp_replace_static(source, replacement, &regexp, limit, temp_storage)
+}
+
+/// Sets `limit` based on the presence of 'g' in `flags` for use in `Regex::replacen`,
+/// and removes 'g' from `flags` if present.
+pub(crate) fn regexp_replace_parse_flags(flags: &str) -> (usize, Cow<str>) {
+    // 'g' means to replace all instead of the first. Use a Cow to avoid allocating in the fast
+    // path. We could switch build_regex to take an iter which would also achieve that.
+    let (limit, flags) = if flags.contains('g') {
+        let flags = flags.replace('g', "");
+        (0, Cow::Owned(flags))
+    } else {
+        (1, Cow::Borrowed(flags))
+    };
+    (limit, flags)
+}
+
+fn regexp_replace_static<'a>(
+    source: Datum<'a>,
+    replacement: Datum<'a>,
+    regexp: &regex::Regex,
+    limit: usize,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let replaced = match regexp.replacen(source.unwrap_str(), limit, replacement.unwrap_str()) {
+        Cow::Borrowed(s) => s,
+        Cow::Owned(s) => temp_storage.push_string(s),
+    };
+    Ok(Datum::String(replaced))
+}
+
 pub fn build_regex(needle: &str, flags: &str) -> Result<Regex, EvalError> {
     let mut case_insensitive = false;
     // Note: Postgres accepts it when both flags are present, taking the last one. We do the same.
@@ -7681,14 +7772,7 @@ impl VariadicFunc {
                 };
                 regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
             }
-            VariadicFunc::RegexpReplace => {
-                let flags = if ds.len() == 3 {
-                    Datum::String("")
-                } else {
-                    ds[3]
-                };
-                regexp_replace(ds[0], ds[1], ds[2], flags, temp_storage)
-            }
+            VariadicFunc::RegexpReplace => regexp_replace_dynamic(&ds, temp_storage),
         }
     }
 

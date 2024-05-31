@@ -35,7 +35,8 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{
-    parse_timezone, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+    parse_timezone, regexp_replace_parse_flags, BinaryFunc, UnaryFunc, UnmaterializableFunc,
+    VariadicFunc,
 };
 use crate::scalar::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
 use crate::scalar::proto_mir_scalar_expr::*;
@@ -1181,6 +1182,27 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             };
+                        } else if *func == VariadicFunc::RegexpReplace
+                            && exprs[1].is_literal()
+                            && exprs.get(3).map_or(true, |e| e.is_literal())
+                        {
+                            let pattern = exprs[1].as_literal_str().unwrap();
+                            let flags = exprs
+                                .get(3)
+                                .map_or("", |expr| expr.as_literal_str().unwrap());
+                            let (limit, flags) = regexp_replace_parse_flags(flags);
+
+                            // Defer errors until evaluation instead of eagerly returning them here
+                            // to match the error behavior of the dynamic function (part of #17189).
+                            let regex = match func::build_regex(pattern, &flags) {
+                                Ok(regex) => Ok((regex, limit)),
+                                Err(err) => Err(err),
+                            };
+                            let mut exprs = mem::take(exprs);
+                            let replacement = exprs.swap_remove(2);
+                            let source = exprs.swap_remove(0);
+                            *e = source
+                                .call_binary(replacement, BinaryFunc::RegexpReplace { regex });
                         } else if *func == VariadicFunc::RegexpSplitToArray
                             && exprs[1].is_literal()
                             && exprs.get(2).map_or(true, |e| e.is_literal())
