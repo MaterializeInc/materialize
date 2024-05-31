@@ -200,3 +200,7 @@ upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
 upsert true 10 "${updates-committed}" "${updates-committed}" true true 2 true
 
 > DROP SOURCE upsert CASCADE
+
+# should be empty because the source was dropped
+> SELECT count(*) FROM mz_internal.mz_source_statistics;
+0

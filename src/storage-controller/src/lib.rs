@@ -1923,9 +1923,7 @@ where
             // Sources can have subsources, which don't have associated clusters, which
             // is why this operates differently than sinks.
             if read_frontier.is_empty() {
-                if self.storage_collections.check_exists(id).is_ok() {
-                    source_statistics_to_drop.push(id);
-                }
+                source_statistics_to_drop.push(id);
             }
 
             // Note that while collections are dropped, the `client` may already
