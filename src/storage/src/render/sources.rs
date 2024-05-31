@@ -307,6 +307,8 @@ where
                                     (None, None, None)
                                 };
 
+                            let grace_period = dyncfgs::CLUSTER_SHUTDOWN_GRACE_PERIOD
+                                .get(storage_state.storage_configuration.config_set());
                             let (stream, tok) = persist_source::persist_source_core(
                                 scope,
                                 id,
@@ -319,8 +321,11 @@ where
                                 flow_control,
                                 false.then_some(|| unreachable!()),
                                 async {},
-                                |error| {
-                                    Box::pin(async move { panic!("upsert_rehydration: {error}") })
+                                move |error| {
+                                    Box::pin(async move {
+                                        tokio::time::sleep(grace_period).await;
+                                        panic!("upsert_rehydration: {error}")
+                                    })
                                 },
                             );
                             (

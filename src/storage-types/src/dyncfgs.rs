@@ -14,6 +14,17 @@ use std::time::Duration;
 
 use mz_dyncfg::{Config, ConfigSet};
 
+/// When dataflows observe an invariant violation it is either due to a bug or due to the cluster
+/// being shut down. This configuration defines the amount of time to wait before panicking the
+/// process, which will register the invariant violation.
+pub const CLUSTER_SHUTDOWN_GRACE_PERIOD: Config<Duration> = Config::new(
+    "storage_cluster_shutdown_grace_period",
+    Duration::from_secs(10 * 60),
+    "When dataflows observe an invariant violation it is either due to a bug or due to \
+        the cluster being shut down. This configuration defines the amount of time to \
+        wait before panicking the process, which will register the invariant violation.",
+);
+
 // Flow control
 
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
@@ -168,6 +179,7 @@ pub const STORAGE_ROCKSDB_CLEANUP_TRIES: Config<usize> = Config::new(
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
+        .add(&CLUSTER_SHUTDOWN_GRACE_PERIOD)
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
