@@ -130,7 +130,7 @@ where
     G: Scope,
     K: Data + Columnation,
     G::Timestamp: Lattice,
-    R: Data + Semigroup + Ord,
+    R: Data + Semigroup,
 {
     type Scope = G;
     type Input = Vec<((K, ()), G::Timestamp, R)>;

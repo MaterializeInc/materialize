@@ -508,10 +508,6 @@ mod container {
 }
 
 mod offset_opt {
-
-    use differential_dataflow::trace::cursor::IntoOwned;
-    use std::ops::Deref;
-
     use differential_dataflow::trace::implementations::BatchContainer;
     use differential_dataflow::trace::implementations::OffsetList;
     use timely::container::PushInto;
@@ -648,34 +644,6 @@ mod offset_opt {
     impl OffsetOptimized {
         pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
             crate::row_spine::offset_list_size(&self.spilled, callback);
-        }
-    }
-
-    /// Helper struct to provide `MyTrait` for `Copy` types.
-    #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
-    pub struct Wrapper<T: Copy>(T);
-
-    impl<T: Copy> Deref for Wrapper<T> {
-        type Target = T;
-
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    impl<'a, T: Copy + Ord> IntoOwned<'a> for Wrapper<T> {
-        type Owned = T;
-
-        fn into_owned(self) -> Self::Owned {
-            self.0
-        }
-
-        fn clone_onto(self, other: &mut Self::Owned) {
-            *other = self.0;
-        }
-
-        fn borrow_as(other: &'a Self::Owned) -> Self {
-            Self(*other)
         }
     }
 }

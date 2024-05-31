@@ -634,9 +634,10 @@ where
                                     time1.join_assign(meet);
                                     let diff1 = diff1.into_owned();
                                     cursor2.map_times(storage2, |time2, diff2| {
-                                        let time = time1.join(&time2.into_owned());
+                                        let mut time2 = time2.into_owned();
+                                        time2.join_assign(&time1);
                                         let diff = diff1.multiply(&diff2.into_owned());
-                                        buffer.push((time, diff));
+                                        buffer.push((time2, diff));
                                     });
                                 });
                                 consolidate(&mut buffer);

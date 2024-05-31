@@ -11,7 +11,6 @@
 //! dataflow.
 
 use std::collections::BTreeMap;
-use std::marker::PhantomData;
 use std::rc::Weak;
 use std::sync::mpsc;
 
@@ -1045,7 +1044,7 @@ where
     }
 }
 
-struct PendingWork<C, K>
+struct PendingWork<C>
 where
     C: Cursor,
     C::Time: Timestamp,
@@ -1053,15 +1052,12 @@ where
     capability: Capability<C::Time>,
     cursor: C,
     batch: C::Storage,
-    _marker: PhantomData<K>,
 }
 
-impl<C, K> PendingWork<C, K>
+impl<C> PendingWork<C>
 where
     C: Cursor,
-    for<'a> C::Key<'a>: IntoOwned<'a, Owned = K>,
     C::Time: Timestamp,
-    K: PartialEq + Sized,
 {
     /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
     fn new(capability: Capability<C::Time>, cursor: C, batch: C::Storage) -> Self {
@@ -1069,11 +1065,10 @@ where
             capability,
             cursor,
             batch,
-            _marker: PhantomData,
         }
     }
     /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to `output`.
-    fn do_work<I, D, L>(
+    fn do_work<I, D, L, K>(
         &mut self,
         key: &Option<K>,
         logic: &mut L,
@@ -1088,6 +1083,8 @@ where
         I: IntoIterator<Item = (D, C::Time, C::Diff)>,
         D: Data,
         L: for<'a, 'b> FnMut(C::Key<'_>, C::Val<'b>, &'a C::Time, &'a C::Diff) -> I + 'static,
+        K: PartialEq + Sized,
+        for<'a> C::Key<'a>: IntoOwned<'a, Owned = K>,
     {
         use differential_dataflow::consolidation::consolidate;
 

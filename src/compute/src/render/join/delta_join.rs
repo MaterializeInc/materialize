@@ -579,6 +579,7 @@ fn build_update_stream<G, Tr>(
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
+    for<'a, 'b> &'a G::Timestamp: PartialEq<Tr::TimeGat<'b>>,
     Tr: for<'a> TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
     for<'a> Tr::Key<'a>: ToDatumIter,
     for<'a> Tr::Val<'a>: ToDatumIter,
@@ -606,12 +607,12 @@ where
                             while let Some(key) = cursor.get_key(batch) {
                                 while let Some(val) = cursor.get_val(batch) {
                                     cursor.map_times(batch, |time, diff| {
-                                        let time = time.into_owned();
                                         // note: only the delta path for the first relation will see
                                         // updates at start-up time
                                         if source_relation == 0
-                                            || !inner_as_of.elements().contains(&time)
+                                            || inner_as_of.elements().iter().all(|e| e != time)
                                         {
+                                            let time = time.into_owned();
                                             let temp_storage = RowArena::new();
 
                                             let key = key.to_datum_iter();
