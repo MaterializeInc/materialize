@@ -16,7 +16,7 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::{self, Future};
 use std::hash::{Hash, Hasher};
-use std::pin::pin;
+use std::pin::{pin, Pin};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -79,7 +79,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
-    error_handler: impl FnMut(String) -> () + 'static,
+    error_handler: impl FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
     project: ProjectionPushdown,
 ) -> (
     Stream<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
@@ -223,7 +223,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
-    error_handler: impl FnMut(String) -> () + 'static,
+    error_handler: impl FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
     project: ProjectionPushdown,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, PressOnDropButton)
 where
@@ -273,13 +273,13 @@ where
 
     // This feels a bit clunky but it makes sure that we can't misuse the error
     // handler below.
-    struct ErrorHandler<H: FnMut(String) -> () + 'static> {
+    struct ErrorHandler<H: FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static> {
         inner: H,
     }
-    impl<H: FnMut(String) -> () + 'static> ErrorHandler<H> {
+    impl<H: FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static> ErrorHandler<H> {
         /// Report the error and enforce that we never return.
-        async fn report_and_stop<R>(&mut self, error: String) -> R {
-            (self.inner)(error);
+        async fn report_and_stop(self, error: String) {
+            (self.inner)(error).await;
 
             // We cannot continue, and we cannot shut down. Otherwise downstream
             // operators might interpret our downgrading/releasing our
@@ -287,7 +287,7 @@ where
             future::pending().await
         }
     }
-    let mut error_handler = ErrorHandler {
+    let error_handler = ErrorHandler {
         inner: error_handler,
     };
 
@@ -372,7 +372,8 @@ where
                         .report_and_stop(format!(
                             "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                         ))
-                        .await
+                        .await;
+                    unreachable!("error handler must diverge");
                 }
             },
             SnapshotMode::Exclude => vec![],
@@ -395,7 +396,8 @@ where
                     .report_and_stop(format!(
                         "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                     ))
-                    .await
+                    .await;
+                unreachable!("error handler must diverge");
             }
         };
 
