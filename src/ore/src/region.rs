@@ -103,20 +103,25 @@ impl<T> LgAllocRegion<T> {
     /// Ensures that there is space in `self.local` to copy at least `count` items.
     #[inline(always)]
     pub fn reserve(&mut self, count: usize) {
-        // Check if `item` fits into `self.local` without reallocation.
-        // If not, stash `self.local` and increase the allocation.
-        if count > self.local.capacity() - self.local.len() {
+        #[cold]
+        fn reserve_inner<T>(this: &mut LgAllocRegion<T>, count: usize) {
             // Increase allocated capacity in powers of two.
             // We could choose a different rule here if we wanted to be
             // more conservative with memory (e.g. page size allocations).
-            let mut next_len = (self.local.capacity() + 1).next_power_of_two();
-            next_len = std::cmp::min(next_len, self.limit);
+            let mut next_len = (this.local.capacity() + 1).next_power_of_two();
+            next_len = std::cmp::min(next_len, this.limit);
             next_len = std::cmp::max(count, next_len);
             let new_local = Region::new_auto(next_len);
-            if !self.local.is_empty() {
-                self.stash.push(std::mem::take(&mut self.local));
+            if !this.local.is_empty() {
+                this.stash.push(std::mem::take(&mut this.local));
             }
-            self.local = new_local;
+            this.local = new_local;
+        }
+
+        // Check if `item` fits into `self.local` without reallocation.
+        // If not, stash `self.local` and increase the allocation.
+        if count > self.local.capacity() - self.local.len() {
+            reserve_inner(self, count);
         }
     }
 
