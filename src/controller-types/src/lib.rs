@@ -15,6 +15,16 @@ pub type ClusterId = mz_compute_types::ComputeInstanceId;
 /// Identifies a cluster replica.
 pub type ReplicaId = mz_cluster_client::ReplicaId;
 
+/// Identifies a watch set.
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
+pub struct WatchSetId(u64);
+
+impl From<u64> for WatchSetId {
+    fn from(value: u64) -> Self {
+        Self(value)
+    }
+}
+
 pub use mz_compute_types::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL as DEFAULT_REPLICA_LOGGING_INTERVAL;
 
 /// Reports whether a given size name is a "v2" cluster size--i.e., a cluster

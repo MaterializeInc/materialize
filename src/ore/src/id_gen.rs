@@ -30,13 +30,22 @@ use rand::{Rng, SeedableRng};
 use crate::cast::CastFrom;
 
 /// Manages the allocation of unique IDs.
-#[derive(Debug, Default, Clone)]
-pub struct Gen<Id: From<u64> + Default> {
+#[derive(Debug, Clone)]
+pub struct Gen<Id> {
     id: u64,
     phantom: PhantomData<Id>,
 }
 
-impl<Id: From<u64> + Default> Gen<Id> {
+impl<Id> Default for Gen<Id> {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<Id: From<u64>> Gen<Id> {
     /// Allocates a new identifier of type `Id` and advances the generator.
     pub fn allocate_id(&mut self) -> Id {
         let id = self.id;

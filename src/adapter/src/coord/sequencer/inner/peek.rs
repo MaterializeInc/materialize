@@ -878,7 +878,7 @@ impl Coordinator {
                 transitive_compute_deps,
                 ts,
                 Box::new((uuid, StatementLifecycleEvent::ComputeDependenciesFinished)),
-            )
+            );
         }
 
         let max_query_size = ctx.session().vars().max_query_result_size();

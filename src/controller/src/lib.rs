@@ -22,10 +22,10 @@
 //! about each of these interfaces.
 
 use std::any::Any;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 use std::num::NonZeroI64;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
@@ -38,7 +38,9 @@ use mz_compute_client::controller::{
 };
 use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
+use mz_controller_types::WatchSetId;
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
+use mz_ore::id_gen::Gen;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -174,17 +176,18 @@ pub struct Controller<T = mz_repr::Timestamp> {
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
 
-    /// A map associating a global ID to a vector of all the watch sets
-    /// that that ID is part of which have not yet been fulfilled for that object.
+    /// A map associating a global ID to the set of all the unfulfilled watch
+    /// set ids that include it.
     ///
     /// See [`self.install_watch_set`] for a description of watch sets.
     // When a watch set is fulfilled for a given object (that is, when
     // the object's frontier advances to at least the watch set's
-    // timestamp), the corresponding entry will be removed from the
-    // vector here. That way, when the entire watch set is fulfilled,
-    // the corresponding `Rc` will be the last reference to it, and
-    // the call to `Rc::into_inner` will succeed.
-    objects_to_unfulfilled_watch_sets: BTreeMap<GlobalId, Vec<Rc<(T, Box<dyn Any>)>>>,
+    // timestamp), the corresponding entry will be removed from the set.
+    unfulfilled_watch_sets_by_object: BTreeMap<GlobalId, BTreeSet<WatchSetId>>,
+    /// A map of installed watch sets indexed by id.
+    unfulfilled_watch_sets: BTreeMap<WatchSetId, (BTreeSet<GlobalId>, T, Box<dyn Any>)>,
+    /// A sequence of numbers used to mint unique WatchSetIds.
+    watch_set_id_gen: Gen<WatchSetId>,
 
     /// A list of watch sets that were already fulfilled as soon as
     /// they were installed, and thus that must be returned to the
@@ -242,13 +245,15 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             persist_pubsub_url: _,
             txn_wal_tables: _,
             secrets_args: _,
-            objects_to_unfulfilled_watch_sets,
+            unfulfilled_watch_sets_by_object: _,
+            unfulfilled_watch_sets,
+            watch_set_id_gen: _,
             immediate_watch_sets,
         } = self;
 
-        let objects_to_unfulfilled_watch_sets: BTreeMap<_, _> = objects_to_unfulfilled_watch_sets
+        let unfulfilled_watch_sets: BTreeMap<_, _> = unfulfilled_watch_sets
             .iter()
-            .map(|(id, watches)| (id.to_string(), format!("{watches:?}")))
+            .map(|(ws_id, watches)| (format!("{ws_id:?}"), format!("{watches:?}")))
             .collect();
         let immediate_watch_sets: Vec<_> = immediate_watch_sets
             .iter()
@@ -266,10 +271,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
         let map = serde_json::Map::from_iter([
             field("compute", compute.dump()?)?,
             field("readiness", format!("{readiness:?}"))?,
-            field(
-                "objects_to_unfulfilled_watch_sets",
-                objects_to_unfulfilled_watch_sets,
-            )?,
+            field("unfulfilled_watch_sets", unfulfilled_watch_sets)?,
             field("immediate_watch_sets", immediate_watch_sets)?,
         ]);
         Ok(serde_json::Value::Object(map))
@@ -357,7 +359,9 @@ where
         mut objects: BTreeSet<GlobalId>,
         t: T,
         token: Box<dyn Any>,
-    ) {
+    ) -> WatchSetId {
+        let watchset_id = self.watch_set_id_gen.allocate_id();
+
         objects.retain(|id| {
             let frontier = self
                 .compute
@@ -369,14 +373,17 @@ where
         if objects.is_empty() {
             self.immediate_watch_sets.push(token);
         } else {
-            let state = Rc::new((t, token));
-            for id in objects {
-                self.objects_to_unfulfilled_watch_sets
-                    .entry(id)
+            for id in objects.iter() {
+                self.unfulfilled_watch_sets_by_object
+                    .entry(*id)
                     .or_default()
-                    .push(Rc::clone(&state));
+                    .insert(watchset_id.clone());
             }
+            self.unfulfilled_watch_sets
+                .insert(watchset_id.clone(), (objects, t, token));
         }
+
+        watchset_id
     }
 
     /// Install a _watch set_ in the controller.
@@ -392,7 +399,9 @@ where
         mut objects: BTreeSet<GlobalId>,
         t: T,
         token: Box<dyn Any>,
-    ) {
+    ) -> WatchSetId {
+        let watchset_id = self.watch_set_id_gen.allocate_id();
+
         let uppers = self
             .storage
             .collections_frontiers(objects.iter().cloned().collect())
@@ -408,12 +417,34 @@ where
         if objects.is_empty() {
             self.immediate_watch_sets.push(token);
         } else {
-            let state = Rc::new((t, token));
-            for id in objects {
-                self.objects_to_unfulfilled_watch_sets
-                    .entry(id)
+            for id in objects.iter() {
+                self.unfulfilled_watch_sets_by_object
+                    .entry(*id)
                     .or_default()
-                    .push(Rc::clone(&state));
+                    .insert(watchset_id.clone());
+            }
+            self.unfulfilled_watch_sets
+                .insert(watchset_id.clone(), (objects, t, token));
+        }
+        watchset_id
+    }
+
+    /// Uninstalls a previously installed WatchSetId. The method is a no-op if the watch set has
+    /// already finished and therefore it's safe to call this function unconditionally.
+    ///
+    /// # Panics
+    /// This method panics if called with a WatchSetId that was never returned by the function.
+    pub fn uninstall_watch_set(&mut self, ws_id: &WatchSetId) {
+        if let Some((obj_ids, _, _)) = self.unfulfilled_watch_sets.remove(ws_id) {
+            for obj_id in obj_ids {
+                let mut entry = match self.unfulfilled_watch_sets_by_object.entry(obj_id) {
+                    Entry::Occupied(entry) => entry,
+                    Entry::Vacant(_) => panic!("corrupted watchset state"),
+                };
+                entry.get_mut().remove(ws_id);
+                if entry.get().is_empty() {
+                    entry.remove();
+                }
             }
         }
     }
@@ -493,20 +524,33 @@ where
         updates: &[(GlobalId, Antichain<T>)],
     ) -> Option<ControllerResponse<T>> {
         let mut finished = vec![];
-        for (id, antichain) in updates {
-            if let Some(x) = self.objects_to_unfulfilled_watch_sets.get_mut(id) {
-                let mut i = 0;
-                while i < x.len() {
-                    if !antichain.less_equal(&x[i].0) {
-                        if let Some((_, token)) = Rc::into_inner(x.swap_remove(i)) {
-                            finished.push(token)
+        for (obj_id, antichain) in updates {
+            let ws_ids = self.unfulfilled_watch_sets_by_object.entry(*obj_id);
+            if let Entry::Occupied(mut ws_ids) = ws_ids {
+                ws_ids.get_mut().retain(|ws_id| {
+                    let mut entry = match self.unfulfilled_watch_sets.entry(*ws_id) {
+                        Entry::Occupied(entry) => entry,
+                        Entry::Vacant(_) => panic!("corrupted watchset state"),
+                    };
+                    // If this object has made more progress than required by this watchset we:
+                    if !antichain.less_equal(&entry.get().1) {
+                        // 1. Remove the object from the set of pending objects for the watchset
+                        entry.get_mut().0.remove(obj_id);
+                        // 2. Mark the watchset as finished if this was the last watched object
+                        if entry.get().0.is_empty() {
+                            let (_, _, token) = entry.remove();
+                            finished.push(token);
                         }
+                        // 3. Remove the watchset from the set of pending watchsets for the object
+                        false
                     } else {
-                        i += 1;
+                        // Otherwise we keep the watchset around to re-check in the future
+                        true
                     }
-                }
-                if x.is_empty() {
-                    self.objects_to_unfulfilled_watch_sets.remove(id);
+                });
+                // Clear the entry if this was the last watchset that was interested in obj_id
+                if ws_ids.get().is_empty() {
+                    ws_ids.remove();
                 }
             }
         }
@@ -628,7 +672,9 @@ where
             persist_pubsub_url: config.persist_pubsub_url,
             txn_wal_tables,
             secrets_args: config.secrets_args,
-            objects_to_unfulfilled_watch_sets: BTreeMap::new(),
+            unfulfilled_watch_sets_by_object: BTreeMap::new(),
+            unfulfilled_watch_sets: BTreeMap::new(),
+            watch_set_id_gen: Gen::default(),
             immediate_watch_sets: Vec::new(),
         }
     }
