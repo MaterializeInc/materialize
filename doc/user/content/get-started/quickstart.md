@@ -48,7 +48,7 @@ with.
     ```sql
     CREATE SOURCE auction_house
     FROM LOAD GENERATOR AUCTION
-    (TICK INTERVAL '1s')
+    (TICK INTERVAL '1s', AS OF 100000)
     FOR ALL TABLES;
     ```
 1. Use the [`SHOW SOURCES`](/sql/show-sources/) command to get an idea of the data being generated:
@@ -111,8 +111,10 @@ for each auction at its `end_time`.
     CREATE VIEW winning_bids AS
     SELECT DISTINCT ON (auctions.id) bids.*, auctions.item, auctions.seller
     FROM auctions, bids
+      -- Where all bids occurred during the auction
     WHERE auctions.id = bids.auction_id
       AND bids.bid_time < auctions.end_time
+        -- Where all auctions have completed
       AND mz_now() >= auctions.end_time
     ORDER BY auctions.id,
       bids.bid_time DESC,
@@ -129,7 +131,9 @@ yet! Querying the view re-runs the embedded statement, which comes at some cost
 on growing amounts of data.
 
     ```sql
-    SELECT * FROM winning_bids;
+    SELECT * FROM winning_bids
+    WHERE item = 'Best Pizza in Town'
+    ORDER BY bid_time DESC;
     ```
 
    Yikes! In Materialize, you use [**indexes**](/sql/create-index/) to
@@ -177,14 +181,18 @@ is identified as a seller for an item at a higher price.
            w1.amount buyer_amount
     FROM winning_bids w1,
          winning_bids w2
+    -- Identified as a buyer and seller for any two auctions
     WHERE w1.buyer = w2.seller
+      -- For the same item
+      AND w1.item = w2.item
+      -- Tries to sell at a higher price
       AND w2.amount > w1.amount;
     ```
 
     Aha! You can now catch any auction flippers in real time, based on the results of this view.
 
     ```sql
-    SELECT * FROM fraud_activity;
+    SELECT * FROM fraud_activity LIMIT 100;
     ```
 
 ## Step 3. See results change!
