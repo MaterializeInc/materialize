@@ -108,6 +108,14 @@ impl EquivalencePropagation {
             .value::<Equivalences>()
             .expect("Equivalences required");
 
+        // `None` analysis values indicate collections that can be pruned.
+        let expr_equivalences = if let Some(e) = expr_equivalences {
+            e
+        } else {
+            expr.take_safely();
+            return;
+        };
+
         // Optimize `outer_equivalences` in the context of `expr_type`.
         // If it ends up unsatisfiable, we can replace `expr` with an empty constant of the same relation type.
         for class in outer_equivalences.classes.iter_mut() {
@@ -198,20 +206,23 @@ impl EquivalencePropagation {
                     .last_child()
                     .value::<Equivalences>()
                     .expect("Equivalences required");
-                for expr in scalars.iter_mut() {
-                    input_equivalences.reduce_expr(expr);
+
+                if let Some(input_equivalences) = input_equivalences {
+                    for expr in scalars.iter_mut() {
+                        input_equivalences.reduce_expr(expr);
+                    }
+                    let input_arity = *derived
+                        .last_child()
+                        .value::<Arity>()
+                        .expect("Arity required");
+                    outer_equivalences.project(0..input_arity);
+                    self.apply(
+                        input,
+                        derived.last_child(),
+                        outer_equivalences,
+                        get_equivalences,
+                    );
                 }
-                let input_arity = *derived
-                    .last_child()
-                    .value::<Arity>()
-                    .expect("Arity required");
-                outer_equivalences.project(0..input_arity);
-                self.apply(
-                    input,
-                    derived.last_child(),
-                    outer_equivalences,
-                    get_equivalences,
-                );
             }
             MirRelationExpr::FlatMap { input, exprs, .. } => {
                 // Transform `exprs` by guarantees from `input` *and* from `outer`???
@@ -219,20 +230,23 @@ impl EquivalencePropagation {
                     .last_child()
                     .value::<Equivalences>()
                     .expect("Equivalences required");
-                for expr in exprs.iter_mut() {
-                    input_equivalences.reduce_expr(expr);
+
+                if let Some(input_equivalences) = input_equivalences {
+                    for expr in exprs.iter_mut() {
+                        input_equivalences.reduce_expr(expr);
+                    }
+                    let input_arity = *derived
+                        .last_child()
+                        .value::<Arity>()
+                        .expect("Arity required");
+                    outer_equivalences.project(0..input_arity);
+                    self.apply(
+                        input,
+                        derived.last_child(),
+                        outer_equivalences,
+                        get_equivalences,
+                    );
                 }
-                let input_arity = *derived
-                    .last_child()
-                    .value::<Arity>()
-                    .expect("Arity required");
-                outer_equivalences.project(0..input_arity);
-                self.apply(
-                    input,
-                    derived.last_child(),
-                    outer_equivalences,
-                    get_equivalences,
-                );
             }
             MirRelationExpr::Filter { input, predicates } => {
                 // Transform `predicates` by guarantees from `input` *and* from `outer`???
@@ -242,27 +256,29 @@ impl EquivalencePropagation {
                     .last_child()
                     .value::<Equivalences>()
                     .expect("Equivalences required");
-                let input_types = derived
-                    .last_child()
-                    .value::<RelationType>()
-                    .expect("RelationType required");
-                for expr in predicates.iter_mut() {
-                    input_equivalences.reduce_expr(expr);
+                if let Some(input_equivalences) = input_equivalences {
+                    let input_types = derived
+                        .last_child()
+                        .value::<RelationType>()
+                        .expect("RelationType required");
+                    for expr in predicates.iter_mut() {
+                        input_equivalences.reduce_expr(expr);
+                    }
+                    // Incorporate `predicates` into `outer_equivalences`.
+                    let mut class = predicates.clone();
+                    class.push(MirScalarExpr::literal_ok(
+                        Datum::True,
+                        mz_repr::ScalarType::Bool,
+                    ));
+                    outer_equivalences.classes.push(class);
+                    outer_equivalences.minimize(input_types);
+                    self.apply(
+                        input,
+                        derived.last_child(),
+                        outer_equivalences,
+                        get_equivalences,
+                    );
                 }
-                // Incorporate `predicates` into `outer_equivalences`.
-                let mut class = predicates.clone();
-                class.push(MirScalarExpr::literal_ok(
-                    Datum::True,
-                    mz_repr::ScalarType::Bool,
-                ));
-                outer_equivalences.classes.push(class);
-                outer_equivalences.minimize(input_types);
-                self.apply(
-                    input,
-                    derived.last_child(),
-                    outer_equivalences,
-                    get_equivalences,
-                );
             }
 
             MirRelationExpr::Join {
@@ -303,13 +319,16 @@ impl EquivalencePropagation {
                 let mut input_equivalences = Vec::with_capacity(children.len());
                 for child in children.iter() {
                     let child_arity = child.value::<Arity>().expect("Arity required");
-                    let mut equivalences = child
+                    let equivalences = child
                         .value::<Equivalences>()
                         .expect("Equivalences required")
                         .clone();
-                    let permutation = (columns..(columns + child_arity)).collect::<Vec<_>>();
-                    equivalences.permute(&permutation);
-                    input_equivalences.push(equivalences);
+
+                    if let Some(mut equivalences) = equivalences {
+                        let permutation = (columns..(columns + child_arity)).collect::<Vec<_>>();
+                        equivalences.permute(&permutation);
+                        input_equivalences.push(equivalences);
+                    }
                     columns += child_arity;
                 }
 
