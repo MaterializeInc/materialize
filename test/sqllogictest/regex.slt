@@ -608,6 +608,8 @@ Explained Query:
     Map (regexp_replace["b..", case_insensitive=false, limit=1](#0, "X"))
       ReadStorage materialize.public.r
 
+Source materialize.public.r
+
 Target cluster: quickstart
 
 EOF
@@ -632,6 +634,8 @@ Explained Query:
   Project (#3)
     Map (regexp_replace["b..", case_insensitive=true, limit=1](#0, "X"))
       ReadStorage materialize.public.r
+
+Source materialize.public.r
 
 Target cluster: quickstart
 
@@ -658,6 +662,8 @@ Explained Query:
     Map (regexp_replace["b..", case_insensitive=true, limit=0](#0, "X"))
       ReadStorage materialize.public.r
 
+Source materialize.public.r
+
 Target cluster: quickstart
 
 EOF
@@ -682,6 +688,8 @@ Explained Query:
   Project (#3)
     Map (regexp_replace(#0, #1, #2, "ig"))
       ReadStorage materialize.public.r
+
+Source materialize.public.r
 
 Target cluster: quickstart
 
@@ -738,6 +746,8 @@ Explained Query:
      ^
 error: unclosed group(#0, #2))
       ReadStorage materialize.public.e
+
+Source materialize.public.e
 
 Target cluster: quickstart
 
