@@ -556,30 +556,9 @@ union all
 select a, -2, 'keys', a from keys;
 ----
 Explained Query:
-  Return
-    Project (#0, #2, #1, #0)
-      Map (-1)
-        Get l0
-  With Mutually Recursive
-    cte l1 =
-      Distinct project=[#0..=#3]
-        Union
-          Project (#0..=#3)
-            Join on=(#0 = #4) type=differential
-              ArrangeBy keys=[[#0]]
-                Get l1
-              ArrangeBy keys=[[#0]]
-                TopK group_by=[#0] limit=1
-                  Project (#0)
-                    Filter (#0) IS NOT NULL
-                      Get l0
-          Get l1
-    cte l0 =
-      Distinct project=[#0, #1]
-        Union
-          ReadStorage materialize.public.bar
-          Project (#0, #2)
-            Get l1
+  Project (#0, #2, #1, #0)
+    Map (-1)
+      ReadStorage materialize.public.bar
 
 Source materialize.public.bar
 

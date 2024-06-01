@@ -180,15 +180,10 @@ impl EquivalencePropagation {
                     self.apply(value.0, value.1, equivalences.clone(), get_equivalences);
                 }
             }
-            MirRelationExpr::LetRec { body, .. } => {
-                // Only descend into `body` without more careful analysis.
-                // We could determine non-recursive bindings, for example, and process them.
-                self.apply(
-                    body,
-                    derived.last_child(),
-                    outer_equivalences,
-                    get_equivalences,
-                );
+            MirRelationExpr::LetRec { .. } => {
+                for (child, derived) in expr.children_mut().rev().zip(derived.children_rev()) {
+                    self.apply(child, derived, outer_equivalences.clone(), get_equivalences);
+                }
             }
             MirRelationExpr::Project { input, outputs } => {
                 // Transform `outer_equivalences` to one relevant for `input`.
