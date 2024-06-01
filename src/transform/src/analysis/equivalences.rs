@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
 use mz_repr::{ColumnType, Datum};
 
-use crate::analysis::Analysis;
+use crate::analysis::{Analysis, Lattice};
 use crate::analysis::{Arity, RelationType};
 use crate::analysis::{Derived, DerivedBuilder};
 
@@ -29,7 +29,11 @@ use crate::analysis::{Derived, DerivedBuilder};
 pub struct Equivalences;
 
 impl Analysis for Equivalences {
-    type Value = EquivalenceClasses;
+    // A `Some(list)` indicates a list of classes of equivalent expressions.
+    // A `None` indicates all expressions are equivalent, including contradictions;
+    // this is only possible for the empty collection, and as an initial result for
+    // unconstrained recursive terms.
+    type Value = Option<EquivalenceClasses>;
 
     fn announce_dependencies(builder: &mut DerivedBuilder) {
         builder.require(Arity);
@@ -39,7 +43,7 @@ impl Analysis for Equivalences {
     fn derive(
         &self,
         expr: &MirRelationExpr,
-        _index: usize,
+        index: usize,
         results: &[Self::Value],
         depends: &Derived,
     ) -> Self::Value {
@@ -73,54 +77,64 @@ impl Analysis for Equivalences {
                         }
                     }
                 }
-                equivalences
+                Some(equivalences)
             }
             MirRelationExpr::Get { id, .. } => {
-                let mut equivalences = EquivalenceClasses::default();
+                let mut equivalences = Some(EquivalenceClasses::default());
                 // Find local identifiers, but nothing for external identifiers.
                 if let Id::Local(id) = id {
                     if let Some(offset) = depends.bindings().get(id) {
                         // It is possible we have derived nothing for a recursive term
                         if let Some(result) = results.get(*offset) {
                             equivalences.clone_from(result);
+                        } else {
+                            // No top element was prepared.
+                            // This means we are executing pessimistically,
+                            // but perhaps we must because optimism is off.
                         }
                     }
                 }
                 equivalences
             }
-            MirRelationExpr::Let { .. } => results.last().unwrap().clone(),
-            MirRelationExpr::LetRec { .. } => results.last().unwrap().clone(),
+            MirRelationExpr::Let { .. } => results.get(index - 1).unwrap().clone(),
+            MirRelationExpr::LetRec { .. } => results.get(index - 1).unwrap().clone(),
             MirRelationExpr::Project { outputs, .. } => {
                 // restrict equivalences, and introduce equivalences for repeated outputs.
-                let mut equivalences = results.last().unwrap().clone();
-                equivalences.project(outputs.iter().cloned());
+                let mut equivalences = results.get(index - 1).unwrap().clone();
+                equivalences
+                    .as_mut()
+                    .map(|e| e.project(outputs.iter().cloned()));
                 equivalences
             }
             MirRelationExpr::Map { scalars, .. } => {
                 // introduce equivalences for new columns and expressions that define them.
-                let mut equivalences = results.last().unwrap().clone();
-                let input_arity = depends.results::<Arity>().unwrap()[results.len() - 1];
-                for (pos, expr) in scalars.iter().enumerate() {
-                    equivalences
-                        .classes
-                        .push(vec![MirScalarExpr::Column(input_arity + pos), expr.clone()]);
+                let mut equivalences = results.get(index - 1).unwrap().clone();
+                if let Some(equivalences) = &mut equivalences {
+                    let input_arity = depends.results::<Arity>().unwrap()[index - 1];
+                    for (pos, expr) in scalars.iter().enumerate() {
+                        equivalences
+                            .classes
+                            .push(vec![MirScalarExpr::Column(input_arity + pos), expr.clone()]);
+                    }
                 }
                 equivalences
             }
-            MirRelationExpr::FlatMap { .. } => results.last().unwrap().clone(),
+            MirRelationExpr::FlatMap { .. } => results.get(index - 1).unwrap().clone(),
             MirRelationExpr::Filter { predicates, .. } => {
-                let mut equivalences = results.last().unwrap().clone();
-                let mut class = predicates.clone();
-                class.push(MirScalarExpr::literal_ok(
-                    Datum::True,
-                    mz_repr::ScalarType::Bool,
-                ));
-                equivalences.classes.push(class);
+                let mut equivalences = results.get(index - 1).unwrap().clone();
+                if let Some(equivalences) = &mut equivalences {
+                    let mut class = predicates.clone();
+                    class.push(MirScalarExpr::literal_ok(
+                        Datum::True,
+                        mz_repr::ScalarType::Bool,
+                    ));
+                    equivalences.classes.push(class);
+                }
                 equivalences
             }
             MirRelationExpr::Join { equivalences, .. } => {
                 // Collect equivalences from all inputs;
-                let expr_index = results.len();
+                let expr_index = index;
                 let mut children = depends
                     .children_of_rev(expr_index, expr.children().count())
                     .collect::<Vec<_>>();
@@ -128,18 +142,26 @@ impl Analysis for Equivalences {
 
                 let arity = depends.results::<Arity>().unwrap();
                 let mut columns = 0;
-                let mut result = EquivalenceClasses::default();
+                let mut result = Some(EquivalenceClasses::default());
                 for child in children.into_iter() {
                     let input_arity = arity[child];
-                    let mut equivalences = results[child].clone();
-                    let permutation = (columns..(columns + input_arity)).collect::<Vec<_>>();
-                    equivalences.permute(&permutation);
-                    result.classes.extend(equivalences.classes);
+                    let equivalences = results[child].clone();
+                    if let Some(mut equivalences) = equivalences {
+                        let permutation = (columns..(columns + input_arity)).collect::<Vec<_>>();
+                        equivalences.permute(&permutation);
+                        result
+                            .as_mut()
+                            .map(|e| e.classes.extend(equivalences.classes));
+                    } else {
+                        result = None;
+                    }
                     columns += input_arity;
                 }
 
                 // Fold join equivalences into our results.
-                result.classes.extend(equivalences.iter().cloned());
+                result
+                    .as_mut()
+                    .map(|e| e.classes.extend(equivalences.iter().cloned()));
                 result
             }
             MirRelationExpr::Reduce {
@@ -147,40 +169,72 @@ impl Analysis for Equivalences {
                 aggregates: _,
                 ..
             } => {
-                let input_arity = depends.results::<Arity>().unwrap()[results.len() - 1];
-                let mut equivalences = results.last().unwrap().clone();
-                // Introduce keys column equivalences as a map, then project to them as a projection.
-                for (pos, expr) in group_key.iter().enumerate() {
-                    equivalences
-                        .classes
-                        .push(vec![MirScalarExpr::Column(input_arity + pos), expr.clone()]);
+                let input_arity = depends.results::<Arity>().unwrap()[index - 1];
+                let mut equivalences = results.get(index - 1).unwrap().clone();
+                if let Some(equivalences) = &mut equivalences {
+                    // Introduce keys column equivalences as a map, then project to them as a projection.
+                    for (pos, expr) in group_key.iter().enumerate() {
+                        equivalences
+                            .classes
+                            .push(vec![MirScalarExpr::Column(input_arity + pos), expr.clone()]);
+                    }
+                    // TODO: MIN, MAX, ANY, ALL aggregates pass through all certain properties of their columns.
+                    // They also pass through equivalences of them and other constant columns (e.g. key columns).
+                    // However, it is not correct to simply project onto these columns, as relationships amongst
+                    // aggregate columns may no longer be preserved. MAX(col) != MIN(col) even though col = col.
+                    // TODO: COUNT ensures a non-null value.
+                    equivalences.project(input_arity..(input_arity + group_key.len()));
                 }
-                // TODO: MIN, MAX, ANY, ALL aggregates pass through all certain properties of their columns.
-                // They also pass through equivalences of them and other constant columns (e.g. key columns).
-                // However, it is not correct to simply project onto these columns, as relationships amongst
-                // aggregate columns may no longer be preserved. MAX(col) != MIN(col) even though col = col.
-                // TODO: COUNT ensures a non-null value.
-                equivalences.project(input_arity..(input_arity + group_key.len()));
                 equivalences
             }
-            MirRelationExpr::TopK { .. } => results.last().unwrap().clone(),
-            MirRelationExpr::Negate { .. } => results.last().unwrap().clone(),
-            MirRelationExpr::Threshold { .. } => results.last().unwrap().clone(),
+            MirRelationExpr::TopK { .. } => results.get(index - 1).unwrap().clone(),
+            MirRelationExpr::Negate { .. } => results.get(index - 1).unwrap().clone(),
+            MirRelationExpr::Threshold { .. } => results.get(index - 1).unwrap().clone(),
             MirRelationExpr::Union { .. } => {
                 // TODO: `EquivalenceClasses::union` takes references, and we could probably skip much of this cloning.
-                let expr_index = results.len();
+                let expr_index = index;
                 depends
                     .children_of_rev(expr_index, expr.children().count())
-                    .map(|c| results[c].clone())
+                    .flat_map(|c| results[c].clone())
                     .reduce(|e1, e2| e1.union(&e2))
-                    .unwrap()
             }
-            MirRelationExpr::ArrangeBy { .. } => results.last().unwrap().clone(),
+            MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
 
-        let expr_type = &depends.results::<RelationType>().unwrap()[results.len()];
-        equivalences.minimize(expr_type);
+        let expr_type = &depends.results::<RelationType>().unwrap()[index];
+        equivalences.as_mut().map(|e| e.minimize(expr_type));
         equivalences
+    }
+
+    fn lattice() -> Option<Box<dyn Lattice<Self::Value>>> {
+        Some(Box::new(EQLattice))
+    }
+}
+
+struct EQLattice;
+
+impl Lattice<Option<EquivalenceClasses>> for EQLattice {
+    fn top(&self) -> Option<EquivalenceClasses> {
+        None
+    }
+
+    fn meet_assign(
+        &self,
+        a: &mut Option<EquivalenceClasses>,
+        b: Option<EquivalenceClasses>,
+    ) -> bool {
+        match (&mut *a, b) {
+            (_, None) => false,
+            (None, b) => {
+                *a = b;
+                true
+            }
+            (Some(a), Some(b)) => {
+                let mut c = a.union(&b);
+                std::mem::swap(a, &mut c);
+                a != &mut c
+            }
+        }
     }
 }
 
