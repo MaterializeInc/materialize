@@ -47,22 +47,8 @@ EXPLAIN WITH MUTUALLY RECURSIVE
     )
 SELECT * FROM foo;
 ----
-Explained Query:
-  Return
-    Get l1
-  With Mutually Recursive
-    cte l1 =
-      Return
-        Threshold
-          Union
-            Get l1
-            Negate
-              Get l0
-      With Mutually Recursive
-        cte l0 =
-          Union
-            Get l1
-            Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
@@ -84,26 +70,8 @@ EXPLAIN WITH MUTUALLY RECURSIVE
     )
 SELECT * FROM foo;
 ----
-Explained Query:
-  Return
-    Get l1
-  With Mutually Recursive
-    cte l1 =
-      Return
-        Threshold
-          Union
-            Get l1
-            Negate
-              Get l0
-      With Mutually Recursive
-        cte l0 =
-          Project (#1)
-            Map ((#0 + 3))
-              Union
-                Filter (#0 > -5)
-                  Get l1
-                Filter (#0 > -5)
-                  Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
@@ -161,14 +129,8 @@ EXPLAIN WITH MUTUALLY RECURSIVE
     )
 SELECT * FROM foo;
 ----
-Explained Query:
-  Return
-    Get l0
-  With Mutually Recursive
-    cte l0 =
-      Union
-        Get l0
-        Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
@@ -188,16 +150,8 @@ SELECT * FROM (
     SELECT * FROM bar
 );
 ----
-Explained Query:
-  Return
-    Union
-      Get l0
-      Get l1
-  With Mutually Recursive
-    cte l1 =
-      Get l1
-    cte l0 =
-      Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
@@ -377,18 +331,8 @@ SELECT * FROM (
     SELECT * FROM bar
 );
 ----
-Explained Query:
-  Return
-    Union
-      Get l0
-      Get l1
-  With Mutually Recursive
-    cte [recursion_limit=7] l1 =
-      Project (#1)
-        Map ((#0 - 2))
-          Get l1
-    cte [recursion_limit=5] l0 =
-      Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
@@ -410,18 +354,8 @@ SELECT * FROM (
     SELECT * FROM bar
 );
 ----
-Explained Query:
-  Return
-    Union
-      Get l0
-      Get l1
-  With Mutually Recursive [recursion_limit=27]
-    cte l1 =
-      Project (#1)
-        Map ((#0 - 2))
-          Get l1
-    cte l0 =
-      Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
@@ -440,14 +374,8 @@ EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 9)
     )
 SELECT * FROM foo;
 ----
-Explained Query:
-  Return
-    Get l0
-  With Mutually Recursive [recursion_limit=9]
-    cte l0 =
-      Union
-        Get l0
-        Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
@@ -465,22 +393,8 @@ EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 17)
     )
 SELECT * FROM foo;
 ----
-Explained Query:
-  Return
-    Get l1
-  With Mutually Recursive [recursion_limit=17]
-    cte l1 =
-      Return
-        Threshold
-          Union
-            Get l1
-            Negate
-              Get l0
-      With Mutually Recursive [recursion_limit=11]
-        cte l0 =
-          Union
-            Get l1
-            Get l0
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 

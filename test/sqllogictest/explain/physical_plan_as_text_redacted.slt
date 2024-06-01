@@ -1335,22 +1335,8 @@ SELECT * FROM (
     SELECT * FROM bar
 );
 ----
-Explained Query:
-  Return
-    Union
-      Get::PassArrangements l0
-        raw=true
-      Get::PassArrangements l1
-        raw=true
-  With Mutually Recursive
-    cte l1 =
-      Get::Collection l1
-        project=(#1)
-        map=((#0 - █))
-        raw=true
-    cte [recursion_limit=5] l0 =
-      Get::PassArrangements l0
-        raw=true
+Explained Query (fast path):
+  Constant <empty>
 
 Target cluster: mz_catalog_server
 
