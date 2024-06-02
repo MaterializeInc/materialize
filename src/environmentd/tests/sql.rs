@@ -2866,7 +2866,7 @@ fn test_auto_run_on_introspection_feature_enabled() {
         match (rx.try_next(), expected) {
             (Ok(Some(notice)), true) => {
                 let msg = notice.message();
-                let expected = "query was automatically run on the \"mz_introspection\" cluster";
+                let expected = "query was automatically run on the \"mz_introspection\" cluster to improve performance";
                 assert_eq!(msg, expected);
             }
             (Err(_), false) => (),
