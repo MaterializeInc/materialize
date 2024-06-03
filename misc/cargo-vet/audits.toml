@@ -239,6 +239,11 @@ criteria = "maintained-and-necessary"
 delta = "8.3.0 -> 9.2.0"
 
 [[audits.launchdarkly-server-sdk]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.0@git:87c0f67aa51fa936d3a6a49605e8e3f565d15281"
+
+[[audits.launchdarkly-server-sdk]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "1.0.0 -> 1.0.0@git:df1440c8b93a192d50470d1b258615febe52f1f8"
