@@ -319,7 +319,7 @@ class MySqlExecutor(Executor):
         )
 
         values = [
-            f"{identifier(field.name)} {str(field.data_type.name(Backend.POSTGRES)).lower()}"
+            f"{identifier(field.name)} {str(field.data_type.name(Backend.MYSQL)).lower()}"
             for field in self.fields
         ]
         keys = [field.name for field in self.fields if field.is_key]
@@ -563,7 +563,7 @@ class KafkaRoundtripExecutor(Executor):
     def create(self, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
         values = [
-            f"{field.name} {str(field.data_type.name(Backend.POSTGRES)).lower()}"
+            f"{field.name} {str(field.data_type.name(Backend.MATERIALIZE)).lower()}"
             for field in self.fields
         ]
         keys = [field.name for field in self.fields if field.is_key]
