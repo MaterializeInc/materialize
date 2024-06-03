@@ -13,20 +13,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Additive BUILD file for the protobuf-native Rust crate."""
-
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@//misc/bazel/rules:rust_cxx_bridge.bzl", "rust_cxx_bridge")
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+
+filegroup(
+    name = "protobuf-native-headers",
+    srcs = glob(["src/**/*.h"]),
+)
+
+copy_to_directory(
+    name = "generated-includes",
+    srcs = [
+        ":protobuf-native-headers",
+        ":internal-bridge/generated",
+        ":io-bridge/generated",
+        ":compiler-bridge/generated",
+    ],
+    out = "protobuf-native",
+    visibility = ["//visibility:public"],
+)
 
 rust_cxx_bridge(
     name = "compiler-bridge",
     src = "src/compiler.rs",
+    hdrs = [":generated-includes"],
     deps = [":protobuf-native-include"],
 )
 
 cc_library(
     name = "compiler-sys",
-    srcs = ["src/compiler.cc"],
+    hdrs = glob(["src/**/*.h"]),
+    srcs = ["src/compiler.cc", ":generated-includes"],
     copts = ["-std=c++17"],
     linkstatic = True,
     deps = [
@@ -38,12 +56,14 @@ cc_library(
 rust_cxx_bridge(
     name = "io-bridge",
     src = "src/io.rs",
+    hdrs = [":generated-includes"],
     deps = [":protobuf-native-include"],
 )
 
 cc_library(
     name = "io-sys",
-    srcs = ["src/io.cc"],
+    hdrs = glob(["src/**/*.h"]),
+    srcs = ["src/io.cc", ":generated-includes"],
     copts = ["-std=c++17"],
     linkstatic = True,
     deps = [
@@ -55,12 +75,14 @@ cc_library(
 rust_cxx_bridge(
     name = "lib-bridge",
     src = "src/lib.rs",
+    hdrs = [":generated-includes"],
     deps = [":protobuf-native-include"],
 )
 
 cc_library(
     name = "lib-sys",
-    srcs = ["src/lib.cc"],
+    hdrs = glob(["src/**/*.h"]),
+    srcs = ["src/lib.cc", ":generated-includes"],
     copts = ["-std=c++17"],
     linkstatic = True,
     deps = [
@@ -81,6 +103,8 @@ cc_library(
     copts = ["-std=c++14"],
     deps = [
         "@cxxbridge//:cxx_cc",
-        "@protobuf//:protobuf_headers",
+        "@protobuf//src/google/protobuf/compiler:code_generator",
+        "@protobuf//src/google/protobuf/compiler:importer",
+        "@com_google_absl//absl/strings:strings",
     ],
 )
