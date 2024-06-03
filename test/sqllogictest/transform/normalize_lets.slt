@@ -31,7 +31,7 @@ Explained Query:
               Constant
                 - (2)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -64,7 +64,7 @@ Explained Query:
             Get l1
             Get l0
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -105,7 +105,7 @@ Explained Query:
                 Filter (#0 > -5)
                   Get l0
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -170,7 +170,7 @@ Explained Query:
         Get l0
         Get l0
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -199,7 +199,7 @@ Explained Query:
     cte l0 =
       Get l0
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -304,7 +304,7 @@ Explained Query:
           Constant
             - (1)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -331,7 +331,7 @@ Explained Query:
           Constant
             - (1)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -358,7 +358,7 @@ Explained Query:
           Constant
             - (1)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -390,7 +390,7 @@ Explained Query:
     cte [recursion_limit=5] l0 =
       Get l0
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -423,7 +423,7 @@ Explained Query:
     cte l0 =
       Get l0
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -449,7 +449,7 @@ Explained Query:
         Get l0
         Get l0
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -482,7 +482,7 @@ Explained Query:
             Get l1
             Get l0
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 

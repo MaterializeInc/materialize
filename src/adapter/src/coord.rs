@@ -184,12 +184,12 @@ pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
 mod appends;
+mod catalog_serving;
 pub mod cluster_scheduling;
 mod command_handler;
 pub mod consistency;
 mod ddl;
 mod indexes;
-mod introspection;
 mod message_handler;
 mod privatelink_status;
 pub mod read_policy;
@@ -748,11 +748,11 @@ pub struct SubscribeFinish {
 /// An enum describing which cluster to run a statement on.
 ///
 /// One example usage would be that if a query depends only on system tables, we might
-/// automatically run it on the introspection cluster to benefit from indexes that exist there.
+/// automatically run it on the catalog server cluster to benefit from indexes that exist there.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TargetCluster {
-    /// The introspection cluster.
-    Introspection,
+    /// The catalog server cluster.
+    CatalogServer,
     /// The current user's active cluster.
     Active,
     /// The cluster selected at the start of a transaction.
@@ -881,7 +881,7 @@ pub struct Config {
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     pub builtin_system_cluster_replica_size: String,
-    pub builtin_introspection_cluster_replica_size: String,
+    pub builtin_catalog_server_cluster_replica_size: String,
     pub builtin_probe_cluster_replica_size: String,
     pub builtin_support_cluster_replica_size: String,
     pub system_parameter_defaults: BTreeMap<String, String>,
@@ -2893,7 +2893,7 @@ pub fn serve(
         cloud_resource_controller,
         cluster_replica_sizes,
         builtin_system_cluster_replica_size,
-        builtin_introspection_cluster_replica_size,
+        builtin_catalog_server_cluster_replica_size,
         builtin_probe_cluster_replica_size,
         builtin_support_cluster_replica_size,
         system_parameter_defaults,
@@ -2992,7 +2992,7 @@ pub fn serve(
                         skip_migrations: false,
                         cluster_replica_sizes,
                         builtin_system_cluster_replica_size,
-                        builtin_introspection_cluster_replica_size,
+                        builtin_catalog_server_cluster_replica_size,
                         builtin_probe_cluster_replica_size,
                         builtin_support_cluster_replica_size,
                         system_parameter_defaults,

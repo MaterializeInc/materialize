@@ -15,7 +15,7 @@ default_owner
 group
 joe
 mz_system
-mz_introspection
+mz_catalog_server
 materialize
 superuser_login
 "space role"

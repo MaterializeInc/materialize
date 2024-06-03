@@ -37,7 +37,7 @@ pub static INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER: Lazy<BTreeMap<String, String>>
     Lazy::new(|| {
         [
             (&SYSTEM_USER, "mz_system"),
-            (&SUPPORT_USER, "mz_introspection"),
+            (&SUPPORT_USER, "mz_catalog_server"),
         ]
         .into_iter()
         .map(|(user, cluster)| (user.name.clone(), cluster.to_string()))

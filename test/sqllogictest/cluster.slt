@@ -39,8 +39,8 @@ ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
 
-statement error db error: ERROR: must be owner of CLUSTER mz_introspection
-ALTER CLUSTER mz_introspection RENAME TO foo
+statement error db error: ERROR: must be owner of CLUSTER mz_catalog_server
+ALTER CLUSTER mz_catalog_server RENAME TO foo
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET enable_rbac_checks;
@@ -88,7 +88,7 @@ query TT rowsort
 SELECT id, name FROM mz_clusters
 ----
 s1  mz_system
-s2  mz_introspection
+s2  mz_catalog_server
 s3  mz_probe
 s4  mz_support
 u1  quickstart
@@ -443,7 +443,7 @@ CREATE CLUSTER REPLICA quickstart.size_1 SIZE '1';
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-mz_introspection  r1  2
+mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
@@ -457,7 +457,7 @@ SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
 foo  size_1  1
 foo  size_2  2
-mz_introspection  r1  2
+mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2
@@ -484,7 +484,7 @@ DROP CLUSTER REPLICA foo.size_1, foo.size_2
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-mz_introspection  r1  2
+mz_catalog_server  r1  2
 mz_probe  r1  2
 mz_system  r1  2
 quickstart  r1  2

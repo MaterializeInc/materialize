@@ -111,7 +111,7 @@ LEFT OUTER JOIN mz_cluster_replicas r ON c.id = r.cluster_id
 ORDER BY r.id
 ----
 s1  mz_system  s1  r1  2
-s2  mz_introspection  s2  r1  2
+s2  mz_catalog_server  s2  r1  2
 s3  mz_probe  s3  r1  2
 u1  quickstart  u1  r1  2
 s4  mz_support  NULL  NULL  NULL
@@ -290,7 +290,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_kafka_sources_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -303,6 +303,6 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_webhook_sources_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF

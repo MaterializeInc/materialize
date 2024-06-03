@@ -93,7 +93,7 @@ pub struct TestHarness {
     storage_usage_retention_period: Option<Duration>,
     default_cluster_replica_size: String,
     builtin_system_cluster_replica_size: String,
-    builtin_introspection_cluster_replica_size: String,
+    builtin_catalog_server_cluster_replica_size: String,
     builtin_probe_cluster_replica_size: String,
     builtin_support_cluster_replica_size: String,
     propagate_crashes: bool,
@@ -125,7 +125,7 @@ impl Default for TestHarness {
             storage_usage_retention_period: None,
             default_cluster_replica_size: "1".to_string(),
             builtin_system_cluster_replica_size: "1".to_string(),
-            builtin_introspection_cluster_replica_size: "1".to_string(),
+            builtin_catalog_server_cluster_replica_size: "1".to_string(),
             builtin_probe_cluster_replica_size: "1".to_string(),
             builtin_support_cluster_replica_size: "1".to_string(),
             propagate_crashes: false,
@@ -254,12 +254,12 @@ impl TestHarness {
         self.builtin_system_cluster_replica_size = builtin_system_cluster_replica_size;
         self
     }
-    pub fn with_builtin_introspection_cluster_replica_size(
+    pub fn with_builtin_catalog_server_cluster_replica_size(
         mut self,
-        builtin_introspection_cluster_replica_size: String,
+        builtin_catalog_server_cluster_replica_size: String,
     ) -> Self {
-        self.builtin_introspection_cluster_replica_size =
-            builtin_introspection_cluster_replica_size;
+        self.builtin_catalog_server_cluster_replica_size =
+            builtin_catalog_server_cluster_replica_size;
         self
     }
 
@@ -507,8 +507,8 @@ impl Listeners {
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                 bootstrap_builtin_system_cluster_replica_size: config
                     .builtin_system_cluster_replica_size,
-                bootstrap_builtin_introspection_cluster_replica_size: config
-                    .builtin_introspection_cluster_replica_size,
+                bootstrap_builtin_catalog_server_cluster_replica_size: config
+                    .builtin_catalog_server_cluster_replica_size,
                 bootstrap_builtin_probe_cluster_replica_size: config
                     .builtin_probe_cluster_replica_size,
                 bootstrap_builtin_support_cluster_replica_size: config

@@ -72,7 +72,7 @@ Union
       Constant
         - ()
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 

@@ -18,7 +18,7 @@ $ set-regex match="cluster1|^quickstart$|v\d+\.\d+\.\d+(-[a-z0-9]+)? \([a-f0-9]{
 > SHOW ALL
 allowed_cluster_replica_sizes       ""                      "The allowed sizes when creating a new cluster replica (Materialize)."
 application_name                    ""                      "Sets the application name to be reported in statistics and logs (PostgreSQL)."
-auto_route_introspection_queries    on                      "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize)."
+auto_route_catalog_queries          on                      "Whether to force queries that depend only on system tables, to run on the mz_catalog_server cluster (Materialize)."
 client_encoding                     UTF8                    "Sets the client's character set encoding (PostgreSQL)."
 client_min_messages                 notice                  "Sets the message levels that are sent to the client (PostgreSQL)."
 cluster                             <VARIES>                "Sets the current cluster (Materialize)."

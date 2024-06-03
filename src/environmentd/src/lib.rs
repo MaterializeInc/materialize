@@ -114,8 +114,8 @@ pub struct Config {
     pub bootstrap_default_cluster_replica_size: String,
     /// The size of the builtin system cluster replicas if bootstrapping.
     pub bootstrap_builtin_system_cluster_replica_size: String,
-    /// The size of the builtin introspection cluster replicas if bootstrapping.
-    pub bootstrap_builtin_introspection_cluster_replica_size: String,
+    /// The size of the builtin catalog server cluster replicas if bootstrapping.
+    pub bootstrap_builtin_catalog_server_cluster_replica_size: String,
     /// The size of the builtin probe cluster replicas if bootstrapping.
     pub bootstrap_builtin_probe_cluster_replica_size: String,
     /// The size of the builtin support cluster replicas if bootstrapping.
@@ -524,8 +524,8 @@ impl Listeners {
             cluster_replica_sizes: config.cluster_replica_sizes,
             builtin_system_cluster_replica_size: config
                 .bootstrap_builtin_system_cluster_replica_size,
-            builtin_introspection_cluster_replica_size: config
-                .bootstrap_builtin_introspection_cluster_replica_size,
+            builtin_catalog_server_cluster_replica_size: config
+                .bootstrap_builtin_catalog_server_cluster_replica_size,
             builtin_probe_cluster_replica_size: config.bootstrap_builtin_probe_cluster_replica_size,
             builtin_support_cluster_replica_size: config
                 .bootstrap_builtin_support_cluster_replica_size,

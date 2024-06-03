@@ -81,7 +81,7 @@ Explained Query:
 Used Indexes:
   - mz_catalog.mz_show_views_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -130,11 +130,11 @@ Explained Query (fast path):
     - ((1, 2) x 2)
     - (3, 4)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
-# Test introspection queries (index found based on cluster auto-routing).
+# Test catalog queries (index found based on cluster auto-routing).
 query T multiline
 EXPLAIN SELECT * FROM mz_internal.mz_source_status_history
 ----
@@ -145,7 +145,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_source_status_history_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 

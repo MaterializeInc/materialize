@@ -277,8 +277,8 @@ simple
 SELECT 1;
 SELECT * FROM t;
 ----
-db error: ERROR: querying the following items "materialize.public.t" is not allowed from the "mz_introspection" cluster
-DETAIL: The transaction is executing on the mz_introspection cluster, maybe having been routed there by the first statement in the transaction.
+db error: ERROR: querying the following items "materialize.public.t" is not allowed from the "mz_catalog_server" cluster
+DETAIL: The transaction is executing on the mz_catalog_server cluster, maybe having been routed there by the first statement in the transaction.
 
 statement ok
 CREATE SCHEMA other
@@ -895,7 +895,7 @@ SET CLUSTER TO default
 
 # Test that the cluster is selected at the start of a transaction and doesn't change.
 
-## Auto-routing selects mz_introspection at the start of transaction.
+## Auto-routing selects mz_catalog_server at the start of transaction.
 
 statement ok
 BEGIN
@@ -938,14 +938,14 @@ Explained Query:
 Used Indexes:
   - mz_catalog.mz_show_views_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
 statement ok
 COMMIT
 
-## Auto-routing doesn't select mz_introspection in the middle of a transaction.
+## Auto-routing doesn't select mz_catalog_server in the middle of a transaction.
 
 # Since mz_views uses custom types, the postgres client will look it up in the catalog on
 # first use. If the first use happens to be in a transaction, then we can get unexpected time
@@ -1229,7 +1229,7 @@ SELECT * FROM blue_t1 LIMIT 1;
 # Make sure SHOW COLUMNS does not use a different cluster during a transaction.
 #
 # SHOW COLUMNS is planned separately from other SHOW statements, and previously it would ignore
-# the mz_introspection auto-routing. This resulted in its dependents being outside the timedomain
+# the mz_catalog_server auto-routing. This resulted in its dependents being outside the timedomain
 # of the transaction.
 
 statement ok

@@ -1,6 +1,6 @@
 # Test that a first query error doesn't ignore startup options.
 
-send conn=c cluster=mz_introspection
+send conn=c cluster=mz_catalog_server
 Query {"query": "SELECT wat"}
 ----
 
@@ -18,6 +18,6 @@ until conn=c
 ReadyForQuery
 ----
 RowDescription {"fields":[{"name":"cluster"}]}
-DataRow {"fields":["mz_introspection"]}
+DataRow {"fields":["mz_catalog_server"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}

@@ -721,6 +721,7 @@ pub(crate) fn durable_migrate(
 ) -> Result<(), anyhow::Error> {
     let boot_ts = boot_ts.into();
     catalog_fix_system_cluster_replica_ids_v_0_95_0(tx, boot_ts)?;
+    catalog_rename_mz_introspection_cluster_v_0_103_0(tx, boot_ts)?;
     Ok(())
 }
 
@@ -810,5 +811,42 @@ fn catalog_fix_system_cluster_replica_ids_v_0_95_0(
             tx.insert_audit_log_events([remove_event, create_event]);
         }
     }
+    Ok(())
+}
+
+/// This migration applies the rename of the built-in `mz_introspection` cluster to
+/// `mz_catalog_server` to the durable catalog state.
+fn catalog_rename_mz_introspection_cluster_v_0_103_0(
+    tx: &mut Transaction,
+    boot_ts: EpochMillis,
+) -> Result<(), anyhow::Error> {
+    use mz_audit_log::{EventDetails, EventType, ObjectType, RenameClusterV1, VersionedEvent};
+
+    let found_cluster_id = tx
+        .get_clusters()
+        .find(|cluster| cluster.id.is_system() && cluster.name == "mz_introspection")
+        .map(|cluster| cluster.id);
+    let Some(cluster_id) = found_cluster_id else {
+        return Ok(());
+    };
+
+    tx.rename_cluster(cluster_id, "mz_introspection", "mz_catalog_server")?;
+
+    // Update audit log.
+    let audit_id = tx.allocate_audit_log_id()?;
+    let rename_event = VersionedEvent::new(
+        audit_id,
+        EventType::Alter,
+        ObjectType::Cluster,
+        EventDetails::RenameClusterV1(RenameClusterV1 {
+            id: cluster_id.to_string(),
+            old_name: "mz_introspection".into(),
+            new_name: "mz_catalog_server".into(),
+        }),
+        None,
+        boot_ts,
+    );
+    tx.insert_audit_log_event(rename_event);
+
     Ok(())
 }

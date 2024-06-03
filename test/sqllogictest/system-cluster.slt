@@ -13,7 +13,7 @@ mode cockroach
 reset-server
 
 statement ok
-SET CLUSTER TO mz_introspection
+SET CLUSTER TO mz_catalog_server
 
 query T multiline
 EXPLAIN SHOW DATABASES
@@ -25,7 +25,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_show_databases_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -40,7 +40,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_show_schemas_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -54,7 +54,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_show_connections_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -68,7 +68,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_show_tables_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -82,7 +82,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_sources_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -96,7 +96,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_show_views_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -110,7 +110,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_materialized_views_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -125,7 +125,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_materialized_views_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -140,7 +140,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_indexes_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -155,7 +155,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_indexes_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -169,7 +169,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_sinks_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -183,7 +183,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_show_types_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -197,7 +197,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_show_all_objects_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -214,7 +214,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_show_columns_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -250,7 +250,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_cluster_replicas_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -264,7 +264,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_cluster_replicas_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -278,7 +278,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_show_secrets_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -292,7 +292,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_indexes_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -306,7 +306,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_roles_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -320,7 +320,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_sources_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -334,7 +334,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_sinks_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -348,7 +348,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_catalog.mz_materialized_views_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -362,7 +362,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_object_dependencies_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -376,7 +376,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_compute_dependencies_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -390,7 +390,7 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_cluster_replica_history_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -433,7 +433,7 @@ Used Indexes:
   - mz_catalog.mz_cluster_replica_sizes_ind (delta join lookup)
   - mz_internal.mz_cluster_replica_metrics_ind (delta join lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -478,7 +478,7 @@ Used Indexes:
   - mz_catalog.mz_sources_ind (*** full scan ***, differential join)
   - mz_internal.mz_source_statuses_ind (differential join)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -504,11 +504,11 @@ Explained Query:
 Used Indexes:
   - mz_internal.mz_source_status_history_ind (lookup)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
-# Querying user objects should not be allowed from the introspection cluster.
+# Querying user objects should not be allowed from the catalog server cluster.
 
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'));
@@ -520,9 +520,9 @@ statement ok
 CREATE TABLE bar ( key text, val bigint );
 
 statement ok
-SET CLUSTER TO mz_introspection;
+SET CLUSTER TO mz_catalog_server;
 
-statement error db error: ERROR: querying the following items "materialize\.public\.bar" is not allowed from the "mz_introspection" cluster
+statement error db error: ERROR: querying the following items "materialize\.public\.bar" is not allowed from the "mz_catalog_server" cluster
 SELECT key FROM bar;
 
 # But inspecting those objects, e.g. checking what indexes exist, should be allowed.
@@ -530,12 +530,12 @@ statement ok
 SHOW INDEXES on bar;
 
 statement ok
-SET CLUSTER TO mz_introspection;
+SET CLUSTER TO mz_catalog_server;
 
 statement ok
 DROP CLUSTER foo CASCADE;
 
-# Creating views with the mz_introspection cluster active should be allowed though.
+# Creating views with the mz_catalog_server cluster active should be allowed though.
 statement ok
 CREATE VIEW keys AS ( SELECT key FROM bar );
 
@@ -546,13 +546,13 @@ ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
 
-statement error permission denied for CLUSTER "mz_introspection"
+statement error permission denied for CLUSTER "mz_catalog_server"
 CREATE MATERIALIZED VIEW live_keys AS ( SELECT key FROM bar );
 
-statement error must be owner of CLUSTER mz_introspection
-ALTER CLUSTER mz_introspection SET (REPLICATION FACTOR 2);
+statement error must be owner of CLUSTER mz_catalog_server
+ALTER CLUSTER mz_catalog_server SET (REPLICATION FACTOR 2);
 
-statement error permission denied for CLUSTER "mz_introspection"
+statement error permission denied for CLUSTER "mz_catalog_server"
 CREATE INDEX i_keys ON bar (key);
 
 statement error must be owner of CLUSTER mz_system

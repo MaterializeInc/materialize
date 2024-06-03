@@ -18,6 +18,7 @@ from statistics import quantiles
 from textwrap import dedent
 from threading import Thread
 
+import psycopg
 import requests
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
@@ -1834,13 +1835,13 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
         """
     )
 
-    # Replace the `mz_introspection` replica with an unorchestrated one so we
+    # Replace the `mz_catalog_server` replica with an unorchestrated one so we
     # can test reconciliation of system indexes too.
     c.sql(
         """
-        ALTER CLUSTER mz_introspection SET (MANAGED = false);
-        DROP CLUSTER REPLICA mz_introspection.r1;
-        CREATE CLUSTER REPLICA mz_introspection.r1 (
+        ALTER CLUSTER mz_catalog_server SET (MANAGED = false);
+        DROP CLUSTER REPLICA mz_catalog_server.r1;
+        CREATE CLUSTER REPLICA mz_catalog_server.r1 (
             STORAGECTL ADDRESSES ['clusterd2:2100'],
             STORAGE ADDRESSES ['clusterd2:2103'],
             COMPUTECTL ADDRESSES ['clusterd2:2101'],
@@ -1865,7 +1866,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
         """
         SET cluster = cluster1;
         SELECT * FROM v1; -- cluster1
-        SHOW INDEXES;    -- mz_introspection
+        SHOW INDEXES;     -- mz_catalog_server
         """
     )
 
@@ -2667,7 +2668,7 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     #  * tables (like `mz_cluster_replicas`)
     #  * indexes (like `mz_cluster_replicas_ind`)
 
-    # Generally, metrics tables are indexed in `mz_introspection` and
+    # Generally, metrics tables are indexed in `mz_catalog_server` and
     # not indexed in the `default` cluster, so we can use that to
     # collect the `since` frontiers we want.
     def collect_sinces() -> tuple[int, int]:
@@ -2678,7 +2679,7 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
         table_since = parse_since_from_explain(explain)
 
         explain = c.sql_query(
-            "SET cluster = mz_introspection;"
+            "SET cluster = mz_catalog_server;"
             "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"
         )[0][0]
         index_since = parse_since_from_explain(explain)
@@ -4069,10 +4070,10 @@ def workflow_test_adhoc_system_indexes(
     c.up("materialized")
 
     # The system user should be able to create a new index on a catalog object
-    # in the mz_introspection cluster.
+    # in the mz_catalog_server cluster.
     c.sql(
         """
-        SET cluster = mz_introspection;
+        SET cluster = mz_catalog_server;
         CREATE INDEX mz_test_idx1 ON mz_tables (char_length(name));
         """,
         port=6877,
@@ -4088,19 +4089,19 @@ def workflow_test_adhoc_system_indexes(
         WHERE i.name = 'mz_test_idx1'
         """
     )
-    assert output[0] == ["u1", "mz_tables", "mz_introspection"], output
+    assert output[0] == ["u1", "mz_tables", "mz_catalog_server"], output
     output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 9")
     assert "mz_test_idx1" in output[0][0], output
     output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 9")
     assert len(output) > 0
 
     # The system user should be able to create a new index on an unstable
-    # catalog object in the mz_introspection cluster if
+    # catalog object in the mz_catalog_server cluster if
     # `enable_unstable_dependencies` is set.
     c.sql(
         """
         ALTER SYSTEM SET enable_unstable_dependencies = on;
-        SET cluster = mz_introspection;
+        SET cluster = mz_catalog_server;
         CREATE INDEX mz_test_idx2 ON mz_internal.mz_hydration_statuses (hydrated);
         ALTER SYSTEM SET enable_unstable_dependencies = off;
         """,
@@ -4117,7 +4118,7 @@ def workflow_test_adhoc_system_indexes(
         WHERE i.name = 'mz_test_idx2'
         """
     )
-    assert output[0] == ["u2", "mz_hydration_statuses", "mz_introspection"], output
+    assert output[0] == ["u2", "mz_hydration_statuses", "mz_catalog_server"], output
     output = c.sql_query(
         "EXPLAIN SELECT * FROM mz_internal.mz_hydration_statuses WHERE hydrated"
     )
@@ -4142,8 +4143,8 @@ def workflow_test_adhoc_system_indexes(
         ORDER BY id
         """
     )
-    assert output[0] == ["u1", "mz_tables", "mz_introspection"], output
-    assert output[1] == ["u2", "mz_hydration_statuses", "mz_introspection"], output
+    assert output[0] == ["u1", "mz_tables", "mz_catalog_server"], output
+    assert output[1] == ["u2", "mz_hydration_statuses", "mz_catalog_server"], output
 
     # Make sure the new indexes can be dropped again.
     c.sql(
@@ -4166,3 +4167,102 @@ def workflow_test_adhoc_system_indexes(
         """
     )
     assert not output, output
+
+
+def workflow_test_mz_introspection_cluster_compat(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests that usages of the `mz_introspection` cluster and the
+    `auto_route_introspection_queries` variable, which both have been renamed,
+    are automatically translated to the new names.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+
+        # Setting variables through `SET <variable>`.
+        c.testdrive(
+            dedent(
+                """
+                > SHOW cluster
+                quickstart
+
+                > SET cluster = mz_introspection
+                > SHOW cluster
+                mz_catalog_server
+
+                > SHOW auto_route_catalog_queries
+                on
+
+                > SET auto_route_introspection_queries = off
+                > SHOW auto_route_catalog_queries
+                off
+
+                > RESET cluster
+                > SHOW cluster
+                quickstart
+
+                > RESET auto_route_introspection_queries
+                > SHOW auto_route_catalog_queries
+                on
+                """
+            )
+        )
+
+        # Setting variables through `ALTER ROLE`.
+        c.sql(
+            """
+            ALTER ROLE materialize SET cluster = mz_introspection;
+            ALTER ROLE materialize SET auto_route_introspection_queries = off;
+            """
+        )
+        c.testdrive(
+            dedent(
+                """
+                > SHOW cluster
+                mz_catalog_server
+                > SHOW auto_route_catalog_queries
+                off
+                """
+            )
+        )
+        c.sql(
+            """
+            ALTER ROLE materialize RESET cluster;
+            ALTER ROLE materialize RESET auto_route_introspection_queries;
+            """
+        )
+        c.testdrive(
+            dedent(
+                """
+                > SHOW cluster
+                quickstart
+                > SHOW auto_route_catalog_queries
+                on
+                """
+            )
+        )
+
+        # Setting variables through the connection string.
+        port = c.default_port("materialized")
+        url = (
+            f"postgres://materialize@localhost:{port}?options="
+            "--cluster%3Dmz_introspection%20"
+            "--auto_route_introspection_queries%3Doff"
+        )
+        with psycopg.connect(url) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SHOW cluster")
+                row = cur.fetchone()
+                assert row == ("mz_catalog_server",), row
+
+                cur.execute("SHOW auto_route_catalog_queries")
+                row = cur.fetchone()
+                assert row == ("off",), row

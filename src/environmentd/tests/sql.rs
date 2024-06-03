@@ -1379,9 +1379,9 @@ fn test_transactional_explain_timestamps() {
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18934
 async fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
-    // `mz_introspection` tests indexes, `default` tests tables.
+    // `mz_catalog_server` tests indexes, `quickstart` tests tables.
     // The bool determines whether we are testing indexes.
-    const CLUSTERS_TO_TRY: &[&str] = &["mz_introspection", "quickstart"];
+    const CLUSTERS_TO_TRY: &[&str] = &["mz_catalog_server", "quickstart"];
     const QUERIES_TO_TRY: &[&str] = &["SELECT * FROM mz_internal.mz_cluster_replica_statuses"];
 
     let now_millis = 619388520000;
@@ -2146,11 +2146,11 @@ fn test_load_generator() {
 }
 
 #[mz_ore::test]
-fn test_introspection_user_permissions() {
+fn test_support_user_permissions() {
     let server = test_util::TestHarness::default().start_blocking();
 
     let mut external_client = server.connect(postgres::NoTls).unwrap();
-    let mut introspection_client = server
+    let mut internal_client = server
         .pg_config_internal()
         .user(&SUPPORT_USER.name)
         .connect(postgres::NoTls)
@@ -2160,54 +2160,54 @@ fn test_introspection_user_permissions() {
         .batch_execute("CREATE TABLE materialize.public.t1 (a INT)")
         .unwrap();
 
-    introspection_client
-        .batch_execute("SET CLUSTER TO 'mz_introspection'")
+    internal_client
+        .batch_execute("SET CLUSTER TO 'mz_catalog_server'")
         .unwrap();
 
-    assert!(introspection_client
+    assert!(internal_client
         .query("SELECT * FROM materialize.public.t1", &[])
         .is_err());
-    assert!(introspection_client
+    assert!(internal_client
         .batch_execute("INSERT INTO materialize.public.t1 VALUES (1)")
         .is_err());
-    assert!(introspection_client
+    assert!(internal_client
         .batch_execute("CREATE TABLE t2 (a INT)")
         .is_err());
 
-    assert!(introspection_client
+    assert!(internal_client
         .query("SELECT * FROM mz_internal.mz_comments", &[])
         .is_ok());
-    assert!(introspection_client
+    assert!(internal_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
         .is_ok());
-    assert!(introspection_client
+    assert!(internal_client
         .query("SELECT * FROM pg_catalog.pg_namespace", &[])
         .is_ok());
 
-    introspection_client
+    internal_client
         .batch_execute("SET CLUSTER TO 'mz_system'")
         .unwrap();
-    assert!(introspection_client
+    assert!(internal_client
         .query("SELECT * FROM mz_internal.mz_comments", &[])
         .is_ok());
-    assert!(introspection_client
+    assert!(internal_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
         .is_ok());
-    assert!(introspection_client
+    assert!(internal_client
         .query("SELECT * FROM pg_catalog.pg_namespace", &[])
         .is_ok());
 
-    introspection_client
+    internal_client
         .batch_execute("SET CLUSTER TO 'default'")
         .unwrap();
-    assert!(introspection_client.query("SELECT * FROM t1", &[]).is_err());
-    assert!(introspection_client
+    assert!(internal_client.query("SELECT * FROM t1", &[]).is_err());
+    assert!(internal_client
         .query("SELECT * FROM mz_internal.mz_comments", &[])
         .is_ok());
-    assert!(introspection_client
+    assert!(internal_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
         .is_ok());
-    assert!(introspection_client
+    assert!(internal_client
         .query("SELECT * FROM pg_catalog.pg_namespace", &[])
         .is_ok());
 }
@@ -2862,11 +2862,11 @@ fn test_auto_run_on_introspection_feature_enabled() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let mut assert_introspection_notice = |expected| {
+    let mut assert_catalog_server_notice = |expected| {
         match (rx.try_next(), expected) {
             (Ok(Some(notice)), true) => {
                 let msg = notice.message();
-                let expected = "query was automatically run on the \"mz_introspection\" cluster";
+                let expected = "query was automatically run on the \"mz_catalog_server\" cluster";
                 assert_eq!(msg, expected);
             }
             (Err(_), false) => (),
@@ -2882,26 +2882,26 @@ fn test_auto_run_on_introspection_feature_enabled() {
         .execute("SET client_min_messages = debug", &[])
         .unwrap();
 
-    // Simple queries with no dependencies should get run on the introspection cluster
+    // Simple queries with no dependencies should get run on the catalog server cluster
     let _row = client.query_one("SELECT 1;", &[]).unwrap();
-    assert_introspection_notice(true);
+    assert_catalog_server_notice(true);
 
-    // Not "simple" queries with no dependencies shouldn't get run on the introspection cluster
+    // Not "simple" queries with no dependencies shouldn't get run on the catalog server cluster
     let _row = client
         .query_one("SELECT generate_series(1, 1);", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_catalog_server_notice(false);
 
-    // Queries that only depend on system tables, __should__ get run on the introspection cluster
+    // Queries that only depend on system tables, __should__ get run on the catalog server cluster
     let _row = client
         .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
         .unwrap();
-    assert_introspection_notice(true);
+    assert_catalog_server_notice(true);
 
     let _row = client
         .query_one("SELECT * FROM pg_attribute LIMIT 1", &[])
         .unwrap();
-    assert_introspection_notice(true);
+    assert_catalog_server_notice(true);
 
     // We add a retry here since it might take a moment to get a replica heartbeat.
     let _row = Retry::default()
@@ -2913,27 +2913,27 @@ fn test_auto_run_on_introspection_feature_enabled() {
             )
         })
         .unwrap();
-    assert_introspection_notice(true);
+    assert_catalog_server_notice(true);
 
     // Start our subscribe.
     client
         .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_functions);")
         .unwrap();
-    assert_introspection_notice(false);
+    assert_catalog_server_notice(false);
 
     // Fetch all of the rows.
     client.batch_execute("FETCH ALL c").unwrap();
-    assert_introspection_notice(true);
+    assert_catalog_server_notice(true);
 
     // End the subscribe.
     client.batch_execute("COMMIT").unwrap();
-    assert_introspection_notice(false);
+    assert_catalog_server_notice(false);
 
     // ... even more complex queries that depend on multiple system tables
     let _rows = client
         .query("SELECT mz_types.name, mz_types.id FROM mz_types JOIN mz_base_types ON mz_types.id = mz_base_types.id", &[])
         .unwrap();
-    assert_introspection_notice(true);
+    assert_catalog_server_notice(true);
 
     client
         .execute(
@@ -2941,13 +2941,13 @@ fn test_auto_run_on_introspection_feature_enabled() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(false);
+    assert_catalog_server_notice(false);
 
-    // But querying user made objects should not result in queries being run on mz_introspection.
+    // But querying user made objects should not result in queries being run on mz_catalog_server.
     let _row = client
         .query_one("SELECT * FROM user_made LIMIT 1", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_catalog_server_notice(false);
 }
 
 const INTROSPECTION_NOTICE: &str = "results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables";
@@ -2968,7 +2968,7 @@ fn test_auto_run_on_introspection_feature_disabled() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let mut assert_introspection_notice = |expected: Option<&str>| {
+    let mut assert_notice = |expected: Option<&str>| {
         match (rx.try_next(), expected) {
             (Ok(Some(notice)), Some(expected)) => {
                 let msg = notice.message();
@@ -2988,7 +2988,7 @@ fn test_auto_run_on_introspection_feature_disabled() {
         .unwrap();
     // Disable the feature, as a user would
     client
-        .execute("SET auto_route_introspection_queries = false", &[])
+        .execute("SET auto_route_catalog_queries = false", &[])
         .unwrap();
 
     // Nothing should emit the notice
@@ -2996,12 +2996,12 @@ fn test_auto_run_on_introspection_feature_disabled() {
     let _row = client
         .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
         .unwrap();
-    assert_introspection_notice(None);
+    assert_notice(None);
 
     let _row = client
         .query_one("SELECT * FROM pg_attribute LIMIT 1", &[])
         .unwrap();
-    assert_introspection_notice(None);
+    assert_notice(None);
 
     // We add a retry here since it might take a moment to get a replica heartbeat.
     let _row = Retry::default()
@@ -3013,12 +3013,12 @@ fn test_auto_run_on_introspection_feature_disabled() {
             )
         })
         .unwrap();
-    assert_introspection_notice(None);
+    assert_notice(None);
 
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
-    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
+    assert_notice(Some(INTROSPECTION_NOTICE));
 
     let _rows = client
         .query(
@@ -3026,18 +3026,18 @@ fn test_auto_run_on_introspection_feature_disabled() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
+    assert_notice(Some(INTROSPECTION_NOTICE));
 
     client
         .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_functions);")
         .unwrap();
-    assert_introspection_notice(None);
+    assert_notice(None);
 
     client.batch_execute("FETCH ALL c").unwrap();
-    assert_introspection_notice(None);
+    assert_notice(None);
 
     client.batch_execute("COMMIT").unwrap();
-    assert_introspection_notice(None);
+    assert_notice(None);
 }
 
 #[mz_ore::test]
@@ -3056,7 +3056,7 @@ fn test_auto_run_on_introspection_per_replica_relations() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let mut assert_introspection_notice = |expected: Option<&str>| {
+    let mut assert_notice = |expected: Option<&str>| {
         match (rx.try_next(), expected) {
             (Ok(Some(notice)), Some(expected)) => {
                 let msg = notice.message();
@@ -3077,17 +3077,17 @@ fn test_auto_run_on_introspection_per_replica_relations() {
 
     // Disable the feature, as a user would
     client
-        .execute("SET auto_route_introspection_queries = false", &[])
+        .execute("SET auto_route_catalog_queries = false", &[])
         .unwrap();
 
     // If a system object is a per-replica relation we do not want to automatically run
-    // it on the mz_introspection cluster
+    // it on the mz_catalog_server cluster
 
     // `mz_active_peeks` is a per-replica relation
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
-    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
+    assert_notice(Some(INTROSPECTION_NOTICE));
 
     // `mz_dataflow_operator_parents` is a VIEW that depends on per-replica relations
     let _rows = client
@@ -3096,11 +3096,11 @@ fn test_auto_run_on_introspection_per_replica_relations() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
+    assert_notice(Some(INTROSPECTION_NOTICE));
 
     // Enable the feature
     client
-        .execute("SET auto_route_introspection_queries = true", &[])
+        .execute("SET auto_route_catalog_queries = true", &[])
         .unwrap();
 
     // Even after enabling the feature we still shouldn't emit the auto-routing notice
@@ -3111,12 +3111,12 @@ fn test_auto_run_on_introspection_per_replica_relations() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
+    assert_notice(Some(INTROSPECTION_NOTICE));
 
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
-    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
+    assert_notice(Some(INTROSPECTION_NOTICE));
 }
 
 #[mz_ore::test]

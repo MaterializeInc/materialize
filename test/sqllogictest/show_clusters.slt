@@ -32,7 +32,7 @@ bar
 r1 (1), r2 (1)
 foo
 NULL
-mz_introspection
+mz_catalog_server
 r1 (2)
 mz_probe
 r1 (2)

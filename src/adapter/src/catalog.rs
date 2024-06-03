@@ -23,7 +23,7 @@ use mz_audit_log::{EventType, FullNameV1, ObjectType};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
     BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTINS, BUILTIN_PREFIXES,
-    MZ_INTROSPECTION_CLUSTER,
+    MZ_CATALOG_SERVER_CLUSTER,
 };
 use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
 use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState};
@@ -579,7 +579,7 @@ impl Catalog {
                     skip_migrations: true,
                     cluster_replica_sizes: Default::default(),
                     builtin_system_cluster_replica_size: "1".into(),
-                    builtin_introspection_cluster_replica_size: "1".into(),
+                    builtin_catalog_server_cluster_replica_size: "1".into(),
                     builtin_probe_cluster_replica_size: "1".into(),
                     builtin_support_cluster_replica_size: "1".into(),
                     system_parameter_defaults,
@@ -770,8 +770,8 @@ impl Catalog {
         self.state.resolve_builtin_cluster(cluster)
     }
 
-    pub fn get_mz_introspections_cluster_id(&self) -> &ClusterId {
-        &self.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER).id
+    pub fn get_mz_catalog_server_cluster_id(&self) -> &ClusterId {
+        &self.resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER).id
     }
 
     /// Resolves a [`Cluster`] for a TargetCluster.
@@ -781,8 +781,8 @@ impl Catalog {
         session: &Session,
     ) -> Result<&Cluster, AdapterError> {
         match target_cluster {
-            TargetCluster::Introspection => {
-                Ok(self.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER))
+            TargetCluster::CatalogServer => {
+                Ok(self.resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER))
             }
             TargetCluster::Active => self.active_cluster(session),
             TargetCluster::Transaction(cluster_id) => self

@@ -56,7 +56,7 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
             cur.execute(
                 dedent(
                     """
-                    SET CLUSTER=mz_introspection;
+                    SET CLUSTER=mz_catalog_server;
                     DECLARE c CURSOR FOR SUBSCRIBE TO (
                        SELECT status, reason
                        FROM mz_internal.mz_cluster_replica_statuses mcrs

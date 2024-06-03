@@ -124,7 +124,7 @@ Explained Query:
     - ((1, 2) x 2)
     - (3, 4)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 
@@ -1373,7 +1373,7 @@ Explained Query:
       Get::PassArrangements l0
         raw=true
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 

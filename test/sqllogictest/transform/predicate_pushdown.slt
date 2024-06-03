@@ -446,7 +446,7 @@ Used Indexes:
   - mz_catalog.mz_show_views_ind (*** full scan ***)
   - mz_catalog.mz_materialized_views_ind (*** full scan ***)
 
-Target cluster: mz_introspection
+Target cluster: mz_catalog_server
 
 EOF
 

@@ -104,7 +104,7 @@ pub enum AdapterNotice {
         role_name: String,
         member_name: String,
     },
-    AutoRunOnIntrospectionCluster,
+    AutoRunOnCatalogServerCluster,
     AlterIndexOwner {
         name: String,
     },
@@ -134,6 +134,8 @@ pub enum AdapterNotice {
     },
     Welcome(String),
     PlanInsights(String),
+    IntrospectionClusterUsage,
+    AutoRouteIntrospectionQueriesUsage,
 }
 
 impl AdapterNotice {
@@ -181,7 +183,7 @@ impl AdapterNotice {
             AdapterNotice::RbacUserDisabled => Severity::Notice,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
-            AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
+            AdapterNotice::AutoRunOnCatalogServerCluster => Severity::Debug,
             AdapterNotice::AlterIndexOwner { .. } => Severity::Warning,
             AdapterNotice::CannotRevoke { .. } => Severity::Warning,
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
@@ -197,6 +199,8 @@ impl AdapterNotice {
             AdapterNotice::VarDefaultUpdated { .. } => Severity::Notice,
             AdapterNotice::Welcome(_) => Severity::Notice,
             AdapterNotice::PlanInsights(_) => Severity::Notice,
+            AdapterNotice::IntrospectionClusterUsage => Severity::Warning,
+            AdapterNotice::AutoRouteIntrospectionQueriesUsage => Severity::Warning,
         }
     }
 
@@ -241,6 +245,8 @@ impl AdapterNotice {
             ),
             AdapterNotice::OptimizerNotice { notice: _, hint } => Some(hint.clone()),
             AdapterNotice::DroppedInUseIndex(..) => Some("To free up the resources used by the index, recreate all the above-mentioned objects.".into()),
+            AdapterNotice::IntrospectionClusterUsage => Some("Use the new name instead.".into()),
+            AdapterNotice::AutoRouteIntrospectionQueriesUsage => Some("Use the new name instead.".into()),
             _ => None
         }
     }
@@ -276,7 +282,7 @@ impl AdapterNotice {
             AdapterNotice::RbacUserDisabled => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => SqlState::WARNING,
-            AdapterNotice::AutoRunOnIntrospectionCluster => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::AutoRunOnCatalogServerCluster => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::AlterIndexOwner { .. } => SqlState::WARNING,
             AdapterNotice::CannotRevoke { .. } => SqlState::WARNING_PRIVILEGE_NOT_REVOKED,
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => SqlState::SUCCESSFUL_COMPLETION,
@@ -293,6 +299,8 @@ impl AdapterNotice {
             AdapterNotice::VarDefaultUpdated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::Welcome(_) => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
+            AdapterNotice::IntrospectionClusterUsage => SqlState::WARNING,
+            AdapterNotice::AutoRouteIntrospectionQueriesUsage => SqlState::WARNING,
         }
     }
 }
@@ -409,9 +417,9 @@ impl fmt::Display for AdapterNotice {
                 f,
                 "role \"{member_name}\" is not a member of role \"{role_name}\""
             ),
-            AdapterNotice::AutoRunOnIntrospectionCluster => write!(
+            AdapterNotice::AutoRunOnCatalogServerCluster => write!(
                 f,
-                "query was automatically run on the \"mz_introspection\" cluster"
+                "query was automatically run on the \"mz_catalog_server\" cluster"
             ),
             AdapterNotice::AlterIndexOwner { name } => {
                 write!(f, "cannot change owner of {}", name.quoted())
@@ -463,6 +471,14 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::Welcome(message) => message.fmt(f),
             AdapterNotice::PlanInsights(message) => message.fmt(f),
+            AdapterNotice::IntrospectionClusterUsage => write!(
+                f,
+                "The mz_introspection cluster has been renamed to mz_catalog_server."
+            ),
+            AdapterNotice::AutoRouteIntrospectionQueriesUsage => write!(
+                f,
+                "The auto_route_introspection_queries variable has been renamed to auto_route_catalog_queries."
+            ),
         }
     }
 }

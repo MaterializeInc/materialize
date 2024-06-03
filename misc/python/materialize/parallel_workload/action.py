@@ -231,7 +231,7 @@ class SelectAction(Action):
         result.extend(
             [
                 "in the same timedomain",
-                'is not allowed from the "mz_introspection" cluster',
+                'is not allowed from the "mz_catalog_server" cluster',
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -307,7 +307,7 @@ class SQLsmithAction(Action):
         result.extend(
             [
                 "in the same timedomain",
-                'is not allowed from the "mz_introspection" cluster',
+                'is not allowed from the "mz_catalog_server" cluster',
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -373,7 +373,7 @@ class CopyToS3Action(Action):
         result.extend(
             [
                 "in the same timedomain",
-                'is not allowed from the "mz_introspection" cluster',
+                'is not allowed from the "mz_catalog_server" cluster',
                 "copy has been terminated because underlying relation",
                 "Relation contains unimplemented arrow types",
                 "Cannot encode the following columns/types",

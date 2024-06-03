@@ -108,7 +108,7 @@ query TT rowsort
 SELECT id, name FROM mz_clusters
 ----
 s1  mz_system
-s2  mz_introspection
+s2  mz_catalog_server
 s3  mz_probe
 s4  mz_support
 u1  quickstart
@@ -124,7 +124,7 @@ query TT rowsort
 SELECT id, name FROM mz_clusters
 ----
 s1  mz_system
-s2  mz_introspection
+s2  mz_catalog_server
 s3  mz_probe
 s4  mz_support
 u1  quickstart

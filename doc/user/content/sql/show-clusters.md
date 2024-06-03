@@ -33,20 +33,19 @@ can also run [`ALTER SYSTEM SET cluster`](/sql/alter-system-set) to change the
 default value.
 {{< /note >}}
 
-### `mz_introspection` system cluster
+### `mz_catalog_server` system cluster
 
-A system cluster named `mz_introspection` will be pre-installed in every
-environment. This cluster has several indexes installed to speed up common
-introspection queries, like `SHOW` commands and queries using the system
-catalog.
+A system cluster named `mz_catalog_server` will be pre-installed in every
+environment. This cluster has several indexes installed to speed up `SHOW`
+commands and queries using the system catalog.
 
 To take advantage of these indexes, Materialize will automatically re-route
 `SHOW` commands and queries using system catalog objects to the
-`mz_introspection` system cluster. You can disable this behavior in
-your session via the `auto_route_introspection_queries`
+`mz_catalog_server` system cluster. You can disable this behavior in
+your session via the `auto_route_catalog_queries`
 [configuration parameter](/sql/show/#other-configuration-parameters).
 
-The following characteristics apply to the `mz_introspection` cluster:
+The following characteristics apply to the `mz_catalog_server` cluster:
 
   * You are **not** billed for this cluster.
   * You cannot create objects in this cluster.
@@ -95,7 +94,7 @@ The following characteristics apply to the `mz_support` cluster:
 ## Examples
 
 ```sql
-SET CLUSTER = mz_introspection;
+SET CLUSTER = mz_catalog_server;
 
 SHOW CLUSTERS;
 ```
@@ -105,7 +104,7 @@ SHOW CLUSTERS;
 --------------------- | ------------------
  default              |  r1 (25cc)
  auction_house        |  r1 (25cc)
- mz_introspection     |  r1 (50cc)
+ mz_catalog_server    |  r1 (50cc)
  mz_system            |  r1 (50cc)
  mz_probe             |  r1 (mz_probe)
  mz_support           |
