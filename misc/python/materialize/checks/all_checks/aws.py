@@ -26,7 +26,6 @@ class AwsConnection(Check):
             dedent(
                 """
                 $[version>=8000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_aws_connection = true
                 ALTER SYSTEM SET enable_connection_validation_syntax = true
 
                 > CREATE CONNECTION aws_assume_role

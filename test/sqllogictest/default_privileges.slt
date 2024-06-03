@@ -3372,22 +3372,6 @@ DROP CONNECTION c
 statement ok
 CREATE SECRET s3_api_secret_key as 'secret_key';
 
-# Disable aws connections
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_aws_connection TO false;
-----
-COMPLETE 0
-
-# aws connections is now disabled by default
-statement error db error: ERROR: CREATE CONNECTION ... TO AWS is not supported
-CREATE CONNECTION materialize.public.a TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET s3_api_secret_key) WITH (VALIDATE = false);
-
-# Enable aws connections
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_aws_connection TO true;
-----
-COMPLETE 0
-
 statement ok
 CREATE CONNECTION materialize.public.a TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET s3_api_secret_key) WITH (VALIDATE = false);
 
@@ -3402,12 +3386,6 @@ a  materialize=U/materialize
 
 statement ok
 DROP CONNECTION a
-
-# Disable aws connections
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_aws_connection TO false;
-----
-COMPLETE 0
 
 statement ok
 DROP SECRET s3_api_secret_key;

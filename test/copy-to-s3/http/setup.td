@@ -10,7 +10,6 @@
 $ set-max-tries max-tries=1
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_aws_connection = true;
 ALTER SYSTEM SET enable_copy_to_expr = true;
 ALTER SYSTEM SET max_sources = 50;
 ALTER SYSTEM SET max_result_size = '100 GB';

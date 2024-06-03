@@ -13,7 +13,6 @@
 $ set-max-tries max-tries=1
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_aws_connection = true;
 ALTER SYSTEM SET enable_copy_to_expr = true;
 
 # Prepare table data

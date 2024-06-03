@@ -3941,9 +3941,7 @@ pub fn plan_create_connection(
     } = stmt;
     let connection_options_extracted = connection::ConnectionOptionExtracted::try_from(values)?;
     let connection = connection_options_extracted.try_into_connection(scx, connection_type)?;
-    if let Connection::Aws(_) = &connection {
-        scx.require_feature_flag(&vars::ENABLE_AWS_CONNECTION)?;
-    } else if let Connection::MySql(_) = &connection {
+    if let Connection::MySql(_) = &connection {
         scx.require_feature_flag(&vars::ENABLE_MYSQL_SOURCE)?;
     }
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
