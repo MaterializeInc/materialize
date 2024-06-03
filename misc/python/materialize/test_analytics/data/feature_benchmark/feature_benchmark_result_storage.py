@@ -21,9 +21,9 @@ from materialize.test_analytics.connection.test_analytics_connection import (
 class FeatureBenchmarkResultEntry:
     scenario_name: str
     scenario_version: str
-    wallclock: float
-    messages: int
-    memory: float
+    wallclock: float | None
+    messages: int | None
+    memory: float | None
 
 
 def insert_result(
@@ -54,9 +54,9 @@ def insert_result(
                 '{framework_version}',
                 '{result_entry.scenario_name}',
                 '{result_entry.scenario_version}',
-                {result_entry.wallclock},
-                {result_entry.messages},
-                {result_entry.memory}
+                {result_entry.wallclock or 'NULL'},
+                {result_entry.messages or 'NULL'},
+                {result_entry.memory or 'NULL'}
             ;
             """
         )
