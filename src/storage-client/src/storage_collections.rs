@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -77,7 +78,7 @@ use crate::controller::{
 ///
 /// - Hands out [ReadHolds](ReadHold) that prevent a collection's since from
 /// advancing while it needs to be read at a specific time.
-#[async_trait(?Send)]
+#[async_trait]
 pub trait StorageCollections: Debug {
     type Timestamp: TimelyTimestamp;
 
@@ -91,8 +92,8 @@ pub trait StorageCollections: Debug {
     /// We also get `drop_ids`, which tells us about all collections that we
     /// might have known about before and have now been dropped.
     async fn initialize_state(
-        &mut self,
-        txn: &mut dyn StorageTxn<Self::Timestamp>,
+        &self,
+        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         init_ids: BTreeSet<GlobalId>,
         drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
@@ -109,12 +110,12 @@ pub trait StorageCollections: Debug {
     /// good and there is no possibility of the old code running concurrently
     /// with the new code.
     async fn init_txns(
-        &mut self,
+        &self,
         init_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Update storage configuration with new parameters.
-    fn update_parameters(&mut self, config_params: StorageParameters);
+    fn update_parameters(&self, config_params: StorageParameters);
 
     /// Returns the [CollectionMetadata] of the collection identified by `id`.
     fn collection_metadata(
@@ -186,8 +187,8 @@ pub trait StorageCollections: Debug {
     /// The data modified in the `StorageTxn` must be made available in all
     /// subsequent calls that require [`StorageMetadata`] as a parameter.
     async fn prepare_state(
-        &mut self,
-        txn: &mut dyn StorageTxn<Self::Timestamp>,
+        &self,
+        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
@@ -215,7 +216,7 @@ pub trait StorageCollections: Debug {
     /// the collections is a table. A None may be given if none of the
     /// collections are a table (i.e. all materialized views, sources, etc).
     async fn create_collections(
-        &mut self,
+        &self,
         storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
@@ -229,7 +230,7 @@ pub trait StorageCollections: Debug {
     /// is really only relevant because newly created subsources depend on the
     /// remap shard, and we can't just have them start at since 0.
     async fn alter_ingestion_source_desc(
-        &mut self,
+        &self,
         ingestion_id: GlobalId,
         source_desc: SourceDesc,
     ) -> Result<(), StorageError<Self::Timestamp>>;
@@ -239,7 +240,7 @@ pub trait StorageCollections: Debug {
     ///
     /// See NOTE on [StorageCollections::alter_ingestion_source_desc].
     async fn alter_ingestion_connections(
-        &mut self,
+        &self,
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
@@ -249,7 +250,7 @@ pub trait StorageCollections: Debug {
     /// Collection state is only fully dropped, however, once there are not more
     /// outstanding [ReadHolds](ReadHold) for a collection.
     fn drop_collections(
-        &mut self,
+        &self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
@@ -266,7 +267,7 @@ pub trait StorageCollections: Debug {
     /// the controller due to a restart. Once command history becomes durable we
     /// can remove this method and use the normal `drop_sources`.
     fn drop_collections_unvalidated(
-        &mut self,
+        &self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     );
@@ -284,12 +285,12 @@ pub trait StorageCollections: Debug {
     ///
     /// Identifiers not present in `policies` retain their existing read
     /// policies.
-    fn set_read_policies(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>);
+    fn set_read_policies(&self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>);
 
     /// Acquires and returns the earliest possible read holds for the specified
     /// collections.
     fn acquire_read_holds(
-        &mut self,
+        &self,
         desired_holds: Vec<GlobalId>,
     ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
 
@@ -298,7 +299,7 @@ pub trait StorageCollections: Debug {
     /// This is a legacy interface that should _not_ be used! It is only used by
     /// the compute controller.
     fn update_read_capabilities(
-        &mut self,
+        &self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
     );
 }
@@ -371,7 +372,7 @@ pub struct StorageCollectionsImpl<
     txns: TxnsWal<T>,
     /// Whether we have run `txns_init` yet (required before create_collections
     /// and the various flavors of append).
-    txns_init_run: bool,
+    txns_init_run: Arc<AtomicBool>,
 
     /// Storage configuration parameters.
     config: Arc<Mutex<StorageConfiguration>>,
@@ -513,7 +514,7 @@ where
             finalized_shards,
             collections,
             txns,
-            txns_init_run: false,
+            txns_init_run: Arc::new(AtomicBool::new(false)),
             envd_epoch,
             config,
             persist_location,
@@ -993,7 +994,7 @@ where
     }
 
     /// Remove any shards that we know are finalized
-    fn synchronize_finalized_shards(&mut self, storage_metadata: &StorageMetadata) {
+    fn synchronize_finalized_shards(&self, storage_metadata: &StorageMetadata) {
         self.finalized_shards
             .lock()
             .expect("lock poisoned")
@@ -1006,7 +1007,7 @@ where
 }
 
 // See comments on the above impl for StorageCollectionsImpl.
-#[async_trait(?Send)]
+#[async_trait]
 impl<T> StorageCollections for StorageCollectionsImpl<T>
 where
     T: TimelyTimestamp
@@ -1019,16 +1020,18 @@ where
     type Timestamp = T;
 
     async fn initialize_state(
-        &mut self,
-        txn: &mut dyn StorageTxn<T>,
+        &self,
+        txn: &mut (dyn StorageTxn<T> + Send),
         init_ids: BTreeSet<GlobalId>,
         drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
         let metadata = txn.get_collection_metadata();
+
         let processed_metadata: Result<Vec<_>, _> = metadata
             .into_iter()
             .map(|(id, shard)| ShardId::from_str(&shard).map(|shard| (id, shard)))
             .collect();
+
         let metadata = processed_metadata.map_err(|e| StorageError::Generic(anyhow::anyhow!(e)))?;
         let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
 
@@ -1074,18 +1077,22 @@ where
     /// See [crate::controller::StorageController::init_txns] and its
     /// implementation.
     async fn init_txns(
-        &mut self,
+        &self,
         _init_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        assert_eq!(self.txns_init_run, false);
+        assert_eq!(
+            self.txns_init_run.load(std::sync::atomic::Ordering::SeqCst),
+            false
+        );
 
         // We don't initialize the txns system, the `StorageController` does
         // that. All we care about is that initialization has been run.
-        self.txns_init_run = true;
+        self.txns_init_run
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
-    fn update_parameters(&mut self, config_params: StorageParameters) {
+    fn update_parameters(&self, config_params: StorageParameters) {
         // We serialize the dyncfg updates in StorageParameters, but configure
         // persist separately.
         config_params.dyncfg_updates.apply(self.persist.cfg());
@@ -1247,8 +1254,8 @@ where
     }
 
     async fn prepare_state(
-        &mut self,
-        txn: &mut dyn StorageTxn<T>,
+        &self,
+        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
@@ -1287,12 +1294,13 @@ where
     // a method/move individual parts to their own methods.
     #[instrument(level = "debug")]
     async fn create_collections(
-        &mut self,
+        &self,
         storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        assert!(self.txns_init_run);
+        assert!(self.txns_init_run.load(std::sync::atomic::Ordering::SeqCst));
+
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
         // 2. create an existing identifier with a new description.
@@ -1640,7 +1648,7 @@ where
     }
 
     async fn alter_ingestion_source_desc(
-        &mut self,
+        &self,
         ingestion_id: GlobalId,
         source_desc: SourceDesc,
     ) -> Result<(), StorageError<Self::Timestamp>> {
@@ -1664,7 +1672,7 @@ where
     }
 
     async fn alter_ingestion_connections(
-        &mut self,
+        &self,
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         let mut self_collections = self.collections.lock().expect("lock poisoned");
@@ -1699,7 +1707,7 @@ where
     }
 
     fn drop_collections(
-        &mut self,
+        &self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
@@ -1712,7 +1720,7 @@ where
     }
 
     fn drop_collections_unvalidated(
-        &mut self,
+        &self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) {
@@ -1788,7 +1796,7 @@ where
         self.synchronize_finalized_shards(storage_metadata);
     }
 
-    fn set_read_policies(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
+    fn set_read_policies(&self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
         let mut collections = self.collections.lock().expect("lock poisoned");
 
         let user_capabilities = collections
@@ -1817,7 +1825,7 @@ where
     }
 
     fn acquire_read_holds(
-        &mut self,
+        &self,
         desired_holds: Vec<GlobalId>,
     ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError> {
         let mut collections = self.collections.lock().expect("lock poisoned");
@@ -1867,7 +1875,7 @@ where
     }
 
     fn update_read_capabilities(
-        &mut self,
+        &self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
     ) {
         let mut collections = self.collections.lock().expect("lock poisoned");

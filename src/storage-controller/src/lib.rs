@@ -259,7 +259,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     recorded_replica_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<T>>,
 
     /// Handle to a [StorageCollections].
-    storage_collections: Box<dyn StorageCollections<Timestamp = T>>,
+    storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
 }
 
 #[async_trait(?Send)]
@@ -2277,7 +2277,7 @@ where
 
     async fn initialize_state(
         &mut self,
-        txn: &mut dyn StorageTxn<T>,
+        txn: &mut (dyn StorageTxn<T> + Send),
         init_ids: BTreeSet<GlobalId>,
         drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
@@ -2288,7 +2288,7 @@ where
 
     async fn prepare_state(
         &mut self,
-        txn: &mut dyn StorageTxn<T>,
+        txn: &mut (dyn StorageTxn<T> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
@@ -2450,7 +2450,7 @@ where
         txn_wal_tables: TxnWalTablesImpl,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
-        storage_collections: Box<dyn StorageCollections<Timestamp = T> + Send>,
+        storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 

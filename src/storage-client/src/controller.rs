@@ -219,7 +219,7 @@ impl StorageMetadata {
 ///
 /// Data written to the implementor of this trait should make a consistent view
 /// of the data available through [`StorageMetadata`].
-#[async_trait(?Send)]
+#[async_trait]
 pub trait StorageTxn<T> {
     /// Retrieve all of the visible storage metadata.
     ///
@@ -701,7 +701,7 @@ pub trait StorageController: Debug {
     /// On boot, seed the controller's metadata/state.
     async fn initialize_state(
         &mut self,
-        txn: &mut dyn StorageTxn<Self::Timestamp>,
+        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         init_ids: BTreeSet<GlobalId>,
         drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
@@ -713,7 +713,7 @@ pub trait StorageController: Debug {
     /// subsequent calls that require [`StorageMetadata`] as a parameter.
     async fn prepare_state(
         &mut self,
-        txn: &mut dyn StorageTxn<Self::Timestamp>,
+        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
