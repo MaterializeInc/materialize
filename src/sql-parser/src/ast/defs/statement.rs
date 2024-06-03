@@ -2281,7 +2281,7 @@ impl<T: AstInfo> AstDisplay for AlterSinkStatement<T> {
 
         match &self.action {
             AlterSinkAction::ChangeRelation(from) => {
-                f.write_str("FROM ");
+                f.write_str("SET FROM ");
                 f.write_node(from);
             }
             AlterSinkAction::SetOptions(options) => {

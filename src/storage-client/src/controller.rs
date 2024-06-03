@@ -428,7 +428,7 @@ pub trait StorageController: Debug {
         exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Create the sinks described by the `ExportDescription`.
+    /// Alter the sink identified by the given id to match the provided `ExportDescription`.
     async fn alter_export(
         &mut self,
         id: GlobalId,

@@ -110,8 +110,7 @@ use crate::session::{
 };
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{
-    guard_write_critical_section, PeekResponseUnary, ReadHolds, TimelineContext,
-    TimestampExplanation,
+    guard_write_critical_section, PeekResponseUnary, TimelineContext, TimestampExplanation,
 };
 
 mod create_index;
@@ -3157,7 +3156,7 @@ impl Coordinator {
             BTreeSet::from_iter([plan.id]),
             read_ts,
             WatchSetResponse::AlterSinkReady(AlterSinkReadyContext {
-                ctx,
+                ctx: Some(ctx),
                 otel_ctx,
                 plan,
                 plan_validity,
@@ -3168,21 +3167,24 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub async fn sequence_alter_sink_finish(
-        &mut self,
-        session: &mut Session,
-        plan: plan::AlterSinkPlan,
-        resolved_ids: ResolvedIds,
-        read_hold: ReadHolds<Timestamp>,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    pub async fn sequence_alter_sink_finish(&mut self, mut ctx: AlterSinkReadyContext) {
+        ctx.otel_ctx.attach_as_parent();
+        match ctx.plan_validity.check(self.catalog()) {
+            Ok(()) => {}
+            Err(err) => {
+                ctx.retire(Err(err));
+                return;
+            }
+        }
+
         let plan::AlterSinkPlan {
             id,
             sink,
             with_snapshot,
             in_cluster,
-        } = plan;
+        } = ctx.plan.clone();
 
-        // Assert that we can recover the updates that happened the timestamps of the write
+        // Assert that we can recover the updates that happened at the timestamps of the write
         // frontier. This must be true in this call.
         let write_frontier = &self
             .controller
@@ -3190,7 +3192,7 @@ impl Coordinator {
             .export(id)
             .expect("sink known to exist")
             .write_frontier;
-        let as_of = read_hold.least_valid_read();
+        let as_of = ctx.read_hold.least_valid_read();
         assert!(write_frontier.iter().all(|t| as_of.less_than(t)));
 
         let catalog_sink = Sink {
@@ -3200,7 +3202,7 @@ impl Coordinator {
             envelope: sink.envelope,
             version: sink.version,
             with_snapshot,
-            resolved_ids,
+            resolved_ids: ctx.resolved_ids.clone(),
             cluster_id: in_cluster,
         };
 
@@ -3210,7 +3212,16 @@ impl Coordinator {
             to_item: CatalogItem::Sink(catalog_sink),
         }];
 
-        self.catalog_transact(Some(session), ops).await?;
+        match self
+            .catalog_transact(Some(ctx.ctx().session_mut()), ops)
+            .await
+        {
+            Ok(()) => {}
+            Err(err) => {
+                ctx.retire(Err(err));
+                return;
+            }
+        }
 
         let status_id = Some(
             self.catalog()
@@ -3245,12 +3256,10 @@ impl Coordinator {
                     instance_id: in_cluster,
                 },
             )
-            .await?;
+            .await
+            .unwrap_or_terminate("cannot fail to alter source desc");
 
-        // The storage controller will have its own read hold by now so we can safely drop ours.
-        drop(read_hold);
-
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Sink))
+        ctx.retire(Ok(ExecuteResponse::AlteredObject(ObjectType::Sink)));
     }
 
     #[instrument]

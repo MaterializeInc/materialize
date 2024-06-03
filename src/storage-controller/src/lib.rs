@@ -1230,7 +1230,10 @@ where
         let from_storage_metadata = self.storage_collections.collection_metadata(from_id)?;
 
         // Check whether the sink's write frontier is beyond the read hold we got
-        let cur_export = self.exports.get_mut(&id).expect("export does not exist");
+        let cur_export = self
+            .exports
+            .get_mut(&id)
+            .ok_or_else(|| StorageError::IdentifierMissing(id))?;
         let input_readable = cur_export
             .write_frontier
             .iter()

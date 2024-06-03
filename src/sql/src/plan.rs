@@ -1026,7 +1026,7 @@ pub struct AlterSourcePlan {
     pub action: AlterSourceAction,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AlterSinkPlan {
     pub id: GlobalId,
     pub sink: Sink,

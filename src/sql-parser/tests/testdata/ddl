@@ -1478,9 +1478,9 @@ ALTER SINK name RESET (SIZE)
                        ^
 
 parse-statement
-ALTER SINK name FROM foobar
+ALTER SINK name SET FROM foobar
 ----
-ALTER SINK name FROM foobar
+ALTER SINK name SET FROM foobar
 =>
 AlterSink(AlterSinkStatement { sink_name: UnresolvedItemName([Ident("name")]), if_exists: false, action: ChangeRelation(Name(UnresolvedItemName([Ident("foobar")]))) })
 

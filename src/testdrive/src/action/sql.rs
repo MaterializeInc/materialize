@@ -67,6 +67,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &State) -> Result<ControlFlow, 
         | CreateRole(_)
         | AlterObjectRename(_)
         | AlterIndex(_)
+        | AlterSink(_)
         | Discard(_)
         | DropObjects(_)
         | SetVariable(_) => false,
@@ -311,7 +312,7 @@ pub async fn run_fail_sql(
     cmd: FailSqlCommand,
     state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    use Statement::{Commit, Fetch, Rollback};
+    use Statement::{AlterSink, Commit, Fetch, Rollback};
 
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
@@ -349,6 +350,7 @@ pub async fn run_fail_sql(
         Some(Commit(_)) | Some(Rollback(_)) => false,
         // FETCH should not be retried because it consumes data on each response.
         Some(Fetch(_)) => false,
+        Some(AlterSink(_)) => false,
         Some(_) => true,
     };
 

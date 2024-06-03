@@ -3381,10 +3381,31 @@ pub(crate) enum WatchSetResponse {
 
 #[derive(Debug)]
 pub(crate) struct AlterSinkReadyContext {
-    ctx: ExecuteContext,
+    ctx: Option<ExecuteContext>,
     otel_ctx: OpenTelemetryContext,
     plan: AlterSinkPlan,
     plan_validity: PlanValidity,
     resolved_ids: ResolvedIds,
     read_hold: ReadHolds<Timestamp>,
+}
+
+impl AlterSinkReadyContext {
+    fn ctx(&mut self) -> &mut ExecuteContext {
+        self.ctx.as_mut().expect("only cleared on drop")
+    }
+
+    fn retire(mut self, result: Result<ExecuteResponse, AdapterError>) {
+        self.ctx
+            .take()
+            .expect("only cleared on drop")
+            .retire(result);
+    }
+}
+
+impl Drop for AlterSinkReadyContext {
+    fn drop(&mut self) {
+        if let Some(ctx) = self.ctx.take() {
+            ctx.retire(Err(AdapterError::Canceled));
+        }
+    }
 }

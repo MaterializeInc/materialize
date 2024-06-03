@@ -450,21 +450,8 @@ impl Coordinator {
                         WatchSetResponse::StatementDependenciesReady(id, ev) => {
                             self.record_statement_lifecycle_event(&id, &ev, now);
                         }
-                        WatchSetResponse::AlterSinkReady(mut c) => {
-                            c.otel_ctx.attach_as_parent();
-                            let result = match c.plan_validity.check(self.catalog()) {
-                                Ok(()) => {
-                                    self.sequence_alter_sink_finish(
-                                        c.ctx.session_mut(),
-                                        c.plan,
-                                        c.resolved_ids,
-                                        c.read_hold,
-                                    )
-                                    .await
-                                }
-                                Err(e) => Err(e),
-                            };
-                            c.ctx.retire(result);
+                        WatchSetResponse::AlterSinkReady(ctx) => {
+                            self.sequence_alter_sink_finish(ctx).await;
                         }
                     }
                 }
