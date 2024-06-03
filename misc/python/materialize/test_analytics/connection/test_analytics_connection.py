@@ -13,45 +13,37 @@ from textwrap import dedent
 import pg8000
 from pg8000 import Connection, Cursor
 
-from materialize.test_analytics.config.test_analytics_db_config import (
-    DATABASE,
-    MATERIALIZE_PROD_SANDBOX_APP_PASSWORD,
-    MATERIALIZE_PROD_SANDBOX_HOSTNAME,
-    MATERIALIZE_PROD_SANDBOX_USERNAME,
-    SEARCH_PATH,
-)
+from materialize.test_analytics.config.mz_db_config import MzDbConfig
 
 
-def create_connection(auto_commit: bool = True) -> Connection:
+def create_connection(config: MzDbConfig) -> Connection:
     connection = pg8000.connect(
-        host=MATERIALIZE_PROD_SANDBOX_HOSTNAME,
-        user=MATERIALIZE_PROD_SANDBOX_USERNAME,
-        password=MATERIALIZE_PROD_SANDBOX_APP_PASSWORD,
-        port=6875,
+        host=config.hostname,
+        user=config.username,
+        password=config.app_password,
+        port=config.port,
         ssl_context=ssl.SSLContext(),
     )
 
-    if auto_commit:
+    if config.auto_commit:
         connection.autocommit = True
 
     return connection
 
 
-def create_cursor(connection: Connection) -> Cursor:
+def create_cursor(config: MzDbConfig, connection: Connection | None) -> Cursor:
+    if connection is None:
+        connection = create_connection(config)
+
     cursor = connection.cursor()
-    connection.autocommit = True
-    cursor.execute(f"SET database = {DATABASE}")
-    cursor.execute(f"SET search_path = {SEARCH_PATH}")
+    cursor.execute(f"SET database = {config.database}")
+    cursor.execute(f"SET search_path = {config.search_path}")
     return cursor
 
 
 def execute_updates(
-    sql_statements: list[str], cursor: Cursor | None = None, verbose: bool = False
+    sql_statements: list[str], cursor: Cursor, verbose: bool = False
 ) -> None:
-    if cursor is None:
-        connection = create_connection()
-        cursor = create_cursor(connection)
-
     for sql in sql_statements:
         sql = dedent(sql)
         if verbose:

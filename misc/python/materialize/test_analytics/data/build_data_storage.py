@@ -8,19 +8,16 @@
 # by the Apache License, Version 2.0.
 
 
+from pg8000 import Cursor
+
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
 from materialize.test_analytics.connection.test_analytics_connection import (
-    create_connection,
-    create_cursor,
     execute_updates,
 )
 
 
-def insert_build(verbose: bool = False) -> None:
-    connection = create_connection()
-    cursor = create_cursor(connection)
-
+def insert_build(cursor: Cursor, verbose: bool = False) -> None:
     pipeline = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_PIPELINE_SLUG)
     build_number = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_NUMBER)
     build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
@@ -64,10 +61,9 @@ def insert_build(verbose: bool = False) -> None:
     execute_updates(sql_statements, cursor, verbose)
 
 
-def insert_build_step(was_successful: bool, verbose: bool = False) -> None:
-    connection = create_connection()
-    cursor = create_cursor(connection)
-
+def insert_build_step(
+    cursor: Cursor, was_successful: bool, verbose: bool = False
+) -> None:
     pipeline = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_PIPELINE_SLUG)
     build_number = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_NUMBER)
     build_url = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_URL)
