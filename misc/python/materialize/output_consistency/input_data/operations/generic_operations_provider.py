@@ -14,9 +14,6 @@ from materialize.output_consistency.input_data.params.any_operation_param import
 from materialize.output_consistency.input_data.params.boolean_operation_param import (
     BooleanOperationParam,
 )
-from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
-    all_data_types_enum_constant_operation_param,
-)
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
 )
@@ -25,6 +22,8 @@ from materialize.output_consistency.input_data.return_specs.dynamic_return_spec 
 )
 from materialize.output_consistency.input_data.return_specs.other_return_spec import (
     OtherReturnTypeSpec,
+from materialize.output_consistency.input_data.special.data_type_enum_param import (
+    TypeEnumConstantOperationParam,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -93,7 +92,7 @@ GENERIC_OPERATION_TYPES.append(
         "CAST ($ AS $)",
         [
             AnyOperationParam(),
-            all_data_types_enum_constant_operation_param(must_be_pg_compatible=True),
+            TypeEnumConstantOperationParam(must_be_pg_compatible=True),
         ],
         OtherReturnTypeSpec(),
         tags={TAG_CASTING},

@@ -12,9 +12,6 @@ from materialize.output_consistency.enum.enum_operation_param import (
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
-from materialize.output_consistency.input_data.types.all_types_provider import (
-    DATA_TYPES,
-)
 
 TAG_DATA_TYPE_ENUM = "data_type"
 
@@ -121,19 +118,3 @@ COLLECTION_INDEX_PARAM = EnumConstantOperationParam(
 COLLECTION_INDEX_PARAM_OPT = EnumConstantOperationParam(
     ["0", "1", "2", "8"], add_quotes=False, add_invalid_value=False, optional=True
 )
-
-
-def all_data_types_enum_constant_operation_param(
-    must_be_pg_compatible: bool,
-) -> EnumConstantOperationParam:
-    all_type_names = [
-        data_type.type_name
-        for data_type in DATA_TYPES
-        if data_type.is_pg_compatible or not must_be_pg_compatible
-    ]
-    return EnumConstantOperationParam(
-        all_type_names,
-        add_quotes=False,
-        add_invalid_value=False,
-        tags={TAG_DATA_TYPE_ENUM},
-    )
