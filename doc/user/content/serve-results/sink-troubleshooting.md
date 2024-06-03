@@ -6,7 +6,7 @@ menu:
     parent: sink
     name: "Troubleshooting sinks"
     identifier: sink-troubleshooting
-    weight: 30
+    weight: 50
 
 ---
 

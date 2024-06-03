@@ -84,9 +84,12 @@ comment_on ::=
   ) object_name 'IS' ( string_literal | 'NULL' )
 commit ::=
   'COMMIT'
-copy_to ::=
+copy_to_stdout ::=
   'COPY' '(' query ')' 'TO' 'STDOUT'
   ( 'WITH'? '(' field val ( ',' field val )* ')' )?
+copy_to_s3 ::=
+  'COPY' ( query | object_name ) 'TO' s3_uri
+  '(' 'WITH' 'AWS CONNECTION' connection_name ',' 'FORMAT' ( csv | parquet ) ( ',' field val )* ')'
 copy_from ::=
   'COPY' table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
   ( 'WITH'? '(' field val ( ',' field val )* ')' )?
