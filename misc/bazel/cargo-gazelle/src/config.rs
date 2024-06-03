@@ -129,6 +129,15 @@ pub struct LibraryConfig {
     /// By default Bazel enables all features of a crate. If this field is set we'll override that
     /// behavior and only set the specified features.
     features_override: Option<Vec<String>>,
+    /// Extra dependencies to include.
+    #[serde(default)]
+    extra_deps: Vec<String>,
+    /// Extra proc macro dependencies to include.
+    #[serde(default)]
+    extra_proc_macro_deps: Vec<String>,
+    /// Should we skip generating the `rust_doc_test` target.
+    #[serde(default)]
+    skip_doc_test: bool,
 }
 
 impl LibraryConfig {
@@ -138,6 +147,18 @@ impl LibraryConfig {
 
     pub fn features_override(&self) -> Option<&Vec<String>> {
         self.features_override.as_ref()
+    }
+
+    pub fn extra_deps(&self) -> &[String] {
+        &self.extra_deps
+    }
+
+    pub fn extra_proc_macro_deps(&self) -> &[String] {
+        &self.extra_proc_macro_deps
+    }
+
+    pub fn skip_doc_test(&self) -> bool {
+        self.skip_doc_test
     }
 }
 
@@ -151,7 +172,7 @@ pub struct BuildConfig {
 
     /// Environment variables to set for the build script.
     #[serde(default)]
-    build_script_env: Vec<String>,
+    build_script_env: BTreeMap<String, String>,
 }
 
 impl BuildConfig {
@@ -159,7 +180,7 @@ impl BuildConfig {
         &self.common
     }
 
-    pub fn build_script_env(&self) -> &[String] {
+    pub fn build_script_env(&self) -> &BTreeMap<String, String> {
         &self.build_script_env
     }
 }
@@ -192,10 +213,10 @@ impl TestConfig {
 pub struct CommonConfig {
     /// Paths that will be added to the `compile_data` field of the generated Bazel target.
     #[serde(default)]
-    compile_data: Vec<camino::Utf8PathBuf>,
+    compile_data: Vec<String>,
     /// Paths that will be added to the `data` field of the generated Bazel target.
     #[serde(default)]
-    data: Vec<camino::Utf8PathBuf>,
+    data: Vec<String>,
     /// Extra flags that should be passed to the Rust compiler.
     #[serde(default)]
     rustc_flags: Vec<String>,
@@ -205,12 +226,32 @@ pub struct CommonConfig {
 }
 
 impl CommonConfig {
-    pub fn compile_data(&self) -> &[camino::Utf8PathBuf] {
-        &self.compile_data
+    /// Returns a tuple of `(<non-glob paths>, <glob paths, if any>)`.
+    pub fn compile_data(&self) -> (Vec<&String>, Option<Vec<&String>>) {
+        let paths: Vec<_> = self
+            .compile_data
+            .iter()
+            .filter(|s| !s.contains('*'))
+            .collect();
+        let globs: Vec<_> = self
+            .compile_data
+            .iter()
+            .filter(|s| s.contains('*'))
+            .collect();
+
+        let globs = if globs.is_empty() { None } else { Some(globs) };
+
+        (paths, globs)
     }
 
-    pub fn data(&self) -> &[camino::Utf8PathBuf] {
-        &self.data
+    /// Returns a tuple of `(<non-glob paths>, <glob paths, if any>)`.
+    pub fn data(&self) -> (Vec<&String>, Option<Vec<&String>>) {
+        let paths: Vec<_> = self.data.iter().filter(|s| !s.contains('*')).collect();
+        let globs: Vec<_> = self.data.iter().filter(|s| s.contains('*')).collect();
+
+        let globs = if globs.is_empty() { None } else { Some(globs) };
+
+        (paths, globs)
     }
 
     pub fn rustc_flags(&self) -> &[String] {

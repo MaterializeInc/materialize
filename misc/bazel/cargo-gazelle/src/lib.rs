@@ -228,6 +228,11 @@ impl<T> List<T> {
     pub fn extend<E: Into<T>, I: IntoIterator<Item = E>>(&mut self, vals: I) {
         self.items.extend(vals.into_iter().map(Into::into))
     }
+
+    /// Returns an iterator over all of the `items`.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.items.iter()
+    }
 }
 
 impl<A> FromIterator<A> for List<A> {
@@ -258,8 +263,10 @@ impl<T: ToBazelDefinition> ToBazelDefinition for List<T> {
         }
 
         for o in &self.objects {
-            write!(w, " + ")?;
-            o.format(&mut w)?;
+            let def = o.to_bazel_definition();
+            if !def.is_empty() {
+                write!(w, " + {def}")?;
+            }
         }
 
         Ok(())
@@ -372,6 +379,36 @@ impl ToBazelDefinition for FileGroup {
             self.files.format(&mut w)?;
         }
         writeln!(w, ")")?;
+
+        Ok(())
+    }
+}
+
+/// A Bazel [`glob`](https://bazel.build/reference/be/functions#glob)
+///
+/// TODO(parkmcar): Support `excludes`.
+#[derive(Debug)]
+pub struct Glob {
+    includes: List<QuotedString>,
+}
+
+impl Glob {
+    pub fn new<E, I>(globs: I) -> Glob
+    where
+        E: Into<QuotedString>,
+        I: IntoIterator<Item = E>,
+    {
+        Glob {
+            includes: List::new(globs),
+        }
+    }
+}
+
+impl ToBazelDefinition for Glob {
+    fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
+        write!(writer, "glob(")?;
+        self.includes.format(writer)?;
+        write!(writer, ")")?;
 
         Ok(())
     }

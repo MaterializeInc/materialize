@@ -22,7 +22,7 @@ use std::str::FromStr;
 use crate::config::{CrateConfig, GlobalConfig};
 use crate::context::CrateContext;
 use crate::rules::Rule;
-use crate::{Dict, Field, FileGroup, List, QuotedString};
+use crate::{Dict, Field, FileGroup, Glob, List, QuotedString};
 
 use super::{AutoIndentingWriter, ToBazelDefinition};
 
@@ -49,7 +49,7 @@ pub struct RustLibrary {
     rustc_flags: Field<List<QuotedString>>,
     rustc_env: Field<Dict<QuotedString, QuotedString>>,
     unit_test: RustTest,
-    doc_tests: RustDocTest,
+    doc_tests: Option<RustDocTest>,
 }
 
 impl RustTarget for RustLibrary {
@@ -93,7 +93,7 @@ impl RustLibrary {
             .map(QuotedString::new)
             .collect::<List<_>>()
             .concat_other(AllCrateDeps::default().normal());
-        let proc_macro_deps = all_deps
+        let mut proc_macro_deps = all_deps
             .iter(DependencyKind::Normal, true)
             .map(QuotedString::new)
             .collect::<List<_>>()
@@ -107,12 +107,25 @@ impl RustLibrary {
 
         // For every library we also generate the tests targets.
         let unit_test = RustTest::library(config, metadata, crate_config)?;
-        let doc_tests = RustDocTest::generate(config, metadata)?;
+        let doc_tests = if crate_config.lib().skip_doc_test() {
+            None
+        } else {
+            let doc_test = RustDocTest::generate(config, metadata)?;
+            Some(doc_test)
+        };
 
         // Extend with any extra config specified in the Cargo.toml.
         let lib_common = crate_config.lib().common();
-        let data = List::new(lib_common.data());
-        let compile_data = List::new(lib_common.compile_data());
+
+        deps.extend(crate_config.lib().extra_deps());
+        proc_macro_deps.extend(crate_config.lib().extra_proc_macro_deps());
+
+        let (paths, globs) = lib_common.data();
+        let data = List::new(paths).concat_other(globs.map(Glob::new));
+
+        let (paths, globs) = lib_common.compile_data();
+        let compile_data = List::new(paths).concat_other(globs.map(Glob::new));
+
         let rustc_flags = List::new(lib_common.rustc_flags());
         let rustc_env = Dict::new(lib_common.rustc_env());
 
@@ -206,23 +219,23 @@ impl RustTest {
         let name = QuotedString::new(format!("{crate_name}_{}_tests", name));
 
         let all_deps = WorkspaceDependencies::new(config, metadata);
-        let mut deps = all_deps
-            .iter(DependencyKind::Development, false)
-            .map(QuotedString::new)
-            .collect::<List<_>>()
-            .concat_other(AllCrateDeps::default().normal().normal_dev());
-        let mut proc_macro_deps = all_deps
-            .iter(DependencyKind::Development, true)
-            .map(QuotedString::new)
-            .collect::<List<_>>()
-            .concat_other(AllCrateDeps::default().proc_macro().proc_macro_dev());
+        let mut deps: List<QuotedString> =
+            List::new(all_deps.iter(DependencyKind::Development, false))
+                .concat_other(AllCrateDeps::default().normal().normal_dev());
+        let mut proc_macro_deps: List<QuotedString> =
+            List::new(all_deps.iter(DependencyKind::Development, true))
+                .concat_other(AllCrateDeps::default().proc_macro().proc_macro_dev());
 
         if matches!(kind, RustTestKind::Integration(_)) {
-            let dep = QuotedString::new(format!(":{crate_name}"));
+            let dep = format!(":{crate_name}");
             if metadata.is_proc_macro() {
-                proc_macro_deps.push_front(dep);
+                if !proc_macro_deps.iter().any(|d| d.unquoted().ends_with(&dep)) {
+                    proc_macro_deps.push_front(dep);
+                }
             } else {
-                deps.push_front(dep);
+                if !deps.iter().any(|d| d.unquoted().ends_with(&dep)) {
+                    deps.push_front(dep);
+                }
             }
         }
 
@@ -233,10 +246,16 @@ impl RustTest {
             .proc_macro_dev();
 
         // Extend with any extra config specified in the Cargo.toml.
-        let data = List::new(test_config.common().data());
-        let compile_data = List::new(test_config.common().compile_data());
-        let rustc_flags = List::new(test_config.common().rustc_flags());
-        let rustc_env = Dict::new(test_config.common().rustc_env());
+        let test_common = test_config.common();
+
+        let (paths, globs) = test_common.data();
+        let data = List::new(paths).concat_other(globs.map(Glob::new));
+
+        let (paths, globs) = test_common.compile_data();
+        let compile_data = List::new(paths).concat_other(globs.map(Glob::new));
+
+        let rustc_flags = List::new(test_common.rustc_flags());
+        let rustc_env = Dict::new(test_common.rustc_env());
 
         // Use the size provided from the config, if one was provided.
         let size = test_config.size().copied().unwrap_or(size);
@@ -463,7 +482,7 @@ pub struct CargoBuildScript {
     pub script_src: Field<List<QuotedString>>,
     pub deps: Field<List<QuotedString>>,
     pub proc_macro_deps: Field<List<QuotedString>>,
-    pub build_script_env: Field<List<QuotedString>>,
+    pub build_script_env: Field<Dict<QuotedString, QuotedString>>,
     pub data: Field<List<QuotedString>>,
     pub compile_data: Field<List<QuotedString>>,
     pub rustc_flags: Field<List<QuotedString>>,
@@ -525,11 +544,35 @@ impl CargoBuildScript {
         let mut data: List<QuotedString> = List::empty();
 
         // Generate a filegroup for any files this build script depends on.
-        let protos = context
+        let mut protos = context
             .build_script
             .as_ref()
-            .map(|b| b.generated_protos.as_slice())
+            .map(|b| b.generated_protos.clone())
             .unwrap_or_default();
+
+        // Make sure to add transitive dependencies.
+        let crate_filename = crate_root_path
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("crate is at the root of the filesystem?"))?;
+        let proto_dependencies = context.build_script.as_ref().map(|b| &b.proto_dependencies);
+        if let Some(deps) = proto_dependencies {
+            let transitive_deps: BTreeSet<_> = deps
+                .iter()
+                // Google related dependencies are included via "well known types".
+                .filter(|p| !p.starts_with("google"))
+                // Imports from within the same crate are already included.
+                .filter(|p| !p.starts_with(crate_filename))
+                // This assume the root of the protobuf path is a crate, which might not be true?
+                .map(|p| p.components().next().unwrap())
+                // TODO(parkmcar): This is a bit hacky, we need to consider where
+                // we are relative to the workspace root.
+                .map(|name| format!("//src/{name}:{PROTO_FILEGROUP_NAME}"))
+                // Collect into a `BTreeSet` to de-dupe.
+                .collect();
+
+            protos.extend(transitive_deps);
+        }
+
         if !protos.is_empty() {
             let proto_filegroup = FileGroup::new(PROTO_FILEGROUP_NAME, protos);
             extras.push(Box::new(proto_filegroup));
@@ -538,37 +581,19 @@ impl CargoBuildScript {
             data.push_back(format!(":{PROTO_FILEGROUP_NAME}"));
         }
 
-        // Add any protobuf dependencies to the data group.
-        let crate_filename = crate_root_path
-            .file_name()
-            .ok_or_else(|| anyhow::anyhow!("crate is at the root of the filesystem?"))?;
-        let proto_dependencies = context.build_script.as_ref().map(|b| &b.proto_dependencies);
-        if let Some(deps) = proto_dependencies {
-            let deps: BTreeSet<_> = deps
-                .iter()
-                // Google related dependencies are included via "well known types".
-                .filter(|p| !p.starts_with("google"))
-                // Imports from within the same crate are already included.
-                .filter(|p| !p.starts_with(crate_filename))
-                // This assume the root of the protobuf path is a crate, which might not be true?
-                .map(|p| p.components().next().unwrap())
-                .collect();
-
-            // TODO(parkmcar): This is a bit hacky, we need to consider where
-            // we are relative to the workspace root.
-            for dep in deps {
-                data.push_back(format!("//src/{dep}:{PROTO_FILEGROUP_NAME}"));
-            }
-        }
-
         // Check for any metadata specified in the Cargo.toml.
         let build_common = crate_config.build().common();
-        data.extend(build_common.data());
 
-        let compile_data = List::new(build_common.compile_data());
+        let (paths, globs) = build_common.data();
+        data.extend(paths);
+        let data = data.concat_other(globs.map(Glob::new));
+
+        let (paths, globs) = build_common.compile_data();
+        let compile_data = List::new(paths).concat_other(globs.map(Glob::new));
+
         let rustc_flags = List::new(build_common.rustc_flags());
         let rustc_env = Dict::new(build_common.rustc_env());
-        let build_script_env = List::new(crate_config.build().build_script_env());
+        let build_script_env = Dict::new(crate_config.build().build_script_env());
 
         Ok(Some(CargoBuildScript {
             name: Field::new("name", name),
