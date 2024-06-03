@@ -80,12 +80,12 @@ def c_repositories():
         ],
     )
 
-    PROTOC_VERSION = "3.25.2"
-    PROTOC_SHA256 = "3c83e4301b968d0b4f29a0c29c0b3cde1da81d790ffd344b111c523ba1954392"
+    PROTOC_VERSION = "26.1"
+    PROTOC_INTEGRITY = "sha256-T8X/Gywzn7hs06JfC1MRR4qwgeZa0ljGeJNZzYTUIfg="
     maybe(
         http_archive,
         name = "protobuf",
-        sha256 = PROTOC_SHA256,
+        integrity = PROTOC_INTEGRITY,
         strip_prefix = "protobuf-{}".format(PROTOC_VERSION),
         urls = [
             "https://github.com/protocolbuffers/protobuf/archive/v{}.tar.gz".format(PROTOC_VERSION),
