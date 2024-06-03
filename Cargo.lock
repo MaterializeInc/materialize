@@ -1071,12 +1071,9 @@ dependencies = [
 
 [[package]]
 name = "built"
-version = "0.5.1"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f346b6890a0dfa7266974910e7df2d5088120dd54721b9b0e5aae1ae5e05715"
-dependencies = [
- "cargo-lock",
-]
+checksum = "c6a6c0b39c38fd754ac338b00a88066436389c0f029da5d37d1e01091d9b7c17"
 
 [[package]]
 name = "bumpalo"
@@ -1148,18 +1145,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88ad0e1e3e88dd237a156ab9f571021b8a158caa0ae44b1968a241efb5144c1e"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "cargo-lock"
-version = "7.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c408da54db4c50d4693f7e649c299bc9de9c23ead86249e5368830bb32a734b"
-dependencies = [
- "semver",
- "serde",
- "toml",
- "url",
 ]
 
 [[package]]
@@ -3254,7 +3239,7 @@ dependencies = [
 [[package]]
 name = "launchdarkly-server-sdk"
 version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/rust-server-sdk#df1440c8b93a192d50470d1b258615febe52f1f8"
+source = "git+https://github.com/MaterializeInc/rust-server-sdk?rev=87c0f67aa51fa936d3a6a49605e8e3f565d15281#87c0f67aa51fa936d3a6a49605e8e3f565d15281"
 dependencies = [
  "built",
  "chrono",
@@ -3416,7 +3401,7 @@ checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 [[package]]
 name = "librocksdb-sys"
 version = "0.11.0+8.3.2"
-source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#ab3684f999a5586d7a5e94bd65defd78af15d40f"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb#ab3684f999a5586d7a5e94bd65defd78af15d40f"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -8038,7 +8023,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.21.0"
-source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#ab3684f999a5586d7a5e94bd65defd78af15d40f"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb#ab3684f999a5586d7a5e94bd65defd78af15d40f"
 dependencies = [
  "libc",
  "librocksdb-sys",
