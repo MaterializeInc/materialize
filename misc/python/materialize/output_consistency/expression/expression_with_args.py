@@ -97,7 +97,7 @@ class ExpressionWithArgs(Expression):
                 ), f"Invalid requested index: {arg_index} as hint for {self.operation}"
                 input_type_hints.type_category_of_requested_args[arg_index] = self.args[
                     arg_index
-                ].resolve_return_type_category()
+                ].resolve_resulting_return_type_category()
 
                 if self.return_type_spec.requires_return_type_spec_hints:
                     input_type_hints.return_type_spec_of_requested_args[

@@ -129,7 +129,7 @@ def is_function_invoked_only_with_non_nested_parameters(
 def involves_data_type_category(
     expression: Expression, data_type_category: DataTypeCategory
 ) -> bool:
-    return expression.resolve_return_type_category() == data_type_category
+    return expression.resolve_resulting_return_type_category() == data_type_category
 
 
 def is_known_to_involve_exact_data_types(
