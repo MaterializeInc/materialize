@@ -96,7 +96,7 @@ use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller::ControllerConfig;
-use mz_controller_types::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::instrument;
@@ -163,7 +163,7 @@ use crate::optimize::dataflows::{
 use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
-use crate::statement_logging::StatementEndedExecutionReason;
+use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycleEvent};
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, ReadHolds, TimestampProvider};
@@ -1423,6 +1423,13 @@ pub struct Coordinator {
     /// (Clusters that have been dropped or are otherwise out of scope for automatic scheduling are
     /// periodically cleaned up from this Map.)
     cluster_scheduling_decisions: BTreeMap<ClusterId, BTreeMap<&'static str, SchedulingDecision>>,
+
+    /// Tracks the state associated with the currently installed watchsets.
+    installed_watch_sets:
+        BTreeMap<WatchSetId, (ConnectionId, (StatementLoggingId, StatementLifecycleEvent))>,
+
+    /// Tracks the currently installed watchsets for each connection.
+    connection_watch_sets: BTreeMap<ConnectionId, BTreeSet<WatchSetId>>,
 }
 
 impl Coordinator {
@@ -2714,6 +2721,51 @@ impl Coordinator {
             .await;
     }
 
+    /// Install a _watch set_ in the controller that is automatically associated with the given
+    /// connection id. The watchset will be automatically cleared if the connection terminates
+    /// before the watchset completes.
+    pub fn install_compute_watch_set(
+        &mut self,
+        conn_id: ConnectionId,
+        objects: BTreeSet<GlobalId>,
+        t: Timestamp,
+        state: (StatementLoggingId, StatementLifecycleEvent),
+    ) {
+        let ws_id = self.controller.install_compute_watch_set(objects, t);
+        self.connection_watch_sets
+            .entry(conn_id.clone())
+            .or_default()
+            .insert(ws_id);
+        self.installed_watch_sets.insert(ws_id, (conn_id, state));
+    }
+
+    /// Install a _watch set_ in the controller that is automatically associated with the given
+    /// connection id. The watchset will be automatically cleared if the connection terminates
+    /// before the watchset completes.
+    pub fn install_storage_watch_set(
+        &mut self,
+        conn_id: ConnectionId,
+        objects: BTreeSet<GlobalId>,
+        t: Timestamp,
+        state: (StatementLoggingId, StatementLifecycleEvent),
+    ) {
+        let ws_id = self.controller.install_storage_watch_set(objects, t);
+        self.connection_watch_sets
+            .entry(conn_id.clone())
+            .or_default()
+            .insert(ws_id);
+        self.installed_watch_sets.insert(ws_id, (conn_id, state));
+    }
+
+    /// Cancels pending watchsets associated with the provided connection id.
+    pub fn cancel_pending_watchsets(&mut self, conn_id: &ConnectionId) {
+        if let Some(ws_ids) = self.connection_watch_sets.remove(conn_id) {
+            for ws_id in ws_ids {
+                self.installed_watch_sets.remove(&ws_id);
+            }
+        }
+    }
+
     /// Returns the state of the [`Coordinator`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
@@ -3102,6 +3154,8 @@ pub fn serve(
                     pg_timestamp_oracle_config,
                     check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
                     cluster_scheduling_decisions: BTreeMap::new(),
+                    installed_watch_sets: BTreeMap::new(),
+                    connection_watch_sets: BTreeMap::new(),
                 };
                 let bootstrap = handle.block_on(async {
                     coord

@@ -837,7 +837,7 @@ impl Coordinator {
         let planned_peek = PlannedPeek {
             plan: peek_plan,
             determination: determination.clone(),
-            conn_id,
+            conn_id: conn_id.clone(),
             source_arity,
             source_ids,
         };
@@ -869,16 +869,18 @@ impl Coordinator {
                     _ => {}
                 }
             }
-            self.controller.install_storage_watch_set(
+            self.install_storage_watch_set(
+                conn_id.clone(),
                 transitive_storage_deps,
                 ts,
-                Box::new((uuid, StatementLifecycleEvent::StorageDependenciesFinished)),
+                (uuid, StatementLifecycleEvent::StorageDependenciesFinished),
             );
-            self.controller.install_compute_watch_set(
+            self.install_compute_watch_set(
+                conn_id,
                 transitive_compute_deps,
                 ts,
-                Box::new((uuid, StatementLifecycleEvent::ComputeDependenciesFinished)),
-            )
+                (uuid, StatementLifecycleEvent::ComputeDependenciesFinished),
+            );
         }
 
         let max_query_size = ctx.session().vars().max_query_result_size();
