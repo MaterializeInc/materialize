@@ -488,7 +488,11 @@ async fn raw_stream<'a>(
     //
     // For this reason we query the server's timeout value and proactively send a keepalive at
     // twice the frequency to have a healthy margin from the deadline.
-    let row = simple_query_opt(&replication_client, "SHOW wal_sender_timeout;")
+    //
+    // Note: We must use the metadata client here which is NOT in replication mode. Some Aurora
+    // Postgres versions disallow SHOW commands from within replication connection.
+    // See: https://github.com/readysettech/readyset/discussions/28#discussioncomment-4405671
+    let row = simple_query_opt(&metadata_client, "SHOW wal_sender_timeout;")
         .await?
         .unwrap();
     let wal_sender_timeout: &str = row.get("wal_sender_timeout").unwrap();
