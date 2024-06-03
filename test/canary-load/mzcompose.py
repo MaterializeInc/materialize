@@ -29,6 +29,7 @@ from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
 )
+from materialize.ui import CommandFailureCausedUIError
 
 SERVICES = [
     Testdrive(),  # Overridden below
@@ -128,11 +129,24 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 except FailedTestExecutionError as e:
                     assert len(e.errors) > 0, "Exception contains no errors"
                     for error in e.errors:
+                        # TODO(def-): Remove when #22576 is fixed
+                        if "Non-positive multiplicity in DistinctBy" in error.message:
+                            continue
                         print(
                             f"Test failure occurred ({error.message}), collecting it, and continuing."
                         )
+                        # collect, continue, and rethrow at the end
+                        failures.append(error)
+                except CommandFailureCausedUIError as e:
+                    msg = (e.stdout or "") + (e.stderr or "")
+                    # TODO(def-): Remove when #22576 is fixed
+                    if "Non-positive multiplicity in DistinctBy" in msg:
+                        continue
+                    print(
+                        f"Test failure occurred ({msg}), collecting it, and continuing."
+                    )
                     # collect, continue, and rethrow at the end
-                    failures.extend(e.errors)
+                    failures.extend(msg)
 
             if len(failures) > 0:
                 # reset test case name to remove current iteration and chunk, which does not apply to collected errors
