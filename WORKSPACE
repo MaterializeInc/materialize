@@ -329,6 +329,16 @@ crates_repository(
                 ":internal-bridge",
             ],
         )],
+        "launchdarkly-server-sdk": [crate.annotation(
+            build_script_env = {
+                "CARGO_PKG_AUTHORS": "LaunchDarkly",
+                "CARGO_PKG_DESCRIPTION": "",
+                "CARGO_PKG_HOMEPAGE": "https://docs.launchdarkly.com/sdk/server-side/rust",
+                "CARGO_PKG_LICENSE": "Apache-2.0",
+                "CARGO_PKG_REPOSITORY": "https://github.com/launchdarkly/rust-server-sdk",
+                "RUSTDOC": "",
+            },
+        )],
     },
     manifests = [
         "//:Cargo.toml",
