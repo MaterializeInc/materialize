@@ -30,7 +30,7 @@ cfg-if = "1.0.0"
 columnation = { git = "https://github.com/frankmcsherry/columnation" }
 chrono = { version = "0.4.35", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
-compact_bytes = "0.1.1"
+compact_bytes = "0.1.2"
 dec = "0.4.8"
 differential-dataflow = "0.12.0"
 enum_dispatch = "0.3.11"
