@@ -166,7 +166,13 @@ class MaterializedViewsAssertNotNull(Check):
 
             > DELETE FROM not_null_table WHERE z IS NULL;
 
-            ? EXPLAIN SELECT * FROM not_null_view1 WHERE x IS NOT NULL
+            ?[version<10300] EXPLAIN SELECT * FROM not_null_view1 WHERE x IS NOT NULL
+            Explained Query:
+              ReadStorage materialize.public.not_null_view1
+
+            Target cluster: quickstart
+
+            ?[version>=10300] EXPLAIN SELECT * FROM not_null_view1 WHERE x IS NOT NULL
             Explained Query:
               ReadStorage materialize.public.not_null_view1
 
@@ -174,7 +180,13 @@ class MaterializedViewsAssertNotNull(Check):
 
             Target cluster: quickstart
 
-            ? EXPLAIN SELECT * FROM not_null_view2 WHERE y IS NOT NULL
+            ?[version<10300] EXPLAIN SELECT * FROM not_null_view2 WHERE y IS NOT NULL
+            Explained Query:
+              ReadStorage materialize.public.not_null_view2
+
+            Target cluster: quickstart
+
+            ?[version>=10300] EXPLAIN SELECT * FROM not_null_view2 WHERE y IS NOT NULL
             Explained Query:
               ReadStorage materialize.public.not_null_view2
 
@@ -182,7 +194,13 @@ class MaterializedViewsAssertNotNull(Check):
 
             Target cluster: quickstart
 
-            ? EXPLAIN SELECT * FROM not_null_view3 WHERE z IS NOT NULL
+            ?[version<10300] EXPLAIN SELECT * FROM not_null_view3 WHERE z IS NOT NULL
+            Explained Query:
+              ReadStorage materialize.public.not_null_view3
+
+            Target cluster: quickstart
+
+            ?[version>=10300] EXPLAIN SELECT * FROM not_null_view3 WHERE z IS NOT NULL
             Explained Query:
               ReadStorage materialize.public.not_null_view3
 
