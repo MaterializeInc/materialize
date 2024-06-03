@@ -9,25 +9,65 @@
 
 //! Tokio tasks (and support machinery) for maintaining storage-managed
 //! collections.
+//!
+//! We differentiate between append-only collections and differential
+//! collections. The intent is that knowing the type allows being more
+//! intentional about what state we keep in memory and how we work when in
+//! read-only mode / during zero-downtime upgrades.
+//!
+//! ## Append-only collections
+//!
+//! Writers only append blind writes. Those writes never fail. It does not
+//! matter at what timestamp they happen (to a degree, but ...).
+//!
+//! While in read-only mode, the append-only write task can immediately write
+//! updates out as batches, but only append them when going out of read-only
+//! mode.
+//!
+//! ## Differential collections
+//!
+//! These are very similar to the self-correcting persist_sink. We have an
+//! in-memory desired state and continually make it so that persist matches
+//! desired. As described below (in the task implementation), we could do this
+//! in a memory efficient way by keeping open a persist read handle and
+//! continually updating/consolidating our desired collection. This way, we
+//! would be memory-efficient even in read-only mode.
+//!
+//! This is an evolution of the current design where, on startup, we bring the
+//! persist collection into a known state (mostly by retracting everything) and
+//! then assume that this `envd` is the only writer. We panic when that is ever
+//! not the case, which we notice when the upper of a collection changes
+//! unexpectedly. With this new design we can instead continually update our
+//! view of the persist shard and emit updates when needed, when desired
+//! changed.
+//!
+//! NOTE: As it is, we always keep all of desired in memory. Only when told to
+//! go out of read-only mode would we start attempting to write.
 
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use differential_dataflow::consolidation;
 use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
-use futures::FutureExt;
+use futures::{Future, FutureExt};
+use itertools::Itertools;
 use mz_ore::channel::ReceiverExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
+use mz_persist_client::read::ReadHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
-use mz_storage_client::client::TimestamplessUpdate;
+use mz_storage_client::client::{TimestamplessUpdate, Update};
 use mz_storage_client::controller::MonotonicAppender;
 use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
-use timely::progress::Timestamp;
+use mz_storage_types::sources::SourceData;
+use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
@@ -51,7 +91,20 @@ pub struct CollectionManager<T>
 where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
-    collections: Arc<Mutex<BTreeMap<GlobalId, (WriteChannel<T>, WriteTask, ShutdownSender)>>>,
+    // WIP: Name TBD! I thought about `managed_collections`, `ivm_collections`,
+    // `self_correcting_collections`.
+    /// These are collections that we write to by adding/removing updates to an
+    /// internal _desired_ collection. The `CollectionManager` continually makes
+    /// sure that collection contents (in persist) match the desired state.
+    differential_collections:
+        Arc<Mutex<BTreeMap<GlobalId, (WriteChannel<T>, WriteTask, ShutdownSender)>>>,
+
+    /// Collections that we only append to using blind-writes.
+    ///
+    /// Every write succeeds at _some_ timestamp, and we never check what the
+    /// actual contents of the collection (in persist) are.
+    append_only_collections:
+        Arc<Mutex<BTreeMap<GlobalId, (WriteChannel<T>, WriteTask, ShutdownSender)>>>,
     write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
     /// Amount of time we'll wait before sending a batch of inserts to Persist, for user
     /// collections.
@@ -81,7 +134,8 @@ where
             .try_into()
             .expect("known to fit");
         CollectionManager {
-            collections: Arc::new(Mutex::new(BTreeMap::new())),
+            differential_collections: Arc::new(Mutex::new(BTreeMap::new())),
+            append_only_collections: Arc::new(Mutex::new(BTreeMap::new())),
             write_handle,
             user_batch_duration_ms: Arc::new(AtomicU64::new(batch_duration_ms)),
             now,
@@ -95,12 +149,23 @@ where
         self.user_batch_duration_ms.store(millis, Ordering::Relaxed);
     }
 
-    /// Registers the collection as one that `CollectionManager` will:
-    /// - Automatically advance the upper of every second
-    /// - Accept appends for. However, note that when appending, the
-    ///   `CollectionManager` expects to be the only writer.
-    pub(super) fn register_collection(&self, id: GlobalId) {
-        let mut guard = self.collections.lock().expect("collection_mgmt panicked");
+    /// Registers a new _differential collection_.
+    ///
+    /// The [CollectionManager] will automatically advance the upper of every
+    /// registered collection every second.
+    ///
+    /// Update the `desired` state of a differential collection using
+    /// [Self::update_desired].
+    pub(super) fn register_differential_collection<'a, R>(&self, id: GlobalId, read_handle_fn: R)
+    where
+        R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
+            + Send
+            + 'static,
+    {
+        let mut guard = self
+            .differential_collections
+            .lock()
+            .expect("collection_mgmt panicked");
 
         // Check if this collection is already registered.
         if let Some((_writer, task, _shutdown_tx)) = guard.get(&id) {
@@ -113,7 +178,45 @@ where
         }
 
         // Spawns a new task so we can write to this collection.
-        let writer_and_handle = write_task(
+        let writer_and_handle = DifferentialWriteTask::spawn(
+            id,
+            self.write_handle.clone(),
+            read_handle_fn,
+            self.now.clone(),
+        );
+        let prev = guard.insert(id, writer_and_handle);
+
+        // Double check the previous task was actually finished.
+        if let Some((_, prev_task, _)) = prev {
+            assert!(
+                prev_task.is_finished(),
+                "should only spawn a new task if the previous is finished"
+            );
+        }
+    }
+
+    /// Registers a new _append-only collection_.
+    ///
+    /// The [CollectionManager] will automatically advance the upper of every
+    /// registered collection every second.
+    pub(super) fn register_append_only_collection(&self, id: GlobalId) {
+        let mut guard = self
+            .append_only_collections
+            .lock()
+            .expect("collection_mgmt panicked");
+
+        // Check if this collection is already registered.
+        if let Some((_writer, task, _shutdown_tx)) = guard.get(&id) {
+            // The collection is already registered and the task is still running so nothing to do.
+            if !task.is_finished() {
+                // TODO(parkmycar): Panic here if we never see this error in production.
+                tracing::error!("Registered a collection twice! {id:?}");
+                return;
+            }
+        }
+
+        // Spawns a new task so we can write to this collection.
+        let writer_and_handle = append_only_write_task(
             id,
             self.write_handle.clone(),
             Arc::clone(&self.user_batch_duration_ms),
@@ -130,14 +233,14 @@ where
         }
     }
 
-    /// Unregisters the collection as one that `CollectionManager` will maintain.
+    /// Unregisters the given collection.
     ///
     /// Also waits until the `CollectionManager` has completed all outstanding work to ensure that
     /// it has stopped referencing the provided `id`.
     #[mz_ore::instrument(level = "debug")]
     pub(super) fn unregister_collection(&self, id: GlobalId) -> BoxFuture<'static, ()> {
         let prev = self
-            .collections
+            .differential_collections
             .lock()
             .expect("CollectionManager panicked")
             .remove(&id);
@@ -148,25 +251,67 @@ where
             //
             // We can ignore errors here because they indicate the task is already done.
             let _ = shutdown_tx.send(());
-            Box::pin(prev_task.map(|_| ()))
-        } else {
-            Box::pin(futures::future::ready(()))
+            return Box::pin(prev_task.map(|_| ()));
         }
+
+        let prev = self
+            .append_only_collections
+            .lock()
+            .expect("CollectionManager panicked")
+            .remove(&id);
+
+        // Wait for the task to complete before reporting as unregisted.
+        if let Some((_prev_writer, prev_task, shutdown_tx)) = prev {
+            // Notify the task it needs to shutdown.
+            //
+            // We can ignore errors here because they indicate the task is already done.
+            let _ = shutdown_tx.send(());
+            return Box::pin(prev_task.map(|_| ()));
+        }
+
+        Box::pin(futures::future::ready(()))
     }
 
-    /// Appends `updates` to the collection correlated with `id`, does not wait for the append to
-    /// complete.
+    /// Appends `updates` to the append-only collection identified by `id`, at
+    /// _some_ timestamp. Does not wait for the append to complete.
     ///
     /// # Panics
-    /// - If `id` does not belong to managed collections.
-    /// - If there is contention to write to the collection identified by `id`.
+    /// - If `id` does not belong to an append-only collections.
     /// - If the collection closed.
-    pub(super) async fn append_to_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    pub(super) async fn blind_write(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         if !updates.is_empty() {
             // Get the update channel in a block to make sure the Mutex lock is scoped.
             let update_tx = {
-                let guard = self.collections.lock().expect("CollectionManager panicked");
-                let (update_tx, _, _) = guard.get(&id).expect("id to exist");
+                let guard = self
+                    .append_only_collections
+                    .lock()
+                    .expect("CollectionManager panicked");
+                let (update_tx, _, _) = guard.get(&id).expect("missing append-only collection");
+                update_tx.clone()
+            };
+
+            // Specifically _do not_ wait for the append to complete, just for it to be sent.
+            let (tx, _rx) = oneshot::channel();
+            update_tx.send((updates, tx)).await.expect("rx hung up");
+        }
+    }
+
+    /// Updates the desired collection state of the collection identified by
+    /// `id`. The underlying persist shard will reflect this change at
+    /// _some_point. Does not wait for the change to complete.
+    ///
+    /// # Panics
+    /// - If `id` does not belong to a differential collection.
+    /// - If the collection closed.
+    pub(super) async fn update_desired(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+        if !updates.is_empty() {
+            // Get the update channel in a block to make sure the Mutex lock is scoped.
+            let update_tx = {
+                let guard = self
+                    .differential_collections
+                    .lock()
+                    .expect("CollectionManager panicked");
+                let (update_tx, _, _) = guard.get(&id).expect("missing differential collection");
                 update_tx.clone()
             };
 
@@ -182,7 +327,10 @@ where
         &self,
         id: GlobalId,
     ) -> Result<MonotonicAppender<T>, StorageError<T>> {
-        let guard = self.collections.lock().expect("CollectionManager panicked");
+        let guard = self
+            .append_only_collections
+            .lock()
+            .expect("CollectionManager panicked");
         let tx = guard
             .get(&id)
             .map(|(tx, _, _)| tx.clone())
@@ -192,13 +340,452 @@ where
     }
 }
 
+/// A task that will make it so that the state in persist matches the desired
+/// state and continuously bump the upper for the specified collection.
+///
+/// NOTE: This implementation is a bit clunky, and could be optimized by not keeping
+/// all of desired in memory (see commend below). It is meant to showcase the
+/// general approach.
+struct DifferentialWriteTask<T, R>
+where
+    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
+        + Send
+        + 'static,
+{
+    /// The collection that we are writing to.
+    id: GlobalId,
+
+    write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+
+    /// For getting a [`ReadHandle`] to sync our state to persist contents.
+    read_handle_fn: R,
+
+    now: NowFn,
+
+    /// In the absence of updates, we regularly bump the upper to "now", on this
+    /// interval. This makes it so the collection remains readable at recent
+    /// timestamps.
+    upper_tick_interval: tokio::time::Interval,
+
+    /// Receiver for write commands. These change our desired state.
+    cmd_rx: mpsc::Receiver<(
+        Vec<(Row, i64)>,
+        oneshot::Sender<Result<(), StorageError<T>>>,
+    )>,
+
+    /// We have to shut down when receiving from this.
+    shutdown_rx: oneshot::Receiver<()>,
+
+    /// The contents of the collection as it should be according to whoever is
+    /// driving us around.
+    // This is memory inefficient: we always keep a full copy of
+    // desired, so that we can re-derive a to_write if/when someone else
+    // writes to persist and we notice because of an upper conflict.
+    // This is optimized for the case where we rarely have more than one
+    // writer.
+    //
+    // We can optimize for a multi-writer case by keeping an open
+    // ReadHandle and continually reading updates from persist, updating
+    // a desired in place. Similar to the self-correcting persist_sink.
+    desired: Vec<(Row, i64)>,
+
+    /// Updates that we have to write when next writing to persist. This is
+    /// determined by looking at what is desired and what is in persist.
+    to_write: Vec<(Row, i64)>,
+
+    /// Current upper of the persist shard. We keep track of this so that we
+    /// realize when someone else writes to the shard, in which case we have to
+    /// update our state of the world, that is update our `to_write` based on
+    /// `desired` and the contents of the persist shard.
+    current_upper: T,
+}
+
+impl<T, R> DifferentialWriteTask<T, R>
+where
+    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+    R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
+        + Send
+        + 'static,
+{
+    /// Spawns a [`DifferentialWriteTask`] in an [`mz_ore::task`] and returns
+    /// handles for interacting with it.
+    fn spawn(
+        id: GlobalId,
+        write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+        read_handle_fn: R,
+        now: NowFn,
+    ) -> (WriteChannel<T>, WriteTask, ShutdownSender) {
+        let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let upper_tick_interval = tokio::time::interval(Duration::from_millis(DEFAULT_TICK_MS));
+
+        let current_upper = T::minimum();
+
+        let task = Self {
+            id,
+            write_handle,
+            read_handle_fn,
+            now,
+            upper_tick_interval,
+            cmd_rx: rx,
+            shutdown_rx,
+            desired: Vec::new(),
+            to_write: Vec::new(),
+            current_upper,
+        };
+
+        let handle = mz_ore::task::spawn(
+            || format!("CollectionManager-differential_write_task-{id}"),
+            async move {
+                let res = task.run().await;
+
+                match res {
+                    ControlFlow::Break(reason) => {
+                        info!("write_task-{} ending: {}", id, reason);
+                    }
+                    c => {
+                        unreachable!(
+                            "cannot break out of the loop with a Continue, but got: {:?}",
+                            c
+                        );
+                    }
+                }
+            },
+        );
+
+        (tx, handle.abort_on_drop(), shutdown_tx)
+    }
+
+    async fn run(mut self) -> ControlFlow<String> {
+        loop {
+            tokio::select! {
+                // Prefer sending actual updates over just bumping the upper,
+                // because sending updates also bump the upper.
+                biased;
+
+                // Listen for a shutdown signal so we can gracefully cleanup.
+                _ = &mut self.shutdown_rx => {
+                    self.handle_shutdown();
+
+                    return ControlFlow::Break("graceful shutdown".to_string());
+                }
+
+                // Pull as many queued updates off the channel as possible.
+                cmd = self.cmd_rx.recv_many(CHANNEL_CAPACITY) => {
+                    if let Some(batch) = cmd {
+
+                        let _ = self.handle_updates(batch).await?;
+
+                    } else {
+                        // Sender has been dropped, which means the collection
+                        // should have been unregistered, break out of the run
+                        // loop if we weren't already aborted.
+                        return ControlFlow::Break("sender has been dropped".to_string());
+                    }
+                }
+
+                // If we haven't received any updates, then we'll move the upper forward.
+                _ = self.upper_tick_interval.tick() => {
+                    let _ = self.tick_upper().await?;
+                },
+            }
+        }
+    }
+
+    async fn tick_upper(&mut self) -> ControlFlow<String> {
+        let now = T::from((self.now)());
+
+        if now <= self.current_upper {
+            // Upper is already further along than current wall-clock time, no
+            // need to bump it.
+            return ControlFlow::Continue(());
+        }
+
+        let request = vec![(self.id, vec![], self.current_upper.clone(), now.clone())];
+
+        match self.write_handle.compare_and_append(request).await {
+            // All good!
+            Ok(Ok(())) => {
+                tracing::debug!(%self.id, "bumped upper of differential collection");
+                self.current_upper = now;
+            }
+            Ok(Err(StorageError::InvalidUppers(failed_ids))) => {
+                // Someone else wrote to the collection or bumped the upper. We
+                // need to sync to latest persist state and potentially patch up
+                // our `to_write`, based on what we learn and `desired`.
+
+                assert_eq!(
+                    failed_ids.len(),
+                    1,
+                    "received errors for more than one collection"
+                );
+                assert_eq!(
+                    failed_ids[0].id, self.id,
+                    "received errors for a different collection"
+                );
+
+                let actual_upper = if let Some(ts) = failed_ids[0].current_upper.as_option() {
+                    ts.clone()
+                } else {
+                    return ControlFlow::Break("upper is the empty antichain".to_string());
+                };
+
+                tracing::info!(%self.id, ?actual_upper, expected_upper = ?self.current_upper, "upper mismatch while bumping upper, syncing to persist state");
+
+                self.current_upper = actual_upper;
+
+                self.sync_to_persist().await;
+            }
+            Ok(Err(err)) => {
+                panic!(
+                    "unexpected error while trying to bump upper of {}: {:?}",
+                    self.id, err
+                );
+            }
+            // Sender hung up, this seems fine and can happen when shutting down.
+            Err(_recv_error) => {
+                // Exit the run loop because there is no other work we can do.
+                return ControlFlow::Break("persist worker is gone".to_string());
+            }
+        }
+
+        ControlFlow::Continue(())
+    }
+
+    fn handle_shutdown(&mut self) {
+        unreachable!("we are not currently unregistering differential storage-managed collections");
+    }
+
+    async fn handle_updates(
+        &mut self,
+        batch: Vec<(
+            Vec<(Row, i64)>,
+            oneshot::Sender<Result<(), StorageError<T>>>,
+        )>,
+    ) -> ControlFlow<String> {
+        // Put in place _some_ rate limiting.
+        let batch_duration_ms = STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
+
+        let use_batch_now = Instant::now();
+        let min_time_to_complete = use_batch_now + batch_duration_ms;
+
+        tracing::debug!(
+            ?use_batch_now,
+            ?batch_duration_ms,
+            ?min_time_to_complete,
+            "batch duration",
+        );
+
+        // Reset the interval which is used to periodically bump the uppers
+        // because the uppers will get bumped with the following update. This
+        // makes it such that we will write at most once every `interval`.
+        //
+        // For example, let's say our `DEFAULT_TICK` interval is 10, so at `t +
+        // 10`, `t + 20`, ... we'll bump the uppers. If we receive an update at
+        // `t + 3` we want to shift this window so we bump the uppers at `t +
+        // 13`, `t + 23`, ... which resetting the interval accomplishes.
+        self.upper_tick_interval.reset();
+
+        let (rows, responders): (Vec<_>, Vec<_>) = batch.into_iter().unzip();
+
+        let rows = rows.into_iter().flatten().collect_vec();
+
+        self.to_write.extend(rows.iter().cloned());
+        self.desired.extend(rows.iter().cloned());
+
+        // TODO: Maybe don't do it every time?
+        consolidation::consolidate(&mut self.desired);
+        consolidation::consolidate(&mut self.to_write);
+
+        self.write_to_persist(responders).await?;
+
+        // Wait until our artificial latency has completed.
+        //
+        // Note: if writing to persist took longer than `DEFAULT_TICK` this
+        // await will resolve immediately.
+        tokio::time::sleep_until(min_time_to_complete).await;
+
+        ControlFlow::Continue(())
+    }
+
+    /// Attempt to write what is currently in [Self::to_write] to persist,
+    /// retrying and re-syncing to persist when necessary, that is when the
+    /// upper was not what we expected.
+    async fn write_to_persist(
+        &mut self,
+        responders: Vec<oneshot::Sender<Result<(), StorageError<T>>>>,
+    ) -> ControlFlow<String> {
+        // We'll try really hard to succeed, but eventually stop.
+        //
+        // Note: it's very rare we should ever need to retry, and if we need to
+        // retry it should only take 1 or 2 attempts. We set `max_tries` to be
+        // high though because if we hit some edge case we want to try hard to
+        // commit the data.
+        let retries = Retry::default()
+            .initial_backoff(Duration::from_secs(1))
+            .clamp_backoff(Duration::from_secs(3))
+            .factor(1.25)
+            .max_tries(20)
+            .into_retry_stream();
+        let mut retries = Box::pin(retries);
+
+        loop {
+            // Append updates to persist!
+            let updates_to_write = self
+                .to_write
+                .iter()
+                .map(|(row, diff)| Update {
+                    row: row.clone(),
+                    timestamp: self.current_upper.clone(),
+                    diff: diff.clone(),
+                })
+                .collect();
+
+            let now = T::from((self.now)());
+            let new_upper = std::cmp::max(
+                now,
+                TimestampManipulation::step_forward(&self.current_upper),
+            );
+
+            let request = vec![(
+                self.id,
+                updates_to_write,
+                self.current_upper.clone(),
+                new_upper.clone(),
+            )];
+
+            let append_result = match self.write_handle.compare_and_append(request.clone()).await {
+                // We got a response!
+                Ok(append_result) => append_result,
+                // Failed to receive which means the worker shutdown.
+                Err(_recv_error) => {
+                    // Sender hung up, this seems fine and can happen when
+                    // shutting down.
+                    notify_listeners(responders, || {
+                        Err(StorageError::ShuttingDown("PersistMonotonicWriteWorker"))
+                    });
+
+                    // End the task since we can no longer send writes to persist.
+                    return ControlFlow::Break("sender hung up".to_string());
+                }
+            };
+
+            match append_result {
+                // Everything was successful!
+                Ok(()) => {
+                    // Notify all of our listeners.
+                    notify_listeners(responders, || Ok(()));
+
+                    self.current_upper = new_upper;
+
+                    // Very important! This is empty at steady state, while
+                    // desired keeps an in-memory copy of desired state.
+                    self.to_write.clear();
+
+                    tracing::debug!(%self.id, "appended to differential collection");
+
+                    // Break out of the retry loop so we can wait for more data.
+                    break;
+                }
+                // Failed to write to some collections,
+                Err(StorageError::InvalidUppers(failed_ids)) => {
+                    // Someone else wrote to the collection. We need to read
+                    // from persist and update to_write based on that and the
+                    // desired state.
+
+                    assert_eq!(
+                        failed_ids.len(),
+                        1,
+                        "received errors for more than one collection"
+                    );
+                    assert_eq!(
+                        failed_ids[0].id, self.id,
+                        "received errors for a different collection"
+                    );
+
+                    let actual_upper = if let Some(ts) = failed_ids[0].current_upper.as_option() {
+                        ts.clone()
+                    } else {
+                        return ControlFlow::Break("upper is the empty antichain".to_string());
+                    };
+
+                    tracing::info!(%self.id, ?actual_upper, expected_upper = ?self.current_upper, "retrying append for differential collection");
+
+                    // We've exhausted all of our retries, notify listeners and
+                    // break out of the retry loop so we can wait for more data.
+                    if retries.next().await.is_none() {
+                        notify_listeners(responders, || {
+                            Err(StorageError::InvalidUppers(failed_ids.clone()))
+                        });
+                        error!(
+                            "exhausted retries when appending to managed collection {failed_ids:?}"
+                        );
+                        break;
+                    }
+
+                    self.current_upper = actual_upper;
+
+                    self.sync_to_persist().await;
+
+                    debug!("Retrying invalid-uppers error while appending to differential collection {failed_ids:?}");
+                }
+                // Uh-oh, something else went wrong!
+                Err(other) => {
+                    panic!(
+                        "Unhandled error while appending to managed collection {:?}: {:?}",
+                        self.id, other
+                    )
+                }
+            }
+        }
+
+        ControlFlow::Continue(())
+    }
+
+    /// Re-derives [Self::to_write] by looking at [Self::desired] and the
+    /// current state in persist. We want to insert everything in desired and
+    /// retract everything in persist. But ideally most of that cancels out in
+    /// consolidation.
+    ///
+    /// To be called when a `compare_and_append` failed because the upper didn't
+    /// match what we expected.
+    async fn sync_to_persist(&mut self) {
+        let mut read_handle = (self.read_handle_fn)().await;
+        let as_of = self
+            .current_upper
+            .step_back()
+            .unwrap_or_else(|| T::minimum());
+        let as_of = Antichain::from_elem(as_of);
+        let snapshot = read_handle.snapshot_and_fetch(as_of).await;
+
+        let mut negated_oks = match snapshot {
+            Ok(contents) => {
+                let mut snapshot = Vec::with_capacity(contents.len());
+                for ((data, _), _, diff) in contents {
+                    let row = data.expect("invalid protobuf data").0.unwrap();
+                    snapshot.push((row, -diff));
+                }
+                snapshot
+            }
+            Err(_) => panic!("read before since"),
+        };
+
+        self.to_write.clear();
+        self.to_write.extend(self.desired.iter().cloned());
+        self.to_write.append(&mut negated_oks);
+        consolidation::consolidate(&mut self.to_write);
+    }
+}
+
 /// Spawns an [`mz_ore::task`] that will continuously bump the upper for the specified collection,
 /// and append data that is sent via the provided [`mpsc::Sender`].
 ///
 /// TODO(parkmycar): One day if we want to customize the tick interval for each collection, that
 /// should be done here.
 /// TODO(parkmycar): Maybe add prometheus metrics for each collection?
-fn write_task<T>(
+fn append_only_write_task<T>(
     id: GlobalId,
     write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
     user_batch_duration_ms: Arc<AtomicU64>,
@@ -211,7 +798,7 @@ where
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
     let handle = mz_ore::task::spawn(
-        || format!("CollectionManager-write_task-{id}"),
+        || format!("CollectionManager-append_only_write_task-{id}"),
         async move {
             let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_TICK_MS));
 

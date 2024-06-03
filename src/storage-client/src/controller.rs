@@ -661,11 +661,21 @@ pub trait StorageController: Debug {
         external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
     );
 
-    /// Records updates for the given introspection type.
+    /// Records append-only updates for the given introspection type.
     ///
-    /// Rows passed in `updates` MUST have the correct schema for the given introspection type,
-    /// as readers rely on this and might panic otherwise.
-    async fn record_introspection_updates(
+    /// Rows passed in `updates` MUST have the correct schema for the given
+    /// introspection type, as readers rely on this and might panic otherwise.
+    async fn append_introspection_updates(
+        &mut self,
+        type_: IntrospectionType,
+        updates: Vec<(Row, Diff)>,
+    );
+
+    /// Updates the desired state of the given introspection type.
+    ///
+    /// Rows passed in `updates` MUST have the correct schema for the given
+    /// introspection type, as readers rely on this and might panic otherwise.
+    async fn update_introspection_collection(
         &mut self,
         type_: IntrospectionType,
         updates: Vec<(Row, Diff)>,

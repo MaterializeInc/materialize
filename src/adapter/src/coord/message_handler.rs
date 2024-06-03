@@ -203,7 +203,7 @@ impl Coordinator {
                 Message::PrivateLinkVpcEndpointEvents(events) => {
                     self.controller
                         .storage
-                        .record_introspection_updates(
+                        .append_introspection_updates(
                             mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
                             events
                                 .into_iter()

@@ -50,7 +50,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand, Status,
-    StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
+    StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate, Update,
 };
 use mz_storage_client::controller::{
     CollectionDescription, DataSource, DataSourceOther, ExportDescription, ExportState,
@@ -797,17 +797,66 @@ where
                         "cannot have multiple IDs for introspection type"
                     );
 
-                    self.collection_manager.register_collection(id);
+                    let metadata = self.storage_collections.collection_metadata(id)?.clone();
+                    let persist_client = self
+                        .persist
+                        .open(metadata.persist_location.clone())
+                        .await
+                        .unwrap();
+
+                    let read_handle_fn = move || {
+                        let persist_client = persist_client.clone();
+                        let metadata = metadata.clone();
+
+                        let fut = async move {
+                            let read_handle = persist_client
+                                .open_leased_reader::<SourceData, (), T, Diff>(
+                                    metadata.data_shard,
+                                    Arc::new(metadata.relation_desc.clone()),
+                                    Arc::new(UnitSchema),
+                                    Diagnostics {
+                                        shard_name: id.to_string(),
+                                        handle_purpose: format!("snapshot {}", id),
+                                    },
+                                    USE_CRITICAL_SINCE_SNAPSHOT.get(persist_client.dyncfgs()),
+                                )
+                                .await
+                                .expect("invalid persist usage");
+                            read_handle
+                        };
+
+                        fut.boxed()
+                    };
+
+                    // Types of storage-managed/introspection collections:
+                    //
+                    // Append-only: Only accepts blind writes, writes that can
+                    // be applied at any timestamp and don’t depend on current
+                    // collection contents.
+                    //
+                    // Pseudo append-only: We treat them largely as append-only
+                    // collections but periodically (currently on bootstrap)
+                    // retract old updates from them.
+                    //
+                    // Differential: at any given time `t` , collection contents
+                    // mirrors some (small cardinality) state. The cardinality
+                    // of the collection stays constant if the thing that is
+                    // mirrored doesn’t change in cardinality. At steady state,
+                    // updates always come in pairs of retractions/additions.
 
                     match i {
                         IntrospectionType::ShardMapping => {
+                            self.collection_manager.register_differential_collection(id, read_handle_fn);
                             self.initialize_shard_mapping().await;
                         }
                         IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
-                            // Set the collection to empty.
-                            self.reconcile_managed_collection(id, vec![]).await;
+                            self.collection_manager.register_differential_collection(id, read_handle_fn);
+                            // Differential collections start with an empty
+                            // desired state. No need to manually reset.
                         }
                         IntrospectionType::StorageSourceStatistics => {
+                            self.collection_manager.register_differential_collection(id, read_handle_fn);
+
                             let prev = self.snapshot_statistics(id).await;
 
                             let scraper_token = statistics::spawn_statistics_scraper::<
@@ -836,6 +885,8 @@ where
                                 .insert(id, Box::new((scraper_token, web_token)));
                         }
                         IntrospectionType::StorageSinkStatistics => {
+                            self.collection_manager.register_differential_collection(id, read_handle_fn);
+
                             let prev = self.snapshot_statistics(id).await;
 
                             let scraper_token =
@@ -860,6 +911,12 @@ where
                                     IntrospectionType::SourceStatusHistory,
                                 )
                                 .await;
+
+                            // Only register afterwards, so the collection
+                            // manager doesn't accidentally bump the upper,
+                            // which would mess with our cleaning up/partial
+                            // truncation above.
+                            self.collection_manager.register_append_only_collection(id);
 
                             let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
                                 .get_by_name(&ColumnName::from("status"))
@@ -888,6 +945,12 @@ where
                                 )
                                 .await;
 
+                            // Only register afterwards, so the collection
+                            // manager doesn't accidentally bump the upper,
+                            // which would mess with our cleaning up/partial
+                            // truncation above.
+                            self.collection_manager.register_append_only_collection(id);
+
                             let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
                                 .get_by_name(&ColumnName::from("status"))
                                 .expect("schema has not changed")
@@ -913,6 +976,12 @@ where
                                 IntrospectionType::PrivatelinkConnectionStatusHistory,
                             )
                             .await;
+
+                            // Only register afterwards, so the collection
+                            // manager doesn't accidentally bump the upper,
+                            // which would mess with our cleaning up/partial
+                            // truncation above.
+                            self.collection_manager.register_append_only_collection(id);
                         }
 
                         // Truncate compute-maintained collections.
@@ -920,7 +989,9 @@ where
                         | IntrospectionType::ComputeHydrationStatus
                         | IntrospectionType::ComputeOperatorHydrationStatus
                         | IntrospectionType::ComputeMaterializedViewRefreshes => {
-                            self.reconcile_managed_collection(id, vec![]).await;
+                            self.collection_manager.register_differential_collection(id, read_handle_fn);
+                            // Differential collections start with an empty
+                            // desired state. No need to manually reset.
                         }
 
                         // Note [btv] - we don't truncate these, because that uses
@@ -930,13 +1001,21 @@ where
                         | IntrospectionType::SessionHistory
                         | IntrospectionType::StatementLifecycleHistory
                         | IntrospectionType::SqlText => {
-                            // do nothing.
+                            // NOTE(aljoscha): We never remove from these
+                            // collections. Someone, at some point needs to
+                            // think about that! Issue:
+                            // https://github.com/MaterializeInc/materialize/issues/25696
+                            self.collection_manager.register_append_only_collection(id);
                         }
                     }
                 }
                 DataSource::Webhook => {
                     // Register the collection so our manager knows about it.
-                    self.collection_manager.register_collection(id);
+                    //
+                    // NOTE: Maybe this shouldn't be in the collection manager,
+                    // and collection manager should only be responsble for
+                    // built-in introspection collections?
+                    self.collection_manager.register_append_only_collection(id);
                 }
                 DataSource::Progress | DataSource::Other(_) => {}
             };
@@ -2101,7 +2180,7 @@ where
         }
 
         let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
-        self.append_to_managed_collection(id, updates).await;
+        self.collection_manager.update_desired(id, updates).await;
     }
 
     async fn record_replica_frontiers(
@@ -2175,16 +2254,25 @@ where
 
         let id =
             self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
-        self.append_to_managed_collection(id, updates).await;
+        self.collection_manager.update_desired(id, updates).await;
     }
 
-    async fn record_introspection_updates(
+    async fn append_introspection_updates(
         &mut self,
         type_: IntrospectionType,
         updates: Vec<(Row, Diff)>,
     ) {
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
-        self.append_to_managed_collection(id, updates).await;
+        self.collection_manager.blind_write(id, updates).await;
+    }
+
+    async fn update_introspection_collection(
+        &mut self,
+        type_: IntrospectionType,
+        updates: Vec<(Row, Diff)>,
+    ) {
+        let id = self.introspection_ids.lock().expect("poisoned")[&type_];
+        self.collection_manager.update_desired(id, updates).await;
     }
 
     /// With the CRDB based timestamp oracle, there is no longer write timestamp
@@ -2935,13 +3023,12 @@ where
     // TODO(guswynn): we need to be more careful about the update time we get here:
     // <https://github.com/MaterializeInc/materialize/issues/25349>
     async fn snapshot_statistics(&mut self, id: GlobalId) -> Vec<Row> {
-        let frontiers = self
-            .storage_collections
-            .collections_frontiers(vec![id])
-            .expect("missing statistics collection")
-            .expect_element(|| format!("more than one result"));
-
-        let upper = frontiers.write_frontier;
+        let upper = self
+            .persist_monotonic_worker
+            .recent_upper(id)
+            .await
+            .expect("missing collection")
+            .expect("missing collection");
 
         match upper.as_option() {
             Some(f) if f > &T::minimum() => {
@@ -2977,64 +3064,6 @@ where
             .retain(|k, _| self.exports.contains_key(k));
     }
 
-    /// Effectively truncates the `data_shard` associated with `global_id`
-    /// effective as of the system time.
-    ///
-    /// # Panics
-    /// - If `id` does not belong to a collection or is not registered as a
-    ///   managed collection.
-    async fn reconcile_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        let mut reconciled_updates = BTreeMap::<Row, Diff>::new();
-
-        for (row, diff) in updates.into_iter() {
-            *reconciled_updates.entry(row).or_default() += diff;
-        }
-
-        let frontiers = self
-            .storage_collections
-            .collection_frontiers(id)
-            .expect("missing shard mapping collection");
-
-        let upper = frontiers.write_frontier;
-
-        match upper.as_option() {
-            Some(f) if f > &T::minimum() => {
-                let as_of = f.step_back().unwrap();
-
-                let negate = self.snapshot(id, as_of).await.unwrap();
-
-                for (row, diff) in negate.into_iter() {
-                    *reconciled_updates.entry(row).or_default() -= diff;
-                }
-            }
-            // If collection is closed or the frontier is the minimum, we cannot
-            // or don't need to truncate (respectively).
-            _ => {}
-        }
-
-        let updates: Vec<_> = reconciled_updates
-            .into_iter()
-            .filter(|(_, diff)| *diff != 0)
-            .collect();
-
-        if !updates.is_empty() {
-            self.append_to_managed_collection(id, updates).await;
-        }
-    }
-
-    /// Append `updates` to the `data_shard` associated with `global_id`
-    /// effective as of the system time.
-    ///
-    /// # Panics
-    /// - If `id` is not registered as a managed collection.
-    #[instrument(level = "debug", fields(id))]
-    async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        assert!(self.txns_init_run);
-        self.collection_manager
-            .append_to_collection(id, updates)
-            .await;
-    }
-
     /// Initializes the data expressing which global IDs correspond to which
     /// shards. Necessary because we cannot write any of these mappings that we
     /// discover before the shard mapping collection exists.
@@ -3058,11 +3087,17 @@ where
             updates.push((row_buf.clone(), 1));
         }
 
-        self.reconcile_managed_collection(id, updates).await;
+        self.collection_manager.update_desired(id, updates).await;
     }
 
-    /// Effectively truncates the source status history shard except for the
-    /// most recent updates from each ID.
+    /// Effectively truncates the status history shard except for the most
+    /// recent updates from each ID.
+    ///
+    /// NOTE: The history collections are really append-only collections, but
+    /// every-now-and-then we want to retract old updates so that the collection
+    /// does not grow unboundedly. Crucially, these are _not_ incremental
+    /// collections, they are not derived from a state at some time `t` and we
+    /// cannot maintain a desired state for them.
     ///
     /// Returns a map with latest unpacked row per id.
     async fn partially_truncate_status_history(
@@ -3110,18 +3145,14 @@ where
 
         let id = self.introspection_ids.lock().expect("poisoned")[&collection];
 
-        let uppers: BTreeMap<GlobalId, Antichain<T>> = self
-            .storage_collections
-            .active_collection_frontiers()
-            .into_iter()
-            .map(
-                |CollectionFrontiers {
-                     id, write_frontier, ..
-                 }| (id, write_frontier),
-            )
-            .collect();
+        let upper = self
+            .persist_monotonic_worker
+            .recent_upper(id)
+            .await
+            .expect("missing collection")
+            .expect("missing collection");
 
-        let mut rows = match uppers[&id].as_option() {
+        let mut rows = match upper.as_option() {
             Some(f) if f > &T::minimum() => {
                 let as_of = f.step_back().unwrap();
 
@@ -3196,6 +3227,13 @@ where
             }
         }
 
+        // It is very important that we append our retractions at the timestamp
+        // right after the timestamp at which we got our snapshot. Otherwise,
+        // it's possible for someone else to sneak in retractions or other
+        // unexpected changes.
+        let expected_upper = upper.into_option().expect("checked above");
+        let new_upper = TimestampManipulation::step_forward(&expected_upper);
+
         let mut row_buf = Row::default();
         // Updates are only deletes because everything else is already in the shard.
         let updates = deletions
@@ -3204,11 +3242,58 @@ where
                 // Re-pack all rows
                 let mut packer = row_buf.packer();
                 packer.extend(unpacked_row.into_iter());
-                (row_buf.clone(), -1)
+
+                let update = Update {
+                    row: row_buf.clone(),
+                    timestamp: expected_upper.clone(),
+                    diff: -1,
+                };
+
+                update
             })
             .collect();
 
-        self.append_to_managed_collection(id, updates).await;
+        let command = (id, updates, expected_upper, new_upper);
+
+        let res = self
+            .persist_monotonic_worker
+            .compare_and_append(vec![command])
+            .await
+            .expect("command must succeed");
+
+        match res {
+            Ok(_) => {
+                // All good, yay!
+            }
+            Err(storage_err) => {
+                match storage_err {
+                    StorageError::InvalidUppers(failed_ids) => {
+                        assert_eq!(
+                            failed_ids.len(),
+                            1,
+                            "received errors for more than one collection"
+                        );
+                        assert_eq!(
+                            failed_ids[0].id, id,
+                            "received errors for a different collection"
+                        );
+
+                        // This is fine, it just means the upper moved because
+                        // of continual upper advancement or because seomeone
+                        // already appended some more retractions/updates.
+                        //
+                        // NOTE: We might want to attempt these partial
+                        // retractions on an interval, instead of only when
+                        // starting up!
+                        info!(%id, current_upper = ?failed_ids[0].current_upper, "failed to append partial truncation");
+                    }
+                    // Uh-oh, something else went wrong!
+                    other => {
+                        panic!("Unhandled error while appending to managed collection {id:?}: {other:?}")
+                    }
+                }
+            }
+        }
 
         latest_row_per_id
             .into_iter()
@@ -3275,7 +3360,7 @@ where
             updates.push((row_buf.clone(), diff));
         }
 
-        self.append_to_managed_collection(id, updates).await;
+        self.collection_manager.update_desired(id, updates).await;
     }
 
     /// Determines and returns this collection's dependencies, if any.

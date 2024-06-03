@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use differential_dataflow::consolidation;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_ore::now::EpochMillis;
@@ -71,16 +72,36 @@ where
         // by the controller.
         let mut current_metrics = ChangeBatch::new();
 
+        let mut correction = Vec::new();
         {
             let mut shared_stats = shared_stats.lock().expect("poisoned");
             for row in previous_values {
-                current_metrics.update(row.clone(), 1);
                 let current = Stats::unpack(row, &metrics);
 
                 shared_stats
                     .as_mut_stats()
                     .insert(current.0, Some(current.1));
             }
+
+            let mut row_buf = Row::default();
+            for (_, stats) in shared_stats.as_stats().iter() {
+                if let Some(stats) = stats {
+                    stats.pack(row_buf.packer());
+                    correction.push((row_buf.clone(), 1));
+                }
+            }
+        }
+
+        tracing::debug!(%statistics_collection_id, ?correction, "seeding stats collection");
+
+        // Make sure that the desired state matches what is already there, when
+        // we start up!
+        if !correction.is_empty() {
+            current_metrics.extend(correction.iter().cloned());
+
+            collection_mgmt
+                .update_desired(statistics_collection_id, correction)
+                .await;
         }
 
         let mut interval = tokio::time::interval(initial_interval);
@@ -122,12 +143,16 @@ where
                         }
                     }
 
+                    consolidation::consolidate(&mut correction);
+
+                    tracing::trace!(%statistics_collection_id, ?correction, "updating stats collection");
+
                     // Update our view of the output collection and write updates
                     // out to the collection.
                     if !correction.is_empty() {
                         current_metrics.extend(correction.iter().cloned());
                         collection_mgmt
-                            .append_to_collection(statistics_collection_id, correction)
+                            .update_desired(statistics_collection_id, correction)
                             .await;
                     }
                 }
