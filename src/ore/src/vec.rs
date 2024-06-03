@@ -96,7 +96,7 @@ pub trait VecExt<T> {
     /// If the closure returns false, the element will remain in the vector and will not be yielded
     /// by the iterator.
     ///
-    /// Using this method is equivalent to the following code:
+    /// Using this method and consuming the iterator is equivalent to the following code:
     ///
     /// ```
     /// # let some_predicate = |x: &mut i32| { *x == 2 || *x == 3 || *x == 6 };
@@ -141,7 +141,7 @@ pub trait VecExt<T> {
     /// assert_eq!(evens, vec![2, 4, 14, 6, 8]);
     /// assert_eq!(odds, vec![1, 15, 3, 13, 5, 11, 9]);
     /// ```
-    #[must_use]
+    #[must_use = "The vector is modified only if the iterator is consumed"]
     fn drain_filter_swapping<F>(&mut self, filter: F) -> DrainFilterSwapping<'_, T, F>
     where
         F: FnMut(&mut T) -> bool;
