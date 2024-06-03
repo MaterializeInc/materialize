@@ -37,6 +37,8 @@ Explained Query:
     Map (text_to_bytea(#0), digest(#1, "sha512"))
       ReadStorage materialize.public.t_using_dataflow_rendering
 
+Source materialize.public.t_using_dataflow_rendering
+
 Target cluster: quickstart
 
 EOF
