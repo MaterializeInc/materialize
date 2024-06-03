@@ -79,3 +79,21 @@ query T
 SELECT '1 hour'::interval::mz_timestamp
 ----
 3600000
+
+# Casts to timestamp[tz]. 8210266815600000 is roughly `HIGH_DATE` for `CheckedTimestamp`.
+query TTT
+SELECT '1 hour'::interval::mz_timestamp::timestamp, '1 hour'::interval::mz_timestamp::timestamptz, 8210266815600000::mz_timestamp::timestamptz
+----
+1970-01-01 01:00:00
+1970-01-01 01:00:00+00
+262142-12-31 07:00:00+00
+
+# Roughly `HIGH_DATE` + 1 day.
+query error db error: ERROR: timestamp out of range
+SELECT 8210266898400000::mz_timestamp::timestamp
+
+query error db error: ERROR: timestamp out of range
+SELECT 18446744073709551615::mz_timestamp::timestamp
+
+query error db error: ERROR: timestamp out of range
+SELECT 8210266898400000::mz_timestamp::timestamptz

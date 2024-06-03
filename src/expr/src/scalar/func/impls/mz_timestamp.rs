@@ -16,9 +16,10 @@ use mz_repr::{strconv, Timestamp};
 
 use crate::EvalError;
 
-// Conversions to MzTimestamp, and a single conversion from MzTimestamp to
-// String. In general we want to make MzTimestamp a more opaque type, so we
-// easily support casting things to it but not from it.
+// Conversions to and from MzTimestamp to make it ergonomic to use. Although, theoretically, an
+// MzTimestamp might not always mean milliseconds-since-unix-epoch, in practice it currently always
+// does mean that. In order to increase usability of this type, we will provide casts and operators
+// that make that assumption.
 
 sqlfunc!(
     #[sqlname = "mz_timestamp_to_text"]
@@ -124,6 +125,38 @@ sqlfunc!(
             .timestamp_millis()
             .try_into()
             .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "mz_timestamp_to_timestamp"]
+    #[preserves_uniqueness = true]
+    #[inverse = to_unary!(super::CastTimestampToMzTimestamp)]
+    fn cast_mz_timestamp_to_timestamp(
+        a: Timestamp,
+    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+        let ms: i64 = a.try_into().map_err(|_| EvalError::TimestampOutOfRange)?;
+        let ct = DateTime::from_timestamp_millis(ms).and_then(|dt| {
+            let ct: Option<CheckedTimestamp<NaiveDateTime>> = dt.naive_utc().try_into().ok();
+            ct
+        });
+        ct.ok_or(EvalError::TimestampOutOfRange)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "mz_timestamp_to_timestamp_tz"]
+    #[preserves_uniqueness = true]
+    #[inverse = to_unary!(super::CastTimestampTzToMzTimestamp)]
+    fn cast_mz_timestamp_to_timestamp_tz(
+        a: Timestamp,
+    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        let ms: i64 = a.try_into().map_err(|_| EvalError::TimestampOutOfRange)?;
+        let ct = DateTime::from_timestamp_millis(ms).and_then(|dt| {
+            let ct: Option<CheckedTimestamp<DateTime<Utc>>> = dt.try_into().ok();
+            ct
+        });
+        ct.ok_or(EvalError::TimestampOutOfRange)
     }
 );
 

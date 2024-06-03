@@ -33,6 +33,8 @@ Integer and numeric casts must be in the form of milliseconds since the Unix epo
 From | To | Required context
 -----|----|--------
 `mz_timestamp` | `text` | Assignment
+`mz_timestamp` | `timestamp` | Assignment
+`mz_timestamp` | `timestamptz` | Assignment
 `text` | `mz_timestamp` | Assignment
 `uint4` | `mz_timestamp` | Implicit
 `uint8` | `mz_timestamp` | Implicit
