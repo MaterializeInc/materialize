@@ -147,20 +147,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
 
-    /// The set of [`ShardId`]s to finalize.
-    ///
-    /// This is a separate set from `finalized_shards` because we know that
-    /// some environments have many, many finalizable shards that we are
-    /// struggling to finalize.
-    finalizable_shards: BTreeSet<ShardId>,
-
-    /// The set of [`ShardId`]s we have finalized.
-    ///
-    /// This is a separate set from `finalizable_shards` because we know that
-    /// some environments have many, many finalizable shards that we are
-    /// struggling to finalize.
-    finalized_shards: BTreeSet<ShardId>,
-
     /// Keep track of subsources of ingestions that we have dropped. With this,
     /// we can synthesize `DroppedIds` messages when we see one for the "main"
     /// ingestion. We do this because the cluster will not send one back by
@@ -2512,8 +2498,6 @@ where
 
         Self {
             build_info,
-            finalizable_shards: BTreeSet::new(),
-            finalized_shards: BTreeSet::new(),
             dropped_ingestions: BTreeMap::new(),
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
