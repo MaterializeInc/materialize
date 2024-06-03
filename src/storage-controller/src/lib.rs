@@ -2277,7 +2277,7 @@ where
 
     async fn initialize_state(
         &mut self,
-        txn: &mut dyn StorageTxn<T>,
+        txn: &mut (dyn StorageTxn<T> + Send),
         init_ids: BTreeSet<GlobalId>,
         drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
@@ -2288,7 +2288,7 @@ where
 
     async fn prepare_state(
         &mut self,
-        txn: &mut dyn StorageTxn<T>,
+        txn: &mut (dyn StorageTxn<T> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {

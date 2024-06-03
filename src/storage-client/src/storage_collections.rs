@@ -78,7 +78,7 @@ use crate::controller::{
 ///
 /// - Hands out [ReadHolds](ReadHold) that prevent a collection's since from
 /// advancing while it needs to be read at a specific time.
-#[async_trait(?Send)]
+#[async_trait]
 pub trait StorageCollections: Debug {
     type Timestamp: TimelyTimestamp;
 
@@ -93,7 +93,7 @@ pub trait StorageCollections: Debug {
     /// might have known about before and have now been dropped.
     async fn initialize_state(
         &self,
-        txn: &mut dyn StorageTxn<Self::Timestamp>,
+        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         init_ids: BTreeSet<GlobalId>,
         drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
@@ -188,7 +188,7 @@ pub trait StorageCollections: Debug {
     /// subsequent calls that require [`StorageMetadata`] as a parameter.
     async fn prepare_state(
         &self,
-        txn: &mut dyn StorageTxn<Self::Timestamp>,
+        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
@@ -1007,7 +1007,7 @@ where
 }
 
 // See comments on the above impl for StorageCollectionsImpl.
-#[async_trait(?Send)]
+#[async_trait]
 impl<T> StorageCollections for StorageCollectionsImpl<T>
 where
     T: TimelyTimestamp
@@ -1021,15 +1021,17 @@ where
 
     async fn initialize_state(
         &self,
-        txn: &mut dyn StorageTxn<T>,
+        txn: &mut (dyn StorageTxn<T> + Send),
         init_ids: BTreeSet<GlobalId>,
         drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
         let metadata = txn.get_collection_metadata();
+
         let processed_metadata: Result<Vec<_>, _> = metadata
             .into_iter()
             .map(|(id, shard)| ShardId::from_str(&shard).map(|shard| (id, shard)))
             .collect();
+
         let metadata = processed_metadata.map_err(|e| StorageError::Generic(anyhow::anyhow!(e)))?;
         let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
 
@@ -1253,7 +1255,7 @@ where
 
     async fn prepare_state(
         &self,
-        txn: &mut dyn StorageTxn<T>,
+        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
