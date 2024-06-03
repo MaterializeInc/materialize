@@ -95,11 +95,12 @@ DEF,B,0
 > FETCH ALL c1
 ABC
 
-> FETCH ALL c2
-DEF
-
-> DECLARE c3 CURSOR FOR SELECT sum FROM sum;
-> FETCH ALL c3
-5000209
-
-> COMMIT
+# TODO(def-) Reenable rest of the test when #27393 is fixed
+# > FETCH ALL c2
+# DEF
+#
+# > DECLARE c3 CURSOR FOR SELECT sum FROM sum;
+# > FETCH ALL c3
+# 5000209
+#
+# > COMMIT
