@@ -239,6 +239,13 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.compact_bytes]]
+version = "0.1.2"
+when = "2024-05-31"
+user-id = 75844
+user-login = "ParkMyCar"
+user-name = "Parker Timmerman"
+
 [[publisher.core-foundation]]
 version = "0.9.3"
 when = "2022-02-07"
