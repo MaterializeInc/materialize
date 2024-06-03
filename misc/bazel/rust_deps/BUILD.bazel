@@ -28,6 +28,7 @@ build_test(
         "@crates_io//:tikv-jemallocator",
         "@crates_io//:tokio",
         "@crates_io//:libz-sys",
+        "@crates_io//:launchdarkly-server-sdk",
     ],
     visibility = ["//visibility:public"],
 )

@@ -1,5 +1,5 @@
 {
-  "checksum": "e91940df6c4dca70188015dddaf9df9b0e10e1ef057a468636a6eafd35c9152a",
+  "checksum": "2cbf2164b677866ca18a556b1652bda554c17531c27abed940c9802ee27c9139",
   "crates": {
     "abomonation 0.7.3": {
       "name": "abomonation",
@@ -5894,14 +5894,14 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
-    "built 0.5.1": {
+    "built 0.7.3": {
       "name": "built",
-      "version": "0.5.1",
+      "version": "0.7.3",
       "package_url": "https://github.com/lukaslueg/built",
       "repository": {
         "Http": {
-          "url": "https://static.crates.io/crates/built/0.5.1/download",
-          "sha256": "4f346b6890a0dfa7266974910e7df2d5088120dd54721b9b0e5aae1ae5e05715"
+          "url": "https://static.crates.io/crates/built/0.7.3/download",
+          "sha256": "c6a6c0b39c38fd754ac338b00a88066436389c0f029da5d37d1e01091d9b7c17"
         }
       },
       "targets": [
@@ -5923,17 +5923,8 @@
         "compile_data_glob": [
           "**"
         ],
-        "deps": {
-          "common": [
-            {
-              "id": "cargo-lock 7.1.0",
-              "target": "cargo_lock"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2018",
-        "version": "0.5.1"
+        "edition": "2021",
+        "version": "0.7.3"
       },
       "license": "MIT",
       "license_ids": [
@@ -6406,66 +6397,6 @@
         ]
       },
       "license": "MIT OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-APACHE"
-    },
-    "cargo-lock 7.1.0": {
-      "name": "cargo-lock",
-      "version": "7.1.0",
-      "package_url": "https://github.com/RustSec/rustsec/tree/main/cargo-lock",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/cargo-lock/7.1.0/download",
-          "sha256": "6c408da54db4c50d4693f7e649c299bc9de9c23ead86249e5368830bb32a734b"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "cargo_lock",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "cargo_lock",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "semver 1.0.16",
-              "target": "semver"
-            },
-            {
-              "id": "serde 1.0.164",
-              "target": "serde"
-            },
-            {
-              "id": "toml 0.5.9",
-              "target": "toml"
-            },
-            {
-              "id": "url 2.5.0",
-              "target": "url"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2018",
-        "version": "7.1.0"
-      },
-      "license": "Apache-2.0 OR MIT",
       "license_ids": [
         "Apache-2.0",
         "MIT"
@@ -10931,7 +10862,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/differential-dataflow.git",
           "commitish": {
-            "Rev": "8d077e51068d4c6a073b3b34d66351c789a49a0d"
+            "Rev": "05a27dafa809c7f561a5a445d623db68559a95b4"
           }
         }
       },
@@ -11292,7 +11223,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/differential-dataflow.git",
           "commitish": {
-            "Rev": "8d077e51068d4c6a073b3b34d66351c789a49a0d"
+            "Rev": "05a27dafa809c7f561a5a445d623db68559a95b4"
           },
           "strip_prefix": "dogsdogsdogs"
         }
@@ -13473,14 +13404,14 @@
       ],
       "license_file": null
     },
-    "flatcontainer 0.1.0": {
+    "flatcontainer 0.4.0": {
       "name": "flatcontainer",
-      "version": "0.1.0",
+      "version": "0.4.0",
       "package_url": "https://github.com/antiguru/flatcontainer",
       "repository": {
         "Http": {
-          "url": "https://static.crates.io/crates/flatcontainer/0.1.0/download",
-          "sha256": "c3c781a27f1f232edc758a11be8eb2e391831fd4a264d6b954b7e7c3ed802758"
+          "url": "https://static.crates.io/crates/flatcontainer/0.4.0/download",
+          "sha256": "48bf7552d4ab459c1fc6894d9895b5d21485fddf9885190c6ae690cbfca24a79"
         }
       },
       "targets": [
@@ -13532,7 +13463,7 @@
           ],
           "selects": {}
         },
-        "version": "0.1.0"
+        "version": "0.4.0"
       },
       "license": "MIT OR Apache-2.0",
       "license_ids": [
@@ -19018,7 +18949,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/rust-server-sdk",
           "commitish": {
-            "Rev": "df1440c8b93a192d50470d1b258615febe52f1f8"
+            "Rev": "87c0f67aa51fa936d3a6a49605e8e3f565d15281"
           },
           "strip_prefix": "launchdarkly-server-sdk"
         }
@@ -19160,7 +19091,7 @@
         "deps": {
           "common": [
             {
-              "id": "built 0.5.1",
+              "id": "built 0.7.3",
               "target": "built"
             }
           ],
@@ -19173,6 +19104,17 @@
               "target": "ring"
             }
           ],
+          "selects": {}
+        },
+        "build_script_env": {
+          "common": {
+            "CARGO_PKG_AUTHORS": "LaunchDarkly",
+            "CARGO_PKG_DESCRIPTION": "",
+            "CARGO_PKG_HOMEPAGE": "https://docs.launchdarkly.com/sdk/server-side/rust",
+            "CARGO_PKG_LICENSE": "Apache-2.0",
+            "CARGO_PKG_REPOSITORY": "https://github.com/launchdarkly/rust-server-sdk",
+            "RUSTDOC": ""
+          },
           "selects": {}
         }
       },
@@ -21869,7 +21811,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/mysql_async",
           "commitish": {
-            "Rev": "6afd2136181f2ec93b7ca7de524f6d02b6f10c1d"
+            "Rev": "a0dbdb7c76e6ff7a27dfa2523a398ca686413737"
           }
         }
       },
@@ -23501,9 +23443,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-balancerd 0.102.0-dev": {
+    "mz-balancerd 0.103.0-dev": {
       "name": "mz-balancerd",
-      "version": "0.102.0-dev",
+      "version": "0.103.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -23637,7 +23579,7 @@
           ],
           "selects": {}
         },
-        "version": "0.102.0-dev"
+        "version": "0.103.0-dev"
       },
       "license": null,
       "license_ids": [],
@@ -24007,9 +23949,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-catalog-debug 0.102.0-dev": {
+    "mz-catalog-debug 0.103.0-dev": {
       "name": "mz-catalog-debug",
-      "version": "0.102.0-dev",
+      "version": "0.103.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [],
@@ -24064,7 +24006,7 @@
           "selects": {}
         },
         "edition": "2021",
-        "version": "0.102.0-dev"
+        "version": "0.103.0-dev"
       },
       "license": null,
       "license_ids": [],
@@ -24588,9 +24530,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-clusterd 0.102.0-dev": {
+    "mz-clusterd 0.103.0-dev": {
       "name": "mz-clusterd",
-      "version": "0.102.0-dev",
+      "version": "0.103.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [],
@@ -24649,7 +24591,7 @@
           "selects": {}
         },
         "edition": "2021",
-        "version": "0.102.0-dev"
+        "version": "0.103.0-dev"
       },
       "license": null,
       "license_ids": [],
@@ -25351,9 +25293,9 @@
       ],
       "license_file": null
     },
-    "mz-environmentd 0.102.0-dev": {
+    "mz-environmentd 0.103.0-dev": {
       "name": "mz-environmentd",
-      "version": "0.102.0-dev",
+      "version": "0.103.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -25493,7 +25435,7 @@
               "target": "mime"
             },
             {
-              "id": "mz-environmentd 0.102.0-dev",
+              "id": "mz-environmentd 0.103.0-dev",
               "target": "build_script_build"
             },
             {
@@ -25718,7 +25660,7 @@
           ],
           "selects": {}
         },
-        "version": "0.102.0-dev"
+        "version": "0.103.0-dev"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -28442,9 +28384,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-persist-client 0.102.0-dev": {
+    "mz-persist-client 0.103.0-dev": {
       "name": "mz-persist-client",
-      "version": "0.102.0-dev",
+      "version": "0.103.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -28527,7 +28469,11 @@
               "target": "hex"
             },
             {
-              "id": "mz-persist-client 0.102.0-dev",
+              "id": "itertools 0.10.5",
+              "target": "itertools"
+            },
+            {
+              "id": "mz-persist-client 0.103.0-dev",
               "target": "build_script_build"
             },
             {
@@ -28636,7 +28582,7 @@
           ],
           "selects": {}
         },
-        "version": "0.102.0-dev"
+        "version": "0.103.0-dev"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -33240,9 +33186,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-testdrive 0.102.0-dev": {
+    "mz-testdrive 0.103.0-dev": {
       "name": "mz-testdrive",
-      "version": "0.102.0-dev",
+      "version": "0.103.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -33377,7 +33323,7 @@
               "target": "mysql_async"
             },
             {
-              "id": "mz-testdrive 0.102.0-dev",
+              "id": "mz-testdrive 0.103.0-dev",
               "target": "build_script_build"
             },
             {
@@ -33505,7 +33451,7 @@
           ],
           "selects": {}
         },
-        "version": "0.102.0-dev"
+        "version": "0.103.0-dev"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -50187,7 +50133,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/timely-dataflow.git",
           "commitish": {
-            "Rev": "89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
+            "Rev": "14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
           },
           "strip_prefix": "timely"
         }
@@ -50287,7 +50233,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/timely-dataflow.git",
           "commitish": {
-            "Rev": "89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
+            "Rev": "14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
           },
           "strip_prefix": "bytes"
         }
@@ -50328,7 +50274,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/timely-dataflow.git",
           "commitish": {
-            "Rev": "89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
+            "Rev": "14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
           },
           "strip_prefix": "communication"
         }
@@ -50422,7 +50368,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/timely-dataflow.git",
           "commitish": {
-            "Rev": "89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
+            "Rev": "14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
           },
           "strip_prefix": "container"
         }
@@ -50453,7 +50399,7 @@
               "target": "columnation"
             },
             {
-              "id": "flatcontainer 0.1.0",
+              "id": "flatcontainer 0.4.0",
               "target": "flatcontainer"
             },
             {
@@ -50480,7 +50426,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/timely-dataflow.git",
           "commitish": {
-            "Rev": "89bcb738c573f2b2b23ac3ec71d858c5afc54bb0"
+            "Rev": "14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
           },
           "strip_prefix": "logging"
         }
@@ -59732,17 +59678,17 @@
     "mz-avro 0.7.0": "src/avro",
     "mz-aws-secrets-controller 0.1.0": "src/aws-secrets-controller",
     "mz-aws-util 0.0.0": "src/aws-util",
-    "mz-balancerd 0.102.0-dev": "src/balancerd",
+    "mz-balancerd 0.103.0-dev": "src/balancerd",
     "mz-build-info 0.0.0": "src/build-info",
     "mz-build-tools 0.0.0": "src/build-tools",
     "mz-catalog 0.0.0": "src/catalog",
-    "mz-catalog-debug 0.102.0-dev": "src/catalog-debug",
+    "mz-catalog-debug 0.103.0-dev": "src/catalog-debug",
     "mz-ccsr 0.0.0": "src/ccsr",
     "mz-cloud-api 0.0.0": "src/cloud-api",
     "mz-cloud-resources 0.0.0": "src/cloud-resources",
     "mz-cluster 0.0.0": "src/cluster",
     "mz-cluster-client 0.0.0": "src/cluster-client",
-    "mz-clusterd 0.102.0-dev": "src/clusterd",
+    "mz-clusterd 0.103.0-dev": "src/clusterd",
     "mz-compute 0.0.0": "src/compute",
     "mz-compute-client 0.0.0": "src/compute-client",
     "mz-compute-types 0.0.0": "src/compute-types",
@@ -59750,7 +59696,7 @@
     "mz-controller-types 0.0.0": "src/controller-types",
     "mz-dyncfg 0.0.0": "src/dyncfg",
     "mz-dyncfgs 0.0.0": "src/dyncfgs",
-    "mz-environmentd 0.102.0-dev": "src/environmentd",
+    "mz-environmentd 0.103.0-dev": "src/environmentd",
     "mz-expr 0.0.0": "src/expr",
     "mz-expr-parser 0.0.0": "src/expr-parser",
     "mz-expr-test-util 0.0.0": "src/expr-test-util",
@@ -59776,7 +59722,7 @@
     "mz-ore 0.1.0": "src/ore",
     "mz-ore-proc 0.1.0": "src/ore-proc",
     "mz-persist 0.0.0": "src/persist",
-    "mz-persist-client 0.102.0-dev": "src/persist-client",
+    "mz-persist-client 0.103.0-dev": "src/persist-client",
     "mz-persist-proc 0.1.0": "src/persist-proc",
     "mz-persist-types 0.0.0": "src/persist-types",
     "mz-pgcopy 0.0.0": "src/pgcopy",
@@ -59815,7 +59761,7 @@
     "mz-storage-operators 0.0.0": "src/storage-operators",
     "mz-storage-types 0.0.0": "src/storage-types",
     "mz-test-util 0.0.0": "test/test-util",
-    "mz-testdrive 0.102.0-dev": "src/testdrive",
+    "mz-testdrive 0.103.0-dev": "src/testdrive",
     "mz-timely-util 0.0.0": "src/timely-util",
     "mz-timestamp-oracle 0.0.0": "src/timestamp-oracle",
     "mz-tls-util 0.0.0": "src/tls-util",

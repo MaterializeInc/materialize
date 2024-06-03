@@ -218,10 +218,6 @@ criteria = "safe-to-deploy"
 version = "0.4.3"
 criteria = "safe-to-deploy"
 
-[[exemptions.built]]
-version = "0.5.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.bytecount]]
 version = "0.6.3"
 criteria = "safe-to-deploy"
