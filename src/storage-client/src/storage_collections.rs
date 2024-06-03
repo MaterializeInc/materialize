@@ -1192,15 +1192,15 @@ where
         // here.
         let read_handle = self.read_handle_for_snapshot(&metadata, id).await;
 
-        let data_snapshot = match metadata {
-            CollectionMetadata {
-                txns_shard: Some(txns_id),
-                data_shard,
-                ..
-            } => {
-                let as_of = as_of
-                    .as_option()
-                    .expect("cannot read as_of the empty antichain");
+        let data_snapshot = match (metadata, as_of.as_option()) {
+            (
+                CollectionMetadata {
+                    txns_shard: Some(txns_id),
+                    data_shard,
+                    ..
+                },
+                Some(as_of),
+            ) => {
                 let txns_read = self.txns.expect_enabled_lazy(&txns_id);
                 txns_read.update_gt(as_of.clone()).await;
                 let data_snapshot = txns_read.data_snapshot(data_shard, as_of.clone()).await;
