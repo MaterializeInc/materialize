@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_catalog::memory::objects::{CatalogItem, Index, Log};
+use mz_catalog::memory::objects::{CatalogItem, Index};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{CollectionPlan, MirScalarExpr};
 use mz_repr::GlobalId;
@@ -56,21 +56,13 @@ impl DataflowBuilder<'_> {
                     }
                     CatalogItem::Source(_)
                     | CatalogItem::Table(_)
-                    | CatalogItem::MaterializedView(_)
-                    | CatalogItem::Log(Log {
-                        has_storage_collection: true,
-                        ..
-                    }) => {
+                    | CatalogItem::MaterializedView(_) => {
                         // Record that we are missing at least one index.
                         id_bundle.storage_ids.insert(id);
                     }
-                    CatalogItem::Log(Log {
-                        has_storage_collection: false,
-                        ..
-                    }) => {
-                        // Log sources without storage collections should always
-                        // be protected by an index.
-                        panic!("log source without storage collection {id} is missing index");
+                    CatalogItem::Log(_) => {
+                        // Log sources should always have an index.
+                        panic!("log source {id} is missing index");
                     }
                     _ => {
                         // Non-indexable thing; no work to do.
