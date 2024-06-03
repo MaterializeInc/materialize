@@ -100,7 +100,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::ProtoBatch;
@@ -260,28 +259,6 @@ impl PersistApi {
             .open(self.collection.persist_location.clone())
             .await
             .unwrap_or_else(|error| panic!("error opening persist client: {error}"))
-    }
-
-    async fn open_handles(
-        &self,
-    ) -> (
-        WriteHandle<SourceData, (), Timestamp, Diff>,
-        ReadHandle<SourceData, (), Timestamp, Diff>,
-    ) {
-        self.open_client()
-            .await
-            .open(
-                self.collection.data_shard,
-                Arc::new(self.collection.relation_desc.clone()),
-                Arc::new(UnitSchema),
-                Diagnostics {
-                    shard_name: self.shard_name.clone(),
-                    handle_purpose: self.purpose.clone(),
-                },
-                false,
-            )
-            .await
-            .unwrap_or_else(|error| panic!("error opening persist handles: {error}"))
     }
 
     async fn open_writer(&self) -> WriteHandle<SourceData, (), Timestamp, Diff> {
@@ -598,17 +575,11 @@ mod mint {
             persist_api: PersistApi,
             as_of: Antichain<Timestamp>,
         ) {
-            let (mut writer, mut reader) = persist_api.open_handles().await;
+            let mut writer = persist_api.open_writer().await;
 
-            let mut upper = as_of;
-            upper.join_assign(reader.since());
+            let upper = as_of;
 
             advance_shard_upper(&mut writer, upper.clone()).await;
-
-            writer.expire().await;
-
-            reader.downgrade_since(&upper).await;
-            self.initial_read_hold = Some(reader);
 
             self.persist_frontiers.ok.clone_from(&upper);
             self.persist_frontiers.err = upper;
