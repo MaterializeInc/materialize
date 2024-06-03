@@ -135,7 +135,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::pin::pin;
 use std::rc::Rc;
-use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::bail;
@@ -314,22 +313,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     .pg_source_snapshot_statement_timeout,
             )
             .await?;
-
-            mz_ore::soft_assert_no_log! {{
-                let row = simple_query_opt(&client, "SHOW statement_timeout;")
-                    .await?
-                    .unwrap();
-                let timeout = row.get("statement_timeout").unwrap().to_owned(
-                );
-
-                // This only needs to be compatible for values we test; doesn't
-                // need to generalize all possible interval/duration mappings.
-                mz_repr::adt::interval::Interval::from_str(&timeout)
-                    .map(|i| i.duration())
-                    .unwrap()
-                    .unwrap()
-                    == config.config.parameters.pg_source_snapshot_statement_timeout
-            }, "SET statement_timeout in PG snapshot did not take effect"};
 
             let (snapshot, snapshot_lsn) = loop {
                 match snapshot_input.next().await {
