@@ -51,7 +51,7 @@ class Benchmark:
         if measure_memory:
             self._memory_aggregation = aggregation_class()
 
-    def run(self) -> list[Aggregation]:
+    def create_scenario_instance(self) -> Scenario:
         scale = self._scenario_cls.SCALE
 
         if self._scale and not self._scenario_cls.FIXED_SCALE:
@@ -63,12 +63,15 @@ class Benchmark:
                 scale = float(self._scale)
 
         scenario_class = self._scenario_cls
-        scenario = scenario_class(
+        return scenario_class(
             scale=scale,
             mz_version=self._mz_version,
             default_size=self._default_size,
             seed=self._seed,
         )
+
+    def run(self) -> list[Aggregation]:
+        scenario = self.create_scenario_instance()
         name = scenario.name()
 
         ui.header(
