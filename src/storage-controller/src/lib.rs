@@ -2287,7 +2287,7 @@ where
     }
 
     async fn prepare_state(
-        &mut self,
+        &self,
         txn: &mut (dyn StorageTxn<T> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,

@@ -712,7 +712,7 @@ pub trait StorageController: Debug {
     /// The data modified in the `StorageTxn` must be made available in all
     /// subsequent calls that require [`StorageMetadata`] as a parameter.
     async fn prepare_state(
-        &mut self,
+        &self,
         txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
