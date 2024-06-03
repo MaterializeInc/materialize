@@ -23,7 +23,7 @@ certificates) can be specified as plain `text`, or also stored as secrets.
 
 ### AWS
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 An Amazon Web Services (AWS) connection provides Materialize with access to an
 Identity and Access Management (IAM) user or role in your AWS account. You can
