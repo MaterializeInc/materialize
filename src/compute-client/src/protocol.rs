@@ -42,11 +42,12 @@
 //!
 //! # Protocol Stages
 //!
-//! The compute protocol consists of three stages that must be transitioned in order:
+//! The compute protocol consists of four stages that must be transitioned in order:
 //!
 //!   1. Creation
 //!   2. Initialization
-//!   3. Computation
+//!   3. Computation (read-only)
+//!   4. Computation (read-write)
 //!
 //! ## Creation Stage
 //!
@@ -75,13 +76,18 @@
 //! reconciliation process).
 //!
 //! The replica may send responses to computation commands it receives. It may also opt to defer
-//! sending responses to the computation stage instead.
+//! sending responses to the computation stages instead.
 //!
-//! ## Computation Stage
+//! ## Computation Stage (read-only)
 //!
-//! The computation stage begins as soon as the compute controller has sent the
+//! This computation stage begins as soon as the compute controller has sent the
 //! [`InitializationComplete`] command. In this stage, the compute controller instructs the replica
 //! to create and maintain dataflows, and to perform peeks on indexes exported by dataflows.
+//!
+//! While in the read-only computation stage, the replica must not affect
+//! changes to external systems (writes). For the most part this means it cannot
+//! write to persist. The replica can transition out of the read-only stage when
+//! receiving an [`AllowWrites`] command.
 //!
 //! The compute controller may send any number of computation commands:
 //!
@@ -99,6 +105,14 @@
 //! The replica must send the required responses to computation commands. This includes commands it
 //! has received in the initialization phase that have not already been responded to.
 //!
+//! ## Computation Stage (read-write)
+//!
+//! The read-write computation stage is exactly like the read-only computation stage, with the
+//! addition that now the replica _can_ affect writes to external systems. This stage begins once
+//! the controller has sent the [`AllowWrites`] command.
+//!
+//! The replica cannot transition back to the read-only computation stage from the read-write stage.
+//!
 //! [`ComputeCommand`]: self::command::ComputeCommand
 //! [`CreateTimely`]: self::command::ComputeCommand::CreateTimely
 //! [`CreateInstance`]: self::command::ComputeCommand::CreateInstance
@@ -106,6 +120,7 @@
 //! [`CreateDataflow`]: self::command::ComputeCommand::CreateDataflow
 //! [`Schedule`]: self::command::ComputeCommand::Schedule
 //! [`AllowCompaction`]: self::command::ComputeCommand::AllowCompaction
+//! [`AllowWrites`]: self::command::ComputeCommand::AllowWrites
 //! [`Peek`]: self::command::ComputeCommand::Peek
 //! [`CancelPeek`]: self::command::ComputeCommand::CancelPeek
 //! [`UpdateConfiguration`]: self::command::ComputeCommand::UpdateConfiguration
