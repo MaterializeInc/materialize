@@ -2319,7 +2319,11 @@ impl WithOptionName for AlterSourceAddSubsourceOptionName {
     /// this value could contain sensitive user data. If you're uncertain, err
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
-        false
+        match self {
+            AlterSourceAddSubsourceOptionName::Details
+            | AlterSourceAddSubsourceOptionName::TextColumns
+            | AlterSourceAddSubsourceOptionName::IgnoreColumns => false,
+        }
     }
 }
 

@@ -23,7 +23,7 @@ use mz_sql_parser::ast::{
 use crate::catalog::{SessionCatalog, SubsourceCatalog};
 use crate::names::Aug;
 use crate::plan::{PlanError, StatementContext};
-use crate::pure::MySqlSourcePurificationError;
+use crate::pure::{MySqlSourcePurificationError, ResolvedItemName};
 
 use super::RequestedSubsource;
 
@@ -74,6 +74,7 @@ pub(super) fn derive_catalog_from_tables<'a>(
 
 pub(super) fn generate_targeted_subsources(
     scx: &StatementContext,
+    source_name: Option<ResolvedItemName>,
     validated_requested_subsources: Vec<RequestedSubsource<MySqlTableDesc>>,
 ) -> Result<Vec<CreateSubsourceStatement<Aug>>, PlanError> {
     let mut subsources = vec![];
@@ -139,9 +140,9 @@ pub(super) fn generate_targeted_subsources(
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
             columns,
-            // We don't know the primary source's `GlobalId` yet; fill it in
-            // once we generate it.
-            of_source: None,
+            // We might not know the primary source's `GlobalId` yet; if not,
+            // we'll fill it in once we generate it.
+            of_source: source_name.clone(),
             constraints,
             if_not_exists: false,
             with_options: vec![CreateSubsourceOption {
@@ -168,10 +169,16 @@ pub(super) fn map_column_refs<'a>(
                 schema_name: name.0[0].as_str(),
                 table_name: name.0[1].as_str(),
             };
-            table_to_cols
+            let new = table_to_cols
                 .entry(key)
                 .or_insert_with(BTreeSet::new)
                 .insert(name.0[2].as_str());
+            if !new {
+                return Err(PlanError::InvalidOptionValue {
+                    option_name: option_type.to_ast_string(),
+                    err: Box::new(PlanError::UnexpectedDuplicateReference { name: name.clone() }),
+                });
+            }
         } else {
             return Err(PlanError::InvalidOptionValue {
                 option_name: option_type.to_ast_string(),
@@ -198,7 +205,7 @@ pub(super) fn normalize_column_refs<'a>(
     });
 
     if !unknown.is_empty() {
-        return Err(MySqlSourcePurificationError::DanglingTextColumns { items: unknown });
+        return Err(MySqlSourcePurificationError::DanglingColumns { items: unknown });
     }
 
     let mut seq: Vec<_> = seq
@@ -255,7 +262,8 @@ pub(super) async fn purify_subsources(
     referenced_subsources: &mut Option<ReferencedSubsources>,
     text_columns: Vec<UnresolvedItemName>,
     ignore_columns: Vec<UnresolvedItemName>,
-    source_name: &UnresolvedItemName,
+    resolved_source_name: Option<ResolvedItemName>,
+    unresolved_source_name: &UnresolvedItemName,
     catalog: &impl SessionCatalog,
 ) -> Result<PurifiedSubsources, PlanError> {
     // Determine which table schemas to request from mysql. Note that in mysql
@@ -333,7 +341,8 @@ pub(super) async fn purify_subsources(
         ReferencedSubsources::All => {
             for table in &tables {
                 let upstream_name = mysql_upstream_name(table)?;
-                let subsource_name = super::subsource_name_gen(source_name, &table.name)?;
+                let subsource_name =
+                    super::subsource_name_gen(unresolved_source_name, &table.name)?;
                 validated_requested_subsources.push(RequestedSubsource {
                     upstream_name,
                     subsource_name,
@@ -361,7 +370,8 @@ pub(super) async fn purify_subsources(
                 }
 
                 let upstream_name = mysql_upstream_name(table)?;
-                let subsource_name = super::subsource_name_gen(source_name, &table.name)?;
+                let subsource_name =
+                    super::subsource_name_gen(unresolved_source_name, &table.name)?;
                 validated_requested_subsources.push(RequestedSubsource {
                     upstream_name,
                     subsource_name,
@@ -373,7 +383,7 @@ pub(super) async fn purify_subsources(
             // The user manually selected a subset of upstream tables so we need to
             // validate that the names actually exist and are not ambiguous
             validated_requested_subsources =
-                super::subsource_gen(subsources, &mysql_catalog, source_name)?;
+                super::subsource_gen(subsources, &mysql_catalog, unresolved_source_name)?;
 
             // subsource_gen automatically inserts the "fully qualified
             // name," which for MySQL sources includes the fake database
@@ -403,7 +413,8 @@ pub(super) async fn purify_subsources(
     validate_requested_subsources_privileges(&validated_requested_subsources, conn).await?;
 
     let scx = StatementContext::new(None, catalog);
-    let new_subsources = generate_targeted_subsources(&scx, validated_requested_subsources)?;
+    let new_subsources =
+        generate_targeted_subsources(&scx, resolved_source_name, validated_requested_subsources)?;
 
     Ok(PurifiedSubsources {
         new_subsources,

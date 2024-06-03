@@ -212,8 +212,8 @@ impl<C: ConnectionAccess> AlterCompatible for MySqlSourceConnection<C> {
             connection_id,
             connection,
             details,
-            text_columns,
-            ignore_columns,
+            text_columns: _,
+            ignore_columns: _,
         } = self;
 
         let compatibility_checks = [
@@ -222,9 +222,10 @@ impl<C: ConnectionAccess> AlterCompatible for MySqlSourceConnection<C> {
                 connection.alter_compatible(id, &other.connection).is_ok(),
                 "connection",
             ),
-            (details == &other.details, "details"),
-            (text_columns == &other.text_columns, "text_columns"),
-            (ignore_columns == &other.ignore_columns, "ignore_columns"),
+            (
+                details.alter_compatible(id, &other.details).is_ok(),
+                "details",
+            ),
         ];
 
         for (compatible, field) in compatibility_checks {

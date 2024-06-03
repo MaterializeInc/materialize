@@ -243,8 +243,8 @@ pub enum MySqlSourcePurificationError {
     UnrecognizedTypes { cols: Vec<(String, String, String)> },
     #[error("duplicated column name references in table {0}: {1:?}")]
     DuplicatedColumnNames(String, Vec<String>),
-    #[error("TEXT COLUMNS refers to columns not currently being added")]
-    DanglingTextColumns { items: Vec<UnresolvedItemName> },
+    #[error("Reference to columns not currently being added")]
+    DanglingColumns { items: Vec<UnresolvedItemName> },
     #[error("Invalid MySQL table reference: {0}")]
     InvalidTableReference(String),
     #[error("No tables found")]
@@ -267,7 +267,7 @@ impl MySqlSourcePurificationError {
                     ", "
                 )
             )),
-            Self::DanglingTextColumns { items } => Some(format!(
+            Self::DanglingColumns { items } => Some(format!(
                 "the following columns are referenced but not added: {}",
                 itertools::join(items, ", ")
             )),

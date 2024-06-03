@@ -956,6 +956,7 @@ async fn purify_create_source(
                 referenced_subsources,
                 text_columns,
                 ignore_columns,
+                None,
                 source_name,
                 &catalog,
             )
@@ -1387,6 +1388,7 @@ async fn purify_alter_source(
                 &mut referenced_subsources,
                 text_columns,
                 ignore_columns,
+                Some(resolved_source_name.clone()),
                 &unresolved_source_name,
                 &catalog,
             )
