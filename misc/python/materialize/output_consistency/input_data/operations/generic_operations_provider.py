@@ -20,8 +20,6 @@ from materialize.output_consistency.input_data.params.number_operation_param imp
 from materialize.output_consistency.input_data.return_specs.dynamic_return_spec import (
     DynamicReturnTypeSpec,
 )
-from materialize.output_consistency.input_data.return_specs.other_return_spec import (
-    OtherReturnTypeSpec,
 from materialize.output_consistency.input_data.special.data_type_enum_param import (
     TypeEnumConstantOperationParam,
 )
@@ -94,7 +92,7 @@ GENERIC_OPERATION_TYPES.append(
             AnyOperationParam(),
             TypeEnumConstantOperationParam(must_be_pg_compatible=True),
         ],
-        OtherReturnTypeSpec(),
+        DynamicReturnTypeSpec(param_index_to_take_type=1),
         tags={TAG_CASTING},
     )
 )
