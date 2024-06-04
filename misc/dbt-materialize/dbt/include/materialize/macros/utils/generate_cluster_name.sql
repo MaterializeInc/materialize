@@ -13,11 +13,9 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro generate_cluster_name_internal(custom_cluster_name, force_deploy_suffix=False) -%}
+{% macro materialize__generate_deploy_cluster_name(custom_cluster_name) -%}
 
-    {%- set cluster_name = adapter.dispatch('generate_cluster_name', 'materialize')(custom_cluster_name) -%}
-    {%- set deploy_suffix = "_dbt_deploy" if var('deploy', False) or force_deploy_suffix else "" -%}
-    {{ cluster_name }}{{ deploy_suffix }}
+    {{ custom_cluster_name }}_dbt_deploy
 
 {%- endmacro %}
 

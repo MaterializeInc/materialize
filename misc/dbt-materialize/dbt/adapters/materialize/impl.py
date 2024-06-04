@@ -291,3 +291,21 @@ class MaterializeAdapter(PostgresAdapter):
         self.connections.execute(f"drop view {view_name}")
 
         return columns
+
+    @available
+    def generate_final_cluster_name(
+        self, cluster_name: str, force_deploy_suffix: bool = False
+    ) -> str:
+        cluster_name = self.execute_macro(
+            "materialize__generate_cluster_name",
+            kwargs={"custom_cluster_name": cluster_name},
+        )
+        if (
+            self.connections.profile.cli_vars.get("deploy", False)
+            or force_deploy_suffix
+        ):
+            cluster_name = self.execute_macro(
+                "materialize__generate_deploy_cluster_name",
+                kwargs={"custom_cluster_name": cluster_name},
+            )
+        return cluster_name

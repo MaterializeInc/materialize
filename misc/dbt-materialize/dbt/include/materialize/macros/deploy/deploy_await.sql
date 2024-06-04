@@ -38,7 +38,7 @@
 {% set clusters = target_config.get('clusters', []) %}
 
 {% for cluster in clusters %}
-    {% set deploy_cluster = generate_cluster_name_internal(cluster, force_deploy_suffix=True) %}
+    {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
     {{ await_cluster_ready(deploy_cluster, poll_interval) }}
 {% endfor %}
 {% endmacro %}
