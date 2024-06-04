@@ -57,7 +57,9 @@ def get_or_query_data(
     if no_fetch and not exists_file(cache_file_path):
         raise RuntimeError(f"File missing: {cache_file_path}")
 
-    if fetch_mode == FetchMode.AUTO and exists_file_with_recent_data(
+    if fetch_mode == FetchMode.AVOID and exists_file(cache_file_path):
+        no_fetch = True
+    elif fetch_mode == FetchMode.AUTO and exists_file_with_recent_data(
         cache_file_path, max_allowed_cache_age_in_hours
     ):
         no_fetch = True
