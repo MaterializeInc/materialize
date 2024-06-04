@@ -532,8 +532,8 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
     # topic should be populated with and what should be the upsert state size.
     pad_len = 1024
     string_pad = "x" * pad_len  # 1KB
-    repeat = 250 * 1024  # repeat * string_pad = 250MB upsert state size
-    updates_count = 2  # repeat * updates_count = 500MB total kafka topic size with multiple updates for the same key
+    repeat = 100 * 1024  # repeat * string_pad = 100MB upsert state size
+    updates_count = 20  # repeat * updates_count = 2000MB total kafka topic size with multiple updates for the same key
 
     backpressure_bytes = 50 * 1024 * 1024  # 50MB
 
@@ -549,6 +549,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             additional_system_parameter_defaults={
                 "disk_cluster_replicas_default": "true",
                 "enable_disk_cluster_replicas": "true",
+                "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                 # Force backpressure to be enabled.
                 "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                 "storage_dataflow_max_inflight_bytes_disk_only": "true",
@@ -604,6 +605,19 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 {
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
+                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
+                    "storage_dataflow_max_inflight_bytes_disk_only": "true",
+                },
+            ),
+            (
+                "default with RocksDB Merge Operator",
+                {
+                    "storage_rocksdb_use_merge_operator": "true",
+                    "disk_cluster_replicas_default": "true",
+                    "enable_disk_cluster_replicas": "true",
+                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                     "storage_dataflow_max_inflight_bytes_disk_only": "true",
@@ -614,6 +628,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 {
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
+                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                     "storage_dataflow_max_inflight_bytes_disk_only": "true",
@@ -626,6 +641,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 {
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
+                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                     "storage_dataflow_max_inflight_bytes_disk_only": "true",
@@ -634,6 +650,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 },
             ),
         ]
+        last_latency = None
         for scenario_name, mz_configs in scenarios:
             with c.override(
                 Materialized(
@@ -664,11 +681,14 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 """
                     )
                 )
-
-                rehydration_latency = c.sql_query(
-                    """select max(rehydration_latency)
-                    from mz_internal.mz_source_statistics_raw st
-                    join mz_sources s on s.id = st.id
-                    where name = 's1';"""
-                )[0]
+                # ensure we wait till the stat is updated
+                rehydration_latency = last_latency
+                while rehydration_latency == last_latency:
+                    rehydration_latency = c.sql_query(
+                        """select max(rehydration_latency)
+                        from mz_internal.mz_source_statistics_raw st
+                        join mz_sources s on s.id = st.id
+                        where name = 's1';"""
+                    )[0]
+                last_latency = rehydration_latency
                 print(f"Scenario {scenario_name} took {rehydration_latency} ms")
