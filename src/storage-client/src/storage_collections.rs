@@ -244,17 +244,6 @@ pub trait StorageCollections: Debug {
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Drops the read capability for the collections and allows their resources
-    /// to be reclaimed.
-    ///
-    /// Collection state is only fully dropped, however, once there are not more
-    /// outstanding [ReadHolds](ReadHold) for a collection.
-    fn drop_collections(
-        &self,
-        storage_metadata: &StorageMetadata,
-        identifiers: Vec<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
     /// Drops the read capability for the sources and allows their resources to
     /// be reclaimed.
     ///
@@ -523,18 +512,6 @@ where
             holds_tx,
             _background_task: Arc::new(background_task.abort_on_drop()),
         }
-    }
-
-    /// Validate that a collection exists for all identifiers, and error if any
-    /// do not.
-    fn validate_collection_ids(
-        &self,
-        ids: impl Iterator<Item = GlobalId>,
-    ) -> Result<(), StorageError<T>> {
-        for id in ids {
-            self.check_exists(id)?;
-        }
-        Ok(())
     }
 
     /// Opens a write and critical since handles for the given `shard`.
@@ -1702,19 +1679,6 @@ where
                 }
             }
         }
-
-        Ok(())
-    }
-
-    fn drop_collections(
-        &self,
-        storage_metadata: &StorageMetadata,
-        identifiers: Vec<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
-        debug!(?identifiers, "drop_collections");
-
-        self.validate_collection_ids(identifiers.iter().cloned())?;
-        self.drop_collections_unvalidated(storage_metadata, identifiers);
 
         Ok(())
     }
