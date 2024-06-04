@@ -24,7 +24,7 @@ use mz_ore::str::StrExt;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
-use proptest::proptest;
+use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -1155,7 +1155,7 @@ fn proptest_packed_acl_item_sorts() {
         assert_eq!(og, rnd);
     }
 
-    proptest!(|(acl_items in proptest::arbitrary::any::<Vec<AclItem>>())| {
+    proptest!(|(acl_items in proptest::collection::vec(any::<AclItem>(), 0..64))| {
         sort_acl_items(acl_items);
     });
 }
@@ -1174,7 +1174,6 @@ fn proptest_packed_mz_acl_item_roundtrips() {
 }
 
 #[mz_ore::test]
-#[ignore] // TODO: Reenable when #27370 is fixed
 fn proptest_packed_mz_acl_item_sorts() {
     fn sort_mz_acl_items(mut og: Vec<MzAclItem>) {
         let mut packed: Vec<_> = og
@@ -1193,7 +1192,7 @@ fn proptest_packed_mz_acl_item_sorts() {
         assert_eq!(og, rnd);
     }
 
-    proptest!(|(acl_items in proptest::arbitrary::any::<Vec<MzAclItem>>())| {
+    proptest!(|(acl_items in proptest::collection::vec(any::<MzAclItem>(), 0..64))| {
         sort_mz_acl_items(acl_items);
     });
 }

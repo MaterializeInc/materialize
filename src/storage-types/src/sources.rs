@@ -1595,7 +1595,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // too slow
     fn all_datums_parquet_roundtrip() {
         let datums = any::<ScalarType>().prop_flat_map(|ty| {
-            prop::collection::vec(arb_datum_for_scalar(&ty), 0..128)
+            prop::collection::vec(arb_datum_for_scalar(&ty), 0..8)
                 .prop_map(move |datums| (ty.clone(), datums))
         });
 

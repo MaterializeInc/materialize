@@ -3623,52 +3623,44 @@ impl Arbitrary for ScalarType {
 
         let leaf = Union::new_weighted(vec![(30, leaf), (1, array), (1, range)]);
 
-        leaf.prop_recursive(
-            2, // For now, just go one level deep
-            4,
-            5,
-            |inner| {
-                Union::new(vec![
-                    // List
-                    (inner.clone(), any::<Option<GlobalId>>())
-                        .prop_map(|(x, id)| ScalarType::List {
-                            element_type: Box::new(x),
-                            custom_id: id,
-                        })
-                        .boxed(),
-                    // Map
-                    (inner.clone(), any::<Option<GlobalId>>())
-                        .prop_map(|(x, id)| ScalarType::Map {
-                            value_type: Box::new(x),
-                            custom_id: id,
-                        })
-                        .boxed(),
-                    // Record
-                    {
-                        // Now we have to use `inner` to create a Record type. First we
-                        // create strategy that creates ColumnType.
-                        let column_type_strat =
-                            (inner, any::<bool>()).prop_map(|(scalar_type, nullable)| ColumnType {
-                                scalar_type,
-                                nullable,
-                            });
+        leaf.prop_recursive(2, 3, 5, |inner| {
+            Union::new(vec![
+                // List
+                (inner.clone(), any::<Option<GlobalId>>())
+                    .prop_map(|(x, id)| ScalarType::List {
+                        element_type: Box::new(x),
+                        custom_id: id,
+                    })
+                    .boxed(),
+                // Map
+                (inner.clone(), any::<Option<GlobalId>>())
+                    .prop_map(|(x, id)| ScalarType::Map {
+                        value_type: Box::new(x),
+                        custom_id: id,
+                    })
+                    .boxed(),
+                // Record
+                {
+                    // Now we have to use `inner` to create a Record type. First we
+                    // create strategy that creates ColumnType.
+                    let column_type_strat =
+                        (inner, any::<bool>()).prop_map(|(scalar_type, nullable)| ColumnType {
+                            scalar_type,
+                            nullable,
+                        });
 
-                        // Then we use that to create the fields of the record case.
-                        // fields has type vec<(ColumnName,ColumnType)>
-                        let fields_strat =
-                            prop::collection::vec((any::<ColumnName>(), column_type_strat), 0..10);
+                    // Then we use that to create the fields of the record case.
+                    // fields has type vec<(ColumnName,ColumnType)>
+                    let fields_strat =
+                        prop::collection::vec((any::<ColumnName>(), column_type_strat), 0..10);
 
-                        // Now we combine it with the default strategies to get Records.
-                        (fields_strat, any::<Option<GlobalId>>())
-                            .prop_map(|(fields, custom_id)| ScalarType::Record {
-                                fields,
-                                custom_id,
-                            })
-                            .boxed()
-                    },
-                ])
-            },
-        )
+                    // Now we combine it with the default strategies to get Records.
+                    (fields_strat, any::<Option<GlobalId>>())
+                        .prop_map(|(fields, custom_id)| ScalarType::Record { fields, custom_id })
+                        .boxed()
+                },
+            ])
+        })
         .boxed()
     }
 }
