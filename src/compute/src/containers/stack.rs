@@ -52,35 +52,6 @@ impl<T: Ord + Columnation + Clone + 'static> BatchContainer for StackWrapper<T> 
     type ReadItem<'a> = &'a Self::Owned;
 
     #[inline]
-    fn copy(&mut self, item: &T) {
-        match self {
-            StackWrapper::Legacy(stack) => stack.copy(item),
-            StackWrapper::Chunked(stack) => stack.copy(item),
-        }
-    }
-    #[inline]
-    fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
-        use StackWrapper::*;
-        match (self, other) {
-            (Legacy(stack), Legacy(other)) => stack.copy_range(other, start, end),
-            (Chunked(stack), Chunked(other)) => {
-                let range = other.range(start..end);
-                stack.reserve_items(range);
-                for item in range {
-                    stack.copy(item);
-                }
-            }
-            (stack, other) => {
-                // Two different implementations. Default to simple and inefficient
-                // implementation because this should be a rare event.
-                for index in start..end {
-                    stack.copy(other.index(index));
-                }
-            }
-        }
-    }
-
-    #[inline]
     fn with_capacity(size: usize) -> Self {
         if ENABLE_CHUNKED_STACK.load(std::sync::atomic::Ordering::Relaxed) {
             Self::Chunked(ChunkedStack::with_capacity(size))
@@ -144,7 +115,7 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> PushInto<T> for StackW
     fn push_into(&mut self, item: T) {
         match self {
             StackWrapper::Legacy(stack) => stack.copy(&item),
-            StackWrapper::Chunked(stack) => stack.copy(&item),
+            StackWrapper::Chunked(stack) => stack.push_into(&item),
         }
     }
 }
@@ -153,7 +124,7 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> PushInto<&T> for Stack
     fn push_into(&mut self, item: &T) {
         match self {
             StackWrapper::Legacy(stack) => stack.copy(item),
-            StackWrapper::Chunked(stack) => stack.copy(item),
+            StackWrapper::Chunked(stack) => stack.push_into(item),
         }
     }
 }
@@ -302,19 +273,6 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for Chu
     type ReadItem<'a> = &'a Self::Owned;
 
     #[inline]
-    fn copy(&mut self, item: &T) {
-        self.copy(item);
-    }
-    #[inline]
-    fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
-        let range = other.range(start..end);
-        self.reserve_items(range);
-        for item in range {
-            self.copy(item);
-        }
-    }
-
-    #[inline]
     fn with_capacity(size: usize) -> Self {
         Self::with_capacity(size)
     }
@@ -337,6 +295,12 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for Chu
     #[inline]
     fn len(&self) -> usize {
         self.len()
+    }
+}
+
+impl<T: Columnation> PushInto<&T> for ChunkedStack<T> {
+    fn push_into(&mut self, item: &T) {
+        self.copy(item);
     }
 }
 

@@ -241,6 +241,23 @@ pub struct AsyncOutputHandle<
     index: usize,
 }
 
+impl<T, C, P> AsyncOutputHandle<T, CapacityContainerBuilder<C>, P>
+where
+    T: Timestamp,
+    C: Container,
+    P: Push<Bundle<T, C>> + 'static,
+{
+    #[allow(clippy::unused_async)]
+    #[inline]
+    pub async fn give_container<Cap>(&mut self, cap: &Cap, container: &mut C)
+    where
+        Cap: CapabilityTrait<T>,
+    {
+        let mut handle = self.handle.borrow_mut();
+        cap.session(&mut handle).give_container(container);
+    }
+}
+
 impl<T, CB, P> AsyncOutputHandle<T, CB, P>
 where
     T: Timestamp,
@@ -271,16 +288,6 @@ where
             handle: Rc::new(RefCell::new(handle)),
             index,
         }
-    }
-
-    #[allow(clippy::unused_async)]
-    #[inline]
-    pub async fn give_container<C>(&mut self, cap: &C, container: &mut CB::Container)
-    where
-        C: CapabilityTrait<T>,
-    {
-        let mut handle = self.handle.borrow_mut();
-        cap.session(&mut handle).give_container(container);
     }
 
     fn cease(&mut self) {
