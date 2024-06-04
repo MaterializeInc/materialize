@@ -21,6 +21,7 @@ use std::fmt;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, Sub};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -56,6 +57,28 @@ impl<Id: From<u64>> Gen<Id> {
 
 /// A generator of u64-bit IDs.
 pub type IdGen = Gen<u64>;
+
+/// Manages the allocation of unique IDs.
+///
+/// Atomic version of `Gen`, for sharing between threads.
+#[derive(Debug, Default)]
+pub struct AtomicGen<Id: From<u64> + Default> {
+    id: AtomicU64,
+    phantom: PhantomData<Id>,
+}
+
+impl<Id: From<u64> + Default> AtomicGen<Id> {
+    /// Allocates a new identifier of type `Id` and advances the generator.
+    pub fn allocate_id(&self) -> Id {
+        let id = self.id.fetch_add(1, Ordering::Relaxed);
+        id.into()
+    }
+}
+
+/// A generator of u64-bit IDs.
+///
+/// Atomic version of `IdGen`, for sharing between threads.
+pub type AtomicIdGen = AtomicGen<u64>;
 
 /// IdAllocator common traits.
 pub trait IdGenerator:

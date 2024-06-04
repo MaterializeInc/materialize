@@ -306,7 +306,7 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(cluster.id())
             .expect("compute instance does not exist");
-        let view_id = self.allocate_transient_id()?;
+        let view_id = self.allocate_transient_id();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
             .override_from(&explain_ctx);
@@ -323,8 +323,8 @@ impl Coordinator {
                 let compute_instance = self
                     .instance_snapshot(cluster.id())
                     .expect("compute instance does not exist");
-                let view_id = self.allocate_transient_id()?;
-                let index_id = self.allocate_transient_id()?;
+                let view_id = self.allocate_transient_id();
+                let index_id = self.allocate_transient_id();
 
                 // Build an optimizer for this SELECT.
                 Either::Left(optimize::peek::Optimizer::new(

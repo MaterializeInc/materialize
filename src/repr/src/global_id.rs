@@ -13,6 +13,7 @@ use std::str::FromStr;
 use anyhow::{anyhow, Error};
 use columnation::{Columnation, CopyRegion};
 use mz_lowertest::MzReflect;
+use mz_ore::id_gen::AtomicIdGen;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -131,4 +132,13 @@ impl RustType<ProtoGlobalId> for GlobalId {
 
 impl Columnation for GlobalId {
     type InnerRegion = CopyRegion<GlobalId>;
+}
+
+#[derive(Debug, Default)]
+pub struct TransientIdGen(AtomicIdGen);
+
+impl TransientIdGen {
+    pub fn allocate_id(&self) -> GlobalId {
+        GlobalId::Transient(self.0.allocate_id())
+    }
 }
