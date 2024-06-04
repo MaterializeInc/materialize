@@ -9,6 +9,7 @@
 
 import sys
 from collections.abc import Iterable
+from typing import Any
 
 from materialize import ui
 from materialize.feature_benchmark.aggregation import Aggregation
@@ -201,6 +202,15 @@ class Report:
             )
 
         return "\n".join(output_lines)
+
+    def measurements_of_this(self, scenario_name: str) -> dict[MeasurementType, Any]:
+        result = dict()
+
+        for comparison in self._comparisons:
+            if comparison.name == scenario_name:
+                result[comparison.type] = comparison.this()
+
+        return result
 
     def get_scenario_version(self, scenario_name: str) -> ScenarioVersion:
         for comparison in self._comparisons:
