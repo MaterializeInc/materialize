@@ -56,9 +56,14 @@ class TypeEnumConstantOperationParam(EnumConstantOperationParam):
             values=all_type_names,
             add_quotes=False,
             add_invalid_value=False,
+            add_null_value=True,
             tags={TAG_DATA_TYPE_ENUM},
         )
         self.corresponding_type_categories = corresponding_type_categories
+
+        # this is due to add_null_value
+        corresponding_type_categories.insert(0, DataTypeCategory.STRING)
+
         assert len(all_type_names) == len(
             corresponding_type_categories
         ), "length of type names and categories do not match"
