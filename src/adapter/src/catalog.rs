@@ -148,7 +148,7 @@ pub struct CatalogPlans {
 }
 
 impl Catalog {
-    /// Initializess the `storage_controller` to understand all shards that
+    /// Initializes the `storage_controller` to understand all shards that
     /// `self` expects to exist.
     ///
     /// Note that this must be done before creating/rendering collections
