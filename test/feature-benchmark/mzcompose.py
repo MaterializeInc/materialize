@@ -198,7 +198,7 @@ def run_one_scenario(
             benchmark = Benchmark(
                 mz_id=mz_id,
                 mz_version=mz_version,
-                scenario=scenario_class,
+                scenario_cls=scenario_class,
                 scale=args.scale,
                 executor=executor,
                 filter=make_filter(args),

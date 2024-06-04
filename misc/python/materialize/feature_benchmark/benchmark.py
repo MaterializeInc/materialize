@@ -26,7 +26,7 @@ class Benchmark:
         self,
         mz_id: int,
         mz_version: MzVersion,
-        scenario: type[Scenario],
+        scenario_cls: type[Scenario],
         executor: Executor,
         filter: Filter,
         termination_conditions: list[TerminationCondition],
@@ -39,7 +39,7 @@ class Benchmark:
         self._scale = scale
         self._mz_id = mz_id
         self._mz_version = mz_version
-        self._scenario = scenario
+        self._scenario_cls = scenario_cls
         self._executor = executor
         self._filter = filter
         self._termination_conditions = termination_conditions
@@ -52,9 +52,9 @@ class Benchmark:
             self._memory_aggregation = aggregation_class()
 
     def run(self) -> list[Aggregation]:
-        scale = self._scenario.SCALE
+        scale = self._scenario_cls.SCALE
 
-        if self._scale and not self._scenario.FIXED_SCALE:
+        if self._scale and not self._scenario_cls.FIXED_SCALE:
             if self._scale.startswith("+"):
                 scale = scale + float(self._scale.lstrip("+"))
             elif self._scale.startswith("-"):
@@ -62,7 +62,7 @@ class Benchmark:
             elif float(self._scale) > 0:
                 scale = float(self._scale)
 
-        scenario_class = self._scenario
+        scenario_class = self._scenario_cls
         scenario = scenario_class(
             scale=scale,
             mz_version=self._mz_version,
