@@ -158,7 +158,7 @@ def run_one_scenario(
             )
         )
 
-        tag = resolve_tag(tag, scenario_class)
+        tag = resolve_tag(tag, scenario_class, args.scale)
 
         entrypoint_host = "balancerd" if balancerd else "materialized"
 
@@ -230,10 +230,10 @@ def run_one_scenario(
     return comparators
 
 
-def resolve_tag(tag: str, scenario_class: type[Scenario]) -> str:
+def resolve_tag(tag: str, scenario_class: type[Scenario], scale: str) -> str:
     if tag == "common-ancestor":
         return resolve_ancestor_image_tag(
-            get_ancestor_overrides_for_performance_regressions(scenario_class)
+            get_ancestor_overrides_for_performance_regressions(scenario_class, scale)
         )
 
     return tag
@@ -466,6 +466,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             scenarios_with_regressions,
             this_tag=args.this_tag,
             baseline_tag=args.other_tag,
+            scale=args.scale,
         )
 
         justifications = [
@@ -501,6 +502,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     latest_report_by_scenario_name,
                     justification_by_scenario_name,
                     baseline_tag=args.other_tag,
+                    scale=args.scale,
                 ),
             )
 
@@ -509,6 +511,7 @@ def _check_regressions_justified(
     scenarios_with_regressions: list[type[Scenario]],
     this_tag: str | None,
     baseline_tag: str | None,
+    scale: str,
 ) -> dict[str, str | None]:
     """
     :return: justification per scenario name if justified else None
@@ -517,7 +520,7 @@ def _check_regressions_justified(
 
     for scenario_class in scenarios_with_regressions:
         regressions_justified, comment = _is_regression_justified(
-            scenario_class, this_tag=this_tag, baseline_tag=baseline_tag
+            scenario_class, this_tag=this_tag, baseline_tag=baseline_tag, scale=scale
         )
 
         justification_by_scenario_name[scenario_class.__name__] = (
@@ -528,7 +531,10 @@ def _check_regressions_justified(
 
 
 def _is_regression_justified(
-    scenario_class: type[Scenario], this_tag: str | None, baseline_tag: str | None
+    scenario_class: type[Scenario],
+    this_tag: str | None,
+    baseline_tag: str | None,
+    scale: str,
 ) -> tuple[bool, str]:
     if (
         this_tag is None
@@ -545,7 +551,7 @@ def _is_regression_justified(
     baseline_version = MzVersion.parse_mz(baseline_tag)
 
     commits_with_regressions = get_commits_of_accepted_regressions_between_versions(
-        get_ancestor_overrides_for_performance_regressions(scenario_class),
+        get_ancestor_overrides_for_performance_regressions(scenario_class, scale),
         since_version_exclusive=baseline_version,
         to_version_inclusive=this_version,
     )
@@ -572,6 +578,7 @@ def _regressions_to_failure_details(
     latest_report_by_scenario_name: dict[str, Report],
     justification_by_scenario_name: dict[str, str | None],
     baseline_tag: str,
+    scale: str,
 ) -> list[TestFailureDetails]:
     failure_details = []
 
@@ -581,7 +588,7 @@ def _regressions_to_failure_details(
         if justification_by_scenario_name[scenario_name] is not None:
             continue
 
-        regression_against_tag = resolve_tag(baseline_tag, scenario_cls)
+        regression_against_tag = resolve_tag(baseline_tag, scenario_cls, scale)
 
         report = latest_report_by_scenario_name[scenario_name]
         failure_details.append(
