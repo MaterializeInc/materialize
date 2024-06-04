@@ -126,6 +126,7 @@ class Action:
             "must be owner of",
             "network error",  # TODO: Remove when #21954 is fixed
             "HTTP read timeout",
+            "result exceeds max size of",
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
@@ -133,7 +134,6 @@ class Action:
                     "query could not complete",
                     "cached plan must not change result type",
                     "violates not-null constraint",
-                    "result exceeds max size of",
                     "unknown catalog item",  # Expected, see #20381
                     "was concurrently dropped",  # role was dropped
                     "unknown cluster",  # cluster was dropped
