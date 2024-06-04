@@ -37,7 +37,9 @@ use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::pg_legacy_name::PgLegacyName;
 use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
-use crate::adt::timestamp::{CheckedTimestamp, TimestampError, TimestampPrecision};
+use crate::adt::timestamp::{
+    CheckedTimestamp, TimestampError, TimestampPrecision, HIGH_DATE, LOW_DATE,
+};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
 pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 pub use crate::relation_and_scalar::ProtoScalarType;
@@ -4179,15 +4181,38 @@ pub(crate) fn add_arb_duration<T: 'static + Copy + Add<chrono::Duration> + std::
 where
     T::Output: std::fmt::Debug,
 {
-    any::<i64>()
-        .prop_map(move |v| to + chrono::Duration::nanoseconds(v))
+    let lower = LOW_DATE
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_micros();
+    let upper = HIGH_DATE
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_micros();
+    (lower..upper)
+        .prop_map(move |v| to + chrono::Duration::microseconds(v))
         .boxed()
 }
 
-fn arb_numeric() -> BoxedStrategy<Numeric> {
-    any::<i128>()
+pub(crate) fn arb_numeric() -> BoxedStrategy<Numeric> {
+    let int_value = any::<i128>()
         .prop_map(|v| Numeric::try_from(v).unwrap())
-        .boxed()
+        .boxed();
+    let float_value = any::<f64>()
+        .prop_map(|v| Numeric::try_from(v).unwrap())
+        .boxed();
+
+    Union::new_weighted(vec![
+        (20, int_value),
+        (20, float_value),
+        (1, Just(Numeric::infinity()).boxed()),
+        (1, Just(-Numeric::infinity()).boxed()),
+        (1, Just(Numeric::nan()).boxed()),
+        (1, Just(Numeric::zero()).boxed()),
+    ])
+    .boxed()
 }
 
 impl<'a> From<&'a PropDatum> for Datum<'a> {
