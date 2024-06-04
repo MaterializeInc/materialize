@@ -10,7 +10,6 @@
 # Tests for AWS connections.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_aws_connection = true;
 ALTER SYSTEM SET enable_connection_validation_syntax = true;
 
 # Test assume role connections.

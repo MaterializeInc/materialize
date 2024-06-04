@@ -111,7 +111,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             port=6877,
             user="mz_system",
             sql="""
-            ALTER SYSTEM SET enable_aws_connection = true;
             ALTER SYSTEM SET enable_connection_validation_syntax = true;
             """,
         )

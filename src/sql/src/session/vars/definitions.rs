@@ -1969,13 +1969,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_aws_connection,
-        desc: "CREATE CONNECTION ... TO AWS",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_mysql_source,
         desc: "Create a MySQL connection or source",
         default: false,

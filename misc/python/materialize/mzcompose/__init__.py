@@ -60,7 +60,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "disk_cluster_replicas_default": "true",
     "enable_alter_swap": "true",
     "enable_assert_not_null": "true",
-    "enable_aws_connection": "true",
     "enable_columnation_lgalloc": "true",
     "enable_comment": "true",
     "enable_compute_chunked_stack": "true",
