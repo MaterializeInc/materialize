@@ -59,6 +59,9 @@ class TypeEnumConstantOperationParam(EnumConstantOperationParam):
             tags={TAG_DATA_TYPE_ENUM},
         )
         self.corresponding_type_categories = corresponding_type_categories
+        assert len(all_type_names) == len(
+            corresponding_type_categories
+        ), "length of type names and categories do not match"
 
     def get_enum_constant(self, index: int) -> EnumConstant:
         original_constant = super().get_enum_constant(index)
