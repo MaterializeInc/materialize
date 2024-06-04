@@ -2345,11 +2345,12 @@ impl Coordinator {
             mz_ore::soft_panic_or_log!(
                 "error bootstrapping dataflow `as_of`: \
                  `min_as_of` {:?} greater than `max_as_of` {:?} \
-                 (import_ids={}, export_ids={}, storage_constraints={:?})",
+                 (import_ids={}, export_ids={}, name={}, storage_constraints={:?})",
                 min_as_of.elements(),
                 max_as_of.elements(),
                 dataflow.display_import_ids(),
                 dataflow.display_export_ids(),
+                dataflow.debug_name,
                 storage_constraints,
             );
             min_as_of.clone()
