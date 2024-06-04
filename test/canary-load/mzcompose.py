@@ -22,6 +22,7 @@ from pg8000.exceptions import InterfaceError
 from requests.exceptions import ReadTimeout
 
 from materialize.cloudtest.util.jwt_key import fetch_jwt
+from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -54,7 +55,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(
         Mz(region=REGION, environment=ENVIRONMENT, app_password=APP_PASSWORD)
     ):
-        host = c.cloud_hostname()
+        host = get_cloud_hostname(
+            c, region=REGION, environment=ENVIRONMENT, app_password=APP_PASSWORD
+        )
 
         with c.override(
             Testdrive(
