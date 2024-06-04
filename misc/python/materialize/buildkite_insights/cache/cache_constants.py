@@ -12,7 +12,7 @@ from enum import Enum
 
 class FetchMode(Enum):
     AUTO = "auto"
-    """Fetch fresh data if existing data does not exist or is outdated"""
+    """Fetch fresh data if existing data does not exist or is older than x hours"""
     ALWAYS = "always"
     """Always fetch fresh data"""
     AVOID = "avoid"

@@ -46,7 +46,7 @@ def get_or_query_data(
     cache_file_path: CacheFilePath,
     fetch_action: Callable[[], Any],
     fetch_mode: FetchMode,
-    max_allowed_cache_age_in_hours: int | None = 10,
+    max_allowed_cache_age_in_hours: int | None = 12,
     add_to_cache_if_not_present: bool = True,
     quiet_mode: bool = False,
 ) -> Any:
