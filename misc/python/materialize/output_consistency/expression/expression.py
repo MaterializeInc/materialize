@@ -51,7 +51,16 @@ class Expression:
         raise NotImplementedError
 
     def resolve_return_type_category(self) -> DataTypeCategory:
+        """
+        :return: the data type category of this value
+        """
         raise NotImplementedError
+
+    def resolve_resulting_return_type_category(self) -> DataTypeCategory:
+        """
+        :return: the data type category that the use of this value will lead to
+        """
+        return self.resolve_return_type_category()
 
     def try_resolve_exact_data_type(self) -> DataType | None:
         raise NotImplementedError
