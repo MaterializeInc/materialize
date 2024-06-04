@@ -37,6 +37,7 @@ def insert_result(
     sql_statements = []
 
     for result_entry in results:
+        # TODO: remove NULL castings when #27429 is resolved
         sql_statements.append(
             f"""
             INSERT INTO feature_benchmark_results
@@ -54,9 +55,9 @@ def insert_result(
                 '{framework_version}',
                 '{result_entry.scenario_name}',
                 '{result_entry.scenario_version}',
-                {result_entry.wallclock or 'NULL'},
-                {result_entry.messages or 'NULL'},
-                {result_entry.memory or 'NULL'}
+                {result_entry.wallclock or 'NULL::DOUBLE'},
+                {result_entry.messages or 'NULL::INT'},
+                {result_entry.memory or 'NULL::DOUBLE'}
             ;
             """
         )
