@@ -435,6 +435,8 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
 
         // MZ_TIMESTAMP
         (MzTimestamp, String) => Assignment: CastMzTimestampToString(func::CastMzTimestampToString),
+        (MzTimestamp, Timestamp) => Assignment: CastMzTimestampToTimestamp(func::CastMzTimestampToTimestamp),
+        (MzTimestamp, TimestampTz) => Assignment: CastMzTimestampToTimestampTz(func::CastMzTimestampToTimestampTz),
         (String, MzTimestamp) => Assignment: CastStringToMzTimestamp(func::CastStringToMzTimestamp),
         (UInt64, MzTimestamp) => Implicit: CastUint64ToMzTimestamp(func::CastUint64ToMzTimestamp),
         (UInt32, MzTimestamp) => Implicit: CastUint32ToMzTimestamp(func::CastUint32ToMzTimestamp),
