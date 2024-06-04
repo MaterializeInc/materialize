@@ -194,13 +194,12 @@ class Executor:
                 raise QueryError(
                     f"{result.status_code}: {result.text}", f"HTTP query: {query}"
                 )
-            r = result.json()["results"]
-            assert len(r) == 1, r
-            if "error" in r[0]:
-                raise QueryError(
-                    f"HTTP {r[0]['error']['code']}: {r[0]['error']['message']}\n{r[0]['error'].get('detail', '')}",
-                    query,
-                )
+            for result in result.json()["results"]:
+                if "error" in result:
+                    raise QueryError(
+                        f"HTTP {result['error']['code']}: {result['error']['message']}\n{result['error'].get('detail', '')}",
+                        query,
+                    )
         except requests.exceptions.ReadTimeout as e:
             raise QueryError(f"HTTP read timeout: {e}", query)
         except requests.exceptions.ConnectionError:
