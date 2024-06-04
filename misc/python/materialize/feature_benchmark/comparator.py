@@ -10,6 +10,7 @@
 from typing import Generic, Protocol, TypeVar
 
 from materialize.feature_benchmark.measurement import MeasurementType
+from materialize.terminal import COLOR_BAD, COLOR_GOOD, with_formatting
 
 T = TypeVar("T")
 
@@ -79,15 +80,19 @@ class RelativeThresholdComparator(Comparator[float | None]):
         if ratio is None:
             return "N/A"
         if ratio >= 2:
-            return f"{ratio:3.1f} TIMES more/slower"
+            return with_formatting(f"{ratio:3.1f} TIMES more/slower", COLOR_BAD)
         elif ratio > 1:
-            return f"{-(1-ratio)*100:3.1f} pct   more/slower"
+            return with_formatting(
+                f"{-(1-ratio)*100:3.1f} pct   more/slower", COLOR_BAD
+            )
         elif ratio == 1:
             return "          same"
         elif ratio > 0.5:
-            return f"{(1-ratio)*100:3.1f} pct   less/faster"
+            return with_formatting(
+                f"{(1-ratio)*100:3.1f} pct   less/faster", COLOR_GOOD
+            )
         else:
-            return f"{(1/ratio):3.1f} times less/faster"
+            return with_formatting(f"{(1/ratio):3.1f} times less/faster", COLOR_GOOD)
 
 
 class Overlappable(Protocol):
