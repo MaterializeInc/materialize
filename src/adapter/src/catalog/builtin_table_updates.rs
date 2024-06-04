@@ -863,17 +863,6 @@ impl CatalogState {
             diff,
         }];
         match connection.connection {
-            mz_storage_types::connections::Connection::Ssh(ref ssh) => {
-                if let Some(public_key_set) = ssh.public_keys.as_ref() {
-                    updates.extend(self.pack_ssh_tunnel_connection_update(
-                        id,
-                        public_key_set,
-                        diff,
-                    ));
-                } else {
-                    tracing::error!(%id, "missing SSH public key; cannot write row to mz_ssh_connections table");
-                }
-            }
             mz_storage_types::connections::Connection::Kafka(ref kafka) => {
                 updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
             }
@@ -900,6 +889,7 @@ impl CatalogState {
             }
             mz_storage_types::connections::Connection::Csr(_)
             | mz_storage_types::connections::Connection::Postgres(_)
+            | mz_storage_types::connections::Connection::Ssh(_)
             | mz_storage_types::connections::Connection::MySql(_) => (),
         };
         updates
@@ -910,8 +900,8 @@ impl CatalogState {
         id: GlobalId,
         (public_key_primary, public_key_secondary): &(String, String),
         diff: Diff,
-    ) -> Vec<BuiltinTableUpdate> {
-        vec![BuiltinTableUpdate {
+    ) -> BuiltinTableUpdate {
+        BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SSH_TUNNEL_CONNECTIONS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
@@ -919,7 +909,7 @@ impl CatalogState {
                 Datum::String(public_key_secondary),
             ]),
             diff,
-        }]
+        }
     }
 
     fn pack_kafka_connection_update(

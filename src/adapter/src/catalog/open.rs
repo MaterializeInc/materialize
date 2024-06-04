@@ -572,21 +572,6 @@ impl Catalog {
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
-            let secrets_reader = &catalog.state.config.connection_context.secrets_reader;
-
-            // Load public keys for SSH connections from the secrets store to the catalog
-            for (id, entry) in catalog.state.entry_by_id.iter_mut() {
-                if let CatalogItem::Connection(ref mut connection) = entry.item {
-                    if let mz_storage_types::connections::Connection::Ssh(ref mut ssh) =
-                        connection.connection
-                    {
-                        let secret = secrets_reader.read(*id).await?;
-                        let keyset = SshKeyPairSet::from_bytes(&secret)?;
-                        let public_key_pair = keyset.public_keys();
-                        ssh.public_keys = Some(public_key_pair);
-                    }
-                }
-            }
 
             let updates = catalog
                 .storage()
@@ -596,6 +581,26 @@ impl Catalog {
                 .get_updates()
                 .collect();
             let mut builtin_table_updates = catalog.state.generate_builtin_table_updates(updates);
+
+            // Load public keys for SSH connections from the secrets store to the builtin tables.
+            let secrets_reader = &catalog.state.config.connection_context.secrets_reader;
+            for (id, entry) in catalog.state.entry_by_id.iter() {
+                if let CatalogItem::Connection(ref connection) = entry.item {
+                    if let mz_storage_types::connections::Connection::Ssh(_) = connection.connection
+                    {
+                        let secret = secrets_reader.read(*id).await?;
+                        let keyset = SshKeyPairSet::from_bytes(&secret)?;
+                        let public_key_pair = keyset.public_keys();
+                        let builtin_table_update = catalog.state.pack_ssh_tunnel_connection_update(
+                            *id,
+                            &public_key_pair,
+                            1,
+                        );
+                        builtin_table_updates.push(builtin_table_update);
+                    }
+                }
+            }
+
             // Operators aren't stored in the catalog, but we would like them in
             // introspection views.
             for (op, func) in OP_IMPLS.iter() {

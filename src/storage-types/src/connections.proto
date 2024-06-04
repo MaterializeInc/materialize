@@ -97,15 +97,12 @@ message ProtoSshTunnel {
 }
 
 message ProtoSshConnection {
-    message ProtoPublicKeys {
-        string primary_public_key = 1;
-        string secondary_public_key = 2;
-    }
+    reserved 4;
+    reserved "public_keys";
 
     string host = 1;
     uint32 port = 2;
     string user = 3;
-    ProtoPublicKeys public_keys = 4;
 }
 
 message ProtoAwsPrivatelink {

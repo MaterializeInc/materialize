@@ -549,7 +549,7 @@ impl Coordinator {
     pub(super) async fn sequence_create_connection(
         &mut self,
         mut ctx: ExecuteContext,
-        mut plan: plan::CreateConnectionPlan,
+        plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
         let connection_gid = match self.catalog_mut().allocate_user_id().await {
@@ -558,7 +558,7 @@ impl Coordinator {
         };
 
         match plan.connection.connection {
-            mz_storage_types::connections::Connection::Ssh(ref mut ssh) => {
+            mz_storage_types::connections::Connection::Ssh(_) => {
                 let key_set = match SshKeyPairSet::new() {
                     Ok(key) => key,
                     Err(err) => return ctx.retire(Err(err.into())),
@@ -572,7 +572,6 @@ impl Coordinator {
                     Ok(()) => (),
                     Err(err) => return ctx.retire(Err(err.into())),
                 }
-                ssh.public_keys = Some(key_set.public_keys());
             }
             _ => {}
         }
@@ -3288,27 +3287,8 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         id: GlobalId,
-        mut connection: Connection,
+        connection: Connection,
     ) -> Result<ExecuteResponse, AdapterError> {
-        match &mut connection.connection {
-            mz_storage_types::connections::Connection::Ssh(ref mut ssh) => {
-                // Retain the connection's current SSH keys
-                let current_ssh = match &self
-                    .catalog
-                    .get_entry(&id)
-                    .connection()
-                    .expect("known to be Connection")
-                    .connection
-                {
-                    mz_storage_types::connections::Connection::Ssh(ssh) => ssh,
-                    _ => unreachable!(),
-                };
-
-                ssh.public_keys.clone_from(&current_ssh.public_keys);
-            }
-            _ => {}
-        };
-
         match self.catalog.get_entry(&id).item() {
             CatalogItem::Connection(curr_conn) => {
                 curr_conn

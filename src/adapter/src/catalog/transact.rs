@@ -2181,41 +2181,17 @@ impl Catalog {
                 }
                 Op::UpdateRotatedKeys {
                     id,
-                    previous_public_key_pair,
-                    new_public_key_pair,
+                    previous_public_key_pair: _,
+                    new_public_key_pair: _,
                 } => {
+                    // Noting to actually do but log.
                     let entry = state.get_entry(&id);
-                    // Retract old keys
-                    builtin_table_updates.extend(state.pack_ssh_tunnel_connection_update(
-                        id,
-                        &previous_public_key_pair,
-                        -1,
-                    ));
-                    // Insert the new rotated keys
-                    builtin_table_updates.extend(state.pack_ssh_tunnel_connection_update(
-                        id,
-                        &new_public_key_pair,
-                        1,
-                    ));
-
-                    let mut connection = entry.connection()?.clone();
-                    if let mz_storage_types::connections::Connection::Ssh(ref mut ssh) =
-                        connection.connection
-                    {
-                        ssh.public_keys = Some(new_public_key_pair)
-                    }
-                    let new_item = CatalogItem::Connection(connection);
-
-                    let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
                     info!(
                         "update {} {} ({})",
-                        old_entry.item_type(),
-                        state.resolve_full_name(old_entry.name(), old_entry.conn_id()),
+                        entry.item_type(),
+                        state.resolve_full_name(entry.name(), entry.conn_id()),
                         id
                     );
-                    let mut new_entry = old_entry;
-                    new_entry.item = new_item;
-                    state.entry_by_id.insert(id, new_entry);
                 }
             };
             tx.commit_op();

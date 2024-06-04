@@ -44,6 +44,7 @@ use mz_sql::session::vars::{
     MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
     MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
 };
+use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
@@ -194,6 +195,8 @@ impl Coordinator {
         let mut views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
+        let mut ssh_conn_to_update = vec![];
+        let mut ssh_conn_to_rotate = vec![];
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
@@ -279,6 +282,7 @@ impl Coordinator {
                                         // SSH connections have an associated secret that should be dropped
                                         mz_storage_types::connections::Connection::Ssh(_) => {
                                             secrets_to_drop.push(*id);
+                                            ssh_conn_to_update.push((*id, -1));
                                         }
                                         // AWS PrivateLink connections have an associated
                                         // VpcEndpoint K8S resource that should be dropped
@@ -376,6 +380,28 @@ impl Coordinator {
                             .unwrap_or(false)
                     });
                     webhook_sources_to_restart.extend(webhook_sources);
+                }
+                catalog::Op::CreateItem {
+                    id,
+                    item:
+                        CatalogItem::Connection(Connection {
+                            connection: mz_storage_types::connections::Connection::Ssh(_),
+                            ..
+                        }),
+                    ..
+                } => {
+                    ssh_conn_to_update.push((*id, 1));
+                }
+                catalog::Op::UpdateRotatedKeys {
+                    id,
+                    previous_public_key_pair,
+                    new_public_key_pair,
+                } => {
+                    ssh_conn_to_rotate.push((
+                        *id,
+                        previous_public_key_pair.clone(),
+                        new_public_key_pair.clone(),
+                    ));
                 }
                 _ => (),
             }
@@ -503,11 +529,38 @@ impl Coordinator {
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
 
         let TransactionResult {
-            builtin_table_updates,
+            mut builtin_table_updates,
             audit_events,
         } = catalog
             .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
             .await?;
+
+        // The `mz_ssh_tunnel_connections` table is weird. It's contents are not fully derived from
+        // catalog state, they're derived from the secrets controller. However, it still must be
+        // kept in-sync with the catalog state. Storing the contents of the table in the durable
+        // catalog would simplify the situation, but then we'd have to somehow encode public keys
+        // the CREATE SQL of connections, which is annoying. In order to successfully balance all of
+        // these constraints, we handle all updates to the table separately.
+        for (ssh_conn, diff) in ssh_conn_to_update {
+            let secret = self.secrets_controller.reader().read(ssh_conn).await?;
+            let key_set = SshKeyPairSet::from_bytes(&secret)?.public_keys();
+            let builtin_table_update = catalog
+                .state()
+                .pack_ssh_tunnel_connection_update(ssh_conn, &key_set, diff);
+            builtin_table_updates.push(builtin_table_update);
+        }
+        for (ssh_conn, prev_key_set, new_key_set) in ssh_conn_to_rotate {
+            let builtin_table_retraction =
+                catalog
+                    .state()
+                    .pack_ssh_tunnel_connection_update(ssh_conn, &prev_key_set, -1);
+            builtin_table_updates.push(builtin_table_retraction);
+            let builtin_table_retraction =
+                catalog
+                    .state()
+                    .pack_ssh_tunnel_connection_update(ssh_conn, &new_key_set, 1);
+            builtin_table_updates.push(builtin_table_retraction);
+        }
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
