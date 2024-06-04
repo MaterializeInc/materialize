@@ -15,7 +15,7 @@
 
 
 -- result of individual benchmark scenarios
-CREATE TABLE feature_benchmark_results (
+CREATE TABLE feature_benchmark_result (
    build_step_id TEXT NOT NULL,
    framework_version TEXT NOT NULL,
    scenario_name TEXT NOT NULL,

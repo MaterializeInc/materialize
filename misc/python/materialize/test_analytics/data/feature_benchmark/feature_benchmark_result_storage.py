@@ -41,7 +41,7 @@ def insert_result(
         # TODO: remove NULL castings when #27429 is resolved
         sql_statements.append(
             f"""
-            INSERT INTO feature_benchmark_results
+            INSERT INTO feature_benchmark_result
             (
                 build_step_id,
                 framework_version,
