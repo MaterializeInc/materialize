@@ -57,7 +57,7 @@ hyper = { version = "0.14.27", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.33.0", features = ["json"] }
 itertools = { version = "0.10.5" }
-k8s-openapi = { version = "0.20.0", default-features = false, features = ["schemars", "v1_26"] }
+k8s-openapi = { version = "0.20.0", default-features = false, features = ["schemars", "v1_28"] }
 kube = { version = "0.87.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.87.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.87.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
@@ -180,7 +180,7 @@ hyper = { version = "0.14.27", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.33.0", features = ["json"] }
 itertools = { version = "0.10.5" }
-k8s-openapi = { version = "0.20.0", default-features = false, features = ["schemars", "v1_26"] }
+k8s-openapi = { version = "0.20.0", default-features = false, features = ["schemars", "v1_28"] }
 kube = { version = "0.87.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.87.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.87.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
