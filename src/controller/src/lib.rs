@@ -49,6 +49,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
+use mz_repr::global_id::TransientIdGen;
 use mz_repr::{GlobalId, TimestampManipulation};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage_client::client::{
@@ -606,6 +607,7 @@ where
     pub async fn new(
         config: ControllerConfig,
         envd_epoch: NonZeroI64,
+        transient_id_gen: Arc<TransientIdGen>,
         // Whether to use the new txn-wal tables implementation or the
         // legacy one.
         txn_wal_tables: TxnWalTablesImpl,
@@ -645,6 +647,7 @@ where
         let compute_controller = ComputeController::new(
             config.build_info,
             envd_epoch,
+            transient_id_gen,
             config.metrics_registry.clone(),
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
