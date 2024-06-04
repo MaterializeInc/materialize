@@ -142,7 +142,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     continue
                 print(f"Test failure occurred ({msg}), collecting it, and continuing.")
                 # collect, continue, and rethrow at the end
-                failures.extend(msg)
+                failures.append(msg)
 
         if len(failures) > 0:
             # reset test case name to remove current iteration and chunk, which does not apply to collected errors
