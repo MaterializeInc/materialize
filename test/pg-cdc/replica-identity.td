@@ -34,7 +34,7 @@ INSERT INTO tbl_a VALUES (1);
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES(tbl_a);
 contains:referenced items not tables with REPLICA IDENTITY FULL
-detail:referenced items: tbl_a
+detail:referenced items: public.tbl_a
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE tbl_a REPLICA IDENTITY FULL

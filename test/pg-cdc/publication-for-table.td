@@ -48,4 +48,4 @@ CREATE PUBLICATION mz_source FOR TABLE t1;
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (t2);
-contains:table t2 not found
+contains:reference to t2 not found in source

@@ -30,6 +30,7 @@ use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
+use mz_storage_types::sources::SubsourceResolutionError;
 
 use crate::catalog::{
     CatalogError, CatalogItemType, ErrorMessageObjectDescription, SystemObjectType,
@@ -257,6 +258,7 @@ pub enum PlanError {
         limit: Duration,
     },
     RetainHistoryRequired,
+    SubsourceResolutionError(SubsourceResolutionError),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -725,6 +727,7 @@ impl fmt::Display for PlanError {
             Self::RetainHistoryRequired => {
                 write!(f, "RETAIN HISTORY cannot be disabled or set to 0")
             },
+            Self::SubsourceResolutionError(e) => write!(f, "{}", e),
         }
     }
 }
@@ -867,6 +870,12 @@ impl From<MySqlSourcePurificationError> for PlanError {
 impl From<IdentError> for PlanError {
     fn from(e: IdentError) -> Self {
         PlanError::InvalidIdent(e)
+    }
+}
+
+impl From<SubsourceResolutionError> for PlanError {
+    fn from(e: SubsourceResolutionError) -> Self {
+        PlanError::SubsourceResolutionError(e)
     }
 }
 

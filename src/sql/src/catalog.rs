@@ -20,7 +20,6 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
@@ -30,7 +29,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
-use mz_sql_parser::ast::{Expr, Ident, QualifiedReplica, UnresolvedItemName};
+use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
 use mz_storage_types::sources::SourceDesc;
@@ -46,7 +45,6 @@ use crate::names::{
     QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
     SchemaSpecifier, SystemObjectId,
 };
-use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
 use crate::plan::{query, ClusterSchedule, PlanError, PlanNotice};
@@ -1294,71 +1292,6 @@ impl CatalogError {
 }
 
 impl Error for CatalogError {}
-
-/// Provides a method of generating a 3-layer catalog on the fly, and then
-/// resolving objects within it.
-pub(crate) struct SubsourceCatalog<T>(pub BTreeMap<String, BTreeMap<String, BTreeMap<String, T>>>);
-
-impl<T> SubsourceCatalog<T> {
-    /// Returns the fully qualified name for `item`, as well as the `T` that it
-    /// describes.
-    ///
-    /// # Errors
-    /// - If `item` cannot be normalized to a [`PartialItemName`]
-    /// - If the normalized `PartialItemName` does not resolve to an item in
-    ///   `self.0`.
-    pub(crate) fn resolve(
-        &self,
-        item: UnresolvedItemName,
-    ) -> Result<(UnresolvedItemName, &T), PlanError> {
-        let name = normalize::unresolved_item_name(item)?;
-
-        let schemas = match self.0.get(&name.item) {
-            Some(schemas) => schemas,
-            None => sql_bail!("table {name} not found in source"),
-        };
-
-        let schema = match &name.schema {
-            Some(schema) => schema,
-            None => match schemas.keys().exactly_one() {
-                Ok(schema) => schema,
-                Err(_) => {
-                    sql_bail!("table {name} is ambiguous, consider specifying the schema")
-                }
-            },
-        };
-
-        let databases = match schemas.get(schema) {
-            Some(databases) => databases,
-            None => sql_bail!("schema {schema} not found in source"),
-        };
-
-        let database = match &name.database {
-            Some(database) => database,
-            None => match databases.keys().exactly_one() {
-                Ok(database) => database,
-                Err(_) => {
-                    sql_bail!("table {name} is ambiguous, consider specifying the database")
-                }
-            },
-        };
-
-        let desc = match databases.get(database) {
-            Some(desc) => desc,
-            None => sql_bail!("database {database} not found source"),
-        };
-
-        // Note: Using unchecked here is okay because all of these values were originally Idents.
-        Ok((
-            UnresolvedItemName::qualified(&[
-                Ident::new_unchecked(database),
-                Ident::new_unchecked(schema),
-                Ident::new_unchecked(&name.item),
-            ]),
-            desc,
-        ))
-    }
-}
 
 // Enum variant docs would be useless here.
 #[allow(missing_docs)]
