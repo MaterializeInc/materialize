@@ -1128,7 +1128,7 @@ fn extract_byte_param_value(v: Option<String>, param_name: &str) -> Result<Optio
 
 generate_extracted_config!(
     CopyOption,
-    (Format, String, Default("text")),
+    (Format, String),
     (Delimiter, String),
     (Null, String),
     (Escape, String),
@@ -1148,13 +1148,20 @@ pub fn plan_copy(
     }: CopyStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let options = CopyOptionExtracted::try_from(options)?;
-    let format = match options.format.to_lowercase().as_str() {
-        "text" => CopyFormat::Text,
-        "csv" => CopyFormat::Csv,
-        "binary" => CopyFormat::Binary,
-        "parquet" => CopyFormat::Parquet,
-        _ => sql_bail!("unknown FORMAT: {}", options.format),
-    };
+    // Parse any user-provided FORMAT option. If not provided, will default to
+    // Text for COPY TO STDOUT and COPY FROM STDIN, but will error for COPY TO <expr>.
+    let format = options
+        .format
+        .as_ref()
+        .map(|format| match format.to_lowercase().as_str() {
+            "text" => Ok(CopyFormat::Text),
+            "csv" => Ok(CopyFormat::Csv),
+            "binary" => Ok(CopyFormat::Binary),
+            "parquet" => Ok(CopyFormat::Parquet),
+            _ => sql_bail!("unknown FORMAT: {}", format),
+        })
+        .transpose()?;
+
     match (&direction, &target) {
         (CopyDirection::To, CopyTarget::Stdout) => {
             if options.delimiter.is_some() {
@@ -1168,22 +1175,37 @@ pub fn plan_copy(
             }
             match relation {
                 CopyRelation::Named { .. } => sql_bail!("named with COPY TO STDOUT unsupported"),
-                CopyRelation::Select(stmt) => {
-                    Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
-                }
-                CopyRelation::Subscribe(stmt) => {
-                    Ok(plan_subscribe(scx, stmt, &Params::empty(), Some(format))?)
-                }
+                CopyRelation::Select(stmt) => Ok(plan_select(
+                    scx,
+                    stmt,
+                    &Params::empty(),
+                    Some(format.unwrap_or(CopyFormat::Text)),
+                )?),
+                CopyRelation::Subscribe(stmt) => Ok(plan_subscribe(
+                    scx,
+                    stmt,
+                    &Params::empty(),
+                    Some(format.unwrap_or(CopyFormat::Text)),
+                )?),
             }
         }
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
-            CopyRelation::Named { name, columns } => {
-                plan_copy_from(scx, name, columns, format, options)
-            }
+            CopyRelation::Named { name, columns } => plan_copy_from(
+                scx,
+                name,
+                columns,
+                format.unwrap_or(CopyFormat::Text),
+                options,
+            ),
             _ => sql_bail!("COPY FROM {} not supported", target),
         },
         (CopyDirection::To, CopyTarget::Expr(to_expr)) => {
             scx.require_feature_flag(&vars::ENABLE_COPY_TO_EXPR)?;
+
+            let format = match format {
+                Some(inner) => inner,
+                _ => sql_bail!("COPY TO <expr> requires a FORMAT option"),
+            };
 
             let stmt = match relation {
                 CopyRelation::Named { name, columns } => {
