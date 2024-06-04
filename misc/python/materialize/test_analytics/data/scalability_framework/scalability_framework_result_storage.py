@@ -39,7 +39,7 @@ def insert_result(
     for result_entry in results:
         sql_statements.append(
             f"""
-                INSERT INTO scalability_framework_results
+                INSERT INTO scalability_framework_result
                 (
                     build_step_id,
                     framework_version,
