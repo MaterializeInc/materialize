@@ -114,6 +114,7 @@ use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
+use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
@@ -1489,7 +1490,8 @@ pub struct Coordinator {
     /// reflect exactly the set of writes that precede them, and no writes that follow.
     global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
 
-    transient_id_counter: u64,
+    /// A generator for transient [`GlobalId`]s, shareable with other threads.
+    transient_id_gen: Arc<TransientIdGen>,
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
     active_conns: BTreeMap<ConnectionId, ConnMeta>,
@@ -2291,7 +2293,7 @@ impl Coordinator {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
                             .take(metainfo.optimizer_notices.len())
-                            .collect::<Result<Vec<_>, _>>()?;
+                            .collect::<Vec<_>>();
                         // Return a metainfo with rendered notices.
                         self.catalog()
                             .render_notices(metainfo, notice_ids, Some(entry.id()))
@@ -2311,7 +2313,7 @@ impl Coordinator {
                             self.instance_snapshot(mv.cluster_id)
                                 .expect("compute instance exists")
                         });
-                    let internal_view_id = self.allocate_transient_id()?;
+                    let internal_view_id = self.allocate_transient_id();
                     let debug_name = self
                         .catalog()
                         .resolve_full_name(entry.name(), None)
@@ -2343,7 +2345,7 @@ impl Coordinator {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
                             .take(metainfo.optimizer_notices.len())
-                            .collect::<Result<Vec<_>, _>>()?;
+                            .collect::<Vec<_>>();
                         // Return a metainfo with rendered notices.
                         self.catalog()
                             .render_notices(metainfo, notice_ids, Some(entry.id()))
@@ -3073,10 +3075,6 @@ impl Coordinator {
 
         let map = serde_json::Map::from_iter([
             (
-                "transient_id_counter".to_string(),
-                serde_json::to_value(self.transient_id_counter)?,
-            ),
-            (
                 "active_conns".to_string(),
                 serde_json::to_value(active_conns)?,
             ),
@@ -3374,7 +3372,7 @@ pub fn serve(
                     strict_serializable_reads_tx,
                     dropped_read_holds_tx,
                     global_timelines: timestamp_oracles,
-                    transient_id_counter: 1,
+                    transient_id_gen: Default::default(),
                     active_conns: BTreeMap::new(),
                     storage_read_capabilities: Default::default(),
                     compute_read_capabilities: Default::default(),
