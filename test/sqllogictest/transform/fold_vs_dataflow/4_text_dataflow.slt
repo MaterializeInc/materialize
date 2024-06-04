@@ -58,6 +58,7 @@ Explained Query:
                     Project ()
                       ReadStorage materialize.public.t_operator
 
+Source materialize.public.t_data
 Source materialize.public.t_operator
 
 Target cluster: quickstart
