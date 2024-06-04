@@ -1144,6 +1144,7 @@ fn proptest_packed_acl_item_roundtrips() {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // slow
 fn proptest_packed_acl_item_sorts() {
     fn sort_acl_items(mut og: Vec<AclItem>) {
         let mut packed: Vec<_> = og.iter().copied().map(PackedAclItem::from_value).collect();
@@ -1174,6 +1175,7 @@ fn proptest_packed_mz_acl_item_roundtrips() {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // slow
 fn proptest_packed_mz_acl_item_sorts() {
     fn sort_mz_acl_items(mut og: Vec<MzAclItem>) {
         let mut packed: Vec<_> = og
