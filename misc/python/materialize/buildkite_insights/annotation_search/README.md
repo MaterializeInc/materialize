@@ -6,8 +6,8 @@ This tool allows searching Buildkite annotations in recent builds.
 ```
 usage: buildkite-annotation-search [-h]
                                    [--branch BRANCH]
-                                   [--fetch-annotations {auto,always,never}]
-                                   [--fetch-builds {auto,always,never}]
+                                   [--fetch-annotations {auto,always,avoid,never}]
+                                   [--fetch-builds {auto,always,avoid,never}]
                                    [--first-build-page-to-fetch FIRST_BUILD_PAGE_TO_FETCH]
                                    [--max-build-fetches MAX_BUILD_FETCHES]
                                    [--max-results MAX_RESULTS]

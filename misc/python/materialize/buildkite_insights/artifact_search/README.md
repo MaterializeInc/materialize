@@ -6,7 +6,7 @@ zst-compressed files are included by default.
 ## Usage
 ```
 usage: buildkite-artifact-search [-h]
-                                 [--fetch {auto,always,never}]
+                                 [--fetch {auto,always,avoid,never}]
                                  [--include-zst-files | --no-include-zst-files]
                                  [--max-results MAX_RESULTS]
                                  [--use-regex]
