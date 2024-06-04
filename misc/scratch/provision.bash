@@ -23,6 +23,7 @@ apt-get install -y \
     libclang-dev \
     lld \
     postgresql-client \
+    python3-dev \
     python3-venv \
     unzip
 
