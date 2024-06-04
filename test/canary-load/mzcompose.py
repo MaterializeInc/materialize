@@ -22,6 +22,7 @@ from pg8000.exceptions import InterfaceError
 from requests.exceptions import ReadTimeout
 
 from materialize.cloudtest.util.jwt_key import fetch_jwt
+from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -51,110 +52,105 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     start_time = time.time()
 
+    host = get_cloud_hostname(
+        c, region=REGION, environment=ENVIRONMENT, app_password=APP_PASSWORD
+    )
+
     with c.override(
-        Mz(region=REGION, environment=ENVIRONMENT, app_password=APP_PASSWORD)
+        Testdrive(
+            no_reset=True,
+            no_consistency_checks=True,  # No access to HTTP for coordinator check
+            materialize_url=f"postgres://{urllib.parse.quote(USERNAME)}:{urllib.parse.quote(APP_PASSWORD)}@{host}:6875/materialize",
+            default_timeout="600s",
+        ),
     ):
-        host = c.cloud_hostname()
+        c.up("testdrive", persistent=True)
 
-        with c.override(
-            Testdrive(
-                no_reset=True,
-                no_consistency_checks=True,  # No access to HTTP for coordinator check
-                materialize_url=f"postgres://{urllib.parse.quote(USERNAME)}:{urllib.parse.quote(APP_PASSWORD)}@{host}:6875/materialize",
-                default_timeout="600s",
-            ),
-        ):
-            c.up("testdrive", persistent=True)
+        failures = []
 
-            failures = []
-
-            count_chunk = 0
-            while time.time() - start_time < args.runtime:
-                count_chunk = count_chunk + 1
-                try:
-                    c.testdrive(
-                        dedent(
-                            """
-                                > DELETE FROM qa_canary_environment.public_table.table
-                            """
-                        )
+        count_chunk = 0
+        while time.time() - start_time < args.runtime:
+            count_chunk = count_chunk + 1
+            try:
+                c.testdrive(
+                    dedent(
+                        """
+                            > DELETE FROM qa_canary_environment.public_table.table
+                        """
                     )
+                )
 
-                    conn1, cursor_on_table = create_connection_and_cursor(
+                conn1, cursor_on_table = create_connection_and_cursor(
+                    host,
+                    USERNAME,
+                    APP_PASSWORD,
+                    "DECLARE subscribe_table CURSOR FOR SUBSCRIBE (SELECT * FROM qa_canary_environment.public_table.table)",
+                )
+                conn2, cursor_on_mv = create_connection_and_cursor(
+                    host,
+                    USERNAME,
+                    APP_PASSWORD,
+                    "DECLARE subscribe_mv CURSOR FOR SUBSCRIBE (SELECT * FROM qa_canary_environment.public_table.table_mv)",
+                )
+
+                i = 0
+                while time.time() - start_time < args.runtime:
+                    print(f"Running iteration {i} of chunk {count_chunk}")
+                    c.override_current_testcase_name(
+                        f"iteration {i} of chunk {count_chunk} in workflow_default"
+                    )
+                    perform_test(
+                        c,
                         host,
                         USERNAME,
-                        APP_PASSWORD,
-                        "DECLARE subscribe_table CURSOR FOR SUBSCRIBE (SELECT * FROM qa_canary_environment.public_table.table)",
+                        PASSWORD,
+                        cursor_on_table,
+                        cursor_on_mv,
+                        i,
                     )
-                    conn2, cursor_on_mv = create_connection_and_cursor(
-                        host,
-                        USERNAME,
-                        APP_PASSWORD,
-                        "DECLARE subscribe_mv CURSOR FOR SUBSCRIBE (SELECT * FROM qa_canary_environment.public_table.table_mv)",
+                    i += 1
+
+                close_connection_and_cursor(conn1, cursor_on_table, "subscribe_table")
+                close_connection_and_cursor(conn2, cursor_on_mv, "subscribe_mv")
+
+            except (InterfaceError, ReadTimeout) as e:
+                error_msg_str = str(e)
+                if "network error" in error_msg_str:
+                    print(
+                        "Network error received, probably a cloud downtime, retrying in 1 min"
                     )
-
-                    i = 0
-                    while time.time() - start_time < args.runtime:
-                        print(f"Running iteration {i} of chunk {count_chunk}")
-                        c.override_current_testcase_name(
-                            f"iteration {i} of chunk {count_chunk} in workflow_default"
-                        )
-                        perform_test(
-                            c,
-                            host,
-                            USERNAME,
-                            PASSWORD,
-                            cursor_on_table,
-                            cursor_on_mv,
-                            i,
-                        )
-                        i += 1
-
-                    close_connection_and_cursor(
-                        conn1, cursor_on_table, "subscribe_table"
-                    )
-                    close_connection_and_cursor(conn2, cursor_on_mv, "subscribe_mv")
-
-                except (InterfaceError, ReadTimeout) as e:
-                    error_msg_str = str(e)
-                    if "network error" in error_msg_str:
-                        print(
-                            "Network error received, probably a cloud downtime, retrying in 1 min"
-                        )
-                        time.sleep(60)
-                    elif "Read timed out" in error_msg_str:
-                        print("Read timed out, retrying")
-                    else:
-                        raise
-                except FailedTestExecutionError as e:
-                    assert len(e.errors) > 0, "Exception contains no errors"
-                    for error in e.errors:
-                        # TODO(def-): Remove when #22576 is fixed
-                        if "Non-positive multiplicity in DistinctBy" in error.message:
-                            continue
-                        print(
-                            f"Test failure occurred ({error.message}), collecting it, and continuing."
-                        )
-                        # collect, continue, and rethrow at the end
-                        failures.append(error)
-                except CommandFailureCausedUIError as e:
-                    msg = (e.stdout or "") + (e.stderr or "")
+                    time.sleep(60)
+                elif "Read timed out" in error_msg_str:
+                    print("Read timed out, retrying")
+                else:
+                    raise
+            except FailedTestExecutionError as e:
+                assert len(e.errors) > 0, "Exception contains no errors"
+                for error in e.errors:
                     # TODO(def-): Remove when #22576 is fixed
-                    if "Non-positive multiplicity in DistinctBy" in msg:
+                    if "Non-positive multiplicity in DistinctBy" in error.message:
                         continue
                     print(
-                        f"Test failure occurred ({msg}), collecting it, and continuing."
+                        f"Test failure occurred ({error.message}), collecting it, and continuing."
                     )
                     # collect, continue, and rethrow at the end
-                    failures.extend(msg)
+                    failures.append(error)
+            except CommandFailureCausedUIError as e:
+                msg = (e.stdout or "") + (e.stderr or "")
+                # TODO(def-): Remove when #22576 is fixed
+                if "Non-positive multiplicity in DistinctBy" in msg:
+                    continue
+                print(f"Test failure occurred ({msg}), collecting it, and continuing.")
+                # collect, continue, and rethrow at the end
+                failures.append(msg)
 
-            if len(failures) > 0:
-                # reset test case name to remove current iteration and chunk, which does not apply to collected errors
-                c.override_current_testcase_name("workflow_default")
-                raise FailedTestExecutionError(
-                    error_summary="SQL failures occurred",
-                    errors=failures,
-                )
+        if len(failures) > 0:
+            # reset test case name to remove current iteration and chunk, which does not apply to collected errors
+            c.override_current_testcase_name("workflow_default")
+            raise FailedTestExecutionError(
+                error_summary="SQL failures occurred",
+                errors=failures,
+            )
 
 
 def fetch_token(user_name: str, password: str) -> str:
