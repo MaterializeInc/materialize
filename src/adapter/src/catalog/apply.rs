@@ -44,18 +44,8 @@ use tracing::warn;
 
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
 
-/// Sorted [`StateUpdate`]s. Builtin view additions are stored separately, because they are applied
-/// via a different mechanism than all other update types.
-struct SortedUpdates {
-    pre_builtin_view_additions: Vec<StateUpdate>,
-    builtin_view_additions: Vec<(&'static Builtin<NameReference>, GlobalId)>,
-    post_builtin_view_additions: Vec<StateUpdate>,
-}
-
-// TODO(jkosh44) When StateUpdates get a timestamp, this will have to return something like
-// `Vec<(SortedUpdates, Timestamp)>` that is sorted by timestamp.
 /// Sort [`StateUpdate`]s in dependency order.
-fn sort_updates(updates: Vec<StateUpdate>) -> SortedUpdates {
+fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     fn push_update<T>(update: T, diff: Diff, retractions: &mut Vec<T>, additions: &mut Vec<T>) {
         if diff == -1 {
             retractions.push(update);
@@ -134,25 +124,12 @@ fn sort_updates(updates: Vec<StateUpdate>) -> SortedUpdates {
         .map(|(_, system_object_mapping, diff)| (system_object_mapping, diff));
 
     // Further partition builtin item updates.
-    let mut builtin_type_retractions = Vec::new();
-    let mut builtin_type_additions = Vec::new();
     let mut other_builtin_retractions = Vec::new();
     let mut other_builtin_additions = Vec::new();
-    let mut builtin_view_retractions = Vec::new();
-    let mut builtin_view_additions = Vec::new();
     let mut builtin_index_retractions = Vec::new();
     let mut builtin_index_additions = Vec::new();
     for (builtin_item_update, diff) in builtin_item_updates {
         match &builtin_item_update.description.object_type {
-            CatalogItemType::Type => push_update(
-                StateUpdate {
-                    kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                    diff,
-                },
-                diff,
-                &mut builtin_type_retractions,
-                &mut builtin_type_additions,
-            ),
             CatalogItemType::Index => push_update(
                 StateUpdate {
                     kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
@@ -162,19 +139,12 @@ fn sort_updates(updates: Vec<StateUpdate>) -> SortedUpdates {
                 &mut builtin_index_retractions,
                 &mut builtin_index_additions,
             ),
-            CatalogItemType::View | CatalogItemType::MaterializedView => {
-                if diff == -1 {
-                    builtin_view_retractions.push(StateUpdate {
-                        kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                        diff,
-                    });
-                } else if diff == 1 {
-                    builtin_view_additions.push(builtin_item_update);
-                }
-            }
             CatalogItemType::Table
             | CatalogItemType::Source
             | CatalogItemType::Sink
+            | CatalogItemType::View
+            | CatalogItemType::MaterializedView
+            | CatalogItemType::Type
             | CatalogItemType::Func
             | CatalogItemType::Secret
             | CatalogItemType::Connection => push_update(
@@ -204,41 +174,21 @@ fn sort_updates(updates: Vec<StateUpdate>) -> SortedUpdates {
     let item_additions = sort_item_updates(item_additions);
 
     // Put everything back together.
-    let pre_builtin_view_additions = iter::empty()
-        // All retractions are included here and must be reversed.
+    iter::empty()
+        // All retractions must be reversed.
         .chain(post_item_retractions.into_iter().rev())
         .chain(item_retractions.into_iter().rev())
         .chain(builtin_index_retractions.into_iter().rev())
         .chain(cluster_retractions.into_iter().rev())
-        .chain(builtin_view_retractions.into_iter().rev())
         .chain(other_builtin_retractions.into_iter().rev())
-        .chain(builtin_type_retractions.into_iter().rev())
         .chain(pre_cluster_retractions.into_iter().rev())
         .chain(pre_cluster_additions.into_iter())
-        .chain(builtin_type_additions.into_iter())
         .chain(other_builtin_additions.into_iter())
-        .collect();
-    let builtin_view_additions: Vec<_> = builtin_view_additions
-        .into_iter()
-        .map(|system_object_mapping| {
-            let (_, builtin) = BUILTIN_LOOKUP
-                .get(&system_object_mapping.description)
-                .expect("missing builtin view");
-            (*builtin, system_object_mapping.unique_identifier.id)
-        })
-        .collect();
-    let post_builtin_view_additions = iter::empty()
         .chain(cluster_additions.into_iter())
         .chain(builtin_index_additions.into_iter())
         .chain(item_additions.into_iter())
         .chain(post_item_additions.into_iter())
-        .collect();
-
-    SortedUpdates {
-        pre_builtin_view_additions,
-        builtin_view_additions,
-        post_builtin_view_additions,
-    }
+        .collect()
 }
 
 impl CatalogState {
@@ -249,17 +199,74 @@ impl CatalogState {
     /// which creates a bootstrapping problem.
     #[instrument]
     pub(crate) async fn apply_updates_for_bootstrap(&mut self, updates: Vec<StateUpdate>) {
-        let SortedUpdates {
-            pre_builtin_view_additions,
-            builtin_view_additions,
-            post_builtin_view_additions,
-        } = sort_updates(updates);
-        for StateUpdate { kind, diff } in pre_builtin_view_additions {
-            self.apply_update(kind, diff);
+        // Most updates are applied one at a time, but builtin view additions are applied in a
+        // batch for performance reasons. A constraint is that updates must be applied in order.
+        // This method is modeled as a simple state machine that batches then applies all builtin
+        // view updates and immediately applies all other updates.
+
+        enum ApplyState {
+            Update,
+            BuiltinViewAdditions(Vec<(&'static Builtin<NameReference>, GlobalId)>),
         }
-        Catalog::parse_views(self, builtin_view_additions).await;
-        for StateUpdate { kind, diff } in post_builtin_view_additions {
-            self.apply_update(kind, diff);
+
+        fn lookup_builtin_view_addition(
+            system_object_mapping: mz_catalog::durable::SystemObjectMapping,
+        ) -> (&'static Builtin<NameReference>, GlobalId) {
+            let (_, builtin) = BUILTIN_LOOKUP
+                .get(&system_object_mapping.description)
+                .expect("missing builtin view");
+            (*builtin, system_object_mapping.unique_identifier.id)
+        }
+
+        let mut state = ApplyState::Update;
+        let updates = sort_updates(updates);
+
+        for update in updates {
+            match (&mut state, update) {
+                (
+                    ApplyState::Update,
+                    StateUpdate {
+                        kind: StateUpdateKind::SystemObjectMapping(system_object_mapping),
+                        diff: 1,
+                    },
+                ) if matches!(
+                    system_object_mapping.description.object_type,
+                    CatalogItemType::View
+                ) =>
+                {
+                    // Start batching builtin view additions.
+                    let view_addition = lookup_builtin_view_addition(system_object_mapping);
+                    state = ApplyState::BuiltinViewAdditions(vec![view_addition]);
+                }
+                (ApplyState::Update, StateUpdate { kind, diff }) => {
+                    // Apply updates normally.
+                    self.apply_update(kind, diff);
+                }
+                (
+                    ApplyState::BuiltinViewAdditions(builtin_view_additions),
+                    StateUpdate {
+                        kind: StateUpdateKind::SystemObjectMapping(system_object_mapping),
+                        diff: 1,
+                    },
+                ) if matches!(
+                    system_object_mapping.description.object_type,
+                    CatalogItemType::View
+                ) =>
+                {
+                    // Continue batching builtin view updates.
+                    let view_addition = lookup_builtin_view_addition(system_object_mapping);
+                    builtin_view_additions.push(view_addition);
+                }
+                (
+                    ApplyState::BuiltinViewAdditions(builtin_view_additions),
+                    StateUpdate { kind, diff },
+                ) => {
+                    // Apply all builtin view additions in a batch and then apply update normally.
+                    Catalog::parse_views(self, std::mem::take(builtin_view_additions)).await;
+                    state = ApplyState::Update;
+                    self.apply_update(kind, diff);
+                }
+            }
         }
     }
 
