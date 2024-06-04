@@ -25,6 +25,9 @@ class AwsConnection(Check):
         return Testdrive(
             dedent(
                 """
+                $[version<10300] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_aws_connection = true
+
                 $[version>=8000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_connection_validation_syntax = true
 

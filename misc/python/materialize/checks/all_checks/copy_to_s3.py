@@ -25,6 +25,9 @@ class CopyToS3(Check):
         return Testdrive(
             dedent(
                 """
+                $[version<10300] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_aws_connection = true
+
                 > CREATE SECRET minio AS '${arg.aws-secret-access-key}'
                 > CREATE CONNECTION aws_conn1 TO AWS (ENDPOINT '${arg.aws-endpoint}', REGION 'us-east-1', ACCESS KEY ID '${arg.aws-access-key-id}', SECRET ACCESS KEY SECRET minio)
                 > COPY (SELECT 1, 2, 3) TO 's3://copytos3/key1' WITH (AWS CONNECTION = aws_conn1, FORMAT = 'csv');
