@@ -216,7 +216,9 @@ def run_one_scenario(
                 early_abort = True
             else:
                 aggregations = benchmark.run()
+                scenario_version = benchmark.create_scenario_instance().version()
                 for aggregation, comparator in zip(aggregations, comparators):
+                    comparator.set_scenario_version(scenario_version)
                     comparator.append(aggregation.aggregate())
 
         c.kill("cockroach", "materialized", "testdrive")

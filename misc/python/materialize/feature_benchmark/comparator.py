@@ -10,6 +10,7 @@
 from typing import Generic, Protocol, TypeVar
 
 from materialize.feature_benchmark.measurement import MeasurementType
+from materialize.feature_benchmark.scenario_version import ScenarioVersion
 from materialize.terminal import COLOR_BAD, COLOR_GOOD, with_formatting
 
 T = TypeVar("T")
@@ -21,6 +22,7 @@ class Comparator(Generic[T]):
         self.type = type
         self.threshold = threshold
         self._points: list[T] = []
+        self.version: ScenarioVersion | None = None
 
     def append(self, point: T) -> None:
         self._points.append(point)
@@ -42,6 +44,13 @@ class Comparator(Generic[T]):
             return "           None"
         else:
             return f"{self.other():>11.3f}"
+
+    def set_scenario_version(self, version: ScenarioVersion):
+        self.version = version
+
+    def get_scenario_version(self) -> ScenarioVersion:
+        assert self.version is not None
+        return self.version
 
     def is_regression(self) -> bool:
         assert False

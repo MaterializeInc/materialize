@@ -17,6 +17,7 @@ from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.filter import Filter
 from materialize.feature_benchmark.measurement import Measurement, MeasurementType
 from materialize.feature_benchmark.scenario import Scenario
+from materialize.feature_benchmark.scenario_version import ScenarioVersion
 from materialize.feature_benchmark.termination import TerminationCondition
 from materialize.mz_version import MzVersion
 
@@ -200,3 +201,10 @@ class Report:
             )
 
         return "\n".join(output_lines)
+
+    def get_scenario_version(self, scenario_name: str) -> ScenarioVersion:
+        for comparison in self._comparisons:
+            if comparison.name == scenario_name:
+                return comparison.get_scenario_version()
+
+        assert False, f"Scenario {scenario_name} not found!"
