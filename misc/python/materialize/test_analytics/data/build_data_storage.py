@@ -69,7 +69,8 @@ def insert_build_step(
     build_url = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_URL)
     step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
     step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
-    shard_index = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB, "NULL")
+    # TODO: remove NULL casting when #27429 is resolved
+    shard_index = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB, "NULL::INT")
     retry_count = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_RETRY_COUNT)
     build_step_url = f"{build_url}#{step_id}"
     aws_instance_type = buildkite.get_var(
