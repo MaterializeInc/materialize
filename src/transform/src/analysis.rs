@@ -1072,7 +1072,6 @@ mod explain {
     use mz_repr::explain::{AnnotatedPlan, Attributes};
 
     // Attributes should have shortened paths when exported.
-    use super::cardinality::HumanizedSymbolicExpression;
     use super::DerivedBuilder;
 
     impl<'c> From<&ExplainContext<'c>> for DerivedBuilder<'c> {
@@ -1094,7 +1093,9 @@ mod explain {
                 builder.require(super::UniqueKeys);
             }
             if context.config.cardinality {
-                builder.require(super::Cardinality::default());
+                builder.require(super::Cardinality::with_stats(
+                    context.cardinality_stats.clone(),
+                ));
             }
             if context.config.column_names || context.config.humanized_exprs {
                 builder.require(super::ColumnNames);
@@ -1181,8 +1182,7 @@ mod explain {
                     derived.results::<super::Cardinality>().unwrap().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
-                    let value = HumanizedSymbolicExpression::new(card, context.humanizer);
-                    attrs.cardinality = Some(value.to_string());
+                    attrs.cardinality = Some(card.to_string());
                 }
             }
 
@@ -1216,122 +1216,191 @@ mod cardinality {
     use mz_ore::cast::CastLossy;
     use mz_repr::GlobalId;
 
-    use mz_repr::explain::ExprHumanizer;
     use ordered_float::OrderedFloat;
 
     use super::{Analysis, Arity, SubtreeSize, UniqueKeys};
-    use crate::symbolic::SymbolicExpression;
 
     /// Compute the estimated cardinality of each subtree of a [MirRelationExpr] from the bottom up.
     #[allow(missing_debug_implementations)]
     pub struct Cardinality {
-        /// A factorizer for generating appropriating scaling factors
-        pub factorize: Box<dyn Factorizer + Send + Sync>,
+        /// Cardinalities for globally named entities
+        pub stats: BTreeMap<GlobalId, usize>,
+    }
+
+    impl Cardinality {
+        /// A cardinality estimator with provided statistics for the given global identifiers
+        pub fn with_stats(stats: BTreeMap<GlobalId, usize>) -> Self {
+            Cardinality { stats }
+        }
     }
 
     impl Default for Cardinality {
         fn default() -> Self {
             Cardinality {
-                factorize: Box::new(WorstCaseFactorizer {
-                    cardinalities: BTreeMap::new(),
-                }),
+                stats: BTreeMap::new(),
             }
         }
     }
 
-    /// The variables used in symbolic expressions representing cardinality
+    /// Cardinality estimates
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-    pub enum FactorizerVariable {
-        /// The total cardinality of a given global id
-        Id(GlobalId),
-        /// The inverse of the number of distinct keys in the index held in the given column, i.e., 1/|# of distinct keys|
-        ///
-        /// TODO(mgree): need to correlate this back to a given global table, to feed in statistics (or have a sub-attribute for collecting this)
-        Index(usize),
-        /// An unbound local or other unknown quantity
+    pub enum CardinalityEstimate {
         Unknown,
+        Estimate(OrderedFloat<f64>),
     }
 
-    /// SymbolicExpressions specialized to factorizer variables
-    pub type SymExp = SymbolicExpression<FactorizerVariable>;
-
-    /// A `Factorizer` computes selectivity factors
-    pub trait Factorizer {
-        /// Compute selectivity for the flat map of `tf`
-        fn flat_map(&self, tf: &TableFunc, input: &SymExp) -> SymExp;
-        /// Computes selectivity of the predicate `expr`, given that `unique_columns` are indexed/unique
-        ///
-        /// The result should be in the range [0, 1.0]
-        fn predicate(&self, expr: &MirScalarExpr, unique_columns: &BTreeSet<usize>) -> SymExp;
-        /// Computes selectivity for a filter
-        fn filter(
-            &self,
-            predicates: &Vec<MirScalarExpr>,
-            keys: &Vec<Vec<usize>>,
-            input: &SymExp,
-        ) -> SymExp;
-        /// Computes selectivity for a join; the cardinality estimate for each input is paired with the keys on that input
-        ///
-        /// `unique_columns` maps column references (that are indexed/unique) to their relation's index in `inputs`
-        fn join(
-            &self,
-            equivalences: &Vec<Vec<MirScalarExpr>>,
-            implementation: &JoinImplementation,
-            unique_columns: BTreeMap<usize, usize>,
-            inputs: Vec<&SymExp>,
-        ) -> SymExp;
-        /// Computes selectivity for a reduce
-        fn reduce(
-            &self,
-            group_key: &Vec<MirScalarExpr>,
-            expected_group_size: &Option<u64>,
-            input: &SymExp,
-        ) -> SymExp;
-        /// Computes selectivity for a topk
-        fn topk(
-            &self,
-            group_key: &Vec<usize>,
-            limit: &Option<MirScalarExpr>,
-            expected_group_size: &Option<u64>,
-            input: &SymExp,
-        ) -> SymExp;
-        /// Computes slectivity for a threshold
-        fn threshold(&self, input: &SymExp) -> SymExp;
+    impl CardinalityEstimate {
+        pub fn max(lhs: CardinalityEstimate, rhs: CardinalityEstimate) -> CardinalityEstimate {
+            use CardinalityEstimate::*;
+            match (lhs, rhs) {
+                (Estimate(lhs), Estimate(rhs)) => Estimate(std::cmp::max(lhs, rhs)),
+                _ => Unknown,
+            }
+        }
     }
 
-    /// The simplest possible `Factorizer` that aims to generate worst-case, upper-bound cardinalities
-    #[derive(Debug)]
-    pub struct WorstCaseFactorizer {
-        /// cardinalities for each `GlobalId` and its unique values
-        pub cardinalities: BTreeMap<FactorizerVariable, usize>,
+    impl std::ops::Add for CardinalityEstimate {
+        type Output = CardinalityEstimate;
+
+        fn add(self, rhs: Self) -> Self::Output {
+            use CardinalityEstimate::*;
+            match (self, rhs) {
+                (Estimate(lhs), Estimate(rhs)) => Estimate(lhs + rhs),
+                _ => Unknown,
+            }
+        }
+    }
+
+    impl std::ops::Sub for CardinalityEstimate {
+        type Output = CardinalityEstimate;
+
+        fn sub(self, rhs: Self) -> Self::Output {
+            use CardinalityEstimate::*;
+            match (self, rhs) {
+                (Estimate(lhs), Estimate(rhs)) => Estimate(lhs - rhs),
+                _ => Unknown,
+            }
+        }
+    }
+
+    impl std::ops::Sub<CardinalityEstimate> for f64 {
+        type Output = CardinalityEstimate;
+
+        fn sub(self, rhs: CardinalityEstimate) -> Self::Output {
+            use CardinalityEstimate::*;
+            if let Estimate(OrderedFloat(rhs)) = rhs {
+                Estimate(OrderedFloat(self - rhs))
+            } else {
+                Unknown
+            }
+        }
+    }
+
+    impl std::ops::Mul for CardinalityEstimate {
+        type Output = CardinalityEstimate;
+
+        fn mul(self, rhs: Self) -> Self::Output {
+            use CardinalityEstimate::*;
+            match (self, rhs) {
+                (Estimate(lhs), Estimate(rhs)) => Estimate(lhs * rhs),
+                _ => Unknown,
+            }
+        }
+    }
+
+    impl std::ops::Mul<f64> for CardinalityEstimate {
+        type Output = CardinalityEstimate;
+
+        fn mul(self, rhs: f64) -> Self::Output {
+            if let CardinalityEstimate::Estimate(OrderedFloat(lhs)) = self {
+                CardinalityEstimate::Estimate(OrderedFloat(lhs * rhs))
+            } else {
+                CardinalityEstimate::Unknown
+            }
+        }
+    }
+
+    impl std::ops::Div for CardinalityEstimate {
+        type Output = CardinalityEstimate;
+
+        fn div(self, rhs: Self) -> Self::Output {
+            use CardinalityEstimate::*;
+            match (self, rhs) {
+                (Estimate(lhs), Estimate(rhs)) => Estimate(lhs / rhs),
+                _ => Unknown,
+            }
+        }
+    }
+
+    impl std::ops::Div<f64> for CardinalityEstimate {
+        type Output = CardinalityEstimate;
+
+        fn div(self, rhs: f64) -> Self::Output {
+            use CardinalityEstimate::*;
+            if let Estimate(lhs) = self {
+                Estimate(lhs / OrderedFloat(rhs))
+            } else {
+                Unknown
+            }
+        }
+    }
+
+    impl std::iter::Sum for CardinalityEstimate {
+        fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+            iter.fold(CardinalityEstimate::from(0.0), |acc, elt| acc + elt)
+        }
+    }
+
+    impl std::iter::Product for CardinalityEstimate {
+        fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
+            iter.fold(CardinalityEstimate::from(1.0), |acc, elt| acc * elt)
+        }
+    }
+
+    impl From<usize> for CardinalityEstimate {
+        fn from(value: usize) -> Self {
+            Self::Estimate(OrderedFloat(f64::cast_lossy(value)))
+        }
+    }
+
+    impl From<f64> for CardinalityEstimate {
+        fn from(value: f64) -> Self {
+            Self::Estimate(OrderedFloat(value))
+        }
     }
 
     /// The default selectivity for predicates we know nothing about.
     ///
     /// It is safe to use this instead of `FactorizerVariable::Index(col)`.
-    pub const WORST_CASE_SELECTIVITY: f64 = 0.1;
+    pub const WORST_CASE_SELECTIVITY: OrderedFloat<f64> = OrderedFloat(0.1);
 
-    impl Factorizer for WorstCaseFactorizer {
-        fn flat_map(&self, tf: &TableFunc, input: &SymExp) -> SymExp {
+    // This section defines how we estimate cardinality for each syntactic construct.
+    //
+    // We split it up into functions to make it all a bit more tractable to work with.
+    impl Cardinality {
+        fn flat_map(&self, tf: &TableFunc, input: CardinalityEstimate) -> CardinalityEstimate {
             match tf {
                 TableFunc::Wrap { types, width } => {
                     input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
                 }
                 _ => {
                     // TODO(mgree) what explosion factor should we make up?
-                    input * &SymExp::from(4.0)
+                    input * CardinalityEstimate::from(4.0)
                 }
             }
         }
 
-        fn predicate(&self, expr: &MirScalarExpr, unique_columns: &BTreeSet<usize>) -> SymExp {
-            let index_cardinality = |expr: &MirScalarExpr| -> Option<SymExp> {
+        fn predicate(
+            &self,
+            predicate_expr: &MirScalarExpr,
+            unique_columns: &BTreeSet<usize>,
+        ) -> OrderedFloat<f64> {
+            let index_selectivity = |expr: &MirScalarExpr| -> Option<OrderedFloat<f64>> {
                 match expr {
                     MirScalarExpr::Column(col) => {
                         if unique_columns.contains(col) {
-                            Some(SymbolicExpression::symbolic(FactorizerVariable::Index(
-                                *col,
-                            )))
+                            // TODO(mgree): when we have index cardinality statistics, they should go here when `expr` is a `MirScalarExpr::Column` that's in `unique_columns`
+                            None
                         } else {
                             None
                         }
@@ -1340,61 +1409,53 @@ mod cardinality {
                 }
             };
 
-            match expr {
+            match predicate_expr {
                 MirScalarExpr::Column(_)
                 | MirScalarExpr::Literal(_, _)
-                | MirScalarExpr::CallUnmaterializable(_) => SymExp::from(1.0),
+                | MirScalarExpr::CallUnmaterializable(_) => OrderedFloat(1.0),
                 MirScalarExpr::CallUnary { func, expr } => match func {
-                    UnaryFunc::Not(_) => 1.0 - self.predicate(expr, unique_columns),
-                    UnaryFunc::IsTrue(_) | UnaryFunc::IsFalse(_) => SymExp::from(0.5),
+                    UnaryFunc::Not(_) => OrderedFloat(1.0) - self.predicate(expr, unique_columns),
+                    UnaryFunc::IsTrue(_) | UnaryFunc::IsFalse(_) => OrderedFloat(0.5),
                     UnaryFunc::IsNull(_) => {
-                        if let Some(icard) = index_cardinality(expr) {
+                        if let Some(icard) = index_selectivity(expr) {
                             icard
                         } else {
-                            SymExp::from(WORST_CASE_SELECTIVITY)
+                            WORST_CASE_SELECTIVITY
                         }
                     }
-                    _ => SymExp::from(WORST_CASE_SELECTIVITY),
+                    _ => WORST_CASE_SELECTIVITY,
                 },
                 MirScalarExpr::CallBinary { func, expr1, expr2 } => {
                     match func {
                         BinaryFunc::Eq => {
-                            match (index_cardinality(expr1), index_cardinality(expr2)) {
-                                (Some(icard1), Some(icard2)) => {
-                                    SymbolicExpression::max(icard1, icard2)
-                                }
-                                (Some(icard), None) | (None, Some(icard)) => icard,
-                                (None, None) => SymExp::from(WORST_CASE_SELECTIVITY),
+                            match (index_selectivity(expr1), index_selectivity(expr2)) {
+                                (Some(isel1), Some(isel2)) => std::cmp::max(isel1, isel2),
+                                (Some(isel), None) | (None, Some(isel)) => isel,
+                                (None, None) => WORST_CASE_SELECTIVITY,
                             }
                         }
                         // 1.0 - the Eq case
                         BinaryFunc::NotEq => {
-                            match (index_cardinality(expr1), index_cardinality(expr2)) {
-                                (Some(icard1), Some(icard2)) => {
-                                    1.0 - SymbolicExpression::max(icard1, icard2)
+                            match (index_selectivity(expr1), index_selectivity(expr2)) {
+                                (Some(isel1), Some(isel2)) => {
+                                    OrderedFloat(1.0) - std::cmp::max(isel1, isel2)
                                 }
-                                (Some(icard), None) | (None, Some(icard)) => 1.0 - icard,
-                                (None, None) => SymExp::from(1.0 - WORST_CASE_SELECTIVITY),
+                                (Some(isel), None) | (None, Some(isel)) => OrderedFloat(1.0) - isel,
+                                (None, None) => OrderedFloat(1.0) - WORST_CASE_SELECTIVITY,
                             }
                         }
                         BinaryFunc::Lt | BinaryFunc::Lte | BinaryFunc::Gt | BinaryFunc::Gte => {
                             // TODO(mgree) if we have high/low key values and one of the columns is an index, we can do better
-                            SymExp::from(0.33)
+                            OrderedFloat(0.33)
                         }
-                        _ => SymExp::from(1.0), // TOOD(mgree): are there other interesting cases?
+                        _ => OrderedFloat(1.0), // TOOD(mgree): are there other interesting cases?
                     }
                 }
                 MirScalarExpr::CallVariadic { func, exprs } => match func {
-                    VariadicFunc::And => {
-                        // can't use SymExp::product because it expects a vector of references :/
-                        let mut factor = SymExp::from(1.0);
-
-                        for expr in exprs {
-                            factor = factor * self.predicate(expr, unique_columns);
-                        }
-
-                        factor
-                    }
+                    VariadicFunc::And => exprs
+                        .iter()
+                        .map(|expr| self.predicate(expr, unique_columns))
+                        .product(),
                     VariadicFunc::Or => {
                         // TODO(mgree): BETWEEN will get compiled down to an OR of appropriate bounds---we could try to detect it and be clever
 
@@ -1406,21 +1467,18 @@ mod cardinality {
                         if let Some(first) = exprs.next() {
                             expr1 = self.predicate(first, unique_columns);
                         } else {
-                            return SymExp::from(1.0);
+                            return OrderedFloat(1.0);
                         }
 
                         for expr2 in exprs {
                             let expr2 = self.predicate(expr2, unique_columns);
-
-                            let intersection = expr1.clone() * expr2.clone();
-                            // TODO(mgree) a big expression! two things could help: hash-consing and simplification
-                            expr1 = expr1 + expr2 - intersection;
+                            expr1 = expr1 + expr2 - expr1 * expr2;
                         }
                         expr1
                     }
-                    _ => SymExp::from(1.0),
+                    _ => OrderedFloat(1.0),
                 },
-                MirScalarExpr::If { cond: _, then, els } => SymExp::max(
+                MirScalarExpr::If { cond: _, then, els } => std::cmp::max(
                     self.predicate(then, unique_columns),
                     self.predicate(els, unique_columns),
                 ),
@@ -1431,8 +1489,8 @@ mod cardinality {
             &self,
             predicates: &Vec<MirScalarExpr>,
             keys: &Vec<Vec<usize>>,
-            input: &SymExp,
-        ) -> SymExp {
+            input: CardinalityEstimate,
+        ) -> CardinalityEstimate {
             // TODO(mgree): should we try to do something for indices built on multiple columns?
             let mut unique_columns = BTreeSet::new();
             for key in keys {
@@ -1441,25 +1499,17 @@ mod cardinality {
                 }
             }
 
-            // worst case scaling factor is 1
-            let mut factor = SymExp::from(1.0);
-
+            let mut estimate = input;
             for expr in predicates {
-                let predicate_scaling_factor = self.predicate(expr, &unique_columns);
-
-                // constant scaling factors should be in [0,1]
+                let selectivity = self.predicate(expr, &unique_columns);
                 debug_assert!(
-                match predicate_scaling_factor {
-                    SymExp::Constant(OrderedFloat(n)) => 0.0 <= n && n <= 1.0,
-                    _ => true,
-                },
-                "predicate scaling factor {predicate_scaling_factor} should be in the range [0,1]"
-            );
-
-                factor = factor * predicate_scaling_factor;
+                    OrderedFloat(0.0) <= selectivity && selectivity <= OrderedFloat(1.0),
+                    "predicate selectivity {selectivity} should be in the range [0,1]"
+                );
+                estimate = estimate * selectivity.0;
             }
 
-            input.clone() * factor
+            estimate
         }
 
         fn join(
@@ -1467,9 +1517,11 @@ mod cardinality {
             equivalences: &Vec<Vec<MirScalarExpr>>,
             _implementation: &JoinImplementation,
             unique_columns: BTreeMap<usize, usize>,
-            inputs: Vec<&SymExp>,
-        ) -> SymExp {
-            let mut inputs = inputs.into_iter().cloned().collect::<Vec<_>>();
+            mut inputs: Vec<CardinalityEstimate>,
+        ) -> CardinalityEstimate {
+            if inputs.is_empty() {
+                return CardinalityEstimate::from(0.0);
+            }
 
             for equiv in equivalences {
                 // those sources which have a unique key
@@ -1500,10 +1552,12 @@ mod cardinality {
                     let mut sources = unique_sources.iter();
 
                     let lhs_idx = *sources.next().unwrap();
-                    let mut lhs = std::mem::replace(&mut inputs[lhs_idx], SymExp::f64(1.0));
+                    let mut lhs =
+                        std::mem::replace(&mut inputs[lhs_idx], CardinalityEstimate::from(1.0));
                     for &rhs_idx in sources {
-                        let rhs = std::mem::replace(&mut inputs[rhs_idx], SymExp::f64(1.0));
-                        lhs = SymExp::min(lhs, rhs);
+                        let rhs =
+                            std::mem::replace(&mut inputs[rhs_idx], CardinalityEstimate::from(1.0));
+                        lhs = CardinalityEstimate::min(lhs, rhs);
                     }
 
                     inputs[lhs_idx] = lhs;
@@ -1515,28 +1569,32 @@ mod cardinality {
                 // some unique columns in this equivalence
                 for idx in unique_sources {
                     // when joining R and S on R.x = S.x, if R.x is unique and S.x is not, we're bounded above by the cardinality of S
-                    inputs[idx] = SymExp::f64(1.0);
+                    inputs[idx] = CardinalityEstimate::from(1.0);
                 }
             }
 
-            SymbolicExpression::product(inputs)
+            let mut product = CardinalityEstimate::from(1.0);
+            for input in inputs {
+                product = product * input;
+            }
+            product
         }
 
         fn reduce(
             &self,
             group_key: &Vec<MirScalarExpr>,
             expected_group_size: &Option<u64>,
-            input: &SymExp,
-        ) -> SymExp {
+            input: CardinalityEstimate,
+        ) -> CardinalityEstimate {
             // TODO(mgree): if no `group_key` is present, we can do way better
 
             if let Some(group_size) = expected_group_size {
                 input / f64::cast_lossy(*group_size)
             } else if group_key.is_empty() {
-                SymExp::from(1.0)
+                CardinalityEstimate::from(1.0)
             } else {
                 // in the worst case, every row is its own group
-                input.clone()
+                input
             }
         }
 
@@ -1545,8 +1603,8 @@ mod cardinality {
             group_key: &Vec<usize>,
             limit: &Option<MirScalarExpr>,
             expected_group_size: &Option<u64>,
-            input: &SymExp,
-        ) -> SymExp {
+            input: CardinalityEstimate,
+        ) -> CardinalityEstimate {
             // TODO: support simple arithmetic expressions
             let k = limit
                 .as_ref()
@@ -1556,21 +1614,21 @@ mod cardinality {
             if let Some(group_size) = expected_group_size {
                 input * (f64::cast_lossy(k) / f64::cast_lossy(*group_size))
             } else if group_key.is_empty() {
-                SymExp::from(k)
+                CardinalityEstimate::from(f64::cast_lossy(k))
             } else {
                 // in the worst case, every row is its own group
                 input.clone()
             }
         }
 
-        fn threshold(&self, input: &SymExp) -> SymExp {
+        fn threshold(&self, input: CardinalityEstimate) -> CardinalityEstimate {
             // worst case scaling factor is 1
             input.clone()
         }
     }
 
     impl Analysis for Cardinality {
-        type Value = SymExp;
+        type Value = CardinalityEstimate;
 
         fn announce_dependencies(builder: &mut crate::analysis::DerivedBuilder) {
             builder.require(crate::analysis::Arity);
@@ -1601,16 +1659,21 @@ mod cardinality {
 
             match expr {
                 Constant { rows, .. } => {
-                    SymExp::from(rows.as_ref().map_or_else(|_| 0, |v| v.len()))
+                    CardinalityEstimate::from(rows.as_ref().map_or_else(|_| 0, |v| v.len()))
                 }
                 Get { id, .. } => match id {
                     Id::Local(id) => depends
                         .bindings()
                         .get(id)
                         .and_then(|id| results.get(*id))
-                        .cloned()
-                        .unwrap_or(SymExp::symbolic(FactorizerVariable::Unknown)),
-                    Id::Global(id) => SymbolicExpression::symbolic(FactorizerVariable::Id(*id)),
+                        .copied()
+                        .unwrap_or(CardinalityEstimate::Unknown),
+                    Id::Global(id) => self
+                        .stats
+                        .get(id)
+                        .copied()
+                        .map(CardinalityEstimate::from)
+                        .unwrap_or(CardinalityEstimate::Unknown),
                 },
                 Let { .. } | Project { .. } | Map { .. } | ArrangeBy { .. } | Negate { .. } => {
                     results[index - 1].clone()
@@ -1618,24 +1681,21 @@ mod cardinality {
                 LetRec { .. } =>
                 // TODO(mgree): implement a recurrence-based approach (or at least identify common idioms, e.g. transitive closure)
                 {
-                    SymbolicExpression::symbolic(FactorizerVariable::Unknown)
+                    CardinalityEstimate::Unknown
                 }
-                Union { base: _, inputs: _ } => {
-                    let inputs = depends
-                        .children_of_rev(index, expr.children().count())
-                        .map(|off| results[off].clone())
-                        .collect();
-                    SymbolicExpression::sum(inputs)
-                }
+                Union { base: _, inputs: _ } => depends
+                    .children_of_rev(index, expr.children().count())
+                    .map(|off| results[off].clone())
+                    .sum(),
                 FlatMap { func, .. } => {
-                    let input = &results[index - 1];
-                    self.factorize.flat_map(func, input)
+                    let input = results[index - 1];
+                    self.flat_map(func, input)
                 }
                 Filter { predicates, .. } => {
-                    let input = &results[index - 1];
+                    let input = results[index - 1];
                     let keys = depends.results::<UniqueKeys>().expect("UniqueKeys missing");
                     let keys = &keys[index - 1];
-                    self.factorize.filter(predicates, keys, input)
+                    self.filter(predicates, keys, input)
                 }
                 Join {
                     equivalences,
@@ -1651,7 +1711,7 @@ mod cardinality {
 
                     let mut offset = 1;
                     for idx in 0..inputs.len() {
-                        let input = &results[index - offset];
+                        let input = results[index - offset];
                         input_results.push(input);
 
                         let arity = arity[index - offset];
@@ -1666,16 +1726,15 @@ mod cardinality {
                         offset += &sizes[index - offset];
                     }
 
-                    self.factorize
-                        .join(equivalences, implementation, unique_columns, input_results)
+                    self.join(equivalences, implementation, unique_columns, input_results)
                 }
                 Reduce {
                     group_key,
                     expected_group_size,
                     ..
                 } => {
-                    let input = &results[index - 1];
-                    self.factorize.reduce(group_key, expected_group_size, input)
+                    let input = results[index - 1];
+                    self.reduce(group_key, expected_group_size, input)
                 }
                 TopK {
                     group_key,
@@ -1683,142 +1742,23 @@ mod cardinality {
                     expected_group_size,
                     ..
                 } => {
-                    let input = &results[index - 1];
-                    self.factorize
-                        .topk(group_key, limit, expected_group_size, input)
+                    let input = results[index - 1];
+                    self.topk(group_key, limit, expected_group_size, input)
                 }
                 Threshold { .. } => {
-                    let input = &results[index - 1];
-                    self.factorize.threshold(input)
+                    let input = results[index - 1];
+                    self.threshold(input)
                 }
             }
         }
     }
 
-    impl SymExp {
-        /// Render a symbolic expression nicely
-        pub fn humanize(
-            &self,
-            h: &dyn ExprHumanizer,
-            f: &mut std::fmt::Formatter<'_>,
-        ) -> std::fmt::Result {
-            self.humanize_factor(h, f)
-        }
-
-        fn humanize_factor(
-            &self,
-            h: &dyn ExprHumanizer,
-            f: &mut std::fmt::Formatter<'_>,
-        ) -> std::fmt::Result {
-            use SymbolicExpression::*;
-            match self {
-                Sum(ss) => {
-                    assert!(ss.len() >= 2);
-
-                    let mut ss = ss.iter();
-                    ss.next().unwrap().humanize_factor(h, f)?;
-                    for s in ss {
-                        write!(f, " + ")?;
-                        s.humanize_factor(h, f)?;
-                    }
-                    Ok(())
-                }
-                _ => self.humanize_term(h, f),
-            }
-        }
-
-        fn humanize_term(
-            &self,
-            h: &dyn ExprHumanizer,
-            f: &mut std::fmt::Formatter<'_>,
-        ) -> std::fmt::Result {
-            use SymbolicExpression::*;
-            match self {
-                Product(ps) => {
-                    assert!(ps.len() >= 2);
-
-                    let mut ps = ps.iter();
-                    ps.next().unwrap().humanize_term(h, f)?;
-                    for p in ps {
-                        write!(f, " * ")?;
-                        p.humanize_term(h, f)?;
-                    }
-                    Ok(())
-                }
-                _ => self.humanize_atom(h, f),
-            }
-        }
-
-        fn humanize_atom(
-            &self,
-            h: &dyn ExprHumanizer,
-            f: &mut std::fmt::Formatter<'_>,
-        ) -> std::fmt::Result {
-            use SymbolicExpression::*;
-            match self {
-                Constant(OrderedFloat::<f64>(n)) => write!(f, "{n}"),
-                Symbolic(FactorizerVariable::Id(v), n) => {
-                    let id = h.humanize_id(*v).unwrap_or_else(|| format!("{v:?}"));
-                    write!(f, "{id}")?;
-
-                    if *n > 1 {
-                        write!(f, "^{n}")?;
-                    }
-
-                    Ok(())
-                }
-                Symbolic(FactorizerVariable::Index(col), n) => {
-                    write!(f, "icard(#{col})^{n}")
-                }
-                Symbolic(FactorizerVariable::Unknown, n) => {
-                    write!(f, "unknown^{n}")
-                }
-                Max(e1, e2) => {
-                    write!(f, "max(")?;
-                    e1.humanize_factor(h, f)?;
-                    write!(f, ", ")?;
-                    e2.humanize_factor(h, f)?;
-                    write!(f, ")")
-                }
-                Min(e1, e2) => {
-                    write!(f, "min(")?;
-                    e1.humanize_factor(h, f)?;
-                    write!(f, ", ")?;
-                    e2.humanize_factor(h, f)?;
-                    write!(f, ")")
-                }
-                Sum(_) | Product(_) => {
-                    write!(f, "(")?;
-                    self.humanize_factor(h, f)?;
-                    write!(f, ")")
-                }
-            }
-        }
-    }
-
-    impl std::fmt::Display for SymExp {
+    impl std::fmt::Display for CardinalityEstimate {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            self.humanize(&mz_repr::explain::DummyHumanizer, f)
-        }
-    }
-
-    /// Wrapping struct for pretty printing of symbolic expressions
-    #[allow(missing_debug_implementations)]
-    pub struct HumanizedSymbolicExpression<'a, 'b> {
-        expr: &'a SymExp,
-        humanizer: &'b dyn ExprHumanizer,
-    }
-
-    impl<'a, 'b> HumanizedSymbolicExpression<'a, 'b> {
-        /// Pairs a symbolic expression with a way to render GlobalIds
-        pub fn new(expr: &'a SymExp, humanizer: &'b dyn ExprHumanizer) -> Self {
-            Self { expr, humanizer }
-        }
-    }
-
-    impl<'a, 'b> std::fmt::Display for HumanizedSymbolicExpression<'a, 'b> {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            self.expr.normalize().humanize(self.humanizer, f)
+            match self {
+                CardinalityEstimate::Estimate(OrderedFloat(estimate)) => write!(f, "{estimate}"),
+                CardinalityEstimate::Unknown => write!(f, "<UNKNOWN>"),
+            }
         }
     }
 }

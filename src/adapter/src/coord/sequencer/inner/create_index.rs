@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, Index};
@@ -209,18 +209,23 @@ impl Coordinator {
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
 
+        // TODO(mgree): calculate statistics (need a timestamp)
+        let cardinality_stats = BTreeMap::new();
+
         let explain = match stage {
             ExplainStage::GlobalPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
                     tracing::error!("cannot find {stage} for index {id} in catalog");
                     coord_bail!("cannot find {stage} for index in catalog");
                 };
+
                 explain_dataflow(
                     plan,
                     format,
                     &config,
                     &features,
                     &self.catalog().for_session(ctx.session()),
+                    cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
@@ -236,6 +241,7 @@ impl Coordinator {
                     &config,
                     &features,
                     &self.catalog().for_session(ctx.session()),
+                    cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?

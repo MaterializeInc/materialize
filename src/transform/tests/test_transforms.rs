@@ -61,6 +61,7 @@ fn handle_explain(
         config: &config,
         features: &features,
         humanizer: catalog,
+        cardinality_stats: Default::default(), // empty stats
         used_indexes: Default::default(),
         finishing: Default::default(),
         duration: Default::default(),

@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
 use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, View};
 use mz_expr::CollectionPlan;
@@ -196,6 +198,8 @@ impl Coordinator {
         let features =
             OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
 
+        let cardinality_stats = BTreeMap::new();
+
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
                 view.raw_expr.clone(),
@@ -203,6 +207,7 @@ impl Coordinator {
                 &config,
                 &features,
                 &self.catalog().for_session(ctx.session()),
+                cardinality_stats,
                 target_cluster,
             )?,
             ExplainStage::LocalPlan => explain_plan(
@@ -211,6 +216,7 @@ impl Coordinator {
                 &config,
                 &features,
                 &self.catalog().for_session(ctx.session()),
+                cardinality_stats,
                 target_cluster,
             )?,
             _ => {

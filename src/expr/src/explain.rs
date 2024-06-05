@@ -43,6 +43,7 @@ pub struct ExplainContext<'a> {
     pub config: &'a ExplainConfig,
     pub features: &'a OptimizerFeatures,
     pub humanizer: &'a dyn ExprHumanizer,
+    pub cardinality_stats: BTreeMap<GlobalId, usize>,
     pub used_indexes: UsedIndexes,
     pub finishing: Option<RowSetFinishing>,
     pub duration: Duration,
