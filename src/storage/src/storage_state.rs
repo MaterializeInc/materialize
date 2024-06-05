@@ -496,10 +496,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
             // Handle any received commands.
             {
-                let mut command_sequencer = command_sequencer.borrow_mut();
-                while let Some(internal_cmd) = command_sequencer.next() {
+                loop {
+                    let mut command_sequencer_borrow = command_sequencer.borrow_mut();
+                    let Some(internal_cmd) = command_sequencer_borrow.next() else {
+                        break;
+                    };
+                    // We must ensure the sequencer is not borrowed during rendering since
+                    // operators will be scheduled synchronously as part of the following call and
+                    // some of them might want to use it.
+                    drop(command_sequencer_borrow);
                     self.handle_internal_storage_command(
-                        &mut *command_sequencer,
+                        &command_sequencer,
                         &mut async_worker,
                         internal_cmd,
                     );
@@ -546,7 +553,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(
         &mut self,
-        internal_cmd_tx: &mut dyn InternalCommandSender,
+        internal_cmd_tx: &RefCell<dyn InternalCommandSender>,
         async_worker: &mut AsyncStorageWorker<mz_repr::Timestamp>,
         internal_cmd: InternalStorageCommand,
     ) {
@@ -613,10 +620,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.storage_state
                             .aggregated_statistics
                             .advance_global_epoch(id);
-                        internal_cmd_tx.broadcast(InternalStorageCommand::RunSinkDataflow(
-                            id,
-                            sink_description,
-                        ));
+                        internal_cmd_tx.borrow_mut().broadcast(
+                            InternalStorageCommand::RunSinkDataflow(id, sink_description),
+                        );
                     }
 
                     // Continue with other commands.
