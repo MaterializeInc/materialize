@@ -232,6 +232,7 @@ class SelectAction(Action):
             [
                 "in the same timedomain",
                 'is not allowed from the "mz_catalog_server" cluster',
+                "timed out before ingesting the source's visible frontier when real-time-recency query issued",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -288,7 +289,12 @@ class SelectAction(Action):
 
         query += " LIMIT 1"
 
+        rtr = self.rng.choice([True, False])
+        if rtr:
+            exe.execute("SET REAL_TIME_RECENCY TO TRUE", explainable=False)
         exe.execute(query, explainable=True, http=Http.RANDOM, fetch=True)
+        if rtr:
+            exe.execute("SET REAL_TIME_RECENCY TO FALSE", explainable=False)
         return True
 
 

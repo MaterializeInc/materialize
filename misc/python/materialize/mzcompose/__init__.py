@@ -54,6 +54,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_enable_s3_lgalloc_noncc_sizes": "true",
     # -----
     # Others (ordered by name)
+    "allow_real_time_recency": "true",
     "cluster_always_use_disk": "true",
     "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
     "compute_hydration_concurrency": 2,
