@@ -889,7 +889,7 @@ impl CatalogState {
             }
             mz_storage_types::connections::Connection::Csr(_)
             | mz_storage_types::connections::Connection::Postgres(_)
-            // SSH connection table updates are handled elsewhere. The content of the tables is
+            // SSH connection table updates are handled elsewhere. The content of the table is
             // stored in the secret controller, not the durable catalog, which requires special
             // handling.
             | mz_storage_types::connections::Connection::Ssh(_)
