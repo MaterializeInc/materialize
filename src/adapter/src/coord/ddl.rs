@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
-use futures::Future;
+use futures::{future, Future, FutureExt};
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
@@ -541,9 +541,18 @@ impl Coordinator {
         // catalog would simplify the situation, but then we'd have to somehow encode public keys
         // the CREATE SQL of connections, which is annoying. In order to successfully balance all of
         // these constraints, we handle all updates to the table separately.
-        for (ssh_conn, diff) in ssh_conn_to_update {
-            let secret = self.secrets_controller.reader().read(ssh_conn).await?;
-            let key_set = SshKeyPairSet::from_bytes(&secret)?.public_keys();
+        let ssh_conn_secrets = ssh_conn_to_update.into_iter().map(|(ssh_conn, diff)| {
+            let secrets_controller = Arc::clone(&self.secrets_controller);
+            async move {
+                let secret = secrets_controller.reader().read(ssh_conn).await?;
+                let key_set = SshKeyPairSet::from_bytes(&secret)?.public_keys();
+                Ok::<_, AdapterError>((ssh_conn, key_set, diff))
+            }
+            .boxed()
+        });
+        let ssh_conn_secrets = future::join_all(ssh_conn_secrets).await;
+        for secret_res in ssh_conn_secrets {
+            let (ssh_conn, key_set, diff) = secret_res?;
             let builtin_table_update = catalog
                 .state()
                 .pack_ssh_tunnel_connection_update(ssh_conn, &key_set, diff);
@@ -555,11 +564,11 @@ impl Coordinator {
                     .state()
                     .pack_ssh_tunnel_connection_update(ssh_conn, &prev_key_set, -1);
             builtin_table_updates.push(builtin_table_retraction);
-            let builtin_table_retraction =
+            let builtin_table_addition =
                 catalog
                     .state()
                     .pack_ssh_tunnel_connection_update(ssh_conn, &new_key_set, 1);
-            builtin_table_updates.push(builtin_table_retraction);
+            builtin_table_updates.push(builtin_table_addition);
         }
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
