@@ -25,12 +25,16 @@ ALTER SYSTEM SET enable_copy_to_expr = true;
     REGION = '${arg.region}'
   );
 
-! COPY t TO 's3://path/to/dir';
+! COPY t TO 's3://path/to/dir' WITH (FORMAT = 'csv');
 contains:AWS CONNECTION is required for COPY ... TO <expr>
+
+! COPY t TO 's3://path/to/dir';
+contains:COPY TO <expr> requires a FORMAT option
 
 ! COPY t TO 's3://path/to/dir'
   WITH (
-    AWS CONNECTION = aws_conn
+    AWS CONNECTION = aws_conn,
+    FORMAT = 'text'
   );
 contains:FORMAT TEXT not yet supported
 
