@@ -21,6 +21,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_storage_client::controller::IntrospectionType;
 
 use crate::controller::ComputeControllerTimestamp;
 use crate::logging::{ComputeLog, LogVariant};
@@ -28,7 +29,11 @@ use crate::logging::{ComputeLog, LogVariant};
 pub(super) fn build_subscribe_dataflows<T>(
     id_gen: Arc<TransientIdGen>,
     log_indexes: &BTreeMap<LogVariant, GlobalId>,
-) -> Vec<(GlobalId, DataflowDescription<Plan<T>, (), T>)>
+) -> Vec<(
+    GlobalId,
+    DataflowDescription<Plan<T>, (), T>,
+    IntrospectionType,
+)>
 where
     T: ComputeControllerTimestamp,
 {
@@ -119,5 +124,5 @@ where
         debug_name: format!("introspection-subscribe-error-count-{sink_id}"),
     };
 
-    vec![(sink_id, dataflow)]
+    vec![(sink_id, dataflow, IntrospectionType::ComputeErrorCounts)]
 }

@@ -1818,6 +1818,22 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinL
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_compute_error_counts_raw_unified",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED_OID,
+    desc: RelationDesc::empty()
+        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("export_id", ScalarType::String.nullable(false))
+        .with_column(
+            "count",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        ),
+    data_source: IntrospectionType::ComputeErrorCounts,
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_ACTIVE_PEEKS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_active_peeks_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -7250,6 +7266,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_COMPUTE_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_ERROR_COUNTS_RAW),
+        Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_KAFKA_SOURCES),

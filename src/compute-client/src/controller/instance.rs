@@ -30,6 +30,7 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -189,7 +190,7 @@ pub(super) struct Instance<T> {
     /// on the subscribe's input. `subscribes` is only used to track which updates have been
     /// emitted, to decide if new ones should be emitted or suppressed.
     subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
-    introspection_subscribes: BTreeMap<GlobalId, ReplicaId>,
+    introspection_subscribes: BTreeMap<GlobalId, (ReplicaId, IntrospectionType)>,
     /// Tracks all in-progress COPY TOs.
     ///
     /// New entries are added for all s3 oneshot sinks (corresponding to a COPY TO) exported from
@@ -632,7 +633,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .collect();
         let introspection_subscribes: BTreeMap<_, _> = introspection_subscribes
             .iter()
-            .map(|(id, replica_id)| (id.to_string(), replica_id.to_string()))
+            .map(|(id, subscribe)| (id.to_string(), format!("{subscribe:?}")))
             .collect();
         let copy_tos: Vec<_> = copy_tos.iter().map(|id| id.to_string()).collect();
         let replica_epochs: BTreeMap<_, _> = replica_epochs
@@ -1031,7 +1032,7 @@ where
         let log_indexes = &self.compute.log_sources;
         let subscribes = introspection::build_subscribe_dataflows(id_gen, log_indexes);
 
-        for (subscribe_id, mut dataflow) in subscribes {
+        for (subscribe_id, mut dataflow, introspection_type) in subscribes {
             let as_of = dataflow
                 .index_imports
                 .keys()
@@ -1047,7 +1048,7 @@ where
 
             self.compute
                 .introspection_subscribes
-                .insert(subscribe_id, replica_id);
+                .insert(subscribe_id, (replica_id, introspection_type));
 
             tracing::info!(%subscribe_id, %replica_id, "installed introspection subscribe");
         }
@@ -1058,7 +1059,9 @@ where
         subscribe_id: GlobalId,
         updates: Result<Vec<(T, Row, Diff)>, String>,
     ) {
-        let Some(replica_id) = self.compute.introspection_subscribes.get(&subscribe_id) else {
+        let Some((replica_id, introspection_type)) =
+            self.compute.introspection_subscribes.get(&subscribe_id)
+        else {
             tracing::error!(%subscribe_id, "updates for unknown introspection subscribe");
             return;
         };
@@ -1067,7 +1070,7 @@ where
             Ok(updates) => updates,
             Err(error) => {
                 tracing::error!(
-                    %subscribe_id, %replica_id,
+                    %subscribe_id, %replica_id, ?introspection_type,
                     "introspection subscribe produced an error: {error}",
                 );
                 self.drop_introspection_subscribe(subscribe_id);
@@ -1075,20 +1078,36 @@ where
             }
         };
 
-        // TODO: send updates
+        let updates = updates
+            .into_iter()
+            .map(|(_, row, diff)| {
+                let replica_id = replica_id.to_string();
+                let datums = std::iter::once(Datum::String(&replica_id)).chain(row.to_datum_iter());
+                let row = Row::pack(datums);
+                (row, diff)
+            })
+            .collect();
+        self.compute
+            .deliver_introspection_updates(*introspection_type, updates);
     }
 
     fn drop_introspection_subscribe(&mut self, subscribe_id: GlobalId) {
-        let Some(replica_id) = self.compute.introspection_subscribes.remove(&subscribe_id) else {
+        let Some((replica_id, introspection_type)) =
+            self.compute.introspection_subscribes.remove(&subscribe_id)
+        else {
             tracing::error!(%subscribe_id, "attempt to drop unknown introspection subscribe");
             return;
         };
         self.compute.subscribes.remove(&subscribe_id);
-        self.drop_collections(vec![subscribe_id]).expect("collection exists");
+        self.drop_collections(vec![subscribe_id])
+            .expect("collection exists");
 
         // TODO: send retractions
 
-        tracing::info!(%subscribe_id, %replica_id, "dropped introspection subscribe");
+        tracing::info!(
+            %subscribe_id, %replica_id, ?introspection_type,
+            "dropped introspection subscribe",
+        );
     }
 
     /// Create the described dataflows and initializes state for their output.
