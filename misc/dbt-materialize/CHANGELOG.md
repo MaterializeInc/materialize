@@ -14,7 +14,7 @@
 ## 1.7.8 - 2024-05-06
 
 * Fix permission management in blue/green automation macros for non-admin users
-  ([#26733](https://github.com/MaterializeInc/materialize/pull/26773)).
+  ([#26773](https://github.com/MaterializeInc/materialize/pull/26773)).
 
 ## 1.7.7 - 2024-04-19
 
