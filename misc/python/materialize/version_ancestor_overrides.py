@@ -22,7 +22,7 @@ Commits must be ordered descending by their date.
 
 
 def get_ancestor_overrides_for_performance_regressions(
-    scenario_class: type[Any], scale: str
+    scenario_class: type[Any], scale: str | None
 ) -> dict[str, MzVersion]:
     scenario_class_name = scenario_class.__name__
 

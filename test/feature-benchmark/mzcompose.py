@@ -245,7 +245,7 @@ def run_one_scenario(
     return comparators
 
 
-def resolve_tag(tag: str, scenario_class: type[Scenario], scale: str) -> str:
+def resolve_tag(tag: str, scenario_class: type[Scenario], scale: str | None) -> str:
     if tag == "common-ancestor":
         return resolve_ancestor_image_tag(
             get_ancestor_overrides_for_performance_regressions(scenario_class, scale)
@@ -543,7 +543,7 @@ def _check_regressions_justified(
     scenarios_with_regressions: list[type[Scenario]],
     this_tag: str | None,
     baseline_tag: str | None,
-    scale: str,
+    scale: str | None,
 ) -> dict[str, str | None]:
     """
     :return: justification per scenario name if justified else None
@@ -566,7 +566,7 @@ def _is_regression_justified(
     scenario_class: type[Scenario],
     this_tag: str | None,
     baseline_tag: str | None,
-    scale: str,
+    scale: str | None,
 ) -> tuple[bool, str]:
     if (
         this_tag is None
@@ -610,7 +610,7 @@ def _regressions_to_failure_details(
     latest_report_by_scenario_name: dict[str, Report],
     justification_by_scenario_name: dict[str, str | None],
     baseline_tag: str,
-    scale: str,
+    scale: str | None,
 ) -> list[TestFailureDetails]:
     failure_details = []
 
@@ -638,7 +638,7 @@ def upload_results_to_test_analytics(
     c: Composition,
     this_tag: str | None,
     scenario_classes: list[type[Scenario]],
-    scale: str,
+    scale: str | None,
     latest_report_by_scenario_name: dict[str, Report],
     was_successful: bool,
 ) -> None:
@@ -666,7 +666,7 @@ def upload_results_to_test_analytics(
                 feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
                     scenario_name=scenario_name,
                     scenario_version=str(scenario_version),
-                    scale=scale,
+                    scale=scale or "default",
                     wallclock=report_measurements[MeasurementType.WALLCLOCK],
                     messages=report_measurements[MeasurementType.MESSAGES],
                     memory=report_measurements[MeasurementType.MEMORY],
