@@ -185,10 +185,10 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
-    UpdateRotatedKeys {
-        id: GlobalId,
-        previous_public_key_pair: (String, String),
-        new_public_key_pair: (String, String),
+    /// Performs updates to builtin tables that are not derived from the durable
+    /// catalog. These should be rare and are weird behaving tables.
+    BuiltinTableUpdate {
+        builtin_table_update: BuiltinTableUpdate,
     },
     /// Performs a dry run of the commit, but errors with
     /// [`AdapterError::TransactionDryRun`].
@@ -2179,19 +2179,10 @@ impl Catalog {
                     tx.clear_system_configs();
                     tx.set_txn_wal_tables(state.system_configuration.txn_wal_tables())?;
                 }
-                Op::UpdateRotatedKeys {
-                    id,
-                    previous_public_key_pair: _,
-                    new_public_key_pair: _,
+                Op::BuiltinTableUpdate {
+                    builtin_table_update,
                 } => {
-                    // Noting to actually do but log.
-                    let entry = state.get_entry(&id);
-                    info!(
-                        "update {} {} ({})",
-                        entry.item_type(),
-                        state.resolve_full_name(entry.name(), entry.conn_id()),
-                        id
-                    );
+                    builtin_table_updates.push(builtin_table_update);
                 }
             };
             tx.commit_op();

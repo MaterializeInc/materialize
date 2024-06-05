@@ -195,8 +195,7 @@ impl Coordinator {
         let mut views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
-        let mut ssh_conn_to_update = vec![];
-        let mut ssh_conn_to_rotate = vec![];
+        let mut ssh_conn_to_drop = vec![];
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
@@ -282,7 +281,7 @@ impl Coordinator {
                                         // SSH connections have an associated secret that should be dropped
                                         mz_storage_types::connections::Connection::Ssh(_) => {
                                             secrets_to_drop.push(*id);
-                                            ssh_conn_to_update.push((*id, -1));
+                                            ssh_conn_to_drop.push(*id);
                                         }
                                         // AWS PrivateLink connections have an associated
                                         // VpcEndpoint K8S resource that should be dropped
@@ -380,28 +379,6 @@ impl Coordinator {
                             .unwrap_or(false)
                     });
                     webhook_sources_to_restart.extend(webhook_sources);
-                }
-                catalog::Op::CreateItem {
-                    id,
-                    item:
-                        CatalogItem::Connection(Connection {
-                            connection: mz_storage_types::connections::Connection::Ssh(_),
-                            ..
-                        }),
-                    ..
-                } => {
-                    ssh_conn_to_update.push((*id, 1));
-                }
-                catalog::Op::UpdateRotatedKeys {
-                    id,
-                    previous_public_key_pair,
-                    new_public_key_pair,
-                } => {
-                    ssh_conn_to_rotate.push((
-                        *id,
-                        previous_public_key_pair.clone(),
-                        new_public_key_pair.clone(),
-                    ));
                 }
                 _ => (),
             }
@@ -541,34 +518,22 @@ impl Coordinator {
         // catalog would simplify the situation, but then we'd have to somehow encode public keys
         // the CREATE SQL of connections, which is annoying. In order to successfully balance all of
         // these constraints, we handle all updates to the table separately.
-        let ssh_conn_secrets = ssh_conn_to_update.into_iter().map(|(ssh_conn, diff)| {
+        let ssh_conn_secrets = ssh_conn_to_drop.into_iter().map(|ssh_conn| {
             let secrets_controller = Arc::clone(&self.secrets_controller);
             async move {
                 let secret = secrets_controller.reader().read(ssh_conn).await?;
                 let key_set = SshKeyPairSet::from_bytes(&secret)?.public_keys();
-                Ok::<_, AdapterError>((ssh_conn, key_set, diff))
+                Ok::<_, AdapterError>((ssh_conn, key_set))
             }
             .boxed()
         });
         let ssh_conn_secrets = future::join_all(ssh_conn_secrets).await;
         for secret_res in ssh_conn_secrets {
-            let (ssh_conn, key_set, diff) = secret_res?;
+            let (ssh_conn, key_set) = secret_res?;
             let builtin_table_update = catalog
                 .state()
-                .pack_ssh_tunnel_connection_update(ssh_conn, &key_set, diff);
+                .pack_ssh_tunnel_connection_update(ssh_conn, &key_set, -1);
             builtin_table_updates.push(builtin_table_update);
-        }
-        for (ssh_conn, prev_key_set, new_key_set) in ssh_conn_to_rotate {
-            let builtin_table_retraction =
-                catalog
-                    .state()
-                    .pack_ssh_tunnel_connection_update(ssh_conn, &prev_key_set, -1);
-            builtin_table_updates.push(builtin_table_retraction);
-            let builtin_table_addition =
-                catalog
-                    .state()
-                    .pack_ssh_tunnel_connection_update(ssh_conn, &new_key_set, 1);
-            builtin_table_updates.push(builtin_table_addition);
         }
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
@@ -1389,8 +1354,8 @@ impl Coordinator {
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
-                | Op::UpdateRotatedKeys { .. }
                 | Op::Comment { .. }
+                | Op::BuiltinTableUpdate { .. }
                 | Op::TransactionDryRun => {}
             }
         }

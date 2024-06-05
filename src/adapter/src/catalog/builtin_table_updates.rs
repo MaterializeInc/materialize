@@ -78,7 +78,7 @@ use crate::catalog::CatalogState;
 use crate::coord::ConnMeta;
 
 /// An update to a built-in table.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BuiltinTableUpdate {
     /// The ID of the table to update.
     pub id: GlobalId,

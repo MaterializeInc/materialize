@@ -549,7 +549,7 @@ impl Coordinator {
     pub(super) async fn sequence_create_connection(
         &mut self,
         mut ctx: ExecuteContext,
-        plan: plan::CreateConnectionPlan,
+        mut plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
         let connection_gid = match self.catalog_mut().allocate_user_id().await {
@@ -557,7 +557,7 @@ impl Coordinator {
             Err(err) => return ctx.retire(Err(err.into())),
         };
 
-        match plan.connection.connection {
+        let public_key_set = match plan.connection.connection {
             mz_storage_types::connections::Connection::Ssh(_) => {
                 let key_set = match SshKeyPairSet::new() {
                     Ok(key) => key,
@@ -569,12 +569,17 @@ impl Coordinator {
                     .ensure(connection_gid, &secret)
                     .await
                 {
-                    Ok(()) => (),
+                    Ok(()) => Some(key_set.public_keys()),
                     Err(err) => return ctx.retire(Err(err.into())),
                 }
             }
-            _ => {}
-        }
+            _ => None,
+        };
+        assert_eq!(
+            plan.public_key_set, None,
+            "public key should not be set yet"
+        );
+        plan.public_key_set = public_key_set;
 
         if plan.validate {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -640,7 +645,7 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let ops = vec![catalog::Op::CreateItem {
+        let mut ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
@@ -650,6 +655,16 @@ impl Coordinator {
             }),
             owner_id: *session.current_role_id(),
         }];
+        if let Some(public_key_set) = plan.public_key_set {
+            let builtin_table_update = self.catalog().state().pack_ssh_tunnel_connection_update(
+                connection_gid,
+                &public_key_set,
+                1,
+            );
+            ops.push(catalog::Op::BuiltinTableUpdate {
+                builtin_table_update,
+            });
+        }
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
@@ -3128,11 +3143,24 @@ impl Coordinator {
             .ensure(id, &new_key_set.to_bytes())
             .await?;
 
-        let ops = vec![catalog::Op::UpdateRotatedKeys {
+        let builtin_table_retraction = self.catalog().state().pack_ssh_tunnel_connection_update(
             id,
-            previous_public_key_pair: previous_key_set.public_keys(),
-            new_public_key_pair: new_key_set.public_keys(),
-        }];
+            &previous_key_set.public_keys(),
+            -1,
+        );
+        let builtin_table_addition = self.catalog().state().pack_ssh_tunnel_connection_update(
+            id,
+            &new_key_set.public_keys(),
+            1,
+        );
+        let ops = vec![
+            catalog::Op::BuiltinTableUpdate {
+                builtin_table_update: builtin_table_retraction,
+            },
+            catalog::Op::BuiltinTableUpdate {
+                builtin_table_update: builtin_table_addition,
+            },
+        ];
 
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::AlteredObject(ObjectType::Connection)),

@@ -3978,6 +3978,7 @@ pub fn plan_create_connection(
             connection,
         },
         validate,
+        public_key_set: None,
     };
     Ok(Plan::CreateConnection(plan))
 }
