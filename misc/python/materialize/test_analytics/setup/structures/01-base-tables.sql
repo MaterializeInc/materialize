@@ -15,33 +15,33 @@
 
 -- test history version
 CREATE TABLE version(
-   version TEXT
+   version TEXT NOT NULL
 );
 
 -- meta data of the build
 CREATE TABLE build (
-   pipeline TEXT,
-   build_number INT,
-   build_id TEXT,
+   pipeline TEXT NOT NULL,
+   build_number INT NOT NULL,
+   build_id TEXT NOT NULL,
    branch TEXT,
-   commit_hash TEXT,
-   date TIMESTAMPTZ,
-   build_url TEXT,
+   commit_hash TEXT NOT NULL,
+   date TIMESTAMPTZ NOT NULL,
+   build_url TEXT NOT NULL,
    remarks TEXT
 );
 
 -- meta data of the build step
 CREATE TABLE build_step (
     -- build_step_id is assumed to be globally unique for now
-    build_step_id TEXT,
-    pipeline TEXT,
-    build_number INT,
-    build_step_key TEXT,
+    build_step_id TEXT NOT NULL,
+    pipeline TEXT NOT NULL,
+    build_number INT NOT NULL,
+    build_step_key TEXT NOT NULL,
     shard_index INT,
-    retry_count INT,
-    url TEXT,
-    is_latest_retry BOOL,
-    success BOOL,
-    aws_instance_type TEXT,
+    retry_count INT NOT NULL,
+    url TEXT NOT NULL,
+    is_latest_retry BOOL NOT NULL,
+    success BOOL NOT NULL,
+    aws_instance_type TEXT NOT NULL,
     remarks TEXT
 );
