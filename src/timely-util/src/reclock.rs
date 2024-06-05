@@ -246,7 +246,6 @@ where
         // The frontier of the `events` input
         let mut source_frontier = MutableAntichain::new_bottom(FromTime::minimum());
 
-        let mut stash = Vec::new();
         let mut binding_buffer = Vec::new();
         let mut remap_buffer = Vec::new();
         let mut interesting_times = Vec::new();
@@ -298,6 +297,7 @@ where
             //         chains that results from sorting the updates by `FromTime`, and then
             //         segmenting the sequence at elements where the partial order on `FromTime` is
             //         violated.
+            let mut stash = Vec::new();
             while let Some(event) = events.pull() {
                 match event.as_mut() {
                     Event::Progress(changes) => {
@@ -307,7 +307,7 @@ where
                 }
             }
             stash.sort_unstable_by(|(_, t1, _): &(D, FromTime, R), (_, t2, _)| t1.cmp(t2));
-            let mut new_source_updates = ChainBatch::from_iter(stash.drain(..));
+            let mut new_source_updates = ChainBatch::from_iter(stash);
 
             // STEP 4: Reclock new and deferred updates
             //         We are now ready to step through the remap bindings in time order and
