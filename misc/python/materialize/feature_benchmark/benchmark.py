@@ -9,6 +9,7 @@
 
 import sys
 from collections.abc import Iterable
+from typing import Any
 
 from materialize import ui
 from materialize.feature_benchmark.aggregation import Aggregation
@@ -17,6 +18,7 @@ from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.filter import Filter
 from materialize.feature_benchmark.measurement import Measurement, MeasurementType
 from materialize.feature_benchmark.scenario import Scenario
+from materialize.feature_benchmark.scenario_version import ScenarioVersion
 from materialize.feature_benchmark.termination import TerminationCondition
 from materialize.mz_version import MzVersion
 
@@ -26,7 +28,7 @@ class Benchmark:
         self,
         mz_id: int,
         mz_version: MzVersion,
-        scenario: type[Scenario],
+        scenario_cls: type[Scenario],
         executor: Executor,
         filter: Filter,
         termination_conditions: list[TerminationCondition],
@@ -39,7 +41,7 @@ class Benchmark:
         self._scale = scale
         self._mz_id = mz_id
         self._mz_version = mz_version
-        self._scenario = scenario
+        self._scenario_cls = scenario_cls
         self._executor = executor
         self._filter = filter
         self._termination_conditions = termination_conditions
@@ -51,10 +53,10 @@ class Benchmark:
         if measure_memory:
             self._memory_aggregation = aggregation_class()
 
-    def run(self) -> list[Aggregation]:
-        scale = self._scenario.SCALE
+    def create_scenario_instance(self) -> Scenario:
+        scale = self._scenario_cls.SCALE
 
-        if self._scale and not self._scenario.FIXED_SCALE:
+        if self._scale and not self._scenario_cls.FIXED_SCALE:
             if self._scale.startswith("+"):
                 scale = scale + float(self._scale.lstrip("+"))
             elif self._scale.startswith("-"):
@@ -62,13 +64,16 @@ class Benchmark:
             elif float(self._scale) > 0:
                 scale = float(self._scale)
 
-        scenario_class = self._scenario
-        scenario = scenario_class(
+        scenario_class = self._scenario_cls
+        return scenario_class(
             scale=scale,
             mz_version=self._mz_version,
             default_size=self._default_size,
             seed=self._seed,
         )
+
+    def run(self) -> list[Aggregation]:
+        scenario = self.create_scenario_instance()
         name = scenario.name()
 
         ui.header(
@@ -197,3 +202,19 @@ class Report:
             )
 
         return "\n".join(output_lines)
+
+    def measurements_of_this(self, scenario_name: str) -> dict[MeasurementType, Any]:
+        result = dict()
+
+        for comparison in self._comparisons:
+            if comparison.name == scenario_name:
+                result[comparison.type] = comparison.this()
+
+        return result
+
+    def get_scenario_version(self, scenario_name: str) -> ScenarioVersion:
+        for comparison in self._comparisons:
+            if comparison.name == scenario_name:
+                return comparison.get_scenario_version()
+
+        assert False, f"Scenario {scenario_name} not found!"

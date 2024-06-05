@@ -31,7 +31,7 @@ def create_connection(config: MzDbConfig) -> Connection:
     return connection
 
 
-def create_cursor(config: MzDbConfig, connection: Connection | None) -> Cursor:
+def create_cursor(config: MzDbConfig, connection: Connection | None = None) -> Cursor:
     if connection is None:
         connection = create_connection(config)
 

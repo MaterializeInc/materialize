@@ -16,11 +16,24 @@ from textwrap import dedent
 
 from materialize import buildkite
 from materialize.docker import is_image_tag_of_version
+from materialize.feature_benchmark.benchmark_versioning import (
+    FEATURE_BENCHMARK_FRAMEWORK_VERSION,
+)
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
+)
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_test_analytics_config,
+)
+from materialize.test_analytics.connection.test_analytics_connection import (
+    create_cursor,
+)
+from materialize.test_analytics.data import build_data_storage
+from materialize.test_analytics.data.feature_benchmark import (
+    feature_benchmark_result_storage,
 )
 from materialize.version_ancestor_overrides import (
     get_ancestor_overrides_for_performance_regressions,
@@ -198,7 +211,7 @@ def run_one_scenario(
             benchmark = Benchmark(
                 mz_id=mz_id,
                 mz_version=mz_version,
-                scenario=scenario_class,
+                scenario_cls=scenario_class,
                 scale=args.scale,
                 executor=executor,
                 filter=make_filter(args),
@@ -216,7 +229,9 @@ def run_one_scenario(
                 early_abort = True
             else:
                 aggregations = benchmark.run()
+                scenario_version = benchmark.create_scenario_instance().version()
                 for aggregation, comparator in zip(aggregations, comparators):
+                    comparator.set_scenario_version(scenario_version)
                     comparator.append(aggregation.aggregate())
 
         c.kill("cockroach", "materialized", "testdrive")
@@ -425,13 +440,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up(*dependencies)
 
-    scenarios_to_run = buildkite.shard_list(
-        selected_scenarios, lambda scenario: scenario.__name__
+    scenarios_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
+        selected_scenarios, lambda scenario_cls: scenario_cls.__name__
     )
 
     scenarios_with_regressions = []
     latest_report_by_scenario_name: dict[str, Report] = dict()
 
+    scenarios_to_run = scenarios_scheduled_to_run.copy()
     for cycle in range(0, args.max_retries):
         print(
             f"Cycle {cycle + 1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios_to_run])}"
@@ -490,21 +506,37 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if all_regressions_justified:
             print("All regressions are justified:")
             print("\n".join(justifications))
+            successful_run = True
         elif len(justifications) > 0:
             print("Some regressions are justified:")
             print("\n".join(justifications))
+            successful_run = False
+        else:
+            successful_run = False
+    else:
+        successful_run = True
+        justification_by_scenario_name = dict()
 
-        if not all_regressions_justified:
-            raise FailedTestExecutionError(
-                error_summary="At least one regression occurred",
-                errors=_regressions_to_failure_details(
-                    scenarios_with_regressions,
-                    latest_report_by_scenario_name,
-                    justification_by_scenario_name,
-                    baseline_tag=args.other_tag,
-                    scale=args.scale,
-                ),
-            )
+    upload_results_to_test_analytics(
+        c,
+        args.this_tag,
+        scenarios_scheduled_to_run,
+        args.scale,
+        latest_report_by_scenario_name,
+        successful_run,
+    )
+
+    if not successful_run:
+        raise FailedTestExecutionError(
+            error_summary="At least one regression occurred",
+            errors=_regressions_to_failure_details(
+                scenarios_with_regressions,
+                latest_report_by_scenario_name,
+                justification_by_scenario_name,
+                baseline_tag=args.other_tag,
+                scale=args.scale,
+            ),
+        )
 
 
 def _check_regressions_justified(
@@ -600,3 +632,54 @@ def _regressions_to_failure_details(
         )
 
     return failure_details
+
+
+def upload_results_to_test_analytics(
+    c: Composition,
+    this_tag: str | None,
+    scenario_classes: list[type[Scenario]],
+    scale: str,
+    latest_report_by_scenario_name: dict[str, Report],
+    was_successful: bool,
+) -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    if this_tag is not None:
+        # only include measurements on HEAD
+        return
+
+    try:
+        cursor = create_cursor(create_test_analytics_config(c))
+        build_data_storage.insert_build(cursor)
+        build_data_storage.insert_build_step(cursor, was_successful=was_successful)
+
+        result_entries = []
+
+        for scenario_cls in scenario_classes:
+            scenario_name = scenario_cls.__name__
+            report = latest_report_by_scenario_name[scenario_name]
+            report_measurements = report.measurements_of_this(scenario_name)
+            scenario_version = report.get_scenario_version(scenario_name)
+
+            result_entries.append(
+                feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
+                    scenario_name=scenario_name,
+                    scenario_version=str(scenario_version),
+                    scale=scale,
+                    wallclock=report_measurements[MeasurementType.WALLCLOCK],
+                    messages=report_measurements[MeasurementType.MESSAGES],
+                    memory=report_measurements[MeasurementType.MEMORY],
+                )
+            )
+
+        feature_benchmark_result_storage.insert_result(
+            cursor,
+            framework_version=FEATURE_BENCHMARK_FRAMEWORK_VERSION,
+            results=result_entries,
+        )
+
+        print("Uploaded results.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        print(f"Uploading results failed! {e}")
