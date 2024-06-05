@@ -496,7 +496,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
             // Handle any received commands.
             {
-                while let Some(internal_cmd) = command_sequencer.borrow_mut().next() {
+                loop {
+                    let mut command_sequencer_borrow = command_sequencer.borrow_mut();
+                    let Some(internal_cmd) = command_sequencer_borrow.next() else {
+                        break;
+                    };
+                    // We must ensure the sequencer is not borrowed during rendering since
+                    // operators will be scheduled synchronously as part of the following call and
+                    // some of them might want to use it.
+                    drop(command_sequencer_borrow);
                     self.handle_internal_storage_command(
                         &command_sequencer,
                         &mut async_worker,
