@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
-use once_cell::sync::Lazy;
 use proptest::prelude::{any, prop, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -340,31 +339,6 @@ impl RustType<ProtoComputeLog> for ComputeLog {
         }
     }
 }
-
-/// TODO(#25239): Add documentation.
-pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
-    let default_logs = vec![
-        LogVariant::Timely(TimelyLog::Operates),
-        LogVariant::Timely(TimelyLog::Channels),
-        LogVariant::Timely(TimelyLog::Elapsed),
-        LogVariant::Timely(TimelyLog::Histogram),
-        LogVariant::Timely(TimelyLog::Addresses),
-        LogVariant::Timely(TimelyLog::Parks),
-        LogVariant::Timely(TimelyLog::MessagesSent),
-        LogVariant::Timely(TimelyLog::MessagesReceived),
-        LogVariant::Timely(TimelyLog::Reachability),
-        LogVariant::Differential(DifferentialLog::ArrangementBatches),
-        LogVariant::Differential(DifferentialLog::ArrangementRecords),
-        LogVariant::Differential(DifferentialLog::Sharing),
-        LogVariant::Compute(ComputeLog::DataflowCurrent),
-        LogVariant::Compute(ComputeLog::FrontierCurrent),
-        LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
-        LogVariant::Compute(ComputeLog::PeekCurrent),
-        LogVariant::Compute(ComputeLog::PeekDuration),
-    ];
-
-    default_logs
-});
 
 impl LogVariant {
     /// By which columns should the logs be indexed.

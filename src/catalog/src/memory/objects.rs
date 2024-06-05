@@ -646,8 +646,6 @@ impl Source {
 #[derive(Debug, Clone, Serialize)]
 pub struct Log {
     pub variant: LogVariant,
-    /// Whether the log is backed by a storage collection.
-    pub has_storage_collection: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

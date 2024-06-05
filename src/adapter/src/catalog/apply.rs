@@ -620,8 +620,7 @@ impl CatalogState {
                     log.oid,
                     name.clone(),
                     CatalogItem::Log(Log {
-                        variant: log.variant.clone(),
-                        has_storage_collection: false,
+                        variant: log.variant,
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(acl_items),
