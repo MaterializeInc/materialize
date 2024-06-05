@@ -69,8 +69,14 @@ def insert_build(cursor: Cursor, verbose: bool = False) -> None:
 
 
 def insert_build_step(
-    cursor: Cursor, was_successful: bool, verbose: bool = False
+    cursor: Cursor,
+    was_successful: bool,
+    include_insert_build: bool = True,
+    verbose: bool = False,
 ) -> None:
+    if include_insert_build:
+        insert_build(cursor)
+
     pipeline = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_PIPELINE_SLUG)
     build_number = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_NUMBER)
     build_url = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_URL)

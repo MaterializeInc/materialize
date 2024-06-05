@@ -688,7 +688,6 @@ def upload_results_to_test_analytics(
 
     try:
         cursor = create_cursor(create_test_analytics_config(c))
-        build_data_storage.insert_build(cursor)
         build_data_storage.insert_build_step(cursor, was_successful=was_successful)
 
         result_entries = []
