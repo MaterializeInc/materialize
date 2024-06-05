@@ -1546,7 +1546,7 @@ impl Coordinator {
             }
         }
 
-        let mut builtin_table_updates = Vec::new();
+        let mut ssh_tunnel_updates = Vec::new();
         let ssh_conn_secrets = ssh_conns_to_drop.into_iter().map(|ssh_conn| {
             let secrets_controller = Arc::clone(&self.secrets_controller);
             async move {
@@ -1559,11 +1559,11 @@ impl Coordinator {
         let ssh_conn_secrets = future::join_all(ssh_conn_secrets).await;
         for secret_res in ssh_conn_secrets {
             let (ssh_conn, key_set) = secret_res?;
-            let builtin_table_update = self
+            let ssh_tunnel_update = self
                 .catalog()
                 .state()
                 .pack_ssh_tunnel_connection_update(ssh_conn, &key_set, -1);
-            builtin_table_updates.push(builtin_table_update);
+            ssh_tunnel_updates.push(ssh_tunnel_update);
         }
 
         let ops = role_revokes
@@ -1585,15 +1585,11 @@ impl Coordinator {
                     .map(DropObjectInfo::manual_drop_from_object_id)
                     .collect(),
             )))
-            .chain(
-                builtin_table_updates
-                    .into_iter()
-                    .map(
-                        |builtin_table_update| catalog::Op::SshTunnelConnectionsUpdates {
-                            builtin_table_update,
-                        },
-                    ),
-            )
+            .chain(ssh_tunnel_updates.into_iter().map(|builtin_table_update| {
+                catalog::Op::SshTunnelConnectionsUpdates {
+                    builtin_table_update,
+                }
+            }))
             .collect();
 
         Ok(DropOps {
