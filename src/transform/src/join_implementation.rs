@@ -274,15 +274,19 @@ impl JoinImplementation {
                 characteristics |= push_down_characteristics;
 
                 // Estimate cardinality
-                let mut builder = DerivedBuilder::new(features);
-                // TODO(mgree): it would be good to not have to copy the statistics here
-                builder.require(Cardinality::with_stats(stats.as_map()));
-                let derived = builder.visit(input);
+                if features.enable_cardinality_estimates {
+                    let mut builder = DerivedBuilder::new(features);
+                    // TODO(mgree): it would be good to not have to copy the statistics here
+                    builder.require(Cardinality::with_stats(stats.as_map()));
+                    let derived = builder.visit(input);
 
-                let estimate = *derived.as_view().value::<Cardinality>().unwrap();
-                // we've already accounted for the filters _in_ the term; these capture the ones above
-                let scaled = estimate * push_down_factor;
-                cardinalities.push(scaled.rounded());
+                    let estimate = *derived.as_view().value::<Cardinality>().unwrap();
+                    // we've already accounted for the filters _in_ the term; these capture the ones above
+                    let scaled = estimate * push_down_factor;
+                    cardinalities.push(scaled.rounded());
+                } else {
+                    cardinalities.push(None);
+                }
 
                 filters.push(characteristics);
 
