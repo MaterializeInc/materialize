@@ -670,7 +670,7 @@ impl Coordinator {
                 &public_key_set,
                 1,
             );
-            ops.push(catalog::Op::SshTunnelConnectionsUpdates {
+            ops.push(catalog::Op::WeirdBuiltinTableUpdates {
                 builtin_table_update,
             });
         }
@@ -1594,7 +1594,7 @@ impl Coordinator {
                     .collect(),
             )))
             .chain(ssh_tunnel_updates.into_iter().map(|builtin_table_update| {
-                catalog::Op::SshTunnelConnectionsUpdates {
+                catalog::Op::WeirdBuiltinTableUpdates {
                     builtin_table_update,
                 }
             }))
@@ -3357,10 +3357,10 @@ impl Coordinator {
             1,
         );
         let ops = vec![
-            catalog::Op::SshTunnelConnectionsUpdates {
+            catalog::Op::WeirdBuiltinTableUpdates {
                 builtin_table_update: builtin_table_retraction,
             },
-            catalog::Op::SshTunnelConnectionsUpdates {
+            catalog::Op::WeirdBuiltinTableUpdates {
                 builtin_table_update: builtin_table_addition,
             },
         ];

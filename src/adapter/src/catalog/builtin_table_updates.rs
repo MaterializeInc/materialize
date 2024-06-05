@@ -31,8 +31,8 @@ use mz_catalog::builtin::{
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterVariant, Connection, DataSourceDesc, Func, Index, MaterializedView, Sink,
-    Table, Type, View,
+    CatalogItem, ClusterReplicaProcessStatus, ClusterVariant, Connection, DataSourceDesc, Func,
+    Index, MaterializedView, Sink, Table, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -364,14 +364,14 @@ impl CatalogState {
         updates
     }
 
-    pub(super) fn pack_cluster_replica_status_update(
+    // TODO(jkosh44) This should not be a builtin table, it should be a builtin source.
+    pub(crate) fn pack_cluster_replica_status_update(
         &self,
-        cluster_id: ClusterId,
         replica_id: ReplicaId,
         process_id: ProcessId,
+        event: &ClusterReplicaProcessStatus,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let event = self.get_cluster_status(cluster_id, replica_id, process_id);
         let status = event.status.as_kebab_case_str();
 
         let not_ready_reason = match event.status {

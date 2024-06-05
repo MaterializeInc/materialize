@@ -36,20 +36,19 @@ use mz_catalog::builtin::{
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
-    CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
-    Role, Schema, Secret, Sink, Source, Table, Type, View,
+    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, CommentsMap, Connection,
+    DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, Role, Schema, Secret,
+    Sink, Source, Table, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
-    ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
-    ReplicaAllocation, ReplicaConfig, ReplicaLocation, UnmanagedReplicaLocation,
+    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaConfig,
+    ReplicaLocation, UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
-use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
+use mz_ore::now::{EpochMillis, NOW_ZERO};
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
 use mz_pgrepr::oid::INVALID_OID;
@@ -1328,15 +1327,6 @@ impl CatalogState {
             name: replica_name.clone(),
             cluster_id,
             replica_id,
-            process_status: (0..config.location.num_processes())
-                .map(|process_id| {
-                    let status = ClusterReplicaProcessStatus {
-                        status: ClusterStatus::NotReady(None),
-                        time: to_datetime((self.config.now)()),
-                    };
-                    (u64::cast_from(process_id), status)
-                })
-                .collect(),
             config,
             owner_id,
         };
@@ -1360,25 +1350,11 @@ impl CatalogState {
         cluster.rename_replica(replica_id, to_name);
     }
 
-    /// Inserts or updates the status of the specified cluster replica process.
-    ///
-    /// Panics if the cluster or replica does not exist.
-    pub(super) fn ensure_cluster_status(
-        &mut self,
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        process_id: ProcessId,
-        status: ClusterReplicaProcessStatus,
-    ) {
-        let replica = self.get_cluster_replica_mut(cluster_id, replica_id);
-        replica.process_status.insert(process_id, status);
-    }
-
     /// Gets a reference to the specified replica of the specified cluster.
     ///
     /// Returns `None` if either the cluster or the replica does not
     /// exist.
-    fn try_get_cluster_replica(
+    pub(super) fn try_get_cluster_replica(
         &self,
         id: ClusterId,
         replica_id: ReplicaId,
@@ -1397,47 +1373,6 @@ impl CatalogState {
     ) -> &ClusterReplica {
         self.try_get_cluster_replica(cluster_id, replica_id)
             .unwrap_or_else(|| panic!("unknown cluster replica: {cluster_id}.{replica_id}"))
-    }
-
-    /// Gets a mutable reference to the specified replica of the specified
-    /// cluster.
-    ///
-    /// Returns `None` if either the clustere or the replica does not
-    /// exist.
-    fn try_get_cluster_replica_mut(
-        &mut self,
-        id: ClusterId,
-        replica_id: ReplicaId,
-    ) -> Option<&mut ClusterReplica> {
-        self.try_get_cluster_mut(id)
-            .and_then(|cluster| cluster.replica_mut(replica_id))
-    }
-
-    /// Gets a mutable reference to the specified replica of the specified
-    /// cluster.
-    ///
-    /// Panics if either the cluster or the replica does not exist.
-    fn get_cluster_replica_mut(
-        &mut self,
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-    ) -> &mut ClusterReplica {
-        self.try_get_cluster_replica_mut(cluster_id, replica_id)
-            .unwrap_or_else(|| panic!("unknown cluster replica: {cluster_id}.{replica_id}"))
-    }
-
-    /// Gets the status of the given cluster replica process.
-    ///
-    /// Panics if the cluster or replica does not exist
-    pub(super) fn get_cluster_status(
-        &self,
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        process_id: ProcessId,
-    ) -> &ClusterReplicaProcessStatus {
-        &self
-            .get_cluster_replica(cluster_id, replica_id)
-            .process_status[&process_id]
     }
 
     /// Get system configuration `name`.

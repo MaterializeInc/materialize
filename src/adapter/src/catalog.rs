@@ -1074,6 +1074,14 @@ impl Catalog {
         self.state.get_cluster_replica(cluster_id, replica_id)
     }
 
+    pub fn try_get_cluster_replica(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> Option<&ClusterReplica> {
+        self.state.try_get_cluster_replica(cluster_id, replica_id)
+    }
+
     pub fn user_cluster_replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
         self.user_clusters().flat_map(|cluster| cluster.replicas())
     }

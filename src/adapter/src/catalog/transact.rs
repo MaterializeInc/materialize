@@ -18,15 +18,10 @@ use mz_audit_log::{
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::Transaction;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
-use mz_catalog::memory::objects::{
-    CatalogItem, ClusterConfig, ClusterReplicaProcessStatus, Database, Role, Schema,
-};
+use mz_catalog::memory::objects::{CatalogItem, ClusterConfig, Database, Role, Schema};
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_controller::clusters::{
-    ClusterEvent, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
-};
+use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
@@ -164,9 +159,6 @@ pub enum Op {
         name: String,
         config: ClusterConfig,
     },
-    UpdateClusterReplicaStatus {
-        event: ClusterEvent,
-    },
     UpdateItem {
         id: GlobalId,
         name: QualifiedItemName,
@@ -185,18 +177,19 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
-    /// Performs updates to builtin table, `mz_ssh_tunnel_connections`. The
-    /// `mz_ssh_tunnel_connections` table is weird. Its contents are not fully derived from catalog
-    /// state, they're derived from the secrets controller. However, it still must be kept in-sync
-    /// with the catalog state. Storing the contents of the table in the durable catalog would
-    /// simplify the situation, but then we'd have to somehow encode public keys the CREATE SQL
-    /// of connections, which is annoying. In order to successfully balance all of these
-    /// constraints, we handle all updates to the table separately.
+    /// Performs updates to weird builtin tables, such as `mz_ssh_tunnel_connections` and
+    /// `mz_cluster_replica_statuses`. Their contents are not fully derived from catalog state.
+    /// `mz_ssh_tunnel_connections` is derived from the secrets controller, however, it still must
+    /// be kept in-sync with the catalog state. Storing the contents of the table in the durable
+    /// catalog would simplify the situation, but then we'd have to somehow encode public keys the
+    /// CREATE SQL of connections, which is annoying. In order to successfully balance all of these
+    /// constraints, we handle all updates to the table separately. `mz_cluster_replica_statuses`
+    /// is ephemeral state and should be a builtin source.
     ///
     /// TODO(jkosh44) In a multi-writer or high availability catalog world, this will not work. If
     /// a process crashes after updating the durable catalog but before updating the builtin table,
     /// then another listening catalog will never know to update the builtin table.
-    SshTunnelConnectionsUpdates {
+    WeirdBuiltinTableUpdates {
         builtin_table_update: BuiltinTableUpdate,
     },
     /// Performs a dry run of the commit, but errors with
@@ -892,19 +885,9 @@ impl Catalog {
                             details,
                         )?;
                     }
-                    let num_processes = config.location.num_processes();
                     state.insert_cluster_replica(cluster_id, name.clone(), id, config, owner_id);
                     builtin_table_updates
                         .extend(state.pack_cluster_replica_update(cluster_id, &name, 1));
-                    for process_id in 0..num_processes {
-                        let update = state.pack_cluster_replica_status_update(
-                            cluster_id,
-                            id,
-                            u64::cast_from(process_id),
-                            1,
-                        );
-                        builtin_table_updates.push(update);
-                    }
                 }
                 Op::CreateItem {
                     id,
@@ -1254,16 +1237,6 @@ impl Catalog {
                     for (replica_id, (cluster_id, reason)) in delta.replicas {
                         let cluster = state.get_cluster(cluster_id);
                         let replica = cluster.replica(replica_id).expect("Must exist");
-
-                        for process_id in replica.process_status.keys() {
-                            let update = state.pack_cluster_replica_status_update(
-                                cluster_id,
-                                replica_id,
-                                *process_id,
-                                -1,
-                            );
-                            builtin_table_updates.push(update);
-                        }
 
                         builtin_table_updates.extend(state.pack_cluster_replica_update(
                             cluster_id,
@@ -2101,29 +2074,6 @@ impl Catalog {
                     builtin_table_updates.extend(state.pack_cluster_update(&name, 1));
                     info!("update cluster {}", name);
                 }
-                Op::UpdateClusterReplicaStatus { event } => {
-                    builtin_table_updates.push(state.pack_cluster_replica_status_update(
-                        event.cluster_id,
-                        event.replica_id,
-                        event.process_id,
-                        -1,
-                    ));
-                    state.ensure_cluster_status(
-                        event.cluster_id,
-                        event.replica_id,
-                        event.process_id,
-                        ClusterReplicaProcessStatus {
-                            status: event.status,
-                            time: event.time,
-                        },
-                    );
-                    builtin_table_updates.push(state.pack_cluster_replica_status_update(
-                        event.cluster_id,
-                        event.replica_id,
-                        event.process_id,
-                        1,
-                    ));
-                }
                 Op::UpdateItem { id, name, to_item } => {
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     Self::update_item(
@@ -2188,7 +2138,7 @@ impl Catalog {
                     tx.clear_system_configs();
                     tx.set_txn_wal_tables(state.system_configuration.txn_wal_tables())?;
                 }
-                Op::SshTunnelConnectionsUpdates {
+                Op::WeirdBuiltinTableUpdates {
                     builtin_table_update,
                 } => {
                     builtin_table_updates.push(builtin_table_update);

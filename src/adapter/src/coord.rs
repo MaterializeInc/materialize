@@ -66,6 +66,7 @@
 //! ```
 //!
 
+use chrono::{DateTime, Utc};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -88,17 +89,22 @@ use mz_adapter_types::compaction::{CompactionWindow, ReadCapability};
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
-use mz_catalog::memory::objects::{CatalogEntry, CatalogItem, Connection, DataSourceDesc, Source};
+use mz_catalog::memory::objects::{
+    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc, Source,
+};
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
-use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
+use mz_controller::clusters::{
+    ClusterConfig, ClusterEvent, ClusterStatus, CreateReplicaConfig, ProcessId,
+};
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
+use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -113,7 +119,7 @@ use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
-use mz_sql::catalog::EnvironmentId;
+use mz_sql::catalog::{CatalogCluster, EnvironmentId};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
@@ -1269,6 +1275,177 @@ impl ExecuteContext {
     }
 }
 
+#[derive(Debug)]
+struct ClusterReplicaStatuses(
+    BTreeMap<ClusterId, BTreeMap<ReplicaId, BTreeMap<ProcessId, ClusterReplicaProcessStatus>>>,
+);
+
+impl ClusterReplicaStatuses {
+    pub(crate) fn new() -> ClusterReplicaStatuses {
+        ClusterReplicaStatuses(BTreeMap::new())
+    }
+
+    /// Initializes the statuses of the specified cluster.
+    ///
+    /// Panics if the cluster statuses are already initialized.
+    pub(crate) fn initialize_cluster_statuses(&mut self, cluster_id: ClusterId) {
+        let prev = self.0.insert(cluster_id, BTreeMap::new());
+        assert_eq!(
+            prev, None,
+            "cluster {cluster_id} statuses already initialized"
+        );
+    }
+
+    /// Initializes the statuses of the specified cluster replica.
+    ///
+    /// Panics if the cluster replica statuses are already initialized.
+    pub(crate) fn initialize_cluster_replica_statuses(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        num_processes: usize,
+        time: DateTime<Utc>,
+    ) {
+        let replica_statuses = self.0.entry(cluster_id).or_default();
+        let process_statuses = (0..num_processes)
+            .map(|process_id| {
+                let status = ClusterReplicaProcessStatus {
+                    status: ClusterStatus::NotReady(None),
+                    time: time.clone(),
+                };
+                (u64::cast_from(process_id), status)
+            })
+            .collect();
+        let prev = replica_statuses.insert(replica_id, process_statuses);
+        assert_eq!(
+            prev, None,
+            "cluster replica {cluster_id}.{replica_id} statuses already initialized"
+        );
+    }
+
+    /// Removes the statuses of the specified cluster.
+    ///
+    /// Panics if the cluster does not exist.
+    pub(crate) fn remove_cluster_statuses(
+        &mut self,
+        cluster_id: &ClusterId,
+    ) -> BTreeMap<ReplicaId, BTreeMap<ProcessId, ClusterReplicaProcessStatus>> {
+        let prev = self.0.remove(cluster_id);
+        prev.unwrap_or_else(|| panic!("unknown cluster: {cluster_id}"))
+    }
+
+    /// Removes the statuses of the specified cluster replica.
+    ///
+    /// Panics if the cluster or replica does not exist.
+    pub(crate) fn remove_cluster_replica_statuses(
+        &mut self,
+        cluster_id: &ClusterId,
+        replica_id: &ReplicaId,
+    ) -> BTreeMap<ProcessId, ClusterReplicaProcessStatus> {
+        let replica_statuses = self
+            .0
+            .get_mut(cluster_id)
+            .unwrap_or_else(|| panic!("unknown cluster: {cluster_id}"));
+        let prev = replica_statuses.remove(replica_id);
+        prev.unwrap_or_else(|| panic!("unknown cluster replica: {cluster_id}.{replica_id}"))
+    }
+
+    /// Inserts or updates the status of the specified cluster replica process.
+    ///
+    /// Panics if the cluster or replica does not exist.
+    pub(crate) fn ensure_cluster_status(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        process_id: ProcessId,
+        status: ClusterReplicaProcessStatus,
+    ) {
+        let replica_statuses = self
+            .0
+            .get_mut(&cluster_id)
+            .unwrap_or_else(|| panic!("unknown cluster: {cluster_id}"))
+            .get_mut(&replica_id)
+            .unwrap_or_else(|| panic!("unknown cluster replica: {cluster_id}.{replica_id}"));
+        replica_statuses.insert(process_id, status);
+    }
+
+    /// Computes the status of the cluster replica as a whole.
+    ///
+    /// Panics if `cluster_id` or `replica_id` don't exist.
+    pub fn get_cluster_replica_status(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> ClusterStatus {
+        let process_status = self.get_cluster_replica_statuses(cluster_id, replica_id);
+        Self::cluster_replica_status(process_status)
+    }
+
+    /// Computes the status of the cluster replica as a whole.
+    pub fn cluster_replica_status(
+        process_status: &BTreeMap<ProcessId, ClusterReplicaProcessStatus>,
+    ) -> ClusterStatus {
+        process_status
+            .values()
+            .fold(ClusterStatus::Ready, |s, p| match (s, p.status) {
+                (ClusterStatus::Ready, ClusterStatus::Ready) => ClusterStatus::Ready,
+                (x, y) => {
+                    let reason_x = match x {
+                        ClusterStatus::NotReady(reason) => reason,
+                        ClusterStatus::Ready => None,
+                    };
+                    let reason_y = match y {
+                        ClusterStatus::NotReady(reason) => reason,
+                        ClusterStatus::Ready => None,
+                    };
+                    // Arbitrarily pick the first known not-ready reason.
+                    ClusterStatus::NotReady(reason_x.or(reason_y))
+                }
+            })
+    }
+
+    /// Gets the statuses of the given cluster replica.
+    ///
+    /// Panics if the cluster or replica does not exist
+    pub(crate) fn get_cluster_replica_statuses(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> &BTreeMap<ProcessId, ClusterReplicaProcessStatus> {
+        self.try_get_cluster_replica_statuses(cluster_id, replica_id)
+            .unwrap_or_else(|| panic!("unknown cluster replica: {cluster_id}.{replica_id}"))
+    }
+
+    /// Gets the statuses of the given cluster replica.
+    pub(crate) fn try_get_cluster_replica_statuses(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> Option<&BTreeMap<ProcessId, ClusterReplicaProcessStatus>> {
+        self.try_get_cluster_statuses(cluster_id)
+            .and_then(|statuses| statuses.get(&replica_id))
+    }
+
+    /// Gets the statuses of the given cluster.
+    ///
+    /// Panics if the cluster does not exist
+    pub(crate) fn get_cluster_statuses(
+        &self,
+        cluster_id: ClusterId,
+    ) -> &BTreeMap<ReplicaId, BTreeMap<ProcessId, ClusterReplicaProcessStatus>> {
+        self.try_get_cluster_statuses(cluster_id)
+            .unwrap_or_else(|| panic!("unknown cluster: {cluster_id}"))
+    }
+
+    /// Gets the statuses of the given cluster.
+    pub(crate) fn try_get_cluster_statuses(
+        &self,
+        cluster_id: ClusterId,
+    ) -> Option<&BTreeMap<ReplicaId, BTreeMap<ProcessId, ClusterReplicaProcessStatus>>> {
+        self.0.get(&cluster_id)
+    }
+}
+
 /// Glues the external world to the Timely workers.
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -1429,6 +1606,9 @@ pub struct Coordinator {
 
     /// Tracks the currently installed watchsets for each connection.
     connection_watch_sets: BTreeMap<ConnectionId, BTreeSet<WatchSetId>>,
+
+    /// Tracks the statuses of all cluster replicas.
+    cluster_replica_statuses: ClusterReplicaStatuses,
 }
 
 impl Coordinator {
@@ -1441,6 +1621,48 @@ impl Coordinator {
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         info!("coordinator init: beginning bootstrap");
+
+        // Initialize cluster replica statuses.
+        // Gross iterator is to avoid partial borrow issues.
+        let cluster_statuses: Vec<(_, Vec<_>)> = self
+            .catalog()
+            .clusters()
+            .map(|cluster| {
+                (
+                    cluster.id(),
+                    cluster
+                        .replicas()
+                        .map(|replica| {
+                            (replica.replica_id, replica.config.location.num_processes())
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        for (cluster_id, replica_statuses) in cluster_statuses {
+            self.cluster_replica_statuses
+                .initialize_cluster_statuses(cluster_id);
+            for (replica_id, num_processes) in replica_statuses {
+                self.cluster_replica_statuses
+                    .initialize_cluster_replica_statuses(
+                        cluster_id,
+                        replica_id,
+                        num_processes,
+                        self.now_datetime(),
+                    );
+            }
+        }
+        for replica_statuses in self.cluster_replica_statuses.0.values() {
+            for (replica_id, processes_statuses) in replica_statuses {
+                for (process_id, status) in processes_statuses {
+                    let builtin_table_update = self
+                        .catalog()
+                        .state()
+                        .pack_cluster_replica_status_update(*replica_id, *process_id, status, 1);
+                    builtin_table_updates.push(builtin_table_update);
+                }
+            }
+        }
 
         // Inform the controllers about their initial configuration.
         let system_config = self.catalog().system_config();
@@ -3155,6 +3377,7 @@ pub fn serve(
                     cluster_scheduling_decisions: BTreeMap::new(),
                     installed_watch_sets: BTreeMap::new(),
                     connection_watch_sets: BTreeMap::new(),
+                    cluster_replica_statuses: ClusterReplicaStatuses::new(),
                 };
                 let bootstrap = handle.block_on(async {
                     coord
