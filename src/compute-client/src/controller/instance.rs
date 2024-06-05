@@ -45,8 +45,8 @@ use uuid::Uuid;
 use crate::controller::error::CollectionMissing;
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
-    CollectionState, ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates,
-    ReplicaId,
+    introspection, CollectionState, ComputeControllerResponse, ComputeControllerTimestamp,
+    IntrospectionUpdates, ReplicaId,
 };
 use crate::logging::LogVariant;
 use crate::metrics::{InstanceMetrics, ReplicaMetrics};
@@ -189,6 +189,7 @@ pub(super) struct Instance<T> {
     /// on the subscribe's input. `subscribes` is only used to track which updates have been
     /// emitted, to decide if new ones should be emitted or suppressed.
     subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
+    introspection_subscribes: BTreeMap<GlobalId, ReplicaId>,
     /// Tracks all in-progress COPY TOs.
     ///
     /// New entries are added for all s3 oneshot sinks (corresponding to a COPY TO) exported from
@@ -593,6 +594,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             log_sources: _,
             peeks,
             subscribes,
+            introspection_subscribes,
             copy_tos,
             history: _,
             response_tx: _,
@@ -628,6 +630,10 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .iter()
             .map(|(id, subscribe)| (id.to_string(), format!("{subscribe:?}")))
             .collect();
+        let introspection_subscribes: BTreeMap<_, _> = introspection_subscribes
+            .iter()
+            .map(|(id, replica_id)| (id.to_string(), replica_id.to_string()))
+            .collect();
         let copy_tos: Vec<_> = copy_tos.iter().map(|id| id.to_string()).collect();
         let replica_epochs: BTreeMap<_, _> = replica_epochs
             .iter()
@@ -640,6 +646,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field("collections", collections)?,
             field("peeks", peeks)?,
             field("subscribes", subscribes)?,
+            field("introspection_subscribes", introspection_subscribes)?,
             field("copy_tos", copy_tos)?,
             field("envd_epoch", envd_epoch)?,
             field("replica_epochs", replica_epochs)?,
@@ -681,6 +688,7 @@ where
             log_sources: arranged_logs,
             peeks: Default::default(),
             subscribes: Default::default(),
+            introspection_subscribes: Default::default(),
             copy_tos: Default::default(),
             history,
             response_tx,
@@ -928,6 +936,8 @@ where
         // Add replica to tracked state.
         self.compute.add_replica_state(id, client, config);
 
+        self.install_introspection_subscribes(id);
+
         Ok(())
     }
 
@@ -945,6 +955,15 @@ where
         // introspection index). We produce an error to inform upstream.
         let to_drop: Vec<_> = self.compute.subscribes_targeting(id).collect();
         for subscribe_id in to_drop {
+            if self
+                .compute
+                .introspection_subscribes
+                .contains_key(&subscribe_id)
+            {
+                self.drop_introspection_subscribe(subscribe_id);
+                continue;
+            }
+
             let subscribe = self.compute.subscribes.remove(&subscribe_id).unwrap();
             let response = ComputeControllerResponse::SubscribeResponse(
                 subscribe_id,
@@ -1005,6 +1024,71 @@ where
         for replica_id in failed_replicas {
             self.rehydrate_replica(replica_id);
         }
+    }
+
+    fn install_introspection_subscribes(&mut self, replica_id: ReplicaId) {
+        let id_gen = Arc::clone(&self.compute.transient_id_gen);
+        let log_indexes = &self.compute.log_sources;
+        let subscribes = introspection::build_subscribe_dataflows(id_gen, log_indexes);
+
+        for (subscribe_id, mut dataflow) in subscribes {
+            let as_of = dataflow
+                .index_imports
+                .keys()
+                .map(|id| self.compute.collections[id].read_frontier().to_owned())
+                .fold(Antichain::from_elem(T::minimum()), |acc, f| acc.join(&f));
+            dataflow.as_of = Some(as_of);
+
+            self.create_dataflow(dataflow)
+                .expect("valid dataflow description");
+            self.compute
+                .set_subscribe_target_replica(subscribe_id, replica_id)
+                .expect("valid subscribe target");
+
+            self.compute
+                .introspection_subscribes
+                .insert(subscribe_id, replica_id);
+
+            tracing::info!(%subscribe_id, %replica_id, "installed introspection subscribe");
+        }
+    }
+
+    fn serve_introspection_subscribe(
+        &mut self,
+        subscribe_id: GlobalId,
+        updates: Result<Vec<(T, Row, Diff)>, String>,
+    ) {
+        let Some(replica_id) = self.compute.introspection_subscribes.get(&subscribe_id) else {
+            tracing::error!(%subscribe_id, "updates for unknown introspection subscribe");
+            return;
+        };
+
+        let updates = match updates {
+            Ok(updates) => updates,
+            Err(error) => {
+                tracing::error!(
+                    %subscribe_id, %replica_id,
+                    "introspection subscribe produced an error: {error}",
+                );
+                self.drop_introspection_subscribe(subscribe_id);
+                return;
+            }
+        };
+
+        // TODO: send updates
+    }
+
+    fn drop_introspection_subscribe(&mut self, subscribe_id: GlobalId) {
+        let Some(replica_id) = self.compute.introspection_subscribes.remove(&subscribe_id) else {
+            tracing::error!(%subscribe_id, "attempt to drop unknown introspection subscribe");
+            return;
+        };
+        self.compute.subscribes.remove(&subscribe_id);
+        self.drop_collections(vec![subscribe_id]).expect("collection exists");
+
+        // TODO: send retractions
+
+        tracing::info!(%subscribe_id, %replica_id, "dropped introspection subscribe");
     }
 
     /// Create the described dataflows and initializes state for their output.
@@ -2004,6 +2088,11 @@ where
         // replica prematurely.
         self.maybe_update_global_write_frontiers(&write_frontier_updates);
 
+        let introspection = self
+            .compute
+            .introspection_subscribes
+            .contains_key(&subscribe_id);
+
         match response {
             SubscribeResponse::Batch(batch) => {
                 let upper = batch.upper;
@@ -2025,14 +2114,20 @@ where
                     if let Ok(updates) = updates.as_mut() {
                         updates.retain(|(time, _data, _diff)| lower.less_equal(time));
                     }
-                    Some(ComputeControllerResponse::SubscribeResponse(
-                        subscribe_id,
-                        SubscribeBatch {
-                            lower,
-                            upper,
-                            updates,
-                        },
-                    ))
+
+                    if introspection {
+                        self.serve_introspection_subscribe(subscribe_id, updates);
+                        None
+                    } else {
+                        Some(ComputeControllerResponse::SubscribeResponse(
+                            subscribe_id,
+                            SubscribeBatch {
+                                lower,
+                                upper,
+                                updates,
+                            },
+                        ))
+                    }
                 } else {
                     None
                 }
@@ -2048,7 +2143,12 @@ where
                     frontier = ?frontier.elements(),
                     "received `DroppedAt` response for a tracked subscribe",
                 );
-                self.compute.subscribes.remove(&subscribe_id);
+
+                if introspection {
+                    self.drop_introspection_subscribe(subscribe_id);
+                } else {
+                    self.compute.subscribes.remove(&subscribe_id);
+                }
                 None
             }
         }

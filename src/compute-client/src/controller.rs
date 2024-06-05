@@ -74,6 +74,7 @@ use crate::service::{ComputeClient, ComputeGrpcClient};
 mod instance;
 mod replica;
 mod sequential_hydration;
+mod introspection;
 
 pub mod error;
 
