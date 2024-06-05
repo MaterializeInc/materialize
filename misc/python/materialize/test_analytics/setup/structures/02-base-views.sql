@@ -31,3 +31,17 @@ INNER JOIN build_step bs
   AND b.pipeline = bs.pipeline
 WHERE bs.success = TRUE
   AND bs.is_latest_retry = TRUE;
+
+CREATE VIEW last_build_per_week AS
+SELECT
+    EXTRACT(YEAR FROM date) AS year,
+    EXTRACT(WEEK FROM date) AS week,
+    b.branch,
+    b.pipeline,
+    max(b.build_id)
+FROM build b
+GROUP BY
+    EXTRACT(YEAR FROM date),
+    EXTRACT(WEEK FROM date),
+    b.branch,
+    b.pipeline;
