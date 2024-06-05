@@ -1412,8 +1412,9 @@ mod cardinality {
                         for expr2 in exprs {
                             let expr2 = self.predicate(expr2, unique_columns);
 
+                            let intersection = expr1.clone() * expr2.clone();
                             // TODO(mgree) a big expression! two things could help: hash-consing and simplification
-                            expr1 = expr1.clone() + expr2.clone() - expr1.clone() * expr2;
+                            expr1 = expr1 + expr2 - intersection;
                         }
                         expr1
                     }
