@@ -14,3 +14,5 @@
 -- limitations under the License.
 
 CREATE DATABASE IF NOT EXISTS test_analytics;
+
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN DATABASE test_analytics TO "infra+qacanaryload@materialize.io";
