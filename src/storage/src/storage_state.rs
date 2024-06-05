@@ -496,10 +496,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
             // Handle any received commands.
             {
-                let mut command_sequencer = command_sequencer.borrow_mut();
-                while let Some(internal_cmd) = command_sequencer.next() {
+                while let Some(internal_cmd) = command_sequencer.borrow_mut().next() {
                     self.handle_internal_storage_command(
-                        &mut *command_sequencer,
+                        &command_sequencer,
                         &mut async_worker,
                         internal_cmd,
                     );
@@ -546,7 +545,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(
         &mut self,
-        internal_cmd_tx: &mut dyn InternalCommandSender,
+        internal_cmd_tx: &RefCell<dyn InternalCommandSender>,
         async_worker: &mut AsyncStorageWorker<mz_repr::Timestamp>,
         internal_cmd: InternalStorageCommand,
     ) {
@@ -613,10 +612,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.storage_state
                             .aggregated_statistics
                             .advance_global_epoch(id);
-                        internal_cmd_tx.broadcast(InternalStorageCommand::RunSinkDataflow(
-                            id,
-                            sink_description,
-                        ));
+                        internal_cmd_tx.borrow_mut().broadcast(
+                            InternalStorageCommand::RunSinkDataflow(id, sink_description),
+                        );
                     }
 
                     // Continue with other commands.
