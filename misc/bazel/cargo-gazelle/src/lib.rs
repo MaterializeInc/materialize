@@ -145,7 +145,10 @@ impl<T: ToString> From<T> for QuotedString {
 /// ```
 /// use cargo_gazelle::{Field, List, QuotedString, ToBazelDefinition};
 ///
-/// let deps = Field::new("crate_features", List::new(vec![QuotedString::new("json")]));
+/// let deps: Field<List<QuotedString>> = Field::new(
+///     "crate_features",
+///     List::new(vec![QuotedString::new("json")],
+/// ));
 /// assert_eq!(deps.to_bazel_definition(), "crate_features = [\"json\"],\n");
 /// ```
 #[derive(Debug, Clone)]
@@ -182,7 +185,7 @@ impl<T: ToBazelDefinition> ToBazelDefinition for Field<T> {
 /// ```
 /// use cargo_gazelle::{List, QuotedString, ToBazelDefinition};
 ///
-/// let deps = List::new(vec![QuotedString::new("tokio")]);
+/// let deps: List<QuotedString> = List::new(vec![QuotedString::new("tokio")]);
 /// assert_eq!(deps.to_bazel_definition(), "[\"tokio\"]");
 /// ```
 #[derive(Debug)]
@@ -279,7 +282,7 @@ impl<T: ToBazelDefinition> ToBazelDefinition for List<T> {
 /// use cargo_gazelle::{Dict, QuotedString, ToBazelDefinition};
 ///
 /// let entry = (QuotedString::new("RUST_LOG"), QuotedString::new("INFO"));
-/// let deps = Dict::new(vec![entry]);
+/// let deps: Dict<QuotedString, QuotedString> = Dict::new(vec![entry]);
 /// assert_eq!(deps.to_bazel_definition(), "{ \"RUST_LOG\": \"INFO\" }");
 /// ```
 #[derive(Debug)]
