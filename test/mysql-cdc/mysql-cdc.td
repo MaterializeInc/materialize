@@ -695,7 +695,7 @@ DELETE FROM mixED_CAse;
     public."enum_table",
     public.another_enum_table
   );
-contains:TEXT COLUMNS refers to columns not currently being added
+contains:Reference to columns not currently being added
 
 > CREATE SOURCE enum_source
   IN CLUSTER cdc_cluster

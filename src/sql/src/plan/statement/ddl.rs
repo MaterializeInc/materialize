@@ -5603,6 +5603,7 @@ pub fn describe_alter_source(
 generate_extracted_config!(
     AlterSourceAddSubsourceOption,
     (TextColumns, Vec::<UnresolvedItemName>, Default(vec![])),
+    (IgnoreColumns, Vec::<UnresolvedItemName>, Default(vec![])),
     (Details, String)
 );
 

@@ -1424,7 +1424,7 @@ AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")])
 parse-statement
 ALTER SOURCE IF EXISTS n ADD SUBSOURCE a, b.c, c, d.e WITH ()
 ----
-error: Expected one of TEXT, found right parenthesis
+error: Expected one of TEXT or IGNORE, found right parenthesis
 ALTER SOURCE IF EXISTS n ADD SUBSOURCE a, b.c, c, d.e WITH ()
                                                             ^
 

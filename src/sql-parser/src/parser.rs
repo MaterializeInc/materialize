@@ -4760,8 +4760,8 @@ impl<'a> Parser<'a> {
     fn parse_alter_source_add_subsource_option(
         &mut self,
     ) -> Result<AlterSourceAddSubsourceOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[TEXT])? {
-            TEXT => {
+        match self.expect_one_of_keywords(&[TEXT, IGNORE])? {
+            ref keyword @ (TEXT | IGNORE) => {
                 self.expect_keyword(COLUMNS)?;
 
                 let _ = self.consume_token(&Token::Eq);
@@ -4778,7 +4778,11 @@ impl<'a> Parser<'a> {
                     });
 
                 Ok(AlterSourceAddSubsourceOption {
-                    name: AlterSourceAddSubsourceOptionName::TextColumns,
+                    name: match *keyword {
+                        TEXT => AlterSourceAddSubsourceOptionName::TextColumns,
+                        IGNORE => AlterSourceAddSubsourceOptionName::IgnoreColumns,
+                        _ => unreachable!(),
+                    },
                     value,
                 })
             }
