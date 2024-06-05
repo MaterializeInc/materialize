@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
-use futures::{future, Future, FutureExt};
+use futures::Future;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
@@ -44,7 +44,6 @@ use mz_sql::session::vars::{
     MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
     MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
 };
-use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
@@ -195,7 +194,6 @@ impl Coordinator {
         let mut views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
-        let mut ssh_conn_to_drop = vec![];
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
@@ -281,7 +279,6 @@ impl Coordinator {
                                         // SSH connections have an associated secret that should be dropped
                                         mz_storage_types::connections::Connection::Ssh(_) => {
                                             secrets_to_drop.push(*id);
-                                            ssh_conn_to_drop.push(*id);
                                         }
                                         // AWS PrivateLink connections have an associated
                                         // VpcEndpoint K8S resource that should be dropped
@@ -506,7 +503,7 @@ impl Coordinator {
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
 
         let TransactionResult {
-            mut builtin_table_updates,
+            builtin_table_updates,
             audit_events,
         } = catalog
             .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
