@@ -21,7 +21,7 @@ use tracing::{error, info};
 
 use crate::cfg::PersistConfig;
 use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey, WriterKey};
-use crate::internal::state::{BatchPart, HollowBlobRef};
+use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::StateVersions;
 use crate::write::WriterId;
 use crate::{retry_external, Metrics, PersistClient, ShardId};
@@ -212,7 +212,7 @@ impl StorageUsageClient {
         let mut batches_bytes = 0;
         let mut rollup_bytes = 0;
         while let Some(_) = states_iter.next(|diff| {
-            diff.referenced_blob_fn(|blob| match blob {
+            diff.referenced_blobs().for_each(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
                     batches_bytes += batch.encoded_size_bytes();
                 }
@@ -447,22 +447,15 @@ impl StorageUsageClient {
         let mut referenced_batches_bytes = BTreeMap::new();
         let mut referenced_other_bytes = 0;
         while let Some(_) = states_iter.next(|x| {
-            x.referenced_blob_fn(|x| match x {
+            x.referenced_blobs().for_each(|x| match x {
                 HollowBlobRef::Batch(x) => {
                     for part in x.parts.iter() {
-                        let part = match part {
-                            BatchPart::Hollow(x) => x,
-                            BatchPart::Inline { .. } => continue,
-                        };
-                        let parsed = BlobKey::parse_ids(&part.key.complete(&shard_id));
-                        if let Ok((_, PartialBlobKey::Batch(writer_id, _))) = parsed {
+                        if let Some(writer_id) = part.writer_key() {
                             let writer_referenced_batches_bytes =
                                 referenced_batches_bytes.entry(writer_id).or_default();
-                            *writer_referenced_batches_bytes +=
-                                u64::cast_from(part.encoded_size_bytes);
+                            *writer_referenced_batches_bytes += u64::cast_from(part.hollow_bytes());
                         } else {
-                            // Unexpected, but don't need to panic here.
-                            referenced_other_bytes += u64::cast_from(part.encoded_size_bytes);
+                            referenced_other_bytes += u64::cast_from(part.hollow_bytes());
                         }
                     }
                 }
@@ -478,11 +471,7 @@ impl StorageUsageClient {
         states_iter.state().blobs().for_each(|x| match x {
             HollowBlobRef::Batch(x) => {
                 for part in x.parts.iter() {
-                    let part = match part {
-                        BatchPart::Hollow(x) => x,
-                        BatchPart::Inline { .. } => continue,
-                    };
-                    current_state_batches_bytes += u64::cast_from(part.encoded_size_bytes);
+                    current_state_batches_bytes += u64::cast_from(part.hollow_bytes());
                 }
             }
             HollowBlobRef::Rollup(x) => {

@@ -37,7 +37,7 @@ use crate::critical::CriticalReaderId;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats};
 use crate::internal::gc::GcReq;
-use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
+use crate::internal::paths::{PartialBatchKey, PartialRollupKey, WriterKey};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::LeasedReaderId;
 use crate::write::WriterId;
@@ -189,6 +189,31 @@ pub enum BatchPart<T> {
 }
 
 impl<T> BatchPart<T> {
+    pub fn hollow_bytes(&self) -> usize {
+        match self {
+            BatchPart::Hollow(x) => x.encoded_size_bytes,
+            BatchPart::Inline { .. } => 0,
+        }
+    }
+
+    pub fn is_inline(&self) -> bool {
+        matches!(self, BatchPart::Inline { .. })
+    }
+
+    pub fn inline_bytes(&self) -> usize {
+        match self {
+            BatchPart::Hollow(_) => 0,
+            BatchPart::Inline { updates, .. } => updates.encoded_size_bytes(),
+        }
+    }
+
+    pub fn writer_key(&self) -> Option<WriterKey> {
+        match self {
+            BatchPart::Hollow(x) => Some(x.key.split().0),
+            BatchPart::Inline { .. } => None,
+        }
+    }
+
     pub fn encoded_size_bytes(&self) -> usize {
         match self {
             BatchPart::Hollow(x) => x.encoded_size_bytes,
@@ -1502,12 +1527,9 @@ where
                     if x.ts_rewrite().is_some() {
                         ret.rewrite_part_count += 1;
                     }
-                    match x {
-                        BatchPart::Hollow(_) => {}
-                        BatchPart::Inline { updates, .. } => {
-                            ret.inline_part_count += 1;
-                            ret.inline_part_bytes += updates.encoded_size_bytes();
-                        }
+                    if x.is_inline() {
+                        ret.inline_part_count += 1;
+                        ret.inline_part_bytes += x.inline_bytes();
                     }
                 }
                 ret.largest_batch_bytes = std::cmp::max(ret.largest_batch_bytes, batch_size);

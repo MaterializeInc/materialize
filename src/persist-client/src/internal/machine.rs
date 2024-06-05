@@ -45,9 +45,9 @@ use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
-    BatchPart, CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch,
-    HollowRollup, IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr,
-    StateCollections, Upper,
+    CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch, HollowRollup,
+    IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections,
+    Upper,
 };
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -439,13 +439,10 @@ where
                         metrics.state.writer_added.inc();
                     }
                     for part in &batch.parts {
-                        match part {
-                            BatchPart::Inline { updates, .. } => {
-                                let bytes = u64::cast_from(updates.encoded_size_bytes());
-                                metrics.inline.part_commit_count.inc();
-                                metrics.inline.part_commit_bytes.inc_by(bytes);
-                            }
-                            BatchPart::Hollow(_) => {}
+                        if part.is_inline() {
+                            let bytes = u64::cast_from(part.inline_bytes());
+                            metrics.inline.part_commit_bytes.inc_by(bytes);
+                            metrics.inline.part_commit_count.inc();
                         }
                     }
                     return CompareAndAppendRes::Success(seqno, writer_maintenance);

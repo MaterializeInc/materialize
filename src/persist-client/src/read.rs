@@ -906,6 +906,7 @@ pub(crate) struct UnexpiredReadHandleState {
 #[derive(Debug)]
 pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D> {
     consolidator: Consolidator<T, D>,
+    _lease: Lease,
     _schemas: Schemas<K, V>,
 }
 
@@ -991,7 +992,11 @@ where
 
         let mut consolidator = Consolidator::new(
             format!("{}[as_of={:?}]", self.shard_id(), as_of.elements()),
+            self.shard_id(),
+            Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
+            Arc::clone(&self.machine.applier.shard_metrics),
+            self.metrics.read.snapshot.clone(),
             FetchBatchFilter::Snapshot {
                 as_of: as_of.clone(),
             },
@@ -999,27 +1004,21 @@ where
             SPLIT_OLD_RUNS.get(&self.cfg.configs),
         );
 
-        let filter = FetchBatchFilter::Snapshot { as_of };
+        let lease = self.lease_seqno();
         for batch in batches {
             for run in batch.runs() {
-                let leased_parts: Vec<_> = run
-                    .into_iter()
-                    .map(|part| {
-                        self.lease_batch_part(batch.desc.clone(), part.clone(), filter.clone())
-                    })
-                    .filter(|p| should_fetch_part(p.part.stats()))
-                    .collect();
-                consolidator.enqueue_leased_run(
-                    &self.blob,
-                    |m| &m.snapshot,
-                    &self.machine.applier.shard_metrics,
-                    leased_parts.into_iter(),
+                consolidator.enqueue_run(
+                    &batch.desc,
+                    run.into_iter()
+                        .filter(|p| should_fetch_part(p.stats()))
+                        .cloned(),
                 );
             }
         }
 
         Ok(Cursor {
             consolidator,
+            _lease: lease,
             _schemas: self.schemas.clone(),
         })
     }

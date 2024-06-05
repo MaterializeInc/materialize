@@ -711,7 +711,11 @@ where
                 desc.lower().elements(),
                 desc.upper().elements()
             ),
+            *shard_id,
+            blob,
             Arc::clone(&metrics),
+            shard_metrics,
+            metrics.read.compaction.clone(),
             FetchBatchFilter::Compaction {
                 since: desc.since().clone(),
             },
@@ -720,15 +724,7 @@ where
         );
 
         for (desc, parts) in runs {
-            consolidator.enqueue_run(
-                *shard_id,
-                &blob,
-                &metrics,
-                |m| &m.compaction,
-                &shard_metrics,
-                desc,
-                parts,
-            );
+            consolidator.enqueue_run(desc, parts.iter().cloned());
         }
 
         let remaining_budget = consolidator.start_prefetches();
@@ -761,10 +757,7 @@ where
         // `CompactConfig::new` by overriding the inline writes threshold
         // config. This is a bit action-at-a-distance, so defensively detect if
         // this breaks here and log and correct it if so.
-        let has_inline_parts = batch.batch.parts.iter().any(|x| match x {
-            BatchPart::Hollow(_) => false,
-            BatchPart::Inline { .. } => true,
-        });
+        let has_inline_parts = batch.batch.parts.iter().any(|x| x.is_inline());
         if has_inline_parts {
             error!(%shard_id, ?cfg, "compaction result unexpectedly had inline writes");
             let () = batch
