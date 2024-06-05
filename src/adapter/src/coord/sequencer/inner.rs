@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use futures::future::BoxFuture;
+use futures::{future, FutureExt};
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
@@ -661,7 +662,7 @@ impl Coordinator {
                 &public_key_set,
                 1,
             );
-            ops.push(catalog::Op::BuiltinTableUpdate {
+            ops.push(catalog::Op::SshTunnelConnectionsUpdates {
                 builtin_table_update,
             });
         }
@@ -1111,7 +1112,7 @@ impl Coordinator {
             dropped_active_db,
             dropped_active_cluster,
             dropped_in_use_indexes,
-        } = self.sequence_drop_common(session, drop_ids)?;
+        } = self.sequence_drop_common(session, drop_ids).await?;
 
         self.catalog_transact(Some(session), ops).await?;
 
@@ -1353,7 +1354,7 @@ impl Coordinator {
             dropped_active_db,
             dropped_active_cluster,
             dropped_in_use_indexes,
-        } = self.sequence_drop_common(session, plan.drop_ids)?;
+        } = self.sequence_drop_common(session, plan.drop_ids).await?;
 
         let ops = privilege_revoke_ops
             .chain(default_privilege_revoke_ops)
@@ -1378,7 +1379,7 @@ impl Coordinator {
         Ok(ExecuteResponse::DroppedOwned)
     }
 
-    fn sequence_drop_common(
+    async fn sequence_drop_common(
         &self,
         session: &Session,
         ids: Vec<ObjectId>,
@@ -1399,6 +1400,9 @@ impl Coordinator {
 
         // Clusters we're dropping
         let mut clusters_to_drop = BTreeSet::new();
+
+        // SSH connections we're dropping.
+        let mut ssh_conns_to_drop = Vec::new();
 
         let ids_set = ids.iter().collect::<BTreeSet<_>>();
         for id in &ids {
@@ -1472,6 +1476,12 @@ impl Coordinator {
                                 dependant_objects: dependants,
                             });
                         }
+                    } else if let Ok(connection) = self.catalog().get_entry(id).connection() {
+                        if let mz_storage_types::connections::Connection::Ssh(_) =
+                            &connection.connection
+                        {
+                            ssh_conns_to_drop.push(*id);
+                        }
                     }
                 }
                 _ => {}
@@ -1536,6 +1546,26 @@ impl Coordinator {
             }
         }
 
+        let mut builtin_table_updates = Vec::new();
+        let ssh_conn_secrets = ssh_conns_to_drop.into_iter().map(|ssh_conn| {
+            let secrets_controller = Arc::clone(&self.secrets_controller);
+            async move {
+                let secret = secrets_controller.reader().read(ssh_conn).await?;
+                let key_set = SshKeyPairSet::from_bytes(&secret)?.public_keys();
+                Ok::<_, AdapterError>((ssh_conn, key_set))
+            }
+            .boxed()
+        });
+        let ssh_conn_secrets = future::join_all(ssh_conn_secrets).await;
+        for secret_res in ssh_conn_secrets {
+            let (ssh_conn, key_set) = secret_res?;
+            let builtin_table_update = self
+                .catalog()
+                .state()
+                .pack_ssh_tunnel_connection_update(ssh_conn, &key_set, -1);
+            builtin_table_updates.push(builtin_table_update);
+        }
+
         let ops = role_revokes
             .into_iter()
             .map(|(role_id, member_id, grantor_id)| catalog::Op::RevokeRole {
@@ -1555,6 +1585,15 @@ impl Coordinator {
                     .map(DropObjectInfo::manual_drop_from_object_id)
                     .collect(),
             )))
+            .chain(
+                builtin_table_updates
+                    .into_iter()
+                    .map(
+                        |builtin_table_update| catalog::Op::SshTunnelConnectionsUpdates {
+                            builtin_table_update,
+                        },
+                    ),
+            )
             .collect();
 
         Ok(DropOps {
@@ -3154,10 +3193,10 @@ impl Coordinator {
             1,
         );
         let ops = vec![
-            catalog::Op::BuiltinTableUpdate {
+            catalog::Op::SshTunnelConnectionsUpdates {
                 builtin_table_update: builtin_table_retraction,
             },
-            catalog::Op::BuiltinTableUpdate {
+            catalog::Op::SshTunnelConnectionsUpdates {
                 builtin_table_update: builtin_table_addition,
             },
         ];

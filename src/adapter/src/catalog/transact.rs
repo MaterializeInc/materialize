@@ -185,9 +185,18 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
-    /// Performs updates to builtin tables that are not derived from the durable
-    /// catalog. These should be rare and are weird behaving tables.
-    BuiltinTableUpdate {
+    /// Performs updates to builtin table, `mz_ssh_tunnel_connections`. The
+    /// `mz_ssh_tunnel_connections` table is weird. Its contents are not fully derived from catalog
+    /// state, they're derived from the secrets controller. However, it still must be kept in-sync
+    /// with the catalog state. Storing the contents of the table in the durable catalog would
+    /// simplify the situation, but then we'd have to somehow encode public keys the CREATE SQL
+    /// of connections, which is annoying. In order to successfully balance all of these
+    /// constraints, we handle all updates to the table separately.
+    ///
+    /// TODO(jkosh44) In a multi-writer or high availability catalog world, this will not work. If
+    /// a process crashes after updating the durable catalog but before updating the builtin table,
+    /// then another listening catalog will never know to update the builtin table.
+    SshTunnelConnectionsUpdates {
         builtin_table_update: BuiltinTableUpdate,
     },
     /// Performs a dry run of the commit, but errors with
@@ -2179,7 +2188,7 @@ impl Catalog {
                     tx.clear_system_configs();
                     tx.set_txn_wal_tables(state.system_configuration.txn_wal_tables())?;
                 }
-                Op::BuiltinTableUpdate {
+                Op::SshTunnelConnectionsUpdates {
                     builtin_table_update,
                 } => {
                     builtin_table_updates.push(builtin_table_update);

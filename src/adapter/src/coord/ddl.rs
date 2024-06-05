@@ -512,30 +512,6 @@ impl Coordinator {
             .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
             .await?;
 
-        // The `mz_ssh_tunnel_connections` table is weird. Its contents are not fully derived from
-        // catalog state, they're derived from the secrets controller. However, it still must be
-        // kept in-sync with the catalog state. Storing the contents of the table in the durable
-        // catalog would simplify the situation, but then we'd have to somehow encode public keys
-        // the CREATE SQL of connections, which is annoying. In order to successfully balance all of
-        // these constraints, we handle all updates to the table separately.
-        let ssh_conn_secrets = ssh_conn_to_drop.into_iter().map(|ssh_conn| {
-            let secrets_controller = Arc::clone(&self.secrets_controller);
-            async move {
-                let secret = secrets_controller.reader().read(ssh_conn).await?;
-                let key_set = SshKeyPairSet::from_bytes(&secret)?.public_keys();
-                Ok::<_, AdapterError>((ssh_conn, key_set))
-            }
-            .boxed()
-        });
-        let ssh_conn_secrets = future::join_all(ssh_conn_secrets).await;
-        for secret_res in ssh_conn_secrets {
-            let (ssh_conn, key_set) = secret_res?;
-            let builtin_table_update = catalog
-                .state()
-                .pack_ssh_tunnel_connection_update(ssh_conn, &key_set, -1);
-            builtin_table_updates.push(builtin_table_update);
-        }
-
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
         let builtin_update_notify = self
@@ -1355,7 +1331,7 @@ impl Coordinator {
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }
-                | Op::BuiltinTableUpdate { .. }
+                | Op::SshTunnelConnectionsUpdates { .. }
                 | Op::TransactionDryRun => {}
             }
         }
