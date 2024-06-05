@@ -21,6 +21,7 @@ from materialize.test_analytics.connection.test_analytics_connection import (
 class FeatureBenchmarkResultEntry:
     scenario_name: str
     scenario_version: str
+    scale: str
     wallclock: float | None
     messages: int | None
     memory: float | None
@@ -46,6 +47,7 @@ def insert_result(
                 framework_version,
                 scenario_name,
                 scenario_version,
+                scale,
                 wallclock,
                 messages,
                 memory
@@ -55,6 +57,7 @@ def insert_result(
                 '{framework_version}',
                 '{result_entry.scenario_name}',
                 '{result_entry.scenario_version}',
+                '{result_entry.scale}',
                 {result_entry.wallclock or 'NULL::DOUBLE'},
                 {result_entry.messages or 'NULL::INT'},
                 {result_entry.memory or 'NULL::DOUBLE'}

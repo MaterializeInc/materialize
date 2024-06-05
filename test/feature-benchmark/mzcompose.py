@@ -521,6 +521,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c,
         args.this_tag,
         scenarios_scheduled_to_run,
+        args.scale,
         latest_report_by_scenario_name,
         successful_run,
     )
@@ -533,7 +534,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 latest_report_by_scenario_name,
                 justification_by_scenario_name,
                 baseline_tag=args.other_tag,
-            scale=args.scale,),
+                scale=args.scale,
+            ),
         )
 
 
@@ -636,6 +638,7 @@ def upload_results_to_test_analytics(
     c: Composition,
     this_tag: str | None,
     scenario_classes: list[type[Scenario]],
+    scale: str,
     latest_report_by_scenario_name: dict[str, Report],
     was_successful: bool,
 ) -> None:
@@ -663,6 +666,7 @@ def upload_results_to_test_analytics(
                 feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
                     scenario_name=scenario_name,
                     scenario_version=str(scenario_version),
+                    scale=scale,
                     wallclock=report_measurements[MeasurementType.WALLCLOCK],
                     messages=report_measurements[MeasurementType.MESSAGES],
                     memory=report_measurements[MeasurementType.MEMORY],

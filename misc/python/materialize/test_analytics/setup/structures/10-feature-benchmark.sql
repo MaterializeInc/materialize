@@ -20,6 +20,7 @@ CREATE TABLE feature_benchmark_results (
    framework_version TEXT NOT NULL,
    scenario_name TEXT NOT NULL,
    scenario_version TEXT NOT NULL,
+   scale TEXT NOT NULL,
    wallclock DOUBLE,
    messages INT,
    memory DOUBLE
