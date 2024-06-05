@@ -4200,7 +4200,8 @@ pub(crate) fn arb_numeric() -> BoxedStrategy<Numeric> {
     let int_value = any::<i128>()
         .prop_map(|v| Numeric::try_from(v).unwrap())
         .boxed();
-    let float_value = any::<f64>()
+    // Numerics only support up to 39 digits.
+    let float_value = (1e-39f64..1e39)
         .prop_map(|v| Numeric::try_from(v).unwrap())
         .boxed();
 
