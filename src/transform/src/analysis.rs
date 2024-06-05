@@ -1213,7 +1213,7 @@ mod cardinality {
         BinaryFunc, Id, JoinImplementation, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
         VariadicFunc,
     };
-    use mz_ore::cast::CastLossy;
+    use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
     use mz_repr::GlobalId;
 
     use ordered_float::OrderedFloat;
@@ -1255,6 +1255,21 @@ mod cardinality {
             match (lhs, rhs) {
                 (Estimate(lhs), Estimate(rhs)) => Estimate(std::cmp::max(lhs, rhs)),
                 _ => Unknown,
+            }
+        }
+
+        pub fn rounded(&self) -> Option<usize> {
+            match self {
+                CardinalityEstimate::Estimate(OrderedFloat(f)) => {
+                    let rounded = f.ceil();
+                    let flattened = usize::cast_from(
+                        u64::try_cast_from(rounded)
+                            .expect("positive and representable cardinality estimate"),
+                    );
+
+                    Some(flattened)
+                }
+                CardinalityEstimate::Unknown => None,
             }
         }
     }
