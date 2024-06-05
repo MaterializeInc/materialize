@@ -81,6 +81,21 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
 
+[[audits.askama]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.12.1"
+
+[[audits.askama_derive]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.12.5"
+
+[[audits.askama_parser]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.2.1"
+
 [[audits.atoi]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -101,6 +116,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.22.0"
 
+[[audits.basic-toml]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.9"
+
 [[audits.bitmaps]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
@@ -115,6 +135,16 @@ version = "1.0.1"
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.7.3"
+
+[[audits.camino]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.1.7"
+
+[[audits.cargo_toml]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.19.2"
 
 [[audits.chrono]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -141,6 +171,11 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 version = "0.1.50"
 
+[[audits.convert_case]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.6.0"
+
 [[audits.core_affinity]]
 who = "Jan Teske <jteske@posteo.net>"
 criteria = "safe-to-deploy"
@@ -156,6 +191,11 @@ who = "Ben Kirwin <bkirwi@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.8.0"
 notes = "Reads and writes files under a prefix controlled by the caller."
+
+[[audits.debug-ignore]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.5"
 
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
@@ -183,6 +223,11 @@ who = "Sean Loiselle <sean@materialize.io>"
 criteria = "safe-to-deploy"
 version = "0.3.26"
 
+[[audits.fixedbitset]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.4.2"
+
 [[audits.flatbuffers]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -208,10 +253,25 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.6.0"
 
+[[audits.guppy]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.17.5"
+
+[[audits.guppy-workspace-hack]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+
 [[audits.half]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "2.4.1"
+
+[[audits.hashbrown]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.14.5"
 
 [[audits.hibitset]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
@@ -298,6 +358,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.32.1"
 
+[[audits.nested]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.1"
+
 [[audits.nonzero_ext]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -378,6 +443,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
 
+[[audits.petgraph]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.6.5"
+
 [[audits.postgres]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -403,6 +473,16 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 version = "1.0.82"
 
+[[audits.protobuf]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "3.4.0"
+
+[[audits.protobuf-parse]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "3.4.0"
+
 [[audits.protobuf-src]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
@@ -412,6 +492,11 @@ version = "2.0.0+26.1"
 who = "Petros Angelatos <petrosagg@gmail.com>"
 criteria = "safe-to-deploy"
 version = "2.0.1+26.1"
+
+[[audits.protobuf-support]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "3.4.0"
 
 [[audits.quanta]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -478,10 +563,20 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "1.0.17"
 
+[[audits.semver]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.23"
+
 [[audits.sized-chunks]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.6.5"
+
+[[audits.smallvec]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.13.2"
 
 [[audits.spin]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
@@ -512,6 +607,16 @@ version = "0.5.1"
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.5.0"
+
+[[audits.target-lexicon]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.12.14"
+
+[[audits.target-spec]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "3.1.0"
 
 [[audits.tempfile]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"

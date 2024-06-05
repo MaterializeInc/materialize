@@ -445,6 +445,7 @@ crates_repository(
         "//:src/workspace-hack/Cargo.toml",
         "//:test/metabase/smoketest/Cargo.toml",
         "//:test/test-util/Cargo.toml",
+        "//:misc/bazel/cargo-gazelle/Cargo.toml",
     ],
     # When `isolated` is true, Bazel will create a new `$CARGO_HOME`, i.e. it
     # won't use `~/.cargo`, when re-pinning. This is nice but not totally

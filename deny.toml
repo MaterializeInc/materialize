@@ -83,6 +83,20 @@ skip = [
     # TODO: Required for Rust nightly upgrade
     { name = "http-body", version = "0.4.5" },
     { name = "http-body", version = "1.0.0" },
+
+    # The most recent version of `skeptic` depends on 0.14.2 and the latest
+    # version of `guppy` that uses `0.14` is very old.
+    { name = "cargo_metadata", version = "0.14.2" },
+    { name = "cargo_metadata", version = "0.18.1" },
+
+    # There are many external crates that rely on 0.10.5. Upgrading them should
+    # be its own PR.
+    { name = "itertools", version = "0.10.5" },
+    { name = "itertools", version = "0.12.1" },
+
+    # A few crates -> `num_enum_derive` -> `proc-macro-crate` -> `toml_edit v0.19.14`.
+    { name = "toml_edit", version = "0.19.14" },
+    { name = "toml_edit", version = "0.20.2" },
 ]
 
 # Use `tracing` instead.
@@ -101,6 +115,7 @@ name = "sha-1"
 # Use `prost` or `protobuf-native` instead.
 [[bans.deny]]
 name = "protobuf"
+wrappers = ["protobuf-parse"]
 
 # Strum has suspect code quality and includes many unneeded features. Use
 # more targeted enum macro crates, e.g. `enum-kinds`.
@@ -125,6 +140,7 @@ wrappers = [
     "postgres",
     "pprof",
     "prost-build",
+    "protobuf-parse",
     # TODO(guswynn): switch to tracing in rdkafka
     "rdkafka",
     "reqwest",

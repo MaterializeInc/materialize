@@ -52,7 +52,7 @@ futures-task = { version = "0.3.30" }
 futures-util = { version = "0.3.30", features = ["channel", "io", "sink"] }
 getrandom = { version = "0.2.10", default-features = false, features = ["std"] }
 globset = { version = "0.4.9", features = ["serde1"] }
-hashbrown = { version = "0.14.0", features = ["raw"] }
+hashbrown = { version = "0.14.5", features = ["raw"] }
 hyper = { version = "0.14.27", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.33.0", features = ["json"] }
@@ -66,6 +66,7 @@ libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 memchr = { version = "2.7.2", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
+minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
 mio = { version = "0.8.11", features = ["net", "os-ext"] }
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.32.1", default-features = false, features = ["binlog", "chrono"] }
@@ -99,12 +100,12 @@ regex-syntax-c38e5c1d305a1b54 = { package = "regex-syntax", version = "0.8.3" }
 reqwest = { version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
-semver = { version = "1.0.16", features = ["serde"] }
-serde = { version = "1.0.164", features = ["alloc", "derive", "rc"] }
-serde_json = { version = "1.0.99", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
+semver = { version = "1.0.23", features = ["serde"] }
+serde = { version = "1.0.203", features = ["alloc", "derive", "rc"] }
+serde_json = { version = "1.0.117", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.6" }
 similar = { version = "2.2.1", features = ["inline", "unicode"] }
-smallvec = { version = "1.10.0", default-features = false, features = ["const_generics", "serde", "union", "write"] }
+smallvec = { version = "1.13.2", default-features = false, features = ["const_generics", "serde", "union", "write"] }
 socket2 = { version = "0.5.3", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
@@ -116,7 +117,6 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tokio-stream = { version = "0.1.14", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.3", default-features = false, features = ["serde"] }
-toml_edit = { version = "0.19.14", features = ["serde"] }
 tonic = { version = "0.9.2", features = ["gzip"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.4.3", features = ["auth", "cors", "map-response-body", "trace", "util"] }
@@ -175,7 +175,7 @@ futures-task = { version = "0.3.30" }
 futures-util = { version = "0.3.30", features = ["channel", "io", "sink"] }
 getrandom = { version = "0.2.10", default-features = false, features = ["std"] }
 globset = { version = "0.4.9", features = ["serde1"] }
-hashbrown = { version = "0.14.0", features = ["raw"] }
+hashbrown = { version = "0.14.5", features = ["raw"] }
 hyper = { version = "0.14.27", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.33.0", features = ["json"] }
@@ -189,6 +189,7 @@ libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 memchr = { version = "2.7.2", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
+minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
 mio = { version = "0.8.11", features = ["net", "os-ext"] }
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.32.1", default-features = false, features = ["binlog", "chrono"] }
@@ -222,12 +223,12 @@ regex-syntax-c38e5c1d305a1b54 = { package = "regex-syntax", version = "0.8.3" }
 reqwest = { version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
-semver = { version = "1.0.16", features = ["serde"] }
-serde = { version = "1.0.164", features = ["alloc", "derive", "rc"] }
-serde_json = { version = "1.0.99", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
+semver = { version = "1.0.23", features = ["serde"] }
+serde = { version = "1.0.203", features = ["alloc", "derive", "rc"] }
+serde_json = { version = "1.0.117", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.6" }
 similar = { version = "2.2.1", features = ["inline", "unicode"] }
-smallvec = { version = "1.10.0", default-features = false, features = ["const_generics", "serde", "union", "write"] }
+smallvec = { version = "1.13.2", default-features = false, features = ["const_generics", "serde", "union", "write"] }
 socket2 = { version = "0.5.3", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
@@ -240,7 +241,6 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tokio-stream = { version = "0.1.14", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.3", default-features = false, features = ["serde"] }
-toml_edit = { version = "0.19.14", features = ["serde"] }
 tonic = { version = "0.9.2", features = ["gzip"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.4.3", features = ["auth", "cors", "map-response-body", "trace", "util"] }
@@ -261,23 +261,31 @@ zstd-sys = { version = "2.0.9", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
+camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
+pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
+camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
+pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
 
 [target.x86_64-apple-darwin.dependencies]
+camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
+pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
+camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
+pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
