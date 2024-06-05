@@ -148,7 +148,11 @@ def wait_for_cloud(c: Composition) -> None:
 def version_check(c: Composition) -> None:
     print("Obtaining mz_version() string from local instance ...")
     c.up("materialized")
-    local_version = c.sql_query("SELECT mz_version();")[0][0]
+    # Remove the ($HASH) suffix because it can be different. The reason is that
+    # the dockerhub devel-$HASH tag is just a link to the mzbuild-$CODEHASH. So
+    # if the code has not changed, the environmentd image of the previous
+    # version will be used.
+    local_version = c.sql_query("SELECT mz_version();")[0][0].split(" ")[0]
 
     print("Obtaining mz_version() string from the cloud ...")
     cloud_cursor = pg8000.connect(
@@ -161,7 +165,7 @@ def version_check(c: Composition) -> None:
     cloud_cursor.execute("SELECT mz_version()")
     result = cloud_cursor.fetchone()
     assert result is not None
-    cloud_version = result[0]
+    cloud_version = result[0].split(" ")[0]
     assert (
         local_version == cloud_version
     ), f"local version: {local_version} is not identical to cloud version: {cloud_version}"
