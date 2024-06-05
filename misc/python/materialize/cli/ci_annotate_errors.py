@@ -22,7 +22,7 @@ import requests
 from junitparser.junitparser import Error, Failure, JUnitXml
 
 from materialize import ci_util, ui
-from materialize.buildkite import add_annotation_raw, get_artifact_url, truncate_str
+from materialize.buildkite import add_annotation_raw, get_artifact_url
 from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
@@ -120,6 +120,21 @@ IGNORE_RE = re.compile(
     )
     """,
     re.VERBOSE | re.MULTILINE,
+)
+
+TERMINAL_COLORS_RE = re.compile(
+    r"""
+    \x1B  # ESC
+    (?:   # 7-bit C1 Fe (except CSI)
+        [@-Z\\-_]
+    |     # or [ for CSI, followed by a control sequence
+        \[
+        [0-?]*  # Parameter bytes
+        [ -/]*  # Intermediate bytes
+        [@-~]   # Final byte
+    )
+""",
+    re.VERBOSE,
 )
 
 
@@ -235,7 +250,9 @@ def annotate_logged_errors(log_files: list[str]) -> int:
 
     def handle_log_error(error_message: bytes, location: str):
         # Don't have too huge output, so truncate
-        formatted_error_message = f"```\n{sanitize_text(truncate_str(error_message.decode('utf-8'), 10_000))}\n```"
+        formatted_error_message = (
+            f"```\n{sanitize_text(error_message.decode('utf-8'), 10_000)}\n```"
+        )
 
         for issue in known_issues:
             match = issue.regex.search(for_github_re(error_message))
@@ -278,12 +295,12 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     ):
         # Don't have too huge output, so truncate
         formatted_error_message = (
-            f" `{sanitize_text(truncate_str(error_message, 1_000))}`"
+            f" `{sanitize_text(error_message, 1_000)}`"
             if error_message is not None and len(error_message) > 0
             else ""
         )
         formatted_error_details = (
-            f"```\n{sanitize_text(truncate_str(details, 9_000))}\n```"
+            f"```\n{sanitize_text(details, 9_000)}\n```"
             if details is not None and len(details) > 0
             else ""
         )
@@ -437,6 +454,8 @@ def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[Error
 
 
 def sanitize_text(text: str, max_length: int = 4000) -> str:
+    text = TERMINAL_COLORS_RE.sub("", text)
+
     if len(text) > max_length:
         text = text[:max_length] + " [...]"
 
