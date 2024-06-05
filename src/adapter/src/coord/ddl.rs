@@ -535,7 +535,7 @@ impl Coordinator {
             .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
             .await?;
 
-        // The `mz_ssh_tunnel_connections` table is weird. It's contents are not fully derived from
+        // The `mz_ssh_tunnel_connections` table is weird. Its contents are not fully derived from
         // catalog state, they're derived from the secrets controller. However, it still must be
         // kept in-sync with the catalog state. Storing the contents of the table in the durable
         // catalog would simplify the situation, but then we'd have to somehow encode public keys
