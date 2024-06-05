@@ -22,18 +22,28 @@ T = TypeVar("T")
 
 
 class BuildkiteEnvVar(Enum):
+    # environment
+    BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE = auto()
+
+    # build
     BUILDKITE_PULL_REQUEST = auto()
     BUILDKITE_BUILD_NUMBER = auto()
+    BUILDKITE_BUILD_ID = auto()
     BUILDKITE_PIPELINE_DEFAULT_BRANCH = auto()
     BUILDKITE_PULL_REQUEST_BASE_BRANCH = auto()
     BUILDKITE_ORGANIZATION_SLUG = auto()
     BUILDKITE_PIPELINE_SLUG = auto()
     BUILDKITE_BRANCH = auto()
+    BUILDKITE_COMMIT = auto()
+    BUILDKITE_BUILD_URL = auto()
 
+    # step
     BUILDKITE_PARALLEL_JOB = auto()
     BUILDKITE_PARALLEL_JOB_COUNT = auto()
     BUILDKITE_STEP_KEY = auto()
+    BUILDKITE_STEP_ID = auto()
     BUILDKITE_LABEL = auto()
+    BUILDKITE_RETRY_COUNT = auto()
 
 
 def get_var(var: BuildkiteEnvVar, fallback_value: Any = None) -> Any:

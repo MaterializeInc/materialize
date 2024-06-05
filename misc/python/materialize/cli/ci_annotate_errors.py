@@ -59,6 +59,8 @@ ERROR_RE = re.compile(
     | SUMMARY:\ .*Sanitizer
     # for miri test summary
     | (FAIL|TIMEOUT)\s+\[\s*\d+\.\d+s\]
+    # test history database
+    | Uploading\ results\ failed
     )
     .* $
     """,
