@@ -204,6 +204,7 @@ ignore = [
 [licenses]
 allow = [
     "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
     "CC0-1.0",
     "0BSD",
     "BSD-2-Clause",
@@ -213,6 +214,7 @@ allow = [
     "MIT",
     "MPL-2.0",
     "Zlib",
+    "Unicode-DFS-2016",
 ]
 copyleft = "deny"
 private = { ignore = true }
