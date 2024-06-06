@@ -908,6 +908,7 @@ class FlipFlagsAction(Action):
         BOOLEAN_FLAG_VALUES = ["TRUE", "FALSE"]
 
         self.flags_with_values: dict[str, list[str]] = dict()
+        # TODO: Add realtime_recency and all other interesting flags from SET here
         for flag in ["catalog", "snapshot", "txn"]:
             self.flags_with_values[
                 f"persist_use_critical_since_{flag}"

@@ -81,8 +81,7 @@ steps:
               composition: feature-benchmark
               args:
                 - --other-tag
-                # common-ancestor will default to latest if not in a PR
-                - common-ancestor
+                - v0.81.0
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
         depends_on: build-aarch64
@@ -96,9 +95,9 @@ steps:
                 - --target
                 - HEAD
                 - --target
-                - common-ancestor
+                - v0.81.0
                 - --regression-against
-                - common-ancestor
+                - v0.81.0
                 - --workload-group-marker
                 - "DmlDqlWorkload"
                 - --max-concurrency
@@ -116,9 +115,9 @@ steps:
                 - --target
                 - HEAD
                 - --target
-                - common-ancestor
+                - v0.81.0
                 - --regression-against
-                - common-ancestor
+                - v0.81.0
                 - --workload-group-marker
                 - "DdlWorkload"
                 - --count
@@ -140,9 +139,9 @@ steps:
                 - --target
                 - HEAD
                 - --target
-                - common-ancestor
+                - v0.81.0
                 - --regression-against
-                - common-ancestor
+                - v0.81.0
                 - --workload-group-marker
                 - "ConnectionWorkload"
                 - --exponent-base
