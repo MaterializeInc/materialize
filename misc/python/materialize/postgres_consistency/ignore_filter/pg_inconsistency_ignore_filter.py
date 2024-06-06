@@ -205,9 +205,8 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             return_type_category = expression.args[0].resolve_return_type_category()
             if return_type_category == DataTypeCategory.STRING:
                 return YesIgnore("#22002: ordering on text different (min/max)")
-
-        if db_function.function_name_in_lower_case in {"min", "max"}:
-            return_type_category = expression.args[0].resolve_return_type_category()
+            if return_type_category == DataTypeCategory.JSONB:
+                return YesIgnore("#26309: ordering on JSON different (min/max)")
             if return_type_category == DataTypeCategory.ARRAY:
                 return YesIgnore("#27457: ordering on array different (min/max)")
 
@@ -347,7 +346,12 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 return_type_category_1,
                 return_type_category_2,
             }:
-                return YesIgnore("#26309: ordering on JSON different")
+                return YesIgnore("#26309: ordering on JSON different (<, <=, ...)")
+            if DataTypeCategory.ARRAY in {
+                return_type_category_1,
+                return_type_category_2,
+            }:
+                return YesIgnore("#27457: ordering on array different (<, <=, ...)")
 
         if db_operation.pattern == "CAST ($ AS $)" and expression.matches(
             partial(
