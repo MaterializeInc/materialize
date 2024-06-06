@@ -12,7 +12,6 @@ import os
 from pg8000 import Cursor
 
 from materialize import MZ_ROOT
-from materialize.test_analytics.test_analytics_db import TEST_ANALYTICS_DB_VERSION
 
 
 def setup_structures(cursor: Cursor) -> None:
@@ -36,13 +35,9 @@ def setup_structures(cursor: Cursor) -> None:
             print(f"> {command}")
             cursor.execute(command)
 
-    cursor.execute(
-        f"INSERT INTO version (version) VALUES ('{TEST_ANALYTICS_DB_VERSION}');"
-    )
-
 
 def exist_structures(cursor: Cursor) -> bool:
-    table_name_to_test = "version"
+    table_name_to_test = "build"
     cursor.execute(
         f"SELECT exists(SELECT 1 FROM mz_tables WHERE name = '{table_name_to_test}');"
     )

@@ -13,11 +13,6 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- test history version
-CREATE TABLE version(
-   version TEXT NOT NULL
-);
-
 -- meta data of the build
 CREATE TABLE build (
    pipeline TEXT NOT NULL,
