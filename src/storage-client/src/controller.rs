@@ -690,6 +690,12 @@ pub trait StorageController: Debug {
         updates: Vec<(Row, Diff)>,
     );
 
+    async fn record_introspection_deletions(
+        &mut self,
+        type_: IntrospectionType,
+        filter: DeletionFilter,
+    );
+
     /// Resets the txns system to a set of invariants necessary for correctness.
     ///
     /// Must be called on boot before create_collections or the various appends.
@@ -810,24 +816,19 @@ impl<T: Timestamp> ExportState<T> {
         self.read_hold.since().is_empty()
     }
 }
+
 /// A channel that allows you to append a set of updates to a pre-defined [`GlobalId`].
 ///
 /// See `CollectionManager::monotonic_appender` to acquire a [`MonotonicAppender`].
 #[derive(Clone, Debug)]
 pub struct MonotonicAppender<T> {
     /// Channel that sends to a [`tokio::task`] which pushes updates to Persist.
-    tx: mpsc::Sender<(
-        Vec<(Row, Diff)>,
-        oneshot::Sender<Result<(), StorageError<T>>>,
-    )>,
+    tx: mpsc::Sender<(WriteCommand, oneshot::Sender<Result<(), StorageError<T>>>)>,
 }
 
 impl<T> MonotonicAppender<T> {
     pub fn new(
-        tx: mpsc::Sender<(
-            Vec<(Row, Diff)>,
-            oneshot::Sender<Result<(), StorageError<T>>>,
-        )>,
+        tx: mpsc::Sender<(WriteCommand, oneshot::Sender<Result<(), StorageError<T>>>)>,
     ) -> Self {
         MonotonicAppender { tx }
     }
@@ -845,7 +846,7 @@ impl<T> MonotonicAppender<T> {
         })?;
 
         // Send our update to the CollectionManager.
-        permit.send((updates, tx));
+        permit.send((WriteCommand::Append { updates }, tx));
 
         // Wait for a response, if we fail to receive then the CollectionManager has gone away.
         let result = rx
@@ -855,6 +856,13 @@ impl<T> MonotonicAppender<T> {
         result
     }
 }
+
+pub enum WriteCommand {
+    Append { updates: Vec<(Row, Diff)> },
+    Delete { filter: DeletionFilter },
+}
+
+pub type DeletionFilter = Box<dyn Fn(&Row) -> bool + Send + Sync>;
 
 #[cfg(test)]
 mod tests {

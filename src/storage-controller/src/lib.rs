@@ -53,8 +53,8 @@ use mz_storage_client::client::{
     StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
-    CollectionDescription, DataSource, DataSourceOther, ExportDescription, ExportState,
-    IntrospectionType, MonotonicAppender, PersistEpoch, Response, SnapshotCursor,
+    CollectionDescription, DataSource, DataSourceOther, DeletionFilter, ExportDescription,
+    ExportState, IntrospectionType, MonotonicAppender, PersistEpoch, Response, SnapshotCursor,
     StorageController, StorageMetadata, StorageTxn,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
@@ -804,7 +804,8 @@ where
                         "cannot have multiple IDs for introspection type"
                     );
 
-                    self.collection_manager.register_collection(id);
+                    let meta = self.collections[&id].collection_metadata.clone();
+                    self.collection_manager.register_collection(id, meta);
 
                     match i {
                         IntrospectionType::ShardMapping => {
@@ -945,7 +946,8 @@ where
                 }
                 DataSource::Webhook => {
                     // Register the collection so our manager knows about it.
-                    self.collection_manager.register_collection(id);
+                    let meta = self.collections[&id].collection_metadata.clone();
+                    self.collection_manager.register_collection(id, meta);
                 }
                 DataSource::Progress | DataSource::Other(_) => {}
             };
@@ -2220,6 +2222,15 @@ where
         self.append_to_managed_collection(id, updates).await;
     }
 
+    async fn record_introspection_deletions(
+        &mut self,
+        type_: IntrospectionType,
+        filter: DeletionFilter,
+    ) {
+        let id = self.introspection_ids.lock().expect("poisoned")[&type_];
+        self.delete_from_managed_collection(id, filter).await;
+    }
+
     /// With the CRDB based timestamp oracle, there is no longer write timestamp
     /// fencing. As in, when a new Coordinator, `B`, starts up, there is nothing
     /// that prevents an old Coordinator, `A`, from getting a new write
@@ -2569,8 +2580,11 @@ where
         let persist_monotonic_worker = persist_handles::PersistMonotonicWriteWorker::new();
         let collection_manager_write_handle = persist_monotonic_worker.clone();
 
-        let collection_manager =
-            collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
+        let collection_manager = collection_mgmt::CollectionManager::new(
+            collection_manager_write_handle,
+            Arc::clone(&persist_clients),
+            now.clone(),
+        );
 
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
 
@@ -3075,6 +3089,14 @@ where
         assert!(self.txns_init_run);
         self.collection_manager
             .append_to_collection(id, updates)
+            .await;
+    }
+
+    #[instrument(level = "debug", fields(id))]
+    async fn delete_from_managed_collection(&self, id: GlobalId, filter: DeletionFilter) {
+        assert!(self.txns_init_run);
+        self.collection_manager
+            .delete_from_collection(id, filter)
             .await;
     }
 

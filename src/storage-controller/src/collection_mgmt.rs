@@ -22,11 +22,16 @@ use mz_ore::channel::ReceiverExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::Diagnostics;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::client::TimestamplessUpdate;
-use mz_storage_client::controller::MonotonicAppender;
+use mz_storage_client::controller::{DeletionFilter, MonotonicAppender, WriteCommand};
+use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
+use mz_storage_types::sources::SourceData;
 use timely::progress::Timestamp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant};
@@ -39,10 +44,7 @@ const CHANNEL_CAPACITY: usize = 4096;
 // Default rate at which we advance the uppers of managed collections.
 const DEFAULT_TICK_MS: u64 = 1_000;
 
-type WriteChannel<T> = mpsc::Sender<(
-    Vec<(Row, Diff)>,
-    oneshot::Sender<Result<(), StorageError<T>>>,
-)>;
+type WriteChannel<T> = mpsc::Sender<(WriteCommand, oneshot::Sender<Result<(), StorageError<T>>>)>;
 type WriteTask = AbortOnDropHandle<()>;
 type ShutdownSender = oneshot::Sender<()>;
 
@@ -53,6 +55,7 @@ where
 {
     collections: Arc<Mutex<BTreeMap<GlobalId, (WriteChannel<T>, WriteTask, ShutdownSender)>>>,
     write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+    persist: Arc<PersistClientCache>,
     /// Amount of time we'll wait before sending a batch of inserts to Persist, for user
     /// collections.
     user_batch_duration_ms: Arc<AtomicU64>,
@@ -74,6 +77,7 @@ where
 {
     pub(super) fn new(
         write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+        persist: Arc<PersistClientCache>,
         now: NowFn,
     ) -> CollectionManager<T> {
         let batch_duration_ms: u64 = STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT
@@ -83,6 +87,7 @@ where
         CollectionManager {
             collections: Arc::new(Mutex::new(BTreeMap::new())),
             write_handle,
+            persist,
             user_batch_duration_ms: Arc::new(AtomicU64::new(batch_duration_ms)),
             now,
         }
@@ -99,7 +104,7 @@ where
     /// - Automatically advance the upper of every second
     /// - Accept appends for. However, note that when appending, the
     ///   `CollectionManager` expects to be the only writer.
-    pub(super) fn register_collection(&self, id: GlobalId) {
+    pub(super) fn register_collection(&self, id: GlobalId, meta: CollectionMetadata) {
         let mut guard = self.collections.lock().expect("collection_mgmt panicked");
 
         // Check if this collection is already registered.
@@ -115,7 +120,9 @@ where
         // Spawns a new task so we can write to this collection.
         let writer_and_handle = write_task(
             id,
+            meta,
             self.write_handle.clone(),
+            Arc::clone(&self.persist),
             Arc::clone(&self.user_batch_duration_ms),
             self.now.clone(),
         );
@@ -172,8 +179,23 @@ where
 
             // Specifically _do not_ wait for the append to complete, just for it to be sent.
             let (tx, _rx) = oneshot::channel();
-            update_tx.send((updates, tx)).await.expect("rx hung up");
+            let cmd = WriteCommand::Append { updates };
+            update_tx.send((cmd, tx)).await.expect("rx hung up");
         }
+    }
+
+    pub(super) async fn delete_from_collection(&self, id: GlobalId, filter: DeletionFilter) {
+        // Get the update channel in a block to make sure the Mutex lock is scoped.
+        let update_tx = {
+            let guard = self.collections.lock().expect("CollectionManager panicked");
+            let (update_tx, _, _) = guard.get(&id).expect("id to exist");
+            update_tx.clone()
+        };
+
+        // Specifically _do not_ wait for the append to complete, just for it to be sent.
+        let (tx, _rx) = oneshot::channel();
+        let cmd = WriteCommand::Delete { filter };
+        update_tx.send((cmd, tx)).await.expect("rx hung up");
     }
 
     /// Returns a [`MonotonicAppender`] that can be used to monotonically append updates to the
@@ -200,7 +222,9 @@ where
 /// TODO(parkmycar): Maybe add prometheus metrics for each collection?
 fn write_task<T>(
     id: GlobalId,
+    meta: CollectionMetadata,
     write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+    persist: Arc<PersistClientCache>,
     user_batch_duration_ms: Arc<AtomicU64>,
     now: NowFn,
 ) -> (WriteChannel<T>, WriteTask, ShutdownSender)
@@ -283,77 +307,57 @@ where
                             // at `t + 13`, `t + 23`, ... which reseting the interval accomplishes.
                             interval.reset();
 
-                            let (rows, responders): (Vec<_>, Vec<_>) = batch
-                                .into_iter()
-                                .unzip();
+                            // Merge subsequent commands of the same type.
+                            let cmds = merge_write_commands(batch);
+                            for (cmd, responders) in cmds {
+                                let updates = match cmd {
+                                    WriteCommand::Append { updates } => updates,
+                                    WriteCommand::Delete { filter } => {
+                                        // TODO share code with `Controller::snapshot`
+                                        assert!(meta.txns_shard.is_none());
 
-                            // Append updates to persist!
-                            let rows = rows
-                                .into_iter()
-                                .flatten()
-                                .map(|(row, diff)| TimestamplessUpdate { row, diff })
-                            .collect();
-                            let request = vec![(id, rows, T::from(now()))];
+                                        let client = persist.open(meta.persist_location.clone()).await.unwrap();
+                                        let (write, mut read) = client.open::<SourceData, (), T, Diff>(
+                                            meta.data_shard,
+                                            Arc::new(meta.relation_desc.clone()),
+                                            Arc::new(UnitSchema),
+                                            Diagnostics {
+                                                shard_name: id.to_string(),
+                                                handle_purpose: format!("CollectionManager delete from {id}"),
+                                            },
+                                            false,
+                                        ).await.unwrap();
 
-                            // We'll try really hard to succeed, but eventually stop.
-                            //
-                            // Note: it's very rare we should ever need to retry, and if we need to
-                            // retry it should only take 1 or 2 attempts. We set `max_tries` to be
-                            // high though because if we hit some edge case we want to try hard to
-                            // commit the data.
-                            let retries = Retry::default()
-                                .initial_backoff(Duration::from_secs(1))
-                                .clamp_backoff(Duration::from_secs(3))
-                                .factor(1.25)
-                                .max_tries(20)
-                                .into_retry_stream();
-                            let mut retries = Box::pin(retries);
+                                        let as_of = write.upper()
+                                            .iter()
+                                            .map(|t| t.step_back().unwrap_or(t.clone()))
+                                            .collect();
+                                        write.expire().await;
 
-                            'append_retry: loop {
-                                let append_result = match write_handle.monotonic_append(request.clone()).await {
-                                    // We got a response!
-                                    Ok(append_result) => append_result,
-                                    // Failed to receive which means the worker shutdown.
-                                    Err(_recv_error) => {
-                                        // Sender hung up, this seems fine and can happen when shutting down.
-                                        notify_listeners(responders, || Err(StorageError::ShuttingDown("PersistMonotonicWriteWorker")));
-
-                                        // End the task since we can no longer send writes to persist.
-                                        break 'run;
+                                        let contents = read.snapshot_and_fetch(as_of).await.unwrap();
+                                        contents.into_iter().filter_map(|((key, _), _, diff)| match key.unwrap() {
+                                            SourceData(Ok(row)) if filter(&row) => Some((row, -diff)),
+                                            _ => None,
+                                        }).collect()
                                     }
                                 };
 
-                                match append_result {
-                                    // Everything was successful!
+                                let result = append_with_retry(id, &write_handle, &now, updates).await;
+                                match result {
                                     Ok(()) => {
-                                        // Notify all of our listeners.
                                         notify_listeners(responders, || Ok(()));
-                                        // Break out of the retry loop so we can wait for more data.
-                                        break 'append_retry;
-                                    },
-                                    // Failed to write to some collections,
-                                    Err(StorageError::InvalidUppers(failed_ids)) => {
-                                        // It's fine to retry invalid-uppers errors here, since
-                                        // monotonic appends do not specify a particular upper or
-                                        // timestamp.
-
-                                        assert_eq!(failed_ids.len(), 1, "received errors for more than one collection");
-                                        assert_eq!(failed_ids[0].id, id, "received errors for a different collection");
-
-                                        // We've exhausted all of our retries, notify listeners
-                                        // and break out of the retry loop so we can wait for more
-                                        // data.
-                                        if retries.next().await.is_none() {
-                                            notify_listeners(responders, || Err(StorageError::InvalidUppers(failed_ids.clone())));
-                                            error!("exhausted retries when appending to managed collection {failed_ids:?}");
-                                            break 'append_retry;
-                                        }
-
-                                        debug!("Retrying invalid-uppers error while appending to managed collection {failed_ids:?}");
                                     }
-                                    // Uh-oh, something else went wrong!
+                                    Err(StorageError::ShuttingDown(name)) => {
+                                        notify_listeners(responders, || Err(StorageError::ShuttingDown(name)));
+                                        // End the task since we can no longer send writes to persist.
+                                        break 'run;
+                                    }
+                                    Err(StorageError::InvalidUppers(failed_ids)) => {
+                                        error!("exhausted retries when appending to managed collection {failed_ids:?}");
+                                        notify_listeners(responders, || Err(StorageError::InvalidUppers(failed_ids.clone())));
+                                    }
                                     Err(other) => {
-                                        panic!("Unhandled error while appending to managed collection {id:?}: {other:?}")
+                                        panic!("Unhandled error while appending to managed collection {id:?}: {other:?}");
                                     }
                                 }
                             }
@@ -399,6 +403,120 @@ where
     );
 
     (tx, handle.abort_on_drop(), shutdown_tx)
+}
+
+fn merge_write_commands<R>(cmds: Vec<(WriteCommand, R)>) -> Vec<(WriteCommand, Vec<R>)> {
+    use WriteCommand::*;
+
+    let mut merged = Vec::new();
+    let mut remaining = cmds.into_iter();
+
+    let Some((cmd, responder)) = remaining.next() else {
+        return merged;
+    };
+
+    let mut prev_cmd = cmd;
+    let mut prev_responders = vec![responder];
+
+    for (cmd, responder) in remaining {
+        prev_cmd = match (prev_cmd, cmd) {
+            (Append { mut updates }, Append { updates: new }) => {
+                prev_responders.push(responder);
+                updates.extend(new);
+                Append { updates }
+            }
+            (Delete { filter: a }, Delete { filter: b }) => {
+                prev_responders.push(responder);
+                let filter: DeletionFilter = Box::new(move |row| a(row) || b(row));
+                Delete { filter }
+            }
+            (prev_cmd, cmd) => {
+                let prev_responders = std::mem::replace(&mut prev_responders, vec![responder]);
+                merged.push((prev_cmd, prev_responders));
+                cmd
+            }
+        };
+    }
+
+    merged.push((prev_cmd, prev_responders));
+    merged
+}
+
+async fn append_with_retry<T>(
+    id: GlobalId,
+    write_handle: &persist_handles::PersistMonotonicWriteWorker<T>,
+    now: &NowFn,
+    updates: Vec<(Row, Diff)>,
+) -> Result<(), StorageError<T>>
+where
+    T: Codec64 + From<EpochMillis> + TimestampManipulation,
+{
+    // Append updates to persist!
+    let rows = updates
+        .into_iter()
+        .map(|(row, diff)| TimestamplessUpdate { row, diff })
+        .collect();
+    let request = vec![(id, rows, T::from(now()))];
+
+    // We'll try really hard to succeed, but eventually stop.
+    //
+    // Note: it's very rare we should ever need to retry, and if we need to
+    // retry it should only take 1 or 2 attempts. We set `max_tries` to be
+    // high though because if we hit some edge case we want to try hard to
+    // commit the data.
+    let retries = Retry::default()
+        .initial_backoff(Duration::from_secs(1))
+        .clamp_backoff(Duration::from_secs(3))
+        .factor(1.25)
+        .max_tries(20)
+        .into_retry_stream();
+    let mut retries = Box::pin(retries);
+
+    loop {
+        let append_result = match write_handle.monotonic_append(request.clone()).await {
+            // We got a response!
+            Ok(append_result) => append_result,
+            // Failed to receive which means the worker shutdown.
+            Err(_recv_error) => {
+                // Sender hung up, this seems fine and can happen when shutting down.
+                return Err(StorageError::ShuttingDown("PersistMonotonicWriteWorker"));
+            }
+        };
+
+        match append_result {
+            // Everything was successful!
+            Ok(()) => return Ok(()),
+            // Failed to write to some collections,
+            Err(StorageError::InvalidUppers(failed_ids)) => {
+                // It's fine to retry invalid-uppers errors here, since
+                // monotonic appends do not specify a particular upper or
+                // timestamp.
+
+                assert_eq!(
+                    failed_ids.len(),
+                    1,
+                    "received errors for more than one collection"
+                );
+                assert_eq!(
+                    failed_ids[0].id, id,
+                    "received errors for a different collection"
+                );
+
+                // We've exhausted all of our retries, notify listeners
+                // and break out of the retry loop so we can wait for more
+                // data.
+                if retries.next().await.is_none() {
+                    return Err(StorageError::InvalidUppers(failed_ids.clone()));
+                }
+
+                debug!("Retrying invalid-uppers error while appending to managed collection {failed_ids:?}");
+            }
+            // Uh-oh, something else went wrong!
+            Err(other) => {
+                panic!("Unhandled error while appending to managed collection {id:?}: {other:?}")
+            }
+        }
+    }
 }
 
 // Helper method for notifying listeners.

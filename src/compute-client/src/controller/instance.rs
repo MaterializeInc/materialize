@@ -34,7 +34,9 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_storage_client::controller::{IntrospectionType, StorageController};
+use mz_storage_client::controller::{
+    DeletionFilter, IntrospectionType, StorageController, WriteCommand,
+};
 use mz_storage_types::read_holds::ReadHoldError;
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
@@ -363,7 +365,17 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         updates: Vec<(Row, Diff)>,
     ) {
         self.introspection_tx
-            .send((type_, updates))
+            .send((type_, WriteCommand::Append { updates }))
+            .expect("global controller never drops");
+    }
+
+    fn deliver_introspection_deletions(
+        &mut self,
+        type_: IntrospectionType,
+        filter: DeletionFilter,
+    ) {
+        self.introspection_tx
+            .send((type_, WriteCommand::Delete { filter }))
             .expect("global controller never drops");
     }
 
@@ -1078,11 +1090,12 @@ where
             }
         };
 
+        let replica_id_str = replica_id.to_string();
         let updates = updates
             .into_iter()
             .map(|(_, row, diff)| {
-                let replica_id = replica_id.to_string();
-                let datums = std::iter::once(Datum::String(&replica_id)).chain(row.to_datum_iter());
+                let datums =
+                    std::iter::once(Datum::String(&replica_id_str)).chain(row.to_datum_iter());
                 let row = Row::pack(datums);
                 (row, diff)
             })
@@ -1102,7 +1115,13 @@ where
         self.drop_collections(vec![subscribe_id])
             .expect("collection exists");
 
-        // TODO: send retractions
+        let replica_id_str = replica_id.to_string();
+        let filter = Box::new(move |row: &Row| {
+            let replica_id = row.unpack_first();
+            replica_id == Datum::String(&replica_id_str)
+        });
+        self.compute
+            .deliver_introspection_deletions(introspection_type, filter);
 
         tracing::info!(
             %subscribe_id, %replica_id, ?introspection_type,
@@ -2562,7 +2581,9 @@ impl HydrationState {
     }
 
     fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
-        let result = self.introspection_tx.send((introspection_type, updates));
+        let result = self
+            .introspection_tx
+            .send((introspection_type, WriteCommand::Append { updates }));
 
         if result.is_err() {
             // The global controller holds on to the `introspection_rx`. So when we get here that

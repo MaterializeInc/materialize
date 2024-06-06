@@ -49,7 +49,7 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
-use mz_storage_client::controller::{IntrospectionType, StorageController};
+use mz_storage_client::controller::{IntrospectionType, StorageController, WriteCommand};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
@@ -72,13 +72,13 @@ use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
 mod instance;
+mod introspection;
 mod replica;
 mod sequential_hydration;
-mod introspection;
 
 pub mod error;
 
-type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
+type IntrospectionUpdates = (IntrospectionType, WriteCommand);
 
 /// A composite trait for types that serve as timestamps in the Compute Controller.
 /// `Into<Datum<'a>>` is needed for writing timestamps to introspection collections.
@@ -692,17 +692,32 @@ where
         // pressure on persist we spend some effort consolidating first.
         let mut updates_by_type = BTreeMap::new();
 
-        for (type_, updates) in self.compute.introspection_rx.try_iter() {
-            updates_by_type
-                .entry(type_)
-                .or_insert_with(Vec::new)
-                .extend(updates);
-        }
-        for updates in updates_by_type.values_mut() {
-            consolidate(updates);
+        for (type_, cmd) in self.compute.introspection_rx.try_iter() {
+            match cmd {
+                WriteCommand::Append { updates } => {
+                    updates_by_type
+                        .entry(type_)
+                        .or_insert_with(Vec::new)
+                        .extend(updates);
+                }
+                WriteCommand::Delete { filter } => {
+                    if let Some(mut updates) = updates_by_type.remove(&type_) {
+                        consolidate(&mut updates);
+                        if !updates.is_empty() {
+                            self.storage
+                                .record_introspection_updates(type_, updates)
+                                .await;
+                        }
+                    }
+                    self.storage
+                        .record_introspection_deletions(type_, filter)
+                        .await;
+                }
+            }
         }
 
-        for (type_, updates) in updates_by_type {
+        for (type_, mut updates) in updates_by_type {
+            consolidate(&mut updates);
             if !updates.is_empty() {
                 self.storage
                     .record_introspection_updates(type_, updates)
@@ -958,7 +973,9 @@ struct CollectionIntrospection<T> {
 
 impl<T> CollectionIntrospection<T> {
     fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
-        let result = self.introspection_tx.send((introspection_type, updates));
+        let result = self
+            .introspection_tx
+            .send((introspection_type, WriteCommand::Append { updates }));
 
         if result.is_err() {
             // The global controller holds on to the `introspection_rx`. So when we get here that
