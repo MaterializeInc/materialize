@@ -31,12 +31,6 @@ def get_ancestor_overrides_for_performance_regressions(
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
-    if scenario_class_name == "ParallelIngestion":
-        # PR#27058 (storage: wire up new reclock implementation) increased memory usage
-        min_ancestor_mz_version_per_commit[
-            "10abb1cca257ffc3d605c99ed961e037bbf3fa51"
-        ] = MzVersion.parse_mz("v0.103.0")
-
     if "OptbenchTPCH" in scenario_class_name:
         # PR#26652 (explain: fix tracing fast path regression) significantly increased wallclock for OptbenchTPCH
         min_ancestor_mz_version_per_commit[
