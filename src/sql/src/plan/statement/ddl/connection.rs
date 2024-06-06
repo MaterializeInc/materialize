@@ -385,7 +385,6 @@ impl ConnectionOptionExtracted {
                         sql_bail!("SSH connections do not support supplying USER value as SECRET")
                     }
                 },
-                public_keys: None,
             }),
             CreateConnectionType::MySql => {
                 scx.require_feature_flag(&crate::session::vars::ENABLE_MYSQL_SOURCE)?;

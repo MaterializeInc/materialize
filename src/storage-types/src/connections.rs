@@ -1888,34 +1888,18 @@ impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
     }
 }
 
-/// A connection to a SSH tunnel.
+/// A connection to an SSH tunnel.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshConnection {
     pub host: String,
     pub port: u16,
     pub user: String,
-    pub public_keys: Option<(String, String)>,
 }
-
-use proto_ssh_connection::ProtoPublicKeys;
 
 use self::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-
-impl RustType<ProtoPublicKeys> for (String, String) {
-    fn into_proto(&self) -> ProtoPublicKeys {
-        ProtoPublicKeys {
-            primary_public_key: self.0.into_proto(),
-            secondary_public_key: self.1.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoPublicKeys) -> Result<Self, TryFromProtoError> {
-        Ok((proto.primary_public_key, proto.secondary_public_key))
-    }
-}
 
 impl RustType<ProtoSshConnection> for SshConnection {
     fn into_proto(&self) -> ProtoSshConnection {
@@ -1923,7 +1907,6 @@ impl RustType<ProtoSshConnection> for SshConnection {
             host: self.host.into_proto(),
             port: self.port.into_proto(),
             user: self.user.into_proto(),
-            public_keys: self.public_keys.into_proto(),
         }
     }
 
@@ -1932,7 +1915,6 @@ impl RustType<ProtoSshConnection> for SshConnection {
             host: proto.host,
             port: proto.port.into_rust()?,
             user: proto.user,
-            public_keys: proto.public_keys.into_rust()?,
         })
     }
 }

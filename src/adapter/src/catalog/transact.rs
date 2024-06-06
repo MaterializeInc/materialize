@@ -185,10 +185,19 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
-    UpdateRotatedKeys {
-        id: GlobalId,
-        previous_public_key_pair: (String, String),
-        new_public_key_pair: (String, String),
+    /// Performs updates to builtin table, `mz_ssh_tunnel_connections`. The
+    /// `mz_ssh_tunnel_connections` table is weird. Its contents are not fully derived from catalog
+    /// state, they're derived from the secrets controller. However, it still must be kept in-sync
+    /// with the catalog state. Storing the contents of the table in the durable catalog would
+    /// simplify the situation, but then we'd have to somehow encode public keys the CREATE SQL
+    /// of connections, which is annoying. In order to successfully balance all of these
+    /// constraints, we handle all updates to the table separately.
+    ///
+    /// TODO(jkosh44) In a multi-writer or high availability catalog world, this will not work. If
+    /// a process crashes after updating the durable catalog but before updating the builtin table,
+    /// then another listening catalog will never know to update the builtin table.
+    SshTunnelConnectionsUpdates {
+        builtin_table_update: BuiltinTableUpdate,
     },
     /// Performs a dry run of the commit, but errors with
     /// [`AdapterError::TransactionDryRun`].
@@ -2179,43 +2188,10 @@ impl Catalog {
                     tx.clear_system_configs();
                     tx.set_txn_wal_tables(state.system_configuration.txn_wal_tables())?;
                 }
-                Op::UpdateRotatedKeys {
-                    id,
-                    previous_public_key_pair,
-                    new_public_key_pair,
+                Op::SshTunnelConnectionsUpdates {
+                    builtin_table_update,
                 } => {
-                    let entry = state.get_entry(&id);
-                    // Retract old keys
-                    builtin_table_updates.extend(state.pack_ssh_tunnel_connection_update(
-                        id,
-                        &previous_public_key_pair,
-                        -1,
-                    ));
-                    // Insert the new rotated keys
-                    builtin_table_updates.extend(state.pack_ssh_tunnel_connection_update(
-                        id,
-                        &new_public_key_pair,
-                        1,
-                    ));
-
-                    let mut connection = entry.connection()?.clone();
-                    if let mz_storage_types::connections::Connection::Ssh(ref mut ssh) =
-                        connection.connection
-                    {
-                        ssh.public_keys = Some(new_public_key_pair)
-                    }
-                    let new_item = CatalogItem::Connection(connection);
-
-                    let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
-                    info!(
-                        "update {} {} ({})",
-                        old_entry.item_type(),
-                        state.resolve_full_name(old_entry.name(), old_entry.conn_id()),
-                        id
-                    );
-                    let mut new_entry = old_entry;
-                    new_entry.item = new_item;
-                    state.entry_by_id.insert(id, new_entry);
+                    builtin_table_updates.push(builtin_table_update);
                 }
             };
             tx.commit_op();

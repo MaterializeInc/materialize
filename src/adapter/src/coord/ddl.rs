@@ -1327,8 +1327,8 @@ impl Coordinator {
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
-                | Op::UpdateRotatedKeys { .. }
                 | Op::Comment { .. }
+                | Op::SshTunnelConnectionsUpdates { .. }
                 | Op::TransactionDryRun => {}
             }
         }

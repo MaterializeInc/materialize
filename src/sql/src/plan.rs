@@ -588,6 +588,7 @@ pub struct CreateConnectionPlan {
     pub if_not_exists: bool,
     pub connection: Connection,
     pub validate: bool,
+    pub public_key_set: Option<(String, String)>,
 }
 
 #[derive(Debug)]
