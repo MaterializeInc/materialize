@@ -56,14 +56,8 @@ from materialize.output_consistency.input_data.operations.jsonb_operations_provi
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     TAG_REGEX,
 )
-from materialize.output_consistency.input_data.return_specs.array_return_spec import (
-    ArrayReturnTypeSpec,
-)
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
-)
-from materialize.output_consistency.input_data.return_specs.string_return_spec import (
-    StringReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.types.number_types_provider import (
     DOUBLE_TYPE_IDENTIFIER,
@@ -208,13 +202,13 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             return YesIgnore("#21997: lpad with negative")
 
         if db_function.function_name_in_lower_case in {"min", "max"}:
-            return_type_spec = expression.args[0].resolve_return_type_spec()
-            if isinstance(return_type_spec, StringReturnTypeSpec):
+            return_type_category = expression.args[0].resolve_return_type_category()
+            if return_type_category == DataTypeCategory.STRING:
                 return YesIgnore("#22002: ordering on text different (min/max)")
 
         if db_function.function_name_in_lower_case in {"min", "max"}:
-            return_type_spec = expression.args[0].resolve_return_type_spec()
-            if isinstance(return_type_spec, ArrayReturnTypeSpec):
+            return_type_category = expression.args[0].resolve_return_type_category()
+            if return_type_category == DataTypeCategory.ARRAY:
                 return YesIgnore("#27457: ordering on array different (min/max)")
 
         if db_function.function_name_in_lower_case == "replace":
