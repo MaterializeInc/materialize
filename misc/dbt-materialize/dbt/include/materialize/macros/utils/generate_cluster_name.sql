@@ -14,17 +14,9 @@
 -- limitations under the License.
 
 {% macro generate_deploy_cluster_name(custom_cluster_name) -%}
-    {{ return(adapter.dispatch('generate_deploy_cluster_name', 'materialize')(custom_cluster_name)) }}
-{%- endmacro %}
-
-{% macro materialize__generate_deploy_cluster_name(custom_cluster_name) -%}
     {{ custom_cluster_name }}_dbt_deploy
 {%- endmacro %}
 
 {% macro generate_cluster_name(custom_cluster_name) -%}
-    {{ return(adapter.dispatch('generate_cluster_name', 'materialize')(custom_cluster_name)) }}
-{%- endmacro %}
-
-{% macro materialize__generate_cluster_name(custom_cluster_name) -%}
     {{ custom_cluster_name }}
 {%- endmacro %}
