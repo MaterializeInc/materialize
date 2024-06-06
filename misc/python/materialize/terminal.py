@@ -26,6 +26,13 @@ def with_formatting(text: str, formatting: str) -> str:
     return with_formattings(text, [formatting])
 
 
+def with_conditional_formatting(text: str, formatting: str, condition: bool) -> str:
+    if condition:
+        return with_formatting(text, formatting)
+
+    return text
+
+
 def with_formattings(text: str, formattings: list[str]) -> str:
     formatting = "".join(formattings)
     return f"{formatting}{text}{_END_FORMATTING}"
