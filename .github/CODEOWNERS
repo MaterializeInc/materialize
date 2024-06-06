@@ -16,8 +16,8 @@
 /ci                                 @MaterializeInc/testing
 /ci/test/lint-deps.toml             @danhhz @benesch
 /doc/user                           @morsapaes
-/doc/developer/reference/compute    @MaterializeInc/compute
-/doc/developer/reference/storage    @MaterializeInc/storage
+/doc/developer/reference/compute    @MaterializeInc/cluster
+/doc/developer/reference/storage    @MaterializeInc/cluster
 /misc/bazel                         @parkmycar @maddyblue
 /misc/dbt-materialize               @morsapaes @MaterializeInc/integrations
 /misc/python/materialize/benches    @MaterializeInc/testing
@@ -38,45 +38,45 @@
 /misc/python/materialize/zippy      @MaterializeInc/testing
 /src/adapter                        @MaterializeInc/adapter
 /src/adapter-types                  @MaterializeInc/adapter
-/src/adapter/src/explain            @MaterializeInc/compute
-/src/adapter/src/optimize           @MaterializeInc/compute
+/src/adapter/src/explain            @MaterializeInc/cluster
+/src/adapter/src/optimize           @MaterializeInc/cluster
 # to track changes to feature flags
 /src/adapter/src/coord/ddl.rs       @MaterializeInc/testing
 # to track changes to feature flags
 /src/adapter/src/flags.rs           @MaterializeInc/testing
 /src/alloc                          @benesch
 /src/audit-log                      @MaterializeInc/adapter
-/src/avro                           @MaterializeInc/storage
-/src/avro-derive                    @MaterializeInc/storage
+/src/avro                           @MaterializeInc/cluster
+/src/avro-derive                    @MaterializeInc/cluster
 /src/build-id                       @teskje
 /src/build-info                     @benesch
 /src/catalog                        @MaterializeInc/adapter
 /src/catalog-debug                  @MaterializeInc/adapter
 /src/ccsr                           @benesch
 /src/cloud-resources                @MaterializeInc/cloud
-/src/cluster                        @MaterializeInc/compute @MaterializeInc/storage
-/src/cluster-client                 @MaterializeInc/compute @MaterializeInc/storage
-/src/clusterd                       @MaterializeInc/compute @MaterializeInc/storage
-/src/compute                        @MaterializeInc/compute
-/src/compute-client                 @MaterializeInc/compute
-/src/compute-types                  @MaterializeInc/compute
-/src/controller                     @MaterializeInc/compute @MaterializeInc/storage
-/src/controller-types               @MaterializeInc/compute @MaterializeInc/storage
+/src/cluster                        @MaterializeInc/cluster
+/src/cluster-client                 @MaterializeInc/cluster
+/src/clusterd                       @MaterializeInc/cluster
+/src/compute                        @MaterializeInc/cluster
+/src/compute-client                 @MaterializeInc/cluster
+/src/compute-types                  @MaterializeInc/cluster
+/src/controller                     @MaterializeInc/cluster
+/src/controller-types               @MaterializeInc/cluster
 /src/dyncfg                         @danhhz
 /src/dyncfgs                        @danhhz
 /src/environmentd                   @MaterializeInc/adapter
-/src/expr                           @MaterializeInc/compute
-/src/expr-parser                    @MaterializeInc/compute
-/src/expr-test-util                 @MaterializeInc/compute
+/src/expr                           @MaterializeInc/cluster
+/src/expr-parser                    @MaterializeInc/cluster
+/src/expr-test-util                 @MaterializeInc/cluster
 /src/fivetran-destination           @MaterializeInc/adapter
 /src/frontegg-auth                  @MaterializeInc/adapter
 /src/http-util                      @MaterializeInc/adapter
-/src/interchange                    @MaterializeInc/storage
-/src/kafka-util                     @MaterializeInc/storage
-/src/lowertest                      @MaterializeInc/compute
-/src/lowertest-derive               @MaterializeInc/compute
+/src/interchange                    @MaterializeInc/cluster
+/src/kafka-util                     @MaterializeInc/cluster
+/src/lowertest                      @MaterializeInc/cluster
+/src/lowertest-derive               @MaterializeInc/cluster
 /src/metabase                       @benesch
-/src/mysql-util                     @MaterializeInc/storage
+/src/mysql-util                     @MaterializeInc/cluster
 /src/mz                             @MaterializeInc/integrations
 /src/npm                            @benesch
 /src/orchestrator                   @benesch
@@ -93,43 +93,43 @@
 /src/pgtest                         @MaterializeInc/adapter
 /src/pgwire                         @MaterializeInc/adapter
 /src/pid-file                       @benesch
-/src/postgres-util                  @MaterializeInc/storage
+/src/postgres-util                  @MaterializeInc/cluster
 /src/prof                           @teskje
 /src/proto                          @aalexandrov
-/src/repr                           @MaterializeInc/storage @MaterializeInc/compute
-# The `explain` and `optimize` modules are owned solely by the compute team.
-/src/repr/src/explain               @MaterializeInc/compute
-/src/repr/src/optimize              @MaterializeInc/compute
+/src/repr                           @MaterializeInc/cluster
+# The `explain` and `optimize` modules are owned solely by the cluster team.
+/src/repr/src/explain               @MaterializeInc/cluster
+/src/repr/src/optimize              @MaterializeInc/cluster
 # The row representation is owned by the persist team.
 /src/repr/src/row                   @MaterializeInc/persist
-/src/repr-test-util                 @MaterializeInc/compute
-/src/rocksdb                        @MaterializeInc/storage
-/src/s3-datagen                     @MaterializeInc/storage
+/src/repr-test-util                 @MaterializeInc/cluster
+/src/rocksdb                        @MaterializeInc/cluster
+/src/s3-datagen                     @MaterializeInc/cluster
 /src/secrets                        @MaterializeInc/cloud
 /src/segment                        @benesch
-/src/service                        @MaterializeInc/storage @MaterializeInc/compute
+/src/service                        @MaterializeInc/cluster
 /src/sql                            @MaterializeInc/adapter
 /src/sql/src/session/vars.rs
-# HirRelationExpr is the boundary between the `sql` crate and the compute
+# HirRelationExpr is the boundary between the `sql` crate and the cluster
 # layer, and is jointly owned by the two teams.
-/src/sql/src/plan/explain           @MaterializeInc/compute
-/src/sql/src/plan/expr.rs           @MaterializeInc/adapter @MaterializeInc/compute
-# The lowering of HirRelationExpr to MirRelationExpr is part of the compute
+/src/sql/src/plan/explain           @MaterializeInc/cluster
+/src/sql/src/plan/expr.rs           @MaterializeInc/adapter @MaterializeInc/cluster
+# The lowering of HirRelationExpr to MirRelationExpr is part of the cluster
 # layer, despite being located in the `sql` crate.
-/src/sql/src/plan/lowering          @MaterializeInc/compute
+/src/sql/src/plan/lowering          @MaterializeInc/cluster
 /src/sql-lexer                      @MaterializeInc/adapter
 /src/sql-parser                     @MaterializeInc/adapter
 /src/sqllogictest                   @MaterializeInc/adapter
-/src/ssh-util                       @MaterializeInc/storage
-/src/storage                        @MaterializeInc/storage
-/src/storage-client                 @MaterializeInc/storage
-/src/storage-controller             @MaterializeInc/storage
-/src/storage-operators              @MaterializeInc/storage
-/src/storage-types                  @MaterializeInc/storage
+/src/ssh-util                       @MaterializeInc/cluster
+/src/storage                        @MaterializeInc/cluster
+/src/storage-client                 @MaterializeInc/cluster
+/src/storage-controller             @MaterializeInc/cluster
+/src/storage-operators              @MaterializeInc/cluster
+/src/storage-types                  @MaterializeInc/cluster
 /src/test-macro                     @MaterializeInc/testing
 /src/testdrive                      @MaterializeInc/testing
-/src/timely-util                    @MaterializeInc/compute
-/src/transform                      @MaterializeInc/compute
+/src/timely-util                    @MaterializeInc/cluster
+/src/transform                      @MaterializeInc/cluster
 /src/txn-wal                        @aljoscha @danhhz @jkosh44
 /src/walkabout                      @benesch
 /src/workspace-hack                 @benesch
