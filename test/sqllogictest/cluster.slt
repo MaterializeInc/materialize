@@ -295,7 +295,7 @@ statement ok
 SET cluster = 'quickstart'
 
 query T
-SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
+SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%' AND name NOT LIKE 'pg_%';
 ----
 foo_v_idx
 v_primary_idx
@@ -358,8 +358,9 @@ statement ok
 DROP CLUSTER baz CASCADE
 
 query T
-SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
+SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%' AND name NOT LIKE 'pg_%';
 ----
+
 
 # Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled
 statement ok
@@ -416,7 +417,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-211
+217
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -424,7 +425,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-183
+189
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER quickstart OWNER TO materialize

@@ -899,3 +899,9 @@ mz_storage_usage_by_shard
 mz_subscriptions
 mz_type_pg_metadata
 mz_webhook_sources
+pg_attrdef_all_databases
+pg_attribute_all_databases
+pg_class_all_databases
+pg_description_all_databases
+pg_namespace_all_databases
+pg_type_all_databases

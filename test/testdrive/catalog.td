@@ -698,6 +698,12 @@ mz_source_statuses
 mz_sql_text_redacted
 mz_aws_privatelink_connection_statuses
 mz_statement_execution_history_redacted
+pg_class_all_databases
+pg_type_all_databases
+pg_namespace_all_databases
+pg_description_all_databases
+pg_attrdef_all_databases
+pg_attribute_all_databases
 
 > SET database = materialize
 
@@ -716,7 +722,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-183
+189
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
