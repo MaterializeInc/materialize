@@ -1163,7 +1163,6 @@ dependencies = [
  "clap",
  "convert_case",
  "guppy",
- "insta",
  "once_cell",
  "proc-macro2",
  "protobuf-parse",
