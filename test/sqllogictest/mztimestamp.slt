@@ -89,11 +89,11 @@ SELECT '1 hour'::interval::mz_timestamp::timestamp, '1 hour'::interval::mz_times
 262142-12-31 07:00:00+00
 
 # Roughly `HIGH_DATE` + 1 day.
-query error db error: ERROR: timestamp out of range
+query error timestamp out of range
 SELECT 8210266898400000::mz_timestamp::timestamp
 
-query error db error: ERROR: timestamp out of range
+query error timestamp out of range
 SELECT 18446744073709551615::mz_timestamp::timestamp
 
-query error db error: ERROR: timestamp out of range
+query error timestamp out of range
 SELECT 8210266898400000::mz_timestamp::timestamptz
