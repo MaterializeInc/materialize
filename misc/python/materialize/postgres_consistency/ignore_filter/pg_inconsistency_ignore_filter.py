@@ -342,10 +342,17 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 )
 
         if db_operation.is_tagged(TAG_EQUALITY_ORDERING):
-            return_type_category = expression.args[0].resolve_return_type_category()
-            if return_type_category == DataTypeCategory.STRING:
+            return_type_category_1 = expression.args[0].resolve_return_type_category()
+            return_type_category_2 = expression.args[1].resolve_return_type_category()
+            if DataTypeCategory.STRING in {
+                return_type_category_1,
+                return_type_category_2,
+            }:
                 return YesIgnore("#22002: ordering on text different (<, <=, ...)")
-            if return_type_category == DataTypeCategory.JSONB:
+            if DataTypeCategory.JSONB in {
+                return_type_category_1,
+                return_type_category_2,
+            }:
                 return YesIgnore("#26309: ordering on JSON different")
 
         if db_operation.pattern == "CAST ($ AS $)" and expression.matches(
