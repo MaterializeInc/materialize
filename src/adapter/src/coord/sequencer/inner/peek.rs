@@ -1025,7 +1025,7 @@ impl Coordinator {
             .map(|t| ResultSpec::value(Datum::MzTimestamp(*t)))
             .unwrap_or_else(ResultSpec::value_all);
 
-        self.render_explain_pushdown(ctx, as_of, mz_now, stage.imports)
+        self.render_explain_pushdown(ctx, as_of, mz_now, None, stage.imports)
             .await
     }
 

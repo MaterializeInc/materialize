@@ -890,7 +890,7 @@ impl Coordinator {
             .collect_dataflow_storage_constraints()
             .remove(&gid)
             .expect("all dataflow storage constraints were collected");
-        let (as_of, _read_holds) = self.bootstrap_dataflow_as_of(
+        let (as_of, read_holds) = self.bootstrap_dataflow_as_of(
             &plan,
             mview.cluster_id,
             storage_constraints,
@@ -915,6 +915,7 @@ impl Coordinator {
             ctx,
             as_of,
             mz_now,
+            Some(read_holds),
             plan.source_imports
                 .into_iter()
                 .filter_map(|(id, (source, _))| source.arguments.operators.map(|mfp| (id, mfp))),

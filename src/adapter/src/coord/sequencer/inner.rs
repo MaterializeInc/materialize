@@ -118,7 +118,8 @@ use crate::session::{
 };
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{
-    guard_write_critical_section, PeekResponseUnary, TimelineContext, TimestampExplanation,
+    guard_write_critical_section, PeekResponseUnary, ReadHolds, TimelineContext,
+    TimestampExplanation,
 };
 
 mod create_index;
@@ -2218,6 +2219,7 @@ impl Coordinator {
         ctx: ExecuteContext,
         as_of: Antichain<Timestamp>,
         mz_now: ResultSpec<'static>,
+        read_holds: Option<ReadHolds<Timestamp>>,
         imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)>,
     ) {
         let explain_timeout = *ctx.session().vars().statement_timeout();
@@ -2291,6 +2293,9 @@ impl Coordinator {
         }
 
         task::spawn(|| "explain filter pushdown", async move {
+            // Transfer the necessary read holds over to the background task
+            let _read_holds = read_holds;
+
             use futures::TryStreamExt;
             let res = match tokio::time::timeout(explain_timeout, futures.try_collect::<Vec<_>>())
                 .await
