@@ -9,7 +9,6 @@
 
 //! Types related to mysql sources
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::num::NonZeroU64;
@@ -329,27 +328,15 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
 impl AlterCompatible for MySqlSourceDetails {
     fn alter_compatible(
         &self,
-        id: mz_repr::GlobalId,
-        other: &Self,
+        _id: mz_repr::GlobalId,
+        _other: &Self,
     ) -> Result<(), crate::controller::AlterError> {
-        // validate that the initial_gtid_set value for any existing subsource remains the same
-        let mut existing = BTreeMap::new();
-        for (i, table) in self.tables.iter().enumerate() {
-            existing.insert(&table.name, self.table_initial_gtid_set(i));
-        }
-
-        for (i, table) in other.tables.iter().enumerate() {
-            if existing.contains_key(&table.name) {
-                if existing[&table.name] != other.table_initial_gtid_set(i) {
-                    tracing::warn!(
-                        "MySqlSourceDetails incompatible at initial_gtid_set:\nself:\n{:#?}\n\nother\n{:#?}",
-                        self,
-                        other
-                    );
-                    return Err(crate::controller::AlterError { id });
-                }
-            }
-        }
+        // TODO(roshan): We should verify here that the initial_gtid_set value for a given
+        // subsource remains the same. However, since a DROP SOURCE operation can drop a specific
+        // subsource without updating these `details`, and then an `ALTER SOURCE .. ADD SUBSOURCE`
+        // can re-add the same subsource with a new initial_gtid_set, there is no way for us to
+        // know that was a valid operation. We could consider updating `details` on DROP SOURCE
+        // or introducing a version or timestamp on each subsource to track changes.
         Ok(())
     }
 }

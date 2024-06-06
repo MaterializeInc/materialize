@@ -217,6 +217,8 @@ mz_source_progress    progress
 #
 # Add subsources
 #
+> ALTER SOURCE mz_source ADD SUBSOURCE public.table_g;
+
 ! ALTER SOURCE mz_source ADD SUBSOURCE public.table_g;
 contains:another subsource already refers to public.table_g
 
