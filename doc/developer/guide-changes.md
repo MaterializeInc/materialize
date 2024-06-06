@@ -873,6 +873,21 @@ rather than its internal details. Always use your best judgment.
 Our testing philosophy is covered in much greater detail in
 [Developer guide: testing](guide-testing.md).
 
+### Force-Pushing to your PR Branch
+
+There is a culture at Materialize of other developers fixing small issues in
+someone's pull request by pushing to the branch directly. QA also uses this to
+add tests for newly introduced or changed features. It is easy to accidentally
+overwrite such changes on your PR when you force-push to your branch using
+`git push --force`. To prevent this you should force-push only with a lease,
+which will prevent you from accidentally overwriting new changes your teammates
+may have added to your PR:
+
+```bash
+$ git config --global alias.pushfwl "push --force-with-lease"
+$ git pushfwl
+```
+
 ## Deviations from Google
 
 As mentioned at the start of this guide, much of the above advice derives from
