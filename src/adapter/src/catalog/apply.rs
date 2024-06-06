@@ -19,14 +19,12 @@ use mz_catalog::builtin::{Builtin, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP};
 use mz_catalog::durable::Item;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, ClusterReplica, ClusterReplicaProcessStatus, DataSourceDesc, Database,
-    Func, Log, Role, Schema, Source, StateUpdate, StateUpdateKind, Table, Type,
+    CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Log, Role, Schema,
+    Source, StateUpdate, StateUpdateKind, Table, Type,
 };
 use mz_compute_client::controller::ComputeReplicaConfig;
-use mz_controller::clusters::{ClusterStatus, ReplicaConfig, ReplicaLogging};
-use mz_ore::cast::CastFrom;
+use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_ore::instrument;
-use mz_ore::now::to_datetime;
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::{Diff, GlobalId};
@@ -560,15 +558,6 @@ impl CatalogState {
                     name: cluster_replica.name.clone(),
                     cluster_id: cluster_replica.cluster_id,
                     replica_id: cluster_replica.replica_id,
-                    process_status: (0..config.location.num_processes())
-                        .map(|process_id| {
-                            let status = ClusterReplicaProcessStatus {
-                                status: ClusterStatus::NotReady(None),
-                                time: to_datetime((self.config.now)()),
-                            };
-                            (u64::cast_from(process_id), status)
-                        })
-                        .collect(),
                     config,
                     owner_id: cluster_replica.owner_id,
                 }
@@ -950,27 +939,11 @@ impl CatalogState {
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
                 self.pack_item_update(introspection_source_index.index_id, diff)
             }
-            StateUpdateKind::ClusterReplica(cluster_replica) => {
-                let mut builtin_table_updates = Vec::new();
-                builtin_table_updates.extend(self.pack_cluster_replica_update(
-                    cluster_replica.cluster_id,
-                    &cluster_replica.name,
-                    diff,
-                ));
-                let config = &self
-                    .get_cluster_replica(cluster_replica.cluster_id, cluster_replica.replica_id)
-                    .config;
-                for process_id in 0..config.location.num_processes() {
-                    let update = self.pack_cluster_replica_status_update(
-                        cluster_replica.cluster_id,
-                        cluster_replica.replica_id,
-                        u64::cast_from(process_id),
-                        diff,
-                    );
-                    builtin_table_updates.push(update);
-                }
-                builtin_table_updates
-            }
+            StateUpdateKind::ClusterReplica(cluster_replica) => self.pack_cluster_replica_update(
+                cluster_replica.cluster_id,
+                &cluster_replica.name,
+                diff,
+            ),
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
                 self.pack_item_update(system_object_mapping.unique_identifier.id, diff)
             }
@@ -995,6 +968,8 @@ impl CatalogState {
     }
 }
 
+/// Inserts `key` and `value` into `map` if `diff` is 1, otherwise remove them from `map` if `diff`
+/// is -1.
 fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: impl FnOnce() -> V, diff: Diff)
 where
     K: Ord + Debug,

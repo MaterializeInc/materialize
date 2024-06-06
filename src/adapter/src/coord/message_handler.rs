@@ -17,6 +17,7 @@ use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use maplit::btreemap;
 use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
@@ -39,9 +40,9 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReaso
 use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::{
-    AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, Message,
-    PeekStage, PeekStageTimestampReadHold, PlanValidity, PurifiedStatementReady,
-    RealTimeRecencyContext, WatchSetResponse,
+    AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
+    CreateConnectionValidationReady, Message, PeekStage, PeekStageTimestampReadHold, PlanValidity,
+    PurifiedStatementReady, RealTimeRecencyContext, WatchSetResponse,
 };
 use crate::session::Session;
 use crate::telemetry::{EventDetails, SegmentClientExt};
@@ -696,34 +697,69 @@ impl Coordinator {
 
         // It is possible that we receive a status update for a replica that has
         // already been dropped from the catalog. Just ignore these events.
-        let Some(cluster) = self.catalog().try_get_cluster(event.cluster_id) else {
-            return;
-        };
-        let Some(replica) = cluster.replica(event.replica_id) else {
+        let Some(replica_statues) = self
+            .cluster_replica_statuses
+            .try_get_cluster_replica_statuses(event.cluster_id, event.replica_id)
+        else {
             return;
         };
 
-        if event.status != replica.process_status[&event.process_id].status {
-            let old_status = replica.status();
+        if event.status != replica_statues[&event.process_id].status {
+            let old_replica_status =
+                ClusterReplicaStatuses::cluster_replica_status(replica_statues);
+            let old_process_status = replica_statues
+                .get(&event.process_id)
+                .expect("Process exists");
+            let builtin_table_retraction =
+                self.catalog().state().pack_cluster_replica_status_update(
+                    event.replica_id,
+                    event.process_id,
+                    old_process_status,
+                    -1,
+                );
+
+            let new_process_status = ClusterReplicaProcessStatus {
+                status: event.status,
+                time: event.time,
+            };
+            let builtin_table_addition = self.catalog().state().pack_cluster_replica_status_update(
+                event.replica_id,
+                event.process_id,
+                &new_process_status,
+                1,
+            );
+            self.cluster_replica_statuses.ensure_cluster_status(
+                event.cluster_id,
+                event.replica_id,
+                event.process_id,
+                new_process_status,
+            );
 
             self.catalog_transact(
                 None::<&Session>,
-                vec![catalog::Op::UpdateClusterReplicaStatus {
-                    event: event.clone(),
-                }],
+                vec![
+                    catalog::Op::WeirdBuiltinTableUpdates {
+                        builtin_table_update: builtin_table_retraction,
+                    },
+                    catalog::Op::WeirdBuiltinTableUpdates {
+                        builtin_table_update: builtin_table_addition,
+                    },
+                ],
             )
             .await
             .unwrap_or_terminate("updating cluster status cannot fail");
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");
-            let new_status = replica.status();
+            let new_replica_status = self
+                .cluster_replica_statuses
+                .get_cluster_replica_status(event.cluster_id, event.replica_id);
 
-            if old_status != new_status {
+            if old_replica_status != new_replica_status {
                 self.broadcast_notice(AdapterNotice::ClusterReplicaStatusChanged {
                     cluster: cluster.name.clone(),
                     replica: replica.name.clone(),
-                    status: new_status,
+                    status: new_replica_status,
                     time: event.time,
                 });
             }

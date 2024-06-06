@@ -30,6 +30,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::instrument;
+use mz_ore::now::to_datetime;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_ore::task;
@@ -199,6 +200,8 @@ impl Coordinator {
         let mut cluster_replicas_to_drop = vec![];
         let mut compute_sinks_to_drop = BTreeMap::new();
         let mut peeks_to_drop = vec![];
+        let mut clusters_to_create = vec![];
+        let mut cluster_replicas_to_create = vec![];
         let mut update_tracing_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
@@ -377,6 +380,21 @@ impl Coordinator {
                     });
                     webhook_sources_to_restart.extend(webhook_sources);
                 }
+                catalog::Op::CreateCluster { id, .. } => {
+                    clusters_to_create.push(*id);
+                }
+                catalog::Op::CreateClusterReplica {
+                    cluster_id,
+                    id,
+                    config,
+                    ..
+                } => {
+                    cluster_replicas_to_create.push((
+                        *cluster_id,
+                        *id,
+                        config.location.num_processes(),
+                    ));
+                }
                 _ => (),
             }
         }
@@ -497,17 +515,82 @@ impl Coordinator {
             catalog,
             active_conns,
             controller,
+            cluster_replica_statuses,
             ..
         } = self;
         let catalog = Arc::make_mut(catalog);
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
 
         let TransactionResult {
-            builtin_table_updates,
+            mut builtin_table_updates,
             audit_events,
         } = catalog
             .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
             .await?;
+
+        // Update in-memory cluster replica statuses.
+        // TODO(jkosh44) All the builtin table updates should be handled as a builtin source
+        // updates elsewhere.
+        for (cluster_id, replica_id) in &cluster_replicas_to_drop {
+            let replica_statuses =
+                cluster_replica_statuses.remove_cluster_replica_statuses(cluster_id, replica_id);
+            for (process_id, status) in replica_statuses {
+                let builtin_table_update = catalog.state().pack_cluster_replica_status_update(
+                    *replica_id,
+                    process_id,
+                    &status,
+                    -1,
+                );
+                builtin_table_updates.push(builtin_table_update);
+            }
+        }
+        for cluster_id in &clusters_to_drop {
+            let cluster_statuses = cluster_replica_statuses.remove_cluster_statuses(cluster_id);
+            for (replica_id, replica_statuses) in cluster_statuses {
+                for (process_id, status) in replica_statuses {
+                    let builtin_table_update = catalog
+                        .state()
+                        .pack_cluster_replica_status_update(replica_id, process_id, &status, -1);
+                    builtin_table_updates.push(builtin_table_update);
+                }
+            }
+        }
+        for cluster_id in clusters_to_create {
+            cluster_replica_statuses.initialize_cluster_statuses(cluster_id);
+            for (replica_id, replica_statuses) in
+                cluster_replica_statuses.get_cluster_statuses(cluster_id)
+            {
+                for (process_id, status) in replica_statuses {
+                    let builtin_table_update = catalog.state().pack_cluster_replica_status_update(
+                        *replica_id,
+                        *process_id,
+                        status,
+                        1,
+                    );
+                    builtin_table_updates.push(builtin_table_update);
+                }
+            }
+        }
+        let now = to_datetime((catalog.config().now)());
+        for (cluster_id, replica_id, num_processes) in cluster_replicas_to_create {
+            cluster_replica_statuses.initialize_cluster_replica_statuses(
+                cluster_id,
+                replica_id,
+                num_processes,
+                now,
+            );
+            for (process_id, status) in
+                cluster_replica_statuses.get_cluster_replica_statuses(cluster_id, replica_id)
+            {
+                let builtin_table_update = catalog.state().pack_cluster_replica_status_update(
+                    replica_id,
+                    *process_id,
+                    status,
+                    1,
+                );
+                builtin_table_updates.push(builtin_table_update);
+            }
+        }
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
@@ -1322,13 +1405,12 @@ impl Coordinator {
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }
-                | Op::UpdateClusterReplicaStatus { .. }
                 | Op::UpdateStorageUsage { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }
-                | Op::SshTunnelConnectionsUpdates { .. }
+                | Op::WeirdBuiltinTableUpdates { .. }
                 | Op::TransactionDryRun => {}
             }
         }

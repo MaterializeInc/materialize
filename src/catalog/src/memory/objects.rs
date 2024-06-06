@@ -19,9 +19,7 @@ use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::logging::LogVariant;
-use mz_controller::clusters::{
-    ClusterRole, ClusterStatus, ProcessId, ReplicaConfig, ReplicaLogging,
-};
+use mz_controller::clusters::{ClusterRole, ClusterStatus, ReplicaConfig, ReplicaLogging};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -278,32 +276,7 @@ pub struct ClusterReplica {
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
     pub config: ReplicaConfig,
-    #[serde(skip)]
-    pub process_status: BTreeMap<ProcessId, ClusterReplicaProcessStatus>,
     pub owner_id: RoleId,
-}
-
-impl ClusterReplica {
-    /// Computes the status of the cluster replica as a whole.
-    pub fn status(&self) -> ClusterStatus {
-        self.process_status
-            .values()
-            .fold(ClusterStatus::Ready, |s, p| match (s, p.status) {
-                (ClusterStatus::Ready, ClusterStatus::Ready) => ClusterStatus::Ready,
-                (x, y) => {
-                    let reason_x = match x {
-                        ClusterStatus::NotReady(reason) => reason,
-                        ClusterStatus::Ready => None,
-                    };
-                    let reason_y = match y {
-                        ClusterStatus::NotReady(reason) => reason,
-                        ClusterStatus::Ready => None,
-                    };
-                    // Arbitrarily pick the first known not-ready reason.
-                    ClusterStatus::NotReady(reason_x.or(reason_y))
-                }
-            })
-    }
 }
 
 impl From<ClusterReplica> for durable::ClusterReplica {
