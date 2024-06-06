@@ -12,6 +12,7 @@ from pg8000 import Cursor
 
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
+from materialize.mz_version import MzVersion
 from materialize.test_analytics.connection.test_analytics_connection import (
     execute_updates,
 )
@@ -23,6 +24,7 @@ def insert_build(cursor: Cursor, verbose: bool = False) -> None:
     build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
     branch = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BRANCH)
     commit_hash = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_COMMIT)
+    mz_version = MzVersion.parse_cargo()
     build_url = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_URL)
 
     sql_statements = []
@@ -35,6 +37,7 @@ def insert_build(cursor: Cursor, verbose: bool = False) -> None:
            build_id,
            branch,
            commit_hash,
+           mz_version,
            date,
            build_url,
            remarks
@@ -45,6 +48,7 @@ def insert_build(cursor: Cursor, verbose: bool = False) -> None:
           '{build_id}',
           '{branch}',
           '{commit_hash}',
+          '{mz_version}',
           now(),
           '{build_url}',
           NULL
