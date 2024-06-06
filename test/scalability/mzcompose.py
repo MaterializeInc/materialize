@@ -61,9 +61,7 @@ from materialize.scalability.workloads.self_test_workloads import *  # noqa: F40
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )
-from materialize.test_analytics.connection.test_analytics_connection import (
-    create_cursor,
-)
+from materialize.test_analytics.connection import test_analytics_connection
 from materialize.test_analytics.data import build_data_storage
 from materialize.test_analytics.data.scalability_framework import (
     scalability_framework_result_storage,
@@ -574,7 +572,9 @@ def upload_results_to_test_analytics(
             endpoint_version_info
         ]
 
-        cursor = create_cursor(create_test_analytics_config(c))
+        cursor = test_analytics_connection.create_cursor(
+            create_test_analytics_config(c)
+        )
         build_data_storage.insert_build_step(cursor, was_successful=was_successful)
 
         result_entries = []

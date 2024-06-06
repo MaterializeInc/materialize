@@ -28,9 +28,7 @@ from materialize.mzcompose.test_result import (
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )
-from materialize.test_analytics.connection.test_analytics_connection import (
-    create_cursor,
-)
+from materialize.test_analytics.connection import test_analytics_connection
 from materialize.test_analytics.data import build_data_storage
 from materialize.test_analytics.data.feature_benchmark import (
     feature_benchmark_result_storage,
@@ -687,7 +685,9 @@ def upload_results_to_test_analytics(
         return
 
     try:
-        cursor = create_cursor(create_test_analytics_config(c))
+        cursor = test_analytics_connection.create_cursor(
+            create_test_analytics_config(c)
+        )
         build_data_storage.insert_build_step(cursor, was_successful=was_successful)
 
         result_entries = []
