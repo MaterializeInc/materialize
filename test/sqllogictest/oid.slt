@@ -1068,3 +1068,15 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16957  current_catalog
 16958  current_role
 16959  user
+16960  pg_class_all_databases
+16961  pg_class_all_databases_ind
+16962  pg_type_all_databases
+16963  pg_type_all_databases_ind
+16964  pg_namespace_all_databases
+16965  pg_namespace_all_databases_ind
+16966  pg_description_all_databases
+16967  pg_description_all_databases_ind
+16968  pg_attrdef_all_databases
+16969  pg_attrdef_all_databases_ind
+16970  pg_attribute_all_databases
+16971  pg_attribute_all_databases_ind

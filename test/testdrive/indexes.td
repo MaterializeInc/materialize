@@ -340,3 +340,9 @@ mz_source_statuses_ind                                      mz_source_statuses  
 mz_sources_ind                                              mz_sources                                   mz_catalog_server    {id}
 mz_recent_sql_text_ind                                      mz_recent_sql_text                           mz_catalog_server    {sql_hash}
 mz_webhook_sources_ind                                      mz_webhook_sources                           mz_catalog_server    {id}
+pg_attrdef_all_databases_ind                                pg_attrdef_all_databases                     mz_catalog_server    {oid,adrelid,adnum,adbin,adsrc}
+pg_attribute_all_databases_ind                              pg_attribute_all_databases                   mz_catalog_server    {attrelid,attname,atttypid,attlen,attnum,atttypmod,attnotnull,atthasdef,attidentity,attgenerated,attisdropped,attcollation,database_name,pg_type_database_name}
+pg_class_all_databases_ind                                  pg_class_all_databases                       mz_catalog_server    {relname}
+pg_description_all_databases_ind                            pg_description_all_databases                 mz_catalog_server    {objoid,classoid,objsubid,description,oid_database_name,class_database_name}
+pg_namespace_all_databases_ind                              pg_namespace_all_databases                   mz_catalog_server    {nspname}
+pg_type_all_databases_ind                                   pg_type_all_databases                        mz_catalog_server    {oid}

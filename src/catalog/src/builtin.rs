@@ -3649,30 +3649,64 @@ GROUP BY
     access: vec![PUBLIC_SELECT],
 });
 
+/// Peeled version of `PG_NAMESPACE`:
+/// - This doesn't check `mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()`,
+///   in order to make this view indexable.
+/// - This has the database name as an extra column, so that downstream views can check it against
+///  `current_database()`.
+pub static PG_NAMESPACE_ALL_DATABASES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "pg_namespace_all_databases",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_PG_NAMESPACE_ALL_DATABASES_OID,
+    column_defs: None,
+    sql: "
+SELECT
+    s.oid AS oid,
+    s.name AS nspname,
+    role_owner.oid AS nspowner,
+    NULL::pg_catalog.text[] AS nspacl,
+    d.name as database_name
+FROM mz_catalog.mz_schemas s
+LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = s.owner_id",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub const PG_NAMESPACE_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
+    name: "pg_namespace_all_databases_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_PG_NAMESPACE_ALL_DATABASES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.pg_namespace_all_databases (nspname)",
+    is_retained_metrics_object: false,
+};
+
 pub static PG_NAMESPACE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_namespace",
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_NAMESPACE_OID,
     column_defs: None,
-    sql: "SELECT
-s.oid AS oid,
-s.name AS nspname,
-role_owner.oid AS nspowner,
-NULL::pg_catalog.text[] AS nspacl
-FROM mz_catalog.mz_schemas s
-LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
-JOIN mz_catalog.mz_roles role_owner ON role_owner.id = s.owner_id
-WHERE s.database_id IS NULL OR d.name = pg_catalog.current_database()",
+    sql: "
+SELECT
+    oid, nspname, nspowner, nspacl
+FROM mz_internal.pg_namespace_all_databases
+WHERE database_name IS NULL OR database_name = pg_catalog.current_database();",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static PG_CLASS: Lazy<BuiltinView> = Lazy::new(|| {
+/// Peeled version of `PG_CLASS`:
+/// - This doesn't check `mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()`,
+///   in order to make this view indexable.
+/// - This has the database name as an extra column, so that downstream views can check it against
+///  `current_database()`.
+pub static PG_CLASS_ALL_DATABASES: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-        name: "pg_class",
-        schema: PG_CATALOG_SCHEMA,
-        oid: oid::VIEW_PG_CLASS_OID,
+        name: "pg_class_all_databases",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_PG_CLASS_ALL_DATABASES_OID,
         column_defs: None,
-        sql: "SELECT
+        sql: "
+SELECT
     class_objects.oid,
     class_objects.name AS relname,
     mz_schemas.oid AS relnamespace,
@@ -3717,7 +3751,8 @@ pub static PG_CLASS: Lazy<BuiltinView> = Lazy::new(|| {
     -- PG removed relhasoids in v12 so it's filled with false
     false AS relhasoids,
     -- MZ doesn't support options for relations
-    NULL::pg_catalog.text[] as reloptions
+    NULL::pg_catalog.text[] as reloptions,
+    d.name as database_name
 FROM (
     -- pg_class catalogs relations and indexes
     SELECT id, oid, schema_id, name, type, owner_id FROM mz_catalog.mz_relations
@@ -3728,10 +3763,34 @@ FROM (
 ) AS class_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
-JOIN mz_catalog.mz_roles role_owner ON role_owner.id = class_objects.owner_id
-WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = class_objects.owner_id",
         access: vec![PUBLIC_SELECT],
     }
+});
+
+pub const PG_CLASS_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
+    name: "pg_class_all_databases_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_PG_CLASS_ALL_DATABASES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.pg_class_all_databases (relname)",
+    is_retained_metrics_object: false,
+};
+
+pub static PG_CLASS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "pg_class",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_CLASS_OID,
+    column_defs: None,
+    sql: "
+SELECT
+    oid, relname, relnamespace, reloftype, relowner, relam, reltablespace, reltuples, reltoastrelid,
+    relhasindex, relpersistence, relkind, relchecks, relhasrules, relhastriggers, relhassubclass,
+    relrowsecurity, relforcerowsecurity, relreplident, relispartition, relhasoids, reloptions
+FROM mz_internal.pg_class_all_databases
+WHERE database_name IS NULL OR database_name = pg_catalog.current_database();
+",
+    access: vec![PUBLIC_SELECT],
 });
 
 pub static PG_DEPEND: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
@@ -3873,57 +3932,106 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
     access: vec![PUBLIC_SELECT],
 });
 
-/// Note: Databases, Roles, Clusters, Cluster Replicas, Secrets, and Connections are excluded from
-/// this view for Postgres compatibility. Specifically, there is no classoid for these objects,
-/// which is required for this view.
-pub static PG_DESCRIPTION: Lazy<BuiltinView> = Lazy::new(|| {
+/// Peeled version of `PG_DESCRIPTION`:
+/// - This doesn't check `mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()`,
+///   in order to make this view indexable.
+/// - This has 2 extra columns for the database names, so that downstream views can check them
+///   against `current_database()`.
+pub static PG_DESCRIPTION_ALL_DATABASES: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-        name: "pg_description",
-        schema: PG_CATALOG_SCHEMA,
-        oid: oid::VIEW_PG_DESCRIPTION_OID,
+        name: "pg_description_all_databases",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_PG_DESCRIPTION_ALL_DATABASES_OID,
         column_defs: None,
         sql: "
-    (
-        -- Gather all of the class oid's for objects that can have comments.
-        WITH pg_classoids AS (
-            SELECT oid, (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_class') AS classoid
-            FROM pg_catalog.pg_class
-            UNION ALL
-            SELECT oid, (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_type') AS classoid
-            FROM pg_catalog.pg_type
-            UNION ALL
-            SELECT oid, (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_namespace') AS classoid
-            FROM pg_catalog.pg_namespace
-        ),
-        -- Gather all of the MZ ids for objects that can have comments.
-        mz_objects AS (
-            SELECT id, oid, type FROM mz_catalog.mz_objects
-            UNION ALL
-            SELECT id, oid, 'schema' AS type FROM mz_catalog.mz_schemas
-        )
-        SELECT
-            pg_classoids.oid AS objoid,
-            pg_classoids.classoid as classoid,
-            COALESCE(cmt.object_sub_id, 0) AS objsubid,
-            cmt.comment AS description
-        FROM
-            pg_classoids
-        JOIN
-            mz_objects ON pg_classoids.oid = mz_objects.oid
-        JOIN
-            mz_internal.mz_comments AS cmt ON mz_objects.id = cmt.id AND lower(mz_objects.type) = lower(cmt.object_type)
-    )",
+(
+    -- Gather all of the class oid's for objects that can have comments.
+    WITH pg_classoids AS (
+        SELECT oid, database_name as oid_database_name,
+          (SELECT oid FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_class') AS classoid,
+          (SELECT database_name FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_class') AS class_database_name
+        FROM mz_internal.pg_class_all_databases
+        UNION ALL
+        SELECT oid, database_name as oid_database_name,
+          (SELECT oid FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_type') AS classoid,
+          (SELECT database_name FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_type') AS class_database_name
+        FROM mz_internal.pg_type_all_databases
+        UNION ALL
+        SELECT oid, database_name as oid_database_name,
+          (SELECT oid FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_namespace') AS classoid,
+          (SELECT database_name FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_namespace') AS class_database_name
+        FROM mz_internal.pg_namespace_all_databases
+    ),
+
+    -- Gather all of the MZ ids for objects that can have comments.
+    mz_objects AS (
+        SELECT id, oid, type FROM mz_catalog.mz_objects
+        UNION ALL
+        SELECT id, oid, 'schema' AS type FROM mz_catalog.mz_schemas
+    )
+    SELECT
+        pg_classoids.oid AS objoid,
+        pg_classoids.classoid as classoid,
+        COALESCE(cmt.object_sub_id, 0) AS objsubid,
+        cmt.comment AS description,
+        -- Columns added because of the peeling. (Note that there are 2 of these here.)
+        oid_database_name,
+        class_database_name
+    FROM
+        pg_classoids
+    JOIN
+        mz_objects ON pg_classoids.oid = mz_objects.oid
+    JOIN
+        mz_internal.mz_comments AS cmt ON mz_objects.id = cmt.id AND lower(mz_objects.type) = lower(cmt.object_type)
+)",
         access: vec![PUBLIC_SELECT],
     }
 });
 
-pub static PG_TYPE: Lazy<BuiltinView> = Lazy::new(|| {
+pub const PG_DESCRIPTION_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
+    name: "pg_description_all_databases_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_PG_DESCRIPTION_ALL_DATABASES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.pg_description_all_databases (objoid, classoid, objsubid, description, oid_database_name, class_database_name)",
+    is_retained_metrics_object: false,
+};
+
+/// Note: Databases, Roles, Clusters, Cluster Replicas, Secrets, and Connections are excluded from
+/// this view for Postgres compatibility. Specifically, there is no classoid for these objects,
+/// which is required for this view.
+pub static PG_DESCRIPTION: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "pg_description",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_DESCRIPTION_OID,
+    column_defs: None,
+    sql: "
+SELECT
+    objoid,
+    classoid,
+    objsubid,
+    description
+FROM
+    mz_internal.pg_description_all_databases
+WHERE
+    (oid_database_name IS NULL OR oid_database_name = pg_catalog.current_database()) AND
+    (class_database_name IS NULL OR class_database_name = pg_catalog.current_database());",
+    access: vec![PUBLIC_SELECT],
+});
+
+/// Peeled version of `PG_TYPE`:
+/// - This doesn't check `mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()`,
+///   in order to make this view indexable.
+/// - This has the database name as an extra column, so that downstream views can check it against
+///  `current_database()`.
+pub static PG_TYPE_ALL_DATABASES: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-        name: "pg_type",
-        schema: PG_CATALOG_SCHEMA,
-        oid: oid::VIEW_PG_TYPE_OID,
+        name: "pg_type_all_databases",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_PG_TYPE_ALL_DATABASES_OID,
         column_defs: None,
-        sql: "SELECT
+        sql: "
+SELECT
     mz_types.oid,
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
@@ -3981,7 +4089,8 @@ pub static PG_TYPE: Lazy<BuiltinView> = Lazy::new(|| {
     -1::pg_catalog.int4 AS typtypmod,
     -- MZ doesn't support COLLATE so typcollation is filled with 0
     0::pg_catalog.oid AS typcollation,
-    NULL::pg_catalog.text AS typdefault
+    NULL::pg_catalog.text AS typdefault,
+    d.name as database_name
 FROM
     mz_catalog.mz_types
     LEFT JOIN mz_internal.mz_type_pg_metadata ON mz_catalog.mz_types.id = mz_internal.mz_type_pg_metadata.id
@@ -3997,23 +4106,50 @@ FROM
         )
             AS t ON mz_types.id = t.id
     LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
-    JOIN mz_catalog.mz_roles role_owner ON role_owner.id = mz_types.owner_id
-    WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
+    JOIN mz_catalog.mz_roles role_owner ON role_owner.id = mz_types.owner_id",
         access: vec![PUBLIC_SELECT],
     }
 });
 
-pub static PG_ATTRIBUTE: Lazy<BuiltinView> = Lazy::new(|| {
+pub const PG_TYPE_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
+    name: "pg_type_all_databases_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_PG_TYPE_ALL_DATABASES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.pg_type_all_databases (oid)",
+    is_retained_metrics_object: false,
+};
+
+pub static PG_TYPE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "pg_type",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_TYPE_OID,
+    column_defs: None,
+    sql: "SELECT
+    oid, typname, typnamespace, typowner, typlen, typtype, typcategory, typdelim, typrelid, typelem,
+    typarray, typinput, typreceive, typnotnull, typbasetype, typtypmod, typcollation, typdefault
+FROM mz_internal.pg_type_all_databases
+WHERE database_name IS NULL OR database_name = pg_catalog.current_database();",
+    access: vec![PUBLIC_SELECT],
+});
+
+/// Peeled version of `PG_ATTRIBUTE`:
+/// - This doesn't check `mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()`,
+///   in order to make this view indexable.
+/// - This has 2 extra columns for the database names, so that downstream views can check them
+///   against `current_database()`.
+pub static PG_ATTRIBUTE_ALL_DATABASES: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-        name: "pg_attribute",
-        schema: PG_CATALOG_SCHEMA,
-        oid: oid::VIEW_PG_ATTRIBUTE_OID,
+        name: "pg_attribute_all_databases",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_PG_ATTRIBUTE_ALL_DATABASES_OID,
         column_defs: None,
-        sql: "SELECT
+        sql: "
+SELECT
     class_objects.oid as attrelid,
     mz_columns.name as attname,
     mz_columns.type_oid AS atttypid,
-    pg_type.typlen AS attlen,
+    pg_type_all_databases.typlen AS attlen,
     position::int8::int2 as attnum,
     mz_columns.type_mod as atttypmod,
     NOT nullable as attnotnull,
@@ -4023,7 +4159,10 @@ pub static PG_ATTRIBUTE: Lazy<BuiltinView> = Lazy::new(|| {
     ''::pg_catalog.\"char\" as attgenerated,
     FALSE as attisdropped,
     -- MZ doesn't support COLLATE so attcollation is filled with 0
-    0::pg_catalog.oid as attcollation
+    0::pg_catalog.oid as attcollation,
+    -- Columns added because of the peeling. (Note that there are 2 of these here.)
+    d.name as database_name,
+    pg_type_all_databases.database_name as pg_type_database_name
 FROM (
     -- pg_attribute catalogs columns on relations and indexes
     SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
@@ -4033,10 +4172,41 @@ FROM (
         JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 ) AS class_objects
 JOIN mz_catalog.mz_columns ON class_objects.id = mz_columns.id
-JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid
+JOIN mz_internal.pg_type_all_databases ON pg_type_all_databases.oid = mz_columns.type_oid
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
-LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
-WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
+LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id",
+        // Since this depends on pg_type, its id must be higher due to initialization
+        // ordering.
+        access: vec![PUBLIC_SELECT],
+    }
+});
+
+pub const PG_ATTRIBUTE_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
+    name: "pg_attribute_all_databases_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_PG_ATTRIBUTE_ALL_DATABASES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.pg_attribute_all_databases (
+    attrelid, attname, atttypid, attlen, attnum, atttypmod, attnotnull, atthasdef, attidentity,
+    attgenerated, attisdropped, attcollation, database_name, pg_type_database_name
+)",
+    is_retained_metrics_object: false,
+};
+
+pub static PG_ATTRIBUTE: Lazy<BuiltinView> = Lazy::new(|| {
+    BuiltinView {
+        name: "pg_attribute",
+        schema: PG_CATALOG_SCHEMA,
+        oid: oid::VIEW_PG_ATTRIBUTE_OID,
+        column_defs: None,
+        sql: "
+SELECT
+    attrelid, attname, atttypid, attlen, attnum, atttypmod, attnotnull, atthasdef, attidentity,
+    attgenerated, attisdropped, attcollation
+FROM mz_internal.pg_attribute_all_databases
+WHERE
+  (database_name IS NULL OR database_name = pg_catalog.current_database()) AND
+  (pg_type_database_name IS NULL OR pg_type_database_name = pg_catalog.current_database());",
         // Since this depends on pg_type, its id must be higher due to initialization
         // ordering.
         access: vec![PUBLIC_SELECT],
@@ -4119,21 +4289,50 @@ WHERE false",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static PG_ATTRDEF: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
-    name: "pg_attrdef",
-    schema: PG_CATALOG_SCHEMA,
-    oid: oid::VIEW_PG_ATTRDEF_OID,
+/// Peeled version of `PG_ATTRDEF`:
+/// - This doesn't check `mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()`,
+///   in order to make this view indexable.
+pub static PG_ATTRDEF_ALL_DATABASES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "pg_attrdef_all_databases",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_PG_ATTRDEF_ALL_DATABASES_OID,
     column_defs: None,
-    sql: "SELECT
+    sql: "
+SELECT
     NULL::pg_catalog.oid AS oid,
     mz_objects.oid AS adrelid,
     mz_columns.position::int8 AS adnum,
     mz_columns.default AS adbin,
     mz_columns.default AS adsrc
 FROM mz_catalog.mz_columns
-    JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
     JOIN mz_catalog.mz_objects ON mz_columns.id = mz_objects.id
 WHERE default IS NOT NULL",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub const PG_ATTRDEF_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
+    name: "pg_attrdef_all_databases_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_PG_ATTRDEF_ALL_DATABASES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.pg_attrdef_all_databases (oid, adrelid, adnum, adbin, adsrc)",
+    is_retained_metrics_object: false,
+};
+
+pub static PG_ATTRDEF: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "pg_attrdef",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_ATTRDEF_OID,
+    column_defs: None,
+    sql: "
+SELECT
+    pg_attrdef_all_databases.oid as oid,
+    adrelid,
+    adnum,
+    adbin,
+    adsrc
+FROM mz_internal.pg_attrdef_all_databases
+    JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database());",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -7158,18 +7357,30 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
         Builtin::View(&MZ_TIMEZONE_NAMES),
         Builtin::View(&MZ_TIMEZONE_ABBREVIATIONS),
+        Builtin::View(&PG_NAMESPACE_ALL_DATABASES),
+        Builtin::Index(&PG_NAMESPACE_ALL_DATABASES_IND),
         Builtin::View(&PG_NAMESPACE),
+        Builtin::View(&PG_CLASS_ALL_DATABASES),
+        Builtin::Index(&PG_CLASS_ALL_DATABASES_IND),
         Builtin::View(&PG_CLASS),
         Builtin::View(&PG_DEPEND),
         Builtin::View(&PG_DATABASE),
         Builtin::View(&PG_INDEX),
+        Builtin::View(&PG_TYPE_ALL_DATABASES),
+        Builtin::Index(&PG_TYPE_ALL_DATABASES_IND),
         Builtin::View(&PG_TYPE),
+        Builtin::View(&PG_DESCRIPTION_ALL_DATABASES),
+        Builtin::Index(&PG_DESCRIPTION_ALL_DATABASES_IND),
         Builtin::View(&PG_DESCRIPTION),
+        Builtin::View(&PG_ATTRIBUTE_ALL_DATABASES),
+        Builtin::Index(&PG_ATTRIBUTE_ALL_DATABASES_IND),
         Builtin::View(&PG_ATTRIBUTE),
         Builtin::View(&PG_PROC),
         Builtin::View(&PG_OPERATOR),
         Builtin::View(&PG_RANGE),
         Builtin::View(&PG_ENUM),
+        Builtin::View(&PG_ATTRDEF_ALL_DATABASES),
+        Builtin::Index(&PG_ATTRDEF_ALL_DATABASES_IND),
         Builtin::View(&PG_ATTRDEF),
         Builtin::View(&PG_SETTINGS),
         Builtin::View(&PG_AUTH_MEMBERS),
