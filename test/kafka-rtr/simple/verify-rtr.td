@@ -81,26 +81,22 @@ A,B,0
 > SELECT sum FROM sum;
 5000207
 
-# Try subscribing
-> BEGIN
-> DECLARE c1 CURSOR FOR SELECT city FROM input_1 WHERE city = 'ABC'
-> DECLARE c2 CURSOR FOR SELECT city FROM input_2 WHERE city = 'DEF'
-
+# Try RTR with transactions: First SELECT determines timestamp
 $ kafka-ingest topic=input_1 format=bytes repeat=1
 ABC,B,0
 
 $ kafka-ingest topic=input_2 format=bytes repeat=1
 DEF,B,0
 
-> FETCH ALL c1
+> BEGIN
+
+> SELECT city FROM input_1 WHERE city = 'ABC';
 ABC
 
-# TODO(def-) Reenable rest of the test when #27393 is fixed
-# > FETCH ALL c2
-# DEF
-#
-# > DECLARE c3 CURSOR FOR SELECT sum FROM sum;
-# > FETCH ALL c3
-# 5000209
-#
-# > COMMIT
+> SELECT city FROM input_2 WHERE city = 'DEF';
+DEF
+
+> SELECT sum FROM sum;
+5000209
+
+> COMMIT
