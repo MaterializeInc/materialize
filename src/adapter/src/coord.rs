@@ -2121,9 +2121,7 @@ impl Coordinator {
     ///
     /// This method expects all dataflow plans to be available, so it must run after
     /// [`Coordinator::bootstrap_dataflow_plans`].
-    pub(self) fn collect_dataflow_storage_constraints(
-        &self,
-    ) -> BTreeMap<GlobalId, StorageConstraints> {
+    fn collect_dataflow_storage_constraints(&self) -> BTreeMap<GlobalId, StorageConstraints> {
         let is_storage_collection =
             |id: &GlobalId| self.controller.storage.check_exists(*id).is_ok();
 
@@ -2205,7 +2203,7 @@ impl Coordinator {
     /// # Panics
     ///
     /// Panics if the given dataflow exports neither an index nor a materialized view.
-    pub(self) fn bootstrap_dataflow_as_of(
+    fn bootstrap_dataflow_as_of(
         &mut self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
@@ -2345,12 +2343,11 @@ impl Coordinator {
             mz_ore::soft_panic_or_log!(
                 "error bootstrapping dataflow `as_of`: \
                  `min_as_of` {:?} greater than `max_as_of` {:?} \
-                 (import_ids={}, export_ids={}, name={}, storage_constraints={:?})",
+                 (import_ids={}, export_ids={}, storage_constraints={:?})",
                 min_as_of.elements(),
                 max_as_of.elements(),
                 dataflow.display_import_ids(),
                 dataflow.display_export_ids(),
-                dataflow.debug_name,
                 storage_constraints,
             );
             min_as_of.clone()

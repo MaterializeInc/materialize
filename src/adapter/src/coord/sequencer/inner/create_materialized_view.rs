@@ -874,8 +874,8 @@ impl Coordinator {
         let CatalogItem::MaterializedView(mview) = self.catalog().get_entry(&gid).item() else {
             unreachable!() // Asserted in `sequence_explain_pushdown`.
         };
+
         let mview = mview.clone();
-        let local_read_ts = self.get_local_read_ts().await;
 
         let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
             tracing::error!("cannot find plan for materialized view {gid} in catalog");
@@ -886,17 +886,19 @@ impl Coordinator {
             return;
         };
 
-        let storage_constraints = self
-            .collect_dataflow_storage_constraints()
-            .remove(&gid)
-            .expect("all dataflow storage constraints were collected");
-        let (as_of, read_holds) = self.bootstrap_dataflow_as_of(
-            &plan,
-            mview.cluster_id,
-            storage_constraints,
-            mview.custom_logical_compaction_window.unwrap_or_default(),
-            local_read_ts,
-        );
+        // We don't have any way to "duplicate" the read hold of the actual collection, which we
+        // obtain below... but the current implementation of read holds guarantees that the storage
+        // holds we obtain here will not be any greater than the hold we actually want.
+        let read_holds =
+            Some(self.acquire_read_holds(&dataflow_import_id_bundle(&plan, mview.cluster_id)));
+
+        let collection = self
+            .controller
+            .compute
+            .collection(mview.cluster_id, gid)
+            .expect("materialized view exists");
+
+        let as_of = collection.read_frontier().to_owned();
 
         let until = mview
             .refresh_schedule
@@ -905,17 +907,17 @@ impl Coordinator {
             .unwrap_or(mz_repr::Timestamp::MAX);
 
         let mz_now = match as_of.as_option() {
-            None => ResultSpec::value_all(),
-            Some(as_of) => {
-                ResultSpec::value_between(Datum::MzTimestamp(*as_of), Datum::MzTimestamp(until))
+            Some(&as_of) => {
+                ResultSpec::value_between(Datum::MzTimestamp(as_of), Datum::MzTimestamp(until))
             }
+            None => ResultSpec::value_all(),
         };
 
         self.render_explain_pushdown(
             ctx,
             as_of,
             mz_now,
-            Some(read_holds),
+            read_holds,
             plan.source_imports
                 .into_iter()
                 .filter_map(|(id, (source, _))| source.arguments.operators.map(|mfp| (id, mfp))),
