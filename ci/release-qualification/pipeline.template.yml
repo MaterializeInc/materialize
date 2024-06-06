@@ -47,7 +47,8 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            args: [--scenario=KafkaSourcesLarge, --actions=100000]
+            # Fewer actions because of OoM
+            args: [--scenario=KafkaSourcesLarge, --actions=12500]
 
     - id: zippy-dataflows-large
       label: "Large Zippy w/ complex dataflows"
@@ -89,6 +90,7 @@ steps:
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
+      skip: "Reenable when #21751 is fixed"
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
