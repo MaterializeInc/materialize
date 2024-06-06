@@ -11,7 +11,11 @@ from typing import Generic, Protocol, TypeVar
 
 from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.scenario_version import ScenarioVersion
-from materialize.terminal import COLOR_BAD, COLOR_GOOD, with_formatting
+from materialize.terminal import (
+    COLOR_BAD,
+    COLOR_GOOD,
+    with_conditional_formatting,
+)
 
 T = TypeVar("T")
 
@@ -58,7 +62,7 @@ class Comparator(Generic[T]):
     def ratio(self) -> float | None:
         assert False
 
-    def human_readable(self) -> str:
+    def human_readable(self, use_colors: bool) -> str:
         return str(self)
 
 
@@ -84,24 +88,32 @@ class RelativeThresholdComparator(Comparator[float | None]):
         else:
             return False
 
-    def human_readable(self) -> str:
+    def human_readable(self, use_colors: bool) -> str:
         ratio = self.ratio()
         if ratio is None:
             return "N/A"
         if ratio >= 2:
-            return with_formatting(f"{ratio:3.1f} TIMES more/slower", COLOR_BAD)
+            return with_conditional_formatting(
+                f"{ratio:3.1f} TIMES more/slower", COLOR_BAD, condition=use_colors
+            )
         elif ratio > 1:
-            return with_formatting(
-                f"{-(1-ratio)*100:3.1f} pct   more/slower", COLOR_BAD
+            return with_conditional_formatting(
+                f"{-(1-ratio)*100:3.1f} pct   more/slower",
+                COLOR_BAD,
+                condition=use_colors,
             )
         elif ratio == 1:
             return "          same"
         elif ratio > 0.5:
-            return with_formatting(
-                f"{(1-ratio)*100:3.1f} pct   less/faster", COLOR_GOOD
+            return with_conditional_formatting(
+                f"{(1-ratio)*100:3.1f} pct   less/faster",
+                COLOR_GOOD,
+                condition=use_colors,
             )
         else:
-            return with_formatting(f"{(1/ratio):3.1f} times less/faster", COLOR_GOOD)
+            return with_conditional_formatting(
+                f"{(1/ratio):3.1f} times less/faster", COLOR_GOOD, condition=use_colors
+            )
 
 
 class Overlappable(Protocol):

@@ -122,21 +122,6 @@ IGNORE_RE = re.compile(
     re.VERBOSE | re.MULTILINE,
 )
 
-TERMINAL_COLORS_RE = re.compile(
-    r"""
-    \x1B  # ESC
-    (?:   # 7-bit C1 Fe (except CSI)
-        [@-Z\\-_]
-    |     # or [ for CSI, followed by a control sequence
-        \[
-        [0-?]*  # Parameter bytes
-        [ -/]*  # Intermediate bytes
-        [@-~]   # Final byte
-    )
-""",
-    re.VERBOSE,
-)
-
 
 @dataclass
 class KnownIssue:
@@ -454,8 +439,6 @@ def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[Error
 
 
 def sanitize_text(text: str, max_length: int = 4000) -> str:
-    text = TERMINAL_COLORS_RE.sub("", text)
-
     if len(text) > max_length:
         text = text[:max_length] + " [...]"
 

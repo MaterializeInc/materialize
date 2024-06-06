@@ -187,7 +187,7 @@ class Report:
     def extend(self, comparisons: Iterable[Comparator]) -> None:
         self._comparisons.extend(comparisons)
 
-    def __str__(self) -> str:
+    def as_string(self, use_colors: bool) -> str:
         output_lines = []
 
         output_lines.append(
@@ -198,10 +198,13 @@ class Report:
         for comparison in self._comparisons:
             regression = "!!YES!!" if comparison.is_regression() else "no"
             output_lines.append(
-                f"{comparison.name:<35} | {comparison.type:<9} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {regression:^13} | {comparison.human_readable()}"
+                f"{comparison.name:<35} | {comparison.type:<9} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {regression:^13} | {comparison.human_readable(use_colors)}"
             )
 
         return "\n".join(output_lines)
+
+    def __str__(self) -> str:
+        return self.as_string(use_colors=False)
 
     def measurements_of_this(self, scenario_name: str) -> dict[MeasurementType, Any]:
         result = dict()
