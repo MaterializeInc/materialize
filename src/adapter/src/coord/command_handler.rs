@@ -227,6 +227,11 @@ impl Coordinator {
                 Command::Dump { tx } => {
                     let _ = tx.send(self.dump());
                 }
+
+                Command::ControllerAllowWrites { tx } => {
+                    self.controller.allow_writes();
+                    let _ = tx.send(Ok(true));
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
