@@ -33,6 +33,7 @@ def insert_result(
     results: list[FeatureBenchmarkResultEntry],
     verbose: bool = False,
 ) -> None:
+    build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
     step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
 
     sql_statements = []
@@ -43,6 +44,7 @@ def insert_result(
             f"""
             INSERT INTO feature_benchmark_result
             (
+                build_id,
                 build_step_id,
                 framework_version,
                 scenario_name,
@@ -53,6 +55,7 @@ def insert_result(
                 memory
             )
             SELECT
+                '{build_id}',
                 '{step_id}',
                 '{framework_version}',
                 '{result_entry.scenario_name}',

@@ -32,6 +32,7 @@ def insert_result(
     results: list[ScalabilityFrameworkResultEntry],
     verbose: bool = False,
 ) -> None:
+    build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
     step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
 
     sql_statements = []
@@ -41,6 +42,7 @@ def insert_result(
             f"""
                 INSERT INTO scalability_framework_result
                 (
+                    build_id,
                     build_step_id,
                     framework_version,
                     workload_name,
@@ -50,6 +52,7 @@ def insert_result(
                     tps
                 )
                 SELECT
+                    '{build_id}',
                     '{step_id}',
                     '{framework_version}',
                     '{result_entry.workload_name}',

@@ -9,4 +9,4 @@
 
 """Test analytics database."""
 
-TEST_ANALYTICS_DATA_VERSION = "0.1.0"
+TEST_ANALYTICS_DATA_VERSION = "0.1.1"
