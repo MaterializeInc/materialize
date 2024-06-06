@@ -890,6 +890,7 @@ mod tests {
     use crate::ShardId;
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn consolidation() {
         // Check that output consolidated via this logic matches output consolidated via timely's!
         type Part = Vec<((Vec<u8>, Vec<u8>), u64, i64)>;
