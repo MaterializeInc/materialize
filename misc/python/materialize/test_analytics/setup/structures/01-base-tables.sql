@@ -22,6 +22,7 @@ CREATE TABLE build (
    commit_hash TEXT NOT NULL,
    date TIMESTAMPTZ NOT NULL,
    build_url TEXT NOT NULL,
+   data_version TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
    remarks TEXT
 );
 
