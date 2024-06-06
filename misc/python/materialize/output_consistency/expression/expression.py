@@ -48,6 +48,11 @@ class Expression:
         raise NotImplementedError
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
+        """
+        Ignore filters should favor #resolve_return_type_category over this method whenever possible because that method
+        resolves dynamic types.
+        :return: the return type spec
+        """
         raise NotImplementedError
 
     def resolve_return_type_category(self) -> DataTypeCategory:

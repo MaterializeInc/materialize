@@ -56,17 +56,8 @@ from materialize.output_consistency.input_data.operations.jsonb_operations_provi
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     TAG_REGEX,
 )
-from materialize.output_consistency.input_data.return_specs.array_return_spec import (
-    ArrayReturnTypeSpec,
-)
-from materialize.output_consistency.input_data.return_specs.jsonb_return_spec import (
-    JsonbReturnTypeSpec,
-)
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
-)
-from materialize.output_consistency.input_data.return_specs.string_return_spec import (
-    StringReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.types.number_types_provider import (
     DOUBLE_TYPE_IDENTIFIER,
@@ -211,13 +202,12 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             return YesIgnore("#21997: lpad with negative")
 
         if db_function.function_name_in_lower_case in {"min", "max"}:
-            return_type_spec = expression.args[0].resolve_return_type_spec()
-            if isinstance(return_type_spec, StringReturnTypeSpec):
+            return_type_category = expression.args[0].resolve_return_type_category()
+            if return_type_category == DataTypeCategory.STRING:
                 return YesIgnore("#22002: ordering on text different (min/max)")
-
-        if db_function.function_name_in_lower_case in {"min", "max"}:
-            return_type_spec = expression.args[0].resolve_return_type_spec()
-            if isinstance(return_type_spec, ArrayReturnTypeSpec):
+            if return_type_category == DataTypeCategory.JSONB:
+                return YesIgnore("#26309: ordering on JSON different (min/max)")
+            if return_type_category == DataTypeCategory.ARRAY:
                 return YesIgnore("#27457: ordering on array different (min/max)")
 
         if db_function.function_name_in_lower_case == "replace":
@@ -345,11 +335,23 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 )
 
         if db_operation.is_tagged(TAG_EQUALITY_ORDERING):
-            return_type_spec = expression.args[0].resolve_return_type_spec()
-            if isinstance(return_type_spec, StringReturnTypeSpec):
+            return_type_category_1 = expression.args[0].resolve_return_type_category()
+            return_type_category_2 = expression.args[1].resolve_return_type_category()
+            if DataTypeCategory.STRING in {
+                return_type_category_1,
+                return_type_category_2,
+            }:
                 return YesIgnore("#22002: ordering on text different (<, <=, ...)")
-            if isinstance(return_type_spec, JsonbReturnTypeSpec):
-                return YesIgnore("#26309: ordering on JSON different")
+            if DataTypeCategory.JSONB in {
+                return_type_category_1,
+                return_type_category_2,
+            }:
+                return YesIgnore("#26309: ordering on JSON different (<, <=, ...)")
+            if DataTypeCategory.ARRAY in {
+                return_type_category_1,
+                return_type_category_2,
+            }:
+                return YesIgnore("#27457: ordering on array different (<, <=, ...)")
 
         if db_operation.pattern == "CAST ($ AS $)" and expression.matches(
             partial(
