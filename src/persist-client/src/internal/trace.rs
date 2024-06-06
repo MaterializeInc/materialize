@@ -1740,6 +1740,19 @@ pub(crate) mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // proptest is too heavy for miri!
+    fn test_roundtrips() {
+        fn check(trace: Trace<i64>) {
+            trace.validate().unwrap();
+            let flat = trace.flatten();
+            let unflat = Trace::unflatten(flat).unwrap();
+            assert_eq!(trace, unflat);
+        }
+
+        proptest!(|(trace in any_trace::<i64>(1..10))| { check(trace) })
+    }
+
+    #[mz_ore::test]
     fn remove_redundant_merge_reqs() {
         fn req(lower: u64, upper: u64) -> FueledMergeReq<u64> {
             FueledMergeReq {
