@@ -1735,8 +1735,9 @@ pub(crate) mod tests {
                 any::<Option<T>>(),
                 proptest::collection::vec(any_hollow_batch::<T>(), num_batches),
                 any::<bool>(),
+                any::<u64>(),
             ),
-            |(since, mut batches, roundtrip_structure)| {
+            |(since, mut batches, roundtrip_structure, timeout_ms)| {
                 let mut trace = Trace::<T>::default();
                 trace.downgrade_since(&since.map_or_else(Antichain::new, Antichain::from_elem));
 
@@ -1756,6 +1757,10 @@ pub(crate) mod tests {
                     );
                     lower.clone_from(batch.desc.upper());
                     let _merge_req = trace.push_batch(batch);
+                }
+                let reqs: Vec<_> = trace.fueled_merge_reqs_before_ms(timeout_ms).collect();
+                for req in reqs {
+                    trace.claim_compaction(req.id, ActiveCompaction { start_ms: 0 })
                 }
                 trace.roundtrip_structure = roundtrip_structure;
                 trace
