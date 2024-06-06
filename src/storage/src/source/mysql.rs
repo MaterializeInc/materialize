@@ -50,7 +50,6 @@
 //! The error streams from both of those operators are published to the source status and also
 //! trigger a restart of the dataflow.
 
-use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt;
 use std::io;
@@ -107,27 +106,10 @@ impl SourceRender for MySqlSourceConnection {
         Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
-        // Determine which collections need to be snapshot and which already have been.
-        let subsource_resume_uppers: BTreeMap<_, _> = config
-            .source_resume_uppers
-            .iter()
-            .map(|(id, upper)| {
-                assert!(
-                    config.source_exports.contains_key(id),
-                    "all source resume uppers must be present in source exports"
-                );
-
-                (
-                    *id,
-                    Antichain::from_iter(upper.iter().map(GtidPartition::decode_row)),
-                )
-            })
-            .collect();
-
-        // Collect the tables that we will be ingesting.
-        let mut table_info = BTreeMap::new();
+        // Collect the subsources that we will be exporting.
+        let mut subsources = Vec::new();
         for (
-            _id,
+            id,
             SourceExport {
                 ingestion_output, ..
             },
@@ -138,11 +120,24 @@ impl SourceRender for MySqlSourceConnection {
                 continue;
             }
 
-            let desc = &self.details.tables[ingestion_output - 1];
-            table_info.insert(
-                MySqlTableName::new(&desc.schema_name, &desc.name),
-                (*ingestion_output, desc.clone()),
+            let table_index = ingestion_output - 1;
+            let desc = self.details.tables[table_index].clone();
+            let initial_gtid_set = self.details.table_initial_gtid_set(table_index).to_string();
+            let resume_upper = Antichain::from_iter(
+                config
+                    .source_resume_uppers
+                    .get(id)
+                    .expect("missing resume upper")
+                    .iter()
+                    .map(GtidPartition::decode_row),
             );
+            subsources.push(SubsourceInfo {
+                name: MySqlTableName::new(&desc.schema_name, &desc.name),
+                output_index: *ingestion_output,
+                desc,
+                initial_gtid_set,
+                resume_upper,
+            });
         }
 
         let metrics = config.metrics.get_mysql_source_metrics(config.id);
@@ -152,8 +147,7 @@ impl SourceRender for MySqlSourceConnection {
                 scope.clone(),
                 config.clone(),
                 self.clone(),
-                subsource_resume_uppers.clone(),
-                table_info.clone(),
+                subsources.clone(),
                 metrics.snapshot_metrics.clone(),
             );
 
@@ -161,8 +155,7 @@ impl SourceRender for MySqlSourceConnection {
             scope.clone(),
             config.clone(),
             self.clone(),
-            subsource_resume_uppers,
-            table_info,
+            subsources,
             &rewinds,
             metrics,
         );
@@ -221,6 +214,15 @@ impl SourceRender for MySqlSourceConnection {
             vec![snapshot_token, repl_token, stats_token],
         )
     }
+}
+
+#[derive(Clone, Debug)]
+struct SubsourceInfo {
+    output_index: usize,
+    name: MySqlTableName,
+    desc: MySqlTableDesc,
+    initial_gtid_set: String,
+    resume_upper: Antichain<GtidPartition>,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]

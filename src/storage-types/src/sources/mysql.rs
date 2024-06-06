@@ -9,6 +9,7 @@
 
 //! Types related to mysql sources
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::num::NonZeroU64;
@@ -278,15 +279,31 @@ pub struct MySqlSourceDetails {
         strategy = "proptest::collection::vec(any::<mz_mysql_util::MySqlTableDesc>(), 0..4)"
     )]
     pub tables: Vec<mz_mysql_util::MySqlTableDesc>,
-    /// The initial 'gtid_executed' set for the source. This is used as the effective
-    /// snapshot point, to ensure consistency if the source is interrupted but commits
-    /// one or more tables before the initial snapshot of all tables is complete.
+    /// The initial 'gtid_executed' set for each subsource. The index of each string in this
+    /// vector corresponds to the index of the corresponding table in the `tables` field.
+    /// If this vector has only one element, it is the initial gtid set for all tables.
+    ///
+    /// This is used as the effective snapshot point for each subsource to ensure correctness
+    /// if the source is interrupted but commits one or more tables before the initial snapshot
+    /// of all tables is complete.
     #[proptest(strategy = "any_gtidset()")]
-    pub initial_gtid_set: String,
+    pub initial_gtid_set: Vec<String>,
 }
 
-fn any_gtidset() -> impl Strategy<Value = String> {
-    any::<(u128, u64)>().prop_map(|(uuid, tx_id)| format!("{}:{}", Uuid::from_u128(uuid), tx_id))
+impl MySqlSourceDetails {
+    /// The initial 'gtid_executed' set for the given table index.
+    pub fn table_initial_gtid_set(&self, table_index: usize) -> &str {
+        self.initial_gtid_set.get(table_index).unwrap_or_else(|| {
+            self.initial_gtid_set
+                .first()
+                .expect("at least one initial gtid set")
+        })
+    }
+}
+
+fn any_gtidset() -> impl Strategy<Value = Vec<String>> {
+    any::<(u128, u64)>()
+        .prop_map(|(uuid, tx_id)| vec![format!("{}:{}", Uuid::from_u128(uuid), tx_id)])
 }
 
 impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
@@ -315,16 +332,25 @@ impl AlterCompatible for MySqlSourceDetails {
         id: mz_repr::GlobalId,
         other: &Self,
     ) -> Result<(), crate::controller::AlterError> {
-        if self.initial_gtid_set == other.initial_gtid_set {
-            Ok(())
-        } else {
-            tracing::warn!(
-                "MySqlSourceDetails incompatible at initial_gtid_set:\nself:\n{:#?}\n\nother\n{:#?}",
-                self,
-                other
-            );
-            Err(crate::controller::AlterError { id })
+        // validate that the initial_gtid_set value for any existing subsource remains the same
+        let mut existing = BTreeMap::new();
+        for (i, table) in self.tables.iter().enumerate() {
+            existing.insert(&table.name, self.table_initial_gtid_set(i));
         }
+
+        for (i, table) in other.tables.iter().enumerate() {
+            if existing.contains_key(&table.name) {
+                if existing[&table.name] != other.table_initial_gtid_set(i) {
+                    tracing::warn!(
+                        "MySqlSourceDetails incompatible at initial_gtid_set:\nself:\n{:#?}\n\nother\n{:#?}",
+                        self,
+                        other
+                    );
+                    return Err(crate::controller::AlterError { id });
+                }
+            }
+        }
+        Ok(())
     }
 }
 
