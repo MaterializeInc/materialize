@@ -9,6 +9,7 @@
 
 """Terminal utilities."""
 
+import re
 
 COLOR_GREEN = "\033[92m"
 COLOR_RED = "\033[91m"
@@ -21,6 +22,8 @@ COLOR_BAD = COLOR_RED
 STYLE_BOLD = "\033[1m"
 _END_FORMATTING = "\033[0m"
 
+_COLOR_FORMATTING_RE = re.compile(r"\[\d+m(.*?)\[0m")
+
 
 def with_formatting(text: str, formatting: str) -> str:
     return with_formattings(text, [formatting])
@@ -29,3 +32,7 @@ def with_formatting(text: str, formatting: str) -> str:
 def with_formattings(text: str, formattings: list[str]) -> str:
     formatting = "".join(formattings)
     return f"{formatting}{text}{_END_FORMATTING}"
+
+
+def remove_formattings(text: str) -> str:
+    return _COLOR_FORMATTING_RE.sub(r"\1", text)

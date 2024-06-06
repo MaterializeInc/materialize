@@ -31,6 +31,7 @@ from materialize.buildkite_insights.steps.build_step import (
     BuildStepMatcher,
     extract_build_step_outcomes,
 )
+from materialize.terminal import remove_formattings
 
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
@@ -123,8 +124,6 @@ IGNORE_RE = re.compile(
     """,
     re.VERBOSE | re.MULTILINE,
 )
-
-COLOR_FORMATTING_RE = re.compile(r"\[\d+m(.*?)\[0m")
 
 
 @dataclass
@@ -443,7 +442,7 @@ def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[Error
 
 
 def sanitize_text(text: str, max_length: int = 4000) -> str:
-    text = COLOR_FORMATTING_RE.sub(r"\1", text)
+    text = remove_formattings(text)
 
     if len(text) > max_length:
         text = text[:max_length] + " [...]"
