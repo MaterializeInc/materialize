@@ -2260,6 +2260,7 @@ impl_display_t!(AlterIndexStatement);
 pub enum AlterSinkAction<T: AstInfo> {
     SetOptions(Vec<CreateSinkOption<T>>),
     ResetOptions(Vec<CreateSinkOptionName>),
+    ChangeRelation(T::ItemName),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2279,6 +2280,10 @@ impl<T: AstInfo> AstDisplay for AlterSinkStatement<T> {
         f.write_str(" ");
 
         match &self.action {
+            AlterSinkAction::ChangeRelation(from) => {
+                f.write_str("SET FROM ");
+                f.write_node(from);
+            }
             AlterSinkAction::SetOptions(options) => {
                 f.write_str("SET (");
                 f.write_node(&display::comma_separated(options));

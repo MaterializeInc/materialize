@@ -4944,18 +4944,31 @@ impl<'a> Parser<'a> {
                     {
                         return result;
                     }
-                    self.expect_token(&Token::LParen)
-                        .map_parser_err(StatementKind::AlterSink)?;
-                    let set_options = self
-                        .parse_comma_separated(Parser::parse_create_sink_option)
-                        .map_parser_err(StatementKind::AlterSink)?;
-                    self.expect_token(&Token::RParen)
-                        .map_parser_err(StatementKind::AlterSink)?;
-                    Statement::AlterSink(AlterSinkStatement {
-                        sink_name: name,
-                        if_exists,
-                        action: AlterSinkAction::SetOptions(set_options),
-                    })
+
+                    if self.parse_keyword(FROM) {
+                        let from = self
+                            .parse_raw_name()
+                            .map_parser_err(StatementKind::AlterSink)?;
+
+                        Statement::AlterSink(AlterSinkStatement {
+                            sink_name: name,
+                            if_exists,
+                            action: AlterSinkAction::ChangeRelation(from),
+                        })
+                    } else {
+                        self.expect_token(&Token::LParen)
+                            .map_parser_err(StatementKind::AlterSink)?;
+                        let set_options = self
+                            .parse_comma_separated(Parser::parse_create_sink_option)
+                            .map_parser_err(StatementKind::AlterSink)?;
+                        self.expect_token(&Token::RParen)
+                            .map_parser_err(StatementKind::AlterSink)?;
+                        Statement::AlterSink(AlterSinkStatement {
+                            sink_name: name,
+                            if_exists,
+                            action: AlterSinkAction::SetOptions(set_options),
+                        })
+                    }
                 }
                 RENAME => {
                     self.expect_keyword(TO)

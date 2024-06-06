@@ -41,7 +41,7 @@ use crate::coord::appends::Deferred;
 use crate::coord::{
     AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, Message,
     PeekStage, PeekStageTimestampReadHold, PlanValidity, PurifiedStatementReady,
-    RealTimeRecencyContext,
+    RealTimeRecencyContext, WatchSetResponse,
 };
 use crate::session::Session;
 use crate::telemetry::{EventDetails, SegmentClientExt};
@@ -435,15 +435,24 @@ impl Coordinator {
             ControllerResponse::WatchSetFinished(ws_ids) => {
                 let now = self.now();
                 for ws_id in ws_ids {
-                    if let Some((conn_id, (id, ev))) = self.installed_watch_sets.remove(&ws_id) {
-                        self.connection_watch_sets
-                            .get_mut(&conn_id)
-                            .expect("corrupted coordinator state: unknown connection id")
-                            .remove(&ws_id);
-                        if self.connection_watch_sets[&conn_id].is_empty() {
-                            self.connection_watch_sets.remove(&conn_id);
+                    let Some((conn_id, rsp)) = self.installed_watch_sets.remove(&ws_id) else {
+                        continue;
+                    };
+                    self.connection_watch_sets
+                        .get_mut(&conn_id)
+                        .expect("corrupted coordinator state: unknown connection id")
+                        .remove(&ws_id);
+                    if self.connection_watch_sets[&conn_id].is_empty() {
+                        self.connection_watch_sets.remove(&conn_id);
+                    }
+
+                    match rsp {
+                        WatchSetResponse::StatementDependenciesReady(id, ev) => {
+                            self.record_statement_lifecycle_event(&id, &ev, now);
                         }
-                        self.record_statement_lifecycle_event(&id, &ev, now);
+                        WatchSetResponse::AlterSinkReady(ctx) => {
+                            self.sequence_alter_sink_finish(ctx).await;
+                        }
                     }
                 }
             }

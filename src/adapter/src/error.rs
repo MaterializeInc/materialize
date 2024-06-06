@@ -222,6 +222,8 @@ pub enum AdapterError {
     RtrTimeout(String),
     /// A humanized version of [`StorageError::RtrDropFailure`].
     RtrDropFailure(String),
+    /// The collection requested to be sinked cannot be read at any timestamp
+    UnreadableSinkCollection,
 }
 
 impl AdapterError {
@@ -525,6 +527,7 @@ impl AdapterError {
             AdapterError::SubsourceAlreadyReferredTo { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::RtrTimeout(_) => SqlState::QUERY_CANCELED,
             AdapterError::RtrDropFailure(_) => SqlState::UNDEFINED_OBJECT,
+            AdapterError::UnreadableSinkCollection => SqlState::from_code("MZ009"),
         }
     }
 
@@ -750,6 +753,9 @@ impl fmt::Display for AdapterError {
                 f,
                 "real-time source dropped before ingesting the upstream system's visible frontier"
             ),
+            AdapterError::UnreadableSinkCollection => {
+                write!(f, "collection is not readable at any time")
+            }
         }
     }
 }

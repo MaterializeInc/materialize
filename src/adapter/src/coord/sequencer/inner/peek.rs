@@ -50,7 +50,7 @@ use crate::coord::{
     PeekStage, PeekStageCopyTo, PeekStageExplainPlan, PeekStageExplainPushdown, PeekStageFinish,
     PeekStageLinearizeTimestamp, PeekStageOptimize, PeekStageRealTimeRecency,
     PeekStageTimestampReadHold, PeekStageValidate, PlanValidity, RealTimeRecencyContext,
-    TargetCluster,
+    TargetCluster, WatchSetResponse,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -873,14 +873,20 @@ impl Coordinator {
                 conn_id.clone(),
                 transitive_storage_deps,
                 ts,
-                (uuid, StatementLifecycleEvent::StorageDependenciesFinished),
+                WatchSetResponse::StatementDependenciesReady(
+                    uuid,
+                    StatementLifecycleEvent::StorageDependenciesFinished,
+                ),
             );
             self.install_compute_watch_set(
                 conn_id,
                 transitive_compute_deps,
                 ts,
-                (uuid, StatementLifecycleEvent::ComputeDependenciesFinished),
-            );
+                WatchSetResponse::StatementDependenciesReady(
+                    uuid,
+                    StatementLifecycleEvent::ComputeDependenciesFinished,
+                ),
+            )
         }
 
         let max_query_size = ctx.session().vars().max_query_result_size();

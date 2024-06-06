@@ -118,6 +118,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AlterSchemaRename(_)
         | Plan::AlterSchemaSwap(_)
         | Plan::AlterSecret(_)
+        | Plan::AlterSink(_)
         | Plan::AlterSystemSet(_)
         | Plan::AlterSystemReset(_)
         | Plan::AlterSystemResetAll(_)

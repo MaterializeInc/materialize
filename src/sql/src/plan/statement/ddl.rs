@@ -28,6 +28,7 @@ use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::HashSet;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
+use mz_ore::vec::VecExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -44,7 +45,7 @@ use mz_sql_parser::ast::{
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
     AlterObjectRenameStatement, AlterObjectSwapStatement, AlterRetainHistoryStatement,
     AlterRoleOption, AlterRoleStatement, AlterSecretStatement, AlterSetClusterStatement,
-    AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
     AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, AvroSchema, AvroSchemaOption,
     AvroSchemaOptionName, ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
@@ -71,6 +72,7 @@ use mz_sql_parser::ast::{
     UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
+use mz_sql_parser::parser::StatementParseResult;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
@@ -118,7 +120,6 @@ use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCL
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalDuration, TryFromValue};
-use crate::plan::WebhookValidation;
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
@@ -134,6 +135,7 @@ use crate::plan::{
     PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
     VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
 };
+use crate::plan::{AlterSinkPlan, WebhookValidation};
 use crate::session::vars;
 use crate::session::vars::{
     ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
@@ -2551,6 +2553,31 @@ generate_extracted_config!(CreateSinkOption, (Snapshot, bool), (Version, u64));
 
 pub fn plan_create_sink(
     scx: &StatementContext,
+    stmt: CreateSinkStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    // Check for an object in the catalog with this same name
+    let Some(name) = stmt.name.clone() else {
+        return Err(PlanError::MissingName(CatalogItemType::Sink));
+    };
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (stmt.if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    plan_sink(scx, stmt)
+}
+
+/// This function will plan a sink as if it does not exist in the catalog. This is so the planning
+/// logic is reused by both CREATE SINK and ALTER SINK planning. It is the responsibility of the
+/// callers (plan_create_sink and plan_alter_sink) to check for name collisions if this is
+/// important.
+fn plan_sink(
+    scx: &StatementContext,
     mut stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let CreateSinkStatement {
@@ -2563,6 +2590,11 @@ pub fn plan_create_sink(
         if_not_exists,
         with_options,
     } = stmt.clone();
+
+    let Some(name) = name else {
+        return Err(PlanError::MissingName(CatalogItemType::Sink));
+    };
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[
         CreateSinkOptionName::Snapshot,
@@ -2588,20 +2620,6 @@ pub fn plan_create_sink(
         Some(ast::SinkEnvelope::Debezium) => SinkEnvelope::Debezium,
         None => sql_bail!("ENVELOPE clause is required"),
     };
-
-    // Check for an object in the catalog with this same name
-    let Some(name) = name else {
-        return Err(PlanError::MissingName(CatalogItemType::Sink));
-    };
-    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
-    let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialItemName::from(full_name.clone());
-    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
-        return Err(PlanError::ItemAlreadyExists {
-            name: full_name.to_string(),
-            item_type: item.item_type(),
-        });
-    }
 
     let from_name = &from;
     let from = scx.get_item_by_resolved_name(&from)?;
@@ -5583,13 +5601,67 @@ pub fn plan_alter_sink(
     let AlterSinkStatement {
         sink_name,
         if_exists,
-        action: _,
+        action,
     } = stmt;
 
     let object_type = ObjectType::Sink;
-    let _ = resolve_item_or_type(scx, object_type, sink_name, if_exists)?;
+    let item = resolve_item_or_type(scx, object_type, sink_name.clone(), if_exists)?;
 
-    bail_unsupported!("ALTER SINK");
+    let Some(item) = item else {
+        scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+            name: sink_name.to_string(),
+            object_type,
+        });
+
+        return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+    };
+
+    match action {
+        AlterSinkAction::ChangeRelation(new_from) => {
+            // First we reconstruct the original CREATE SINK statement
+            let create_sql = item.create_sql();
+            let stmts = mz_sql_parser::parser::parse_statements(create_sql)?;
+            let [stmt]: [StatementParseResult; 1] = stmts
+                .try_into()
+                .expect("create sql of sink was not exactly one statement");
+            let Statement::CreateSink(mut stmt) = stmt.ast else {
+                unreachable!("invalid create SQL for sink item");
+            };
+
+            // And then we find the existing version of the sink and increase it by one
+            let cur_version = stmt
+                .with_options
+                .drain_filter_swapping(|o| o.name == CreateSinkOptionName::Version)
+                .map(|o| u64::try_from_value(o.value).expect("invalid sink create_sql"))
+                .max()
+                .unwrap_or(0);
+            let new_version = cur_version + 1;
+            stmt.with_options.push(CreateSinkOption {
+                name: CreateSinkOptionName::Version,
+                value: Some(WithOptionValue::Value(Value::Number(
+                    new_version.to_string(),
+                ))),
+            });
+
+            // Then resolve and swap the resolved from relation to the new one
+            let (mut stmt, _) = crate::names::resolve(scx.catalog, stmt)?;
+            stmt.from = new_from;
+
+            // Finally re-plan the modified create sink statement to verify the new configuration is valid
+            let Plan::CreateSink(plan) = plan_sink(scx, stmt)? else {
+                unreachable!("invalid plan for CREATE SINK statement");
+            };
+
+            Ok(Plan::AlterSink(AlterSinkPlan {
+                id: item.id(),
+                sink: plan.sink,
+                with_snapshot: plan.with_snapshot,
+                in_cluster: plan.in_cluster,
+            }))
+        }
+        AlterSinkAction::SetOptions(_) => bail_unsupported!("ALTER SINK SET options"),
+        AlterSinkAction::ResetOptions(_) => bail_unsupported!("ALTER SINK RESET option"),
+    }
 }
 
 pub fn describe_alter_source(

@@ -115,7 +115,7 @@ use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::ResolvedIds;
-use mz_sql::plan::{self, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
@@ -1425,8 +1425,7 @@ pub struct Coordinator {
     cluster_scheduling_decisions: BTreeMap<ClusterId, BTreeMap<&'static str, SchedulingDecision>>,
 
     /// Tracks the state associated with the currently installed watchsets.
-    installed_watch_sets:
-        BTreeMap<WatchSetId, (ConnectionId, (StatementLoggingId, StatementLifecycleEvent))>,
+    installed_watch_sets: BTreeMap<WatchSetId, (ConnectionId, WatchSetResponse)>,
 
     /// Tracks the currently installed watchsets for each connection.
     connection_watch_sets: BTreeMap<ConnectionId, BTreeSet<WatchSetId>>,
@@ -2729,7 +2728,7 @@ impl Coordinator {
         conn_id: ConnectionId,
         objects: BTreeSet<GlobalId>,
         t: Timestamp,
-        state: (StatementLoggingId, StatementLifecycleEvent),
+        state: WatchSetResponse,
     ) {
         let ws_id = self.controller.install_compute_watch_set(objects, t);
         self.connection_watch_sets
@@ -2747,7 +2746,7 @@ impl Coordinator {
         conn_id: ConnectionId,
         objects: BTreeSet<GlobalId>,
         t: Timestamp,
-        state: (StatementLoggingId, StatementLifecycleEvent),
+        state: WatchSetResponse,
     ) {
         let ws_id = self.controller.install_storage_watch_set(objects, t);
         self.connection_watch_sets
@@ -3370,6 +3369,43 @@ impl StorageConstraints {
         CollectionIdBundle {
             storage_ids: self.dependencies.clone(),
             compute_ids: Default::default(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum WatchSetResponse {
+    StatementDependenciesReady(StatementLoggingId, StatementLifecycleEvent),
+    AlterSinkReady(AlterSinkReadyContext),
+}
+
+#[derive(Debug)]
+pub(crate) struct AlterSinkReadyContext {
+    ctx: Option<ExecuteContext>,
+    otel_ctx: OpenTelemetryContext,
+    plan: AlterSinkPlan,
+    plan_validity: PlanValidity,
+    resolved_ids: ResolvedIds,
+    read_hold: ReadHolds<Timestamp>,
+}
+
+impl AlterSinkReadyContext {
+    fn ctx(&mut self) -> &mut ExecuteContext {
+        self.ctx.as_mut().expect("only cleared on drop")
+    }
+
+    fn retire(mut self, result: Result<ExecuteResponse, AdapterError>) {
+        self.ctx
+            .take()
+            .expect("only cleared on drop")
+            .retire(result);
+    }
+}
+
+impl Drop for AlterSinkReadyContext {
+    fn drop(&mut self) {
+        if let Some(ctx) = self.ctx.take() {
+            ctx.retire(Err(AdapterError::Canceled));
         }
     }
 }

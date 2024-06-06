@@ -417,6 +417,9 @@ impl Coordinator {
                     let result = self.sequence_alter_secret(ctx.session(), plan).await;
                     ctx.retire(result);
                 }
+                Plan::AlterSink(plan) => {
+                    self.sequence_alter_sink_prepare(ctx, plan).await;
+                }
                 Plan::AlterSource(plan) => {
                     let result = self.sequence_alter_source(ctx.session_mut(), plan).await;
                     ctx.retire(result);

@@ -163,6 +163,7 @@ pub enum Plan {
     AlterSchemaRename(AlterSchemaRenamePlan),
     AlterSchemaSwap(AlterSchemaSwapPlan),
     AlterSecret(AlterSecretPlan),
+    AlterSink(AlterSinkPlan),
     AlterSystemSet(AlterSystemSetPlan),
     AlterSystemReset(AlterSystemResetPlan),
     AlterSystemResetAll(AlterSystemResetAllPlan),
@@ -212,8 +213,7 @@ impl Plan {
             StatementKind::AlterRole => &[PlanKind::AlterRole],
             StatementKind::AlterSecret => &[PlanKind::AlterNoop, PlanKind::AlterSecret],
             StatementKind::AlterSetCluster => &[PlanKind::AlterNoop, PlanKind::AlterSetCluster],
-            // TODO: If we ever support ALTER SINK again, this will need to be changed
-            StatementKind::AlterSink => &[PlanKind::AlterNoop],
+            StatementKind::AlterSink => &[PlanKind::AlterNoop, PlanKind::AlterSink],
             StatementKind::AlterSource => &[
                 PlanKind::AlterNoop,
                 PlanKind::AlterSource,
@@ -380,6 +380,7 @@ impl Plan {
             Plan::AlterSchemaRename(_) => "alter rename schema",
             Plan::AlterSchemaSwap(_) => "alter swap schema",
             Plan::AlterSecret(_) => "alter secret",
+            Plan::AlterSink(_) => "alter sink",
             Plan::AlterSystemSet(_) => "alter system",
             Plan::AlterSystemReset(_) => "alter system",
             Plan::AlterSystemResetAll(_) => "alter system",
@@ -1023,6 +1024,14 @@ pub enum AlterSourceAction {
 pub struct AlterSourcePlan {
     pub id: GlobalId,
     pub action: AlterSourceAction,
+}
+
+#[derive(Debug, Clone)]
+pub struct AlterSinkPlan {
+    pub id: GlobalId,
+    pub sink: Sink,
+    pub with_snapshot: bool,
+    pub in_cluster: ClusterId,
 }
 
 #[derive(Debug)]

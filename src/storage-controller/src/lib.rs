@@ -313,28 +313,51 @@ where
         (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
         StorageError<Self::Timestamp>,
     > {
-        let frontiers = self.storage_collections.collection_frontiers(id)?;
-
-        Ok((frontiers.implied_capability, frontiers.write_frontier))
+        Ok(match self.export(id) {
+            Ok(export) => (
+                export.read_hold.since().clone(),
+                export.write_frontier.clone(),
+            ),
+            Err(_) => {
+                let frontiers = self.storage_collections.collection_frontiers(id)?;
+                (frontiers.implied_capability, frontiers.write_frontier)
+            }
+        })
     }
 
     fn collections_frontiers(
         &self,
-        ids: Vec<GlobalId>,
+        mut ids: Vec<GlobalId>,
     ) -> Result<Vec<(GlobalId, Antichain<T>, Antichain<T>)>, StorageError<Self::Timestamp>> {
-        let res = self
-            .storage_collections
-            .collections_frontiers(ids)?
-            .into_iter()
-            .map(|frontiers| {
-                (
-                    frontiers.id,
-                    frontiers.implied_capability,
-                    frontiers.write_frontier,
-                )
-            });
+        // The ids might be either normal collections or exports. Both have frontiers that might be
+        // interesting to external observers.
+        let mut result = vec![];
+        ids.retain(|&id| match self.export(id) {
+            Ok(export) => {
+                result.push((
+                    id,
+                    export.read_hold.since().clone(),
+                    export.write_frontier.clone(),
+                ));
+                false
+            }
+            Err(_) => true,
+        });
 
-        Ok(res.collect_vec())
+        result.extend(
+            self.storage_collections
+                .collections_frontiers(ids)?
+                .into_iter()
+                .map(|frontiers| {
+                    (
+                        frontiers.id,
+                        frontiers.implied_capability,
+                        frontiers.write_frontier,
+                    )
+                }),
+        );
+
+        Ok(result)
     }
 
     fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)> {
@@ -1186,6 +1209,71 @@ where
 
             client.send(StorageCommand::RunSinks(vec![cmd]));
         }
+        Ok(())
+    }
+
+    async fn alter_export(
+        &mut self,
+        id: GlobalId,
+        description: ExportDescription<Self::Timestamp>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let from_id = description.sink.from;
+
+        // Acquire read holds at StorageCollections to ensure that the
+        // sinked collection is not dropped while we're sinking it.
+        let desired_read_holds = vec![from_id.clone()];
+        let read_hold = self
+            .storage_collections
+            .acquire_read_holds(desired_read_holds)
+            .expect("missing dependency")
+            .into_element();
+        let from_storage_metadata = self.storage_collections.collection_metadata(from_id)?;
+
+        // Check whether the sink's write frontier is beyond the read hold we got
+        let cur_export = self
+            .exports
+            .get_mut(&id)
+            .ok_or_else(|| StorageError::IdentifierMissing(id))?;
+        let input_readable = cur_export
+            .write_frontier
+            .iter()
+            .all(|t| read_hold.since().less_than(t));
+        if !input_readable {
+            return Err(StorageError::ReadBeforeSince(from_id));
+        }
+
+        cur_export.description = description.clone();
+
+        let status_id = match description.sink.status_id.clone() {
+            Some(id) => Some(self.storage_collections.collection_metadata(id)?.data_shard),
+            None => None,
+        };
+
+        let cmd = RunSinkCommand {
+            id,
+            description: StorageSinkDesc {
+                from: from_id,
+                from_desc: description.sink.from_desc,
+                connection: description.sink.connection,
+                envelope: description.sink.envelope,
+                as_of: description.sink.as_of,
+                version: description.sink.version,
+                status_id,
+                from_storage_metadata,
+                with_snapshot: description.sink.with_snapshot,
+            },
+        };
+
+        // Fetch the client for this exports's cluster.
+        let client = self
+            .clients
+            .get_mut(&description.instance_id)
+            .ok_or_else(|| StorageError::ExportInstanceMissing {
+                storage_instance_id: description.instance_id,
+                export_id: id,
+            })?;
+
+        client.send(StorageCommand::RunSinks(vec![cmd]));
         Ok(())
     }
 
