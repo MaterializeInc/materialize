@@ -81,7 +81,7 @@ A,B,0
 > SELECT sum FROM sum;
 5000207
 
-# Try RTR with transactions: First SELECT determines timestamp
+# Try RTR with transactions
 $ kafka-ingest topic=input_1 format=bytes repeat=1
 ABC,B,0
 
@@ -90,11 +90,12 @@ DEF,B,0
 
 > BEGIN
 
-> SELECT city FROM input_1 WHERE city = 'ABC';
-ABC
-
+# First SELECT determines timestamp, so choose the later ingestion
 > SELECT city FROM input_2 WHERE city = 'DEF';
 DEF
+
+> SELECT city FROM input_1 WHERE city = 'ABC';
+ABC
 
 > SELECT sum FROM sum;
 5000209
