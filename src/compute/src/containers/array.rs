@@ -88,13 +88,17 @@ impl<T> Array<T> {
 
     /// Remove all elements. Drops the contents, but leaves the allocation untouched.
     pub fn clear(&mut self) {
-        for e in &mut self.elements[..self.length] {
+        let elems = &mut self.elements[..self.length];
+        // We are about to run the type's destructor, which may panic. Therefore we set the length
+        // of the array to zero so that if we have to unwind the stack we don't end up re-dropping
+        // in valid memory through the Drop impl of Array itself.
+        self.length = 0;
+        for e in elems {
             // SAFETY: We know elements up to `length` are initialized.
             unsafe {
                 e.assume_init_drop();
             }
         }
-        self.length = 0;
     }
 }
 
