@@ -26,6 +26,5 @@ contains:incompatible schema change
 > SELECT COUNT(*) = 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%Connection refused%';
 true
 
-# TODO #24975 (support ALTER SOURCE)
-# ! SELECT * FROM t0
-# contains:unknown catalog item 't0'
+! SELECT * FROM t0
+contains:unknown catalog item 't0'
