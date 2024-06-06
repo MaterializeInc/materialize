@@ -59,9 +59,6 @@ from materialize.output_consistency.input_data.operations.string_operations_prov
 from materialize.output_consistency.input_data.return_specs.array_return_spec import (
     ArrayReturnTypeSpec,
 )
-from materialize.output_consistency.input_data.return_specs.jsonb_return_spec import (
-    JsonbReturnTypeSpec,
-)
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
@@ -345,10 +342,10 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 )
 
         if db_operation.is_tagged(TAG_EQUALITY_ORDERING):
-            return_type_spec = expression.args[0].resolve_return_type_spec()
-            if isinstance(return_type_spec, StringReturnTypeSpec):
+            return_type_category = expression.args[0].resolve_return_type_category()
+            if return_type_category == DataTypeCategory.STRING:
                 return YesIgnore("#22002: ordering on text different (<, <=, ...)")
-            if isinstance(return_type_spec, JsonbReturnTypeSpec):
+            if return_type_category == DataTypeCategory.JSONB:
                 return YesIgnore("#26309: ordering on JSON different")
 
         if db_operation.pattern == "CAST ($ AS $)" and expression.matches(
