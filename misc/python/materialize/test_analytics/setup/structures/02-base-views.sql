@@ -21,6 +21,7 @@ SELECT
     b.build_number,
     b.build_id,
     b.commit_hash,
+    b.mz_version,
     b.date,
     b.build_url,
     bs.shard_index
