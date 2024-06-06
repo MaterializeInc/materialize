@@ -15,6 +15,7 @@ from materialize.buildkite import BuildkiteEnvVar
 from materialize.test_analytics.connection.test_analytics_connection import (
     execute_updates,
 )
+from materialize.test_analytics.test_analytics_db import TEST_ANALYTICS_DATA_VERSION
 
 
 def insert_build(cursor: Cursor, verbose: bool = False) -> None:
@@ -37,6 +38,7 @@ def insert_build(cursor: Cursor, verbose: bool = False) -> None:
            commit_hash,
            date,
            build_url,
+           data_version,
            remarks
         )
         SELECT
@@ -47,6 +49,7 @@ def insert_build(cursor: Cursor, verbose: bool = False) -> None:
           '{commit_hash}',
           now(),
           '{build_url}',
+          '{TEST_ANALYTICS_DATA_VERSION}',
           NULL
         WHERE NOT EXISTS
         (

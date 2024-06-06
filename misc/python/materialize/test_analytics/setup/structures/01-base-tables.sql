@@ -13,11 +13,6 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- test history version
-CREATE TABLE version(
-   version TEXT NOT NULL
-);
-
 -- meta data of the build
 CREATE TABLE build (
    pipeline TEXT NOT NULL,
@@ -27,6 +22,7 @@ CREATE TABLE build (
    commit_hash TEXT NOT NULL,
    date TIMESTAMPTZ NOT NULL,
    build_url TEXT NOT NULL,
+   data_version TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
    remarks TEXT
 );
 
