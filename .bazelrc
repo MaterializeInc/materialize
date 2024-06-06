@@ -11,3 +11,8 @@ common:macos --linkopt=-mmacosx-version-min=13.0
 
 # Config for building protobuf.
 build --copt=-Wno-error=deprecated-declarations
+
+# Required to stamp our development builds with the current git hash.
+#
+# This script gets run before every build, see the script for more info.
+build --workspace_status_command "python3 misc/bazel/build-info/workspace_status.py"

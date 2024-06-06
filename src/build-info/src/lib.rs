@@ -84,32 +84,84 @@ macro_rules! build_info {
     () => {
         $crate::BuildInfo {
             version: env!("CARGO_PKG_VERSION"),
-            sha: $crate::private::run_command_str!(
-                "sh",
-                "-c",
-                r#"if [ -n "$MZ_DEV_BUILD_SHA" ]; then
-                       echo "$MZ_DEV_BUILD_SHA"
-                   else
-                       # Unfortunately we need to suppress error messages from `git`, as
-                       # run_command_str will display no error message at all if we print
-                       # more than one line of output to stderr.
-                       git rev-parse --verify HEAD 2>/dev/null || {
-                           printf "error: unable to determine Git SHA; " >&2
-                           printf "either build from working Git clone " >&2
-                           printf "(see https://materialize.com/docs/install/#build-from-source), " >&2
-                           printf "or specify SHA manually by setting MZ_DEV_BUILD_SHA environment variable" >&2
-                           printf "If you are using git worktrees, you must be in the primary worktree" >&2
-                           printf "for automatic detection to work." >&2
-                           exit 1
-                       }
-                   fi"#
-            ),
-            time: $crate::private::run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
+            sha: $crate::__git_sha_internal!(),
+            time: $crate::__build_time_internal!(),
         }
+    };
+}
+
+#[cfg(bazel)]
+#[macro_export]
+macro_rules! __git_sha_internal {
+    () => {
+        $crate::private::bazel_variables::GIT_COMMIT_HASH
+    };
+}
+
+#[cfg(not(bazel))]
+#[macro_export]
+macro_rules! __git_sha_internal {
+    () => {
+        $crate::private::run_command_str!(
+            "sh",
+            "-c",
+            r#"if [ -n "$MZ_DEV_BUILD_SHA" ]; then
+                    echo "$MZ_DEV_BUILD_SHA"
+                else
+                    # Unfortunately we need to suppress error messages from `git`, as
+                    # run_command_str will display no error message at all if we print
+                    # more than one line of output to stderr.
+                    git rev-parse --verify HEAD 2>/dev/null || {
+                        printf "error: unable to determine Git SHA; " >&2
+                        printf "either build from working Git clone " >&2
+                        printf "(see https://materialize.com/docs/install/#build-from-source), " >&2
+                        printf "or specify SHA manually by setting MZ_DEV_BUILD_SHA environment variable" >&2
+                        printf "If you are using git worktrees, you must be in the primary worktree" >&2
+                        printf "for automatic detection to work." >&2
+                        exit 1
+                    }
+                fi"#
+        )
     }
+}
+
+#[cfg(bazel)]
+#[macro_export]
+macro_rules! __build_time_internal {
+    () => {
+        $crate::private::bazel_variables::MZ_BUILD_TIME
+    };
+}
+
+#[cfg(not(bazel))]
+#[macro_export]
+macro_rules! __build_time_internal {
+    () => {
+        $crate::private::run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ")
+    };
 }
 
 #[doc(hidden)]
 pub mod private {
     pub use compile_time_run::run_command_str;
+
+    // Bazel has a "workspace status" feature that allows us to collect info from
+    // the workspace (e.g. git hash) at build time. These values get incleded via
+    // a generated file.
+    #[cfg(bazel)]
+    #[allow(unused)]
+    pub mod bazel_variables {
+        include!(std::env!("BAZEL_GEN_BUILD_INFO"));
+    }
+}
+
+#[cfg(test)]
+mod test {
+    #[test] // allow(test-attribute)
+    fn smoketest_build_info() {
+        let build_info = crate::build_info!();
+
+        assert_eq!(build_info.sha.len(), 40);
+        assert_eq!(build_info.time.len(), 20);
+    }
 }
