@@ -571,12 +571,13 @@ impl Coordinator {
                 }
             }
         }
+        let now = to_datetime((catalog.config().now)());
         for (cluster_id, replica_id, num_processes) in cluster_replicas_to_create {
             cluster_replica_statuses.initialize_cluster_replica_statuses(
                 cluster_id,
                 replica_id,
                 num_processes,
-                to_datetime((catalog.config().now)()),
+                now,
             );
             for (process_id, status) in
                 cluster_replica_statuses.get_cluster_replica_statuses(cluster_id, replica_id)

@@ -1639,6 +1639,7 @@ impl Coordinator {
                 )
             })
             .collect();
+        let now = self.now_datetime();
         for (cluster_id, replica_statuses) in cluster_statuses {
             self.cluster_replica_statuses
                 .initialize_cluster_statuses(cluster_id);
@@ -1648,7 +1649,7 @@ impl Coordinator {
                         cluster_id,
                         replica_id,
                         num_processes,
-                        self.now_datetime(),
+                        now,
                     );
             }
         }
