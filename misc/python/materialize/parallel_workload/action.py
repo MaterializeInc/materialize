@@ -384,6 +384,7 @@ class CopyToS3Action(Action):
                 "Relation contains unimplemented arrow types",
                 "Cannot encode the following columns/types",
                 "timeout: error trying to connect",
+                "cannot represent decimal value",  # parquet limitation
             ]
         )
         if exe.db.complexity == Complexity.DDL:

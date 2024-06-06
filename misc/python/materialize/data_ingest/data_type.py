@@ -30,6 +30,8 @@ class Backend(Enum):
     AVRO = 1
     JSON = 2
     POSTGRES = 3
+    MYSQL = 4
+    MATERIALIZE = 5
 
 
 class DataType:
@@ -50,7 +52,7 @@ class DataType:
         raise NotImplementedError
 
     @staticmethod
-    def name(backend: Backend = Backend.POSTGRES) -> str:
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
         raise NotImplementedError
 
 
@@ -64,7 +66,7 @@ class Boolean(DataType):
         return rng.choice((True, False))
 
     @staticmethod
-    def name(backend: Backend = Backend.POSTGRES) -> str:
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
         return "boolean"
 
 
@@ -93,7 +95,7 @@ class SmallInt(DataType):
         return num
 
     @staticmethod
-    def name(backend: Backend = Backend.POSTGRES) -> str:
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.AVRO:
             return "int"  # no explicit support in AVRO
         elif backend == Backend.JSON:
@@ -129,7 +131,7 @@ class Int(DataType):
         return num
 
     @staticmethod
-    def name(backend: Backend = Backend.POSTGRES) -> str:
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.JSON:
             return "integer"
         else:
@@ -165,13 +167,133 @@ class Long(DataType):
         return num
 
     @staticmethod
-    def name(backend: Backend = Backend.POSTGRES) -> str:
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.AVRO:
             return "long"
         elif backend == Backend.JSON:
             return "integer"
         else:
             return "bigint"
+
+
+class UInt2(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if record_size == RecordSize.TINY:
+            min, max = 0, 256
+        elif record_size in (RecordSize.SMALL, RecordSize.MEDIUM, RecordSize.LARGE):
+            min, max = 0, 65535
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+
+        if rng.randrange(10) == 0:
+            return min
+        if rng.randrange(10) == 0:
+            return max
+        return rng.randint(min, max)
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        return num
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            return "int"  # no explicit support in AVRO
+        elif backend == Backend.JSON:
+            return "integer"  # no explicit support in JSON
+        elif backend == Backend.POSTGRES:
+            return "numeric"  # no support in Postgres
+        elif backend == Backend.MYSQL:
+            return "smallint unsigned"
+        else:
+            return "uint2"
+
+
+class UInt4(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if record_size == RecordSize.TINY:
+            min, max = 0, 256
+        elif record_size == RecordSize.SMALL:
+            min, max = 0, 65535
+        elif record_size in (RecordSize.MEDIUM, RecordSize.LARGE):
+            min, max = 0, 4294967295
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+
+        if rng.randrange(10) == 0:
+            return min
+        if rng.randrange(10) == 0:
+            return max
+        return rng.randint(min, max)
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        return num
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            return "int"  # no explicit support in AVRO
+        elif backend == Backend.JSON:
+            return "integer"  # no explicit support in JSON
+        elif backend == Backend.POSTGRES:
+            return "numeric"  # no support in Postgres
+        elif backend == Backend.MYSQL:
+            return "int unsigned"
+        else:
+            return "uint4"
+
+
+class UInt8(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if record_size == RecordSize.TINY:
+            min, max = 0, 256
+        elif record_size == RecordSize.SMALL:
+            min, max = 0, 65535
+        elif record_size == RecordSize.MEDIUM:
+            min, max = 0, 4294967295
+        elif record_size == RecordSize.LARGE:
+            min, max = 0, 18446744073709551615
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+
+        if rng.randrange(10) == 0:
+            return min
+        if rng.randrange(10) == 0:
+            return max
+        return rng.randint(min, max)
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        return num
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            return "long"
+        elif backend == Backend.JSON:
+            return "integer"
+        elif backend == Backend.POSTGRES:
+            return "numeric"  # no support in Postgres
+        elif backend == Backend.MYSQL:
+            return "bigint unsigned"
+        else:
+            return "uint8"
 
 
 class Float(DataType):
@@ -202,7 +324,7 @@ class Float(DataType):
         return num
 
     @staticmethod
-    def name(backend: Backend = Backend.POSTGRES) -> str:
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.AVRO:
             return "float"
         elif backend == Backend.JSON:
@@ -213,13 +335,35 @@ class Float(DataType):
 
 class Double(Float):
     @staticmethod
-    def name(backend: Backend = Backend.POSTGRES) -> str:
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.AVRO:
             return "double"
         elif backend == Backend.JSON:
             return "number"
         else:
             return "float8"
+
+
+class Numeric(Float):
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            return "double"
+        elif backend == Backend.JSON:
+            return "number"
+        else:
+            return "numeric"
+
+
+class Numeric383(Float):
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            return "double"
+        elif backend == Backend.JSON:
+            return "number"
+        else:
+            return "numeric(38,3)"
 
 
 class Text(DataType):
@@ -262,8 +406,8 @@ class Text(DataType):
         return f"'{result}'" if in_query else str(result)
 
     @staticmethod
-    def name(backend: Backend = Backend.POSTGRES) -> str:
-        if backend == Backend.POSTGRES:
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend in (Backend.MATERIALIZE, Backend.POSTGRES, Backend.MYSQL):
             return "text"
         else:
             return "string"
@@ -271,7 +415,7 @@ class Text(DataType):
 
 class Bytea(Text):
     @staticmethod
-    def name(backend: Backend = Backend.POSTGRES) -> str:
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.AVRO:
             return "bytes"
         elif backend == Backend.JSON:
@@ -304,13 +448,13 @@ class UUID(DataType):
         return f"'{result}'::uuid" if in_query else str(result)
 
     @staticmethod
-    def name(backend: Backend = Backend.POSTGRES) -> str:
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
         return "uuid"
 
 
 class Jsonb(DataType):
     @staticmethod
-    def name(backend: Backend = Backend.POSTGRES) -> str:
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.AVRO:
             return "record"
         elif backend == Backend.JSON:
@@ -345,7 +489,7 @@ class Jsonb(DataType):
 
 class TextTextMap(DataType):
     @staticmethod
-    def name(backend: Backend = Backend.POSTGRES) -> str:
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.AVRO:
             return "record"
         elif backend == Backend.JSON:
@@ -386,16 +530,288 @@ class TextTextMap(DataType):
         return f"'{values_str}'::map[text=>text]" if in_query else values_str
 
 
+class IntArray(DataType):
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            raise ValueError("Unsupported")
+        elif backend == Backend.JSON:
+            raise ValueError("Unsupported")
+        else:
+            return "int[]"
+
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if record_size == RecordSize.TINY:
+            key_range = 1
+        elif record_size == RecordSize.SMALL:
+            key_range = 5
+        elif record_size == RecordSize.MEDIUM:
+            key_range = 10
+        elif record_size == RecordSize.LARGE:
+            key_range = 20
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+        values = [str(rng.randint(-100, 100)) for i in range(0, key_range)]
+        values_str = f"{{{', '.join(values)}}}"
+        return f"'{values_str}'::int[]" if in_query else values_str
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        values = [str(num) for i in range(0, num)]
+        values_str = f"{{{', '.join(values)}}}"
+        return f"'{values_str}'::int[]" if in_query else values_str
+
+
+class IntList(DataType):
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            raise ValueError("Unsupported")
+        elif backend == Backend.JSON:
+            raise ValueError("Unsupported")
+        else:
+            return "int list"
+
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if record_size == RecordSize.TINY:
+            key_range = 1
+        elif record_size == RecordSize.SMALL:
+            key_range = 5
+        elif record_size == RecordSize.MEDIUM:
+            key_range = 10
+        elif record_size == RecordSize.LARGE:
+            key_range = 20
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+        values = [str(rng.randint(-100, 100)) for i in range(0, key_range)]
+        values_str = f"{{{', '.join(values)}}}"
+        return f"'{values_str}'::int list" if in_query else values_str
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        values = [str(num) for i in range(0, num)]
+        values_str = f"{{{', '.join(values)}}}"
+        return f"'{values_str}'::int list" if in_query else values_str
+
+
+class Timestamp(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(100) == 0:
+            return "TIMESTAMP '1-01-01'"
+        if rng.randrange(100) == 0:
+            return "TIMESTAMP '99999-12-31'"
+
+        return f"TIMESTAMP '{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}'"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        day = num % 28
+        month = num // 28 % 12
+        year = num // 336
+        return f"TIMESTAMP '{year}-{month}-{day}'"
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            raise ValueError("Unsupported")
+        elif backend == Backend.JSON:
+            raise ValueError("Unsupported")
+        else:
+            return "timestamp"
+
+
+class Date(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(100) == 0:
+            return "DATE '1-01-01'"
+        if rng.randrange(100) == 0:
+            return "DATE '99999-12-31'"
+
+        return f"DATE '{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}'"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        day = num % 28
+        month = num // 28 % 12
+        year = num // 336
+        return f"TIME '{year}-{month}-{day}'"
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            raise ValueError("Unsupported")
+        elif backend == Backend.JSON:
+            raise ValueError("Unsupported")
+        else:
+            return "date"
+
+
+class Time(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(100) == 0:
+            return "TIME '00:00:00'"
+        if rng.randrange(100) == 0:
+            return "TIME '23:59:59.999999'"
+
+        return f"TIME '{rng.randrange(0, 24)}:{rng.randrange(0, 60)}:{rng.randrange(0, 60)}.{rng.randrange(0, 1000000)}'"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        seconds = num % 60
+        minutes = num // 60 % 60
+        hours = num // 3600
+        return f"TIME '{hours}:{minutes}:{seconds}'"
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            raise ValueError("Unsupported")
+        elif backend == Backend.JSON:
+            raise ValueError("Unsupported")
+        else:
+            return "time"
+
+
+class Interval(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(100) == 0:
+            return "INTERVAL '-178956970 years -8 months -2147483648 days -2562047788:00:54.775808'"
+        if rng.randrange(100) == 0:
+            return "INTERVAL '178956970 years 7 months 2147483647 days 2562047788:00:54.775807'"
+
+        if record_size == RecordSize.TINY:
+            return f"INTERVAL '{rng.random()}' MINUTE"
+        elif record_size == RecordSize.SMALL:
+            return f"INTERVAL '{rng.uniform(-100, 100)} days {rng.uniform(-100, 100)} seconds'"
+        elif record_size == RecordSize.MEDIUM:
+            return f"INTERVAL '{rng.uniform(-100, 100)} years {rng.uniform(-100, 100)} days {rng.uniform(-100, 100)} seconds'"
+        elif record_size == RecordSize.LARGE:
+            return f"INTERVAL '{rng.uniform(-178956970, 178956970)} years {rng.uniform(-365, 365)} days {rng.uniform(-1000000000, 1000000000)} seconds'"
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        return f"INTERVAL '{num}' MINUTE"
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            raise ValueError("Unsupported")
+        elif backend == Backend.JSON:
+            raise ValueError("Unsupported")
+        else:
+            return "interval"
+
+
+class Oid(Int):
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            raise ValueError("Unsupported")
+        elif backend == Backend.JSON:
+            raise ValueError("Unsupported")
+        else:
+            return "oid"
+
+
 # Sort to keep determinism for reproducible runs with specific seed
 DATA_TYPES = sorted(list(all_subclasses(DataType)), key=repr)
 
 # fastavro._schema_common.UnknownType: record
 # bytea requires Python bytes type instead of str
 DATA_TYPES_FOR_AVRO = sorted(
-    list(set(DATA_TYPES) - {TextTextMap, Jsonb, Bytea, Boolean, UUID}), key=repr
+    list(
+        set(DATA_TYPES)
+        - {
+            TextTextMap,
+            Jsonb,
+            Bytea,
+            Boolean,
+            UUID,
+            Interval,
+            IntList,
+            IntArray,
+            Time,
+            Date,
+            Timestamp,
+            Oid,
+            Numeric,
+            UInt2,
+            UInt4,
+            UInt8,
+        }
+    ),
+    key=repr,
+)
+
+DATA_TYPES_FOR_MYSQL = sorted(
+    list(
+        set(DATA_TYPES)
+        - {
+            IntList,
+            IntArray,
+            UUID,
+            TextTextMap,
+            Interval,
+            Oid,
+            Jsonb,
+            Bytea,
+            Boolean,
+            Numeric,
+            Numeric383,
+            UInt2,
+            UInt4,
+            UInt8,
+        }
+    ),
+    key=repr,
 )
 
 # MySQL doesn't support keys of unlimited size
-DATA_TYPES_FOR_KEY = sorted(list(set(DATA_TYPES_FOR_AVRO) - {Text, Bytea}), key=repr)
+DATA_TYPES_FOR_KEY = sorted(
+    list(set(DATA_TYPES_FOR_AVRO) - {Text, Bytea, IntList, IntArray}), key=repr
+)
 
-NUMBER_TYPES = [SmallInt, Int, Long, Float, Double]
+NUMBER_TYPES = [
+    SmallInt,
+    Int,
+    Long,
+    UInt2,
+    UInt4,
+    UInt8,
+    Float,
+    Double,
+    Numeric,
+    Numeric383,
+]

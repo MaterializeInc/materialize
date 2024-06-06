@@ -19,6 +19,7 @@ from materialize.data_ingest.data_type import (
     DATA_TYPES,
     DATA_TYPES_FOR_AVRO,
     DATA_TYPES_FOR_KEY,
+    DATA_TYPES_FOR_MYSQL,
     Bytea,
     DataType,
     Jsonb,
@@ -634,7 +635,7 @@ class MySqlSource(DBObject):
                 Field(f"key{i}", rng.choice(DATA_TYPES_FOR_KEY), True)
             )
         for i in range(rng.randint(0, 20)):
-            fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
+            fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_MYSQL), False))
         self.columns = [
             MySqlColumn(field.name, field.data_type, False, self) for field in fields
         ]
