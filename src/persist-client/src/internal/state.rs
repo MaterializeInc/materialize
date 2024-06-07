@@ -816,6 +816,8 @@ where
         idempotency_token: &IdempotencyToken,
         debug_info: &HandleDebugState,
         inline_writes_total_max_bytes: usize,
+        record_compactions: bool,
+        claim_unclaimed_compactions: bool,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -905,23 +907,28 @@ where
             }
         }
 
-        let merge_reqs = if batch.desc.upper() != batch.desc.lower() {
+        let mut merge_reqs = if batch.desc.upper() != batch.desc.lower() {
             self.trace.push_batch(batch.clone())
         } else {
-            let timeout_time_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
-            self.trace
-                .fueled_merge_reqs_before_ms(timeout_time_ms)
-                .take(1)
-                .collect()
+            Vec::new()
         };
 
-        for req in &merge_reqs {
-            self.trace.claim_compaction(
-                req.id,
-                ActiveCompaction {
-                    start_ms: heartbeat_timestamp_ms,
-                },
-            )
+        // NB: we don't claim unclaimed compactions when the recording flag is off, even if we'd
+        // otherwise be allowed to, to avoid triggering the same compactions in every writer.
+        if record_compactions && claim_unclaimed_compactions && merge_reqs.is_empty() {
+            let threshold_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
+            merge_reqs.extend(self.trace.fueled_merge_reqs_before_ms(threshold_ms).take(1))
+        }
+
+        if record_compactions {
+            for req in &merge_reqs {
+                self.trace.claim_compaction(
+                    req.id,
+                    ActiveCompaction {
+                        start_ms: heartbeat_timestamp_ms,
+                    },
+                )
+            }
         }
 
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
@@ -2265,6 +2272,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
+                true,
+                true,
             ),
             Break(CompareAndAppendBreak::Upper {
                 shard_upper: Antichain::from_elem(0),
@@ -2282,6 +2291,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
+                true,
+                true,
             )
             .is_continue());
 
@@ -2295,6 +2306,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
+                true,
+                true,
             ),
             Break(CompareAndAppendBreak::InvalidUsage(InvalidBounds {
                 lower: Antichain::from_elem(5),
@@ -2312,6 +2325,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
+                true,
+                true,
             ),
             Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidEmptyTimeInterval {
@@ -2332,6 +2347,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
+                true,
+                true,
             )
             .is_continue());
     }
@@ -2377,6 +2394,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
+                true,
+                true,
             )
             .is_continue());
 
@@ -2449,6 +2468,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
+                true,
+                true,
             )
             .is_continue());
 
@@ -2478,6 +2499,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
+                true,
+                true,
             )
             .is_continue());
 
@@ -2539,6 +2562,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
+                true,
+                true,
             )
             .is_continue());
         assert!(state
@@ -2551,6 +2576,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
+                true,
+                true,
             )
             .is_continue());
 
@@ -2606,6 +2633,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
+                true,
+                true,
             )
             .is_continue());
 
@@ -2625,6 +2654,8 @@ pub(crate) mod tests {
                 &IdempotencyToken::new(),
                 &debug_state(),
                 0,
+                true,
+                true,
             )
             .is_continue());
     }
@@ -2658,6 +2689,8 @@ pub(crate) mod tests {
             &IdempotencyToken::new(),
             &debug_state(),
             0,
+            true,
+            true,
         );
         assert_eq!(state.maybe_gc(false), None);
 

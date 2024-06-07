@@ -73,6 +73,19 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     }
 }
 
+pub(crate) const RECORD_COMPACTIONS: Config<bool> = Config::new(
+    "persist_record_compactions",
+    false,
+    "Record compaction requests in persistent spine state.",
+);
+
+pub(crate) const CLAIM_UNCLAIMED_COMPACTIONS: Config<bool> = Config::new(
+    "persist_claim_unclaimed_compactions",
+    false,
+    "If an append doesn't result in a compaction request, but there is some uncompacted batch \
+    in state, compact that instead.",
+);
+
 impl<K, V, T, D> Machine<K, V, T, D>
 where
     K: Debug + Codec,
@@ -393,6 +406,8 @@ where
                         idempotency_token,
                         debug_info,
                         INLINE_WRITES_TOTAL_MAX_BYTES.get(cfg),
+                        RECORD_COMPACTIONS.get(cfg),
+                        CLAIM_UNCLAIMED_COMPACTIONS.get(cfg),
                     )
                 })
                 .await;
