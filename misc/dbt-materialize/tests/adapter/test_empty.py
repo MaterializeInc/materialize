@@ -13,11 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dbt.tests.adapter.empty.test_empty import BaseTestEmpty, BaseTestEmptyInlineSourceRef
+from dbt.tests.adapter.empty.test_empty import (
+    BaseTestEmpty,
+    BaseTestEmptyInlineSourceRef,
+)
 
 
 class TestMaterializeEmpty(BaseTestEmpty):
     pass
+
 
 class TestMaterializeEmptyInlineSourceRef(BaseTestEmptyInlineSourceRef):
     pass
