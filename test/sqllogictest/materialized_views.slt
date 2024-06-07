@@ -1630,10 +1630,8 @@ COMPLETE 0
 # Pulling stats for refresh-every and similar MVs can time out,
 # since data may not yet be available...
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET statement_timeout = '1s'
-----
-COMPLETE 0
+statement ok
+SET statement_timeout = '1s'
 
 statement ok
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW const_mv;
