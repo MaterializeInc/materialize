@@ -144,7 +144,7 @@ pub struct ComputeState {
 
     /// When this replica/cluster is in read-only mode it must not affect any
     /// changes to external state. This flag can only be changed by a
-    /// [ComputeCommand].
+    /// [ComputeCommand::AllowWrites].
     ///
     /// Everything running on this replica/cluster must obey this flag. At the
     /// time of writing the only part that is doing this is `persist_sink`.
