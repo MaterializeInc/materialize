@@ -1796,10 +1796,18 @@ impl<'a> Transaction<'a> {
                 .pending
                 .iter()
                 .flat_map(|(k, vs)| vs.into_iter().map(move |v| (k, v)))
-                .filter(move |(_k, v)| v.ts == op)
-                .map(|(k, v)| (k.clone(), v.value.clone(), v.diff.clone()))
-                .map(|(k, v, diff)| (DurableType::from_key_value(k, v), diff))
-                .map(move |(update, diff)| (kind_fn(update), diff))
+                .filter_map(move |(k, v)| {
+                    if v.ts == op {
+                        let key = k.clone();
+                        let value = v.value.clone();
+                        let diff = v.diff.clone();
+                        let update = DurableType::from_key_value(key, value);
+                        let kind = kind_fn(update);
+                        Some((kind, diff))
+                    } else {
+                        None
+                    }
+                })
         }
 
         fn get_large_collection_op_updates<'a, K, T>(
@@ -1811,12 +1819,17 @@ impl<'a> Transaction<'a> {
             K: Ord + Eq + Clone + Debug,
             T: DurableType<K, ()>,
         {
-            collection
-                .iter()
-                .filter(move |(_k, _diff, ts)| *ts == op)
-                .map(|(k, diff, _ts)| (k.clone(), (), diff.clone()))
-                .map(|(k, v, diff)| (DurableType::from_key_value(k, v), diff))
-                .map(move |(update, diff)| (kind_fn(update), diff))
+            collection.iter().filter_map(move |(k, diff, ts)| {
+                if *ts == op {
+                    let key = k.clone();
+                    let diff = diff.clone();
+                    let update = DurableType::from_key_value(key, ());
+                    let kind = kind_fn(update);
+                    Some((kind, diff))
+                } else {
+                    None
+                }
+            })
         }
 
         let Transaction {
