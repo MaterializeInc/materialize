@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// TODO(parkmycar): Remove this.
+#![allow(clippy::as_conversions)]
+
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::ops::AddAssign;
@@ -886,9 +889,7 @@ impl DatumColumnDecoder {
                 // Return early because we've already packed the necessary Datums.
                 return;
             }
-            DatumColumnDecoder::RecordEmpty(array) => {
-                array.is_valid(idx).then(|| Datum::empty_list())
-            }
+            DatumColumnDecoder::RecordEmpty(array) => array.is_valid(idx).then(Datum::empty_list),
             DatumColumnDecoder::Record { fields, nulls } => {
                 let is_valid = nulls.as_ref().map(|n| n.is_valid(idx)).unwrap_or(true);
                 if !is_valid {
