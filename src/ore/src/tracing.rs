@@ -35,6 +35,7 @@ use std::time::Duration;
 #[cfg(feature = "tokio-console")]
 use console_subscriber::ConsoleLayer;
 use derivative::Derivative;
+use futures::executor::block_on;
 use http::HeaderMap;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
@@ -88,7 +89,7 @@ pub struct TracingConfig<F> {
     #[derivative(Debug = "ignore")]
     pub capture: Option<SharedStorage>,
     /// Optional Sentry configuration.
-    pub sentry: Option<SentryConfig<F>>,
+    pub sentry: SentryConfig<F>,
     /// The version of this build of the service.
     pub build_version: &'static str,
     /// The commit SHA of this build of the service.
@@ -103,7 +104,9 @@ pub struct TracingConfig<F> {
 #[derive(Debug, Clone)]
 pub struct SentryConfig<F> {
     /// Sentry data source name to submit events to.
-    pub dsn: String,
+    /// 
+    /// If unset the client will not report any panics.
+    pub dsn: Option<String>,
     /// The environment name to report to Sentry.
     ///
     /// If unset, the Sentry SDK will attempt to read the value from the
@@ -316,10 +319,8 @@ pub static GLOBAL_SUBSCRIBER: OnceLock<GlobalSubscriber> = OnceLock::new();
 /// [Jaeger]: https://jaegertracing.io
 /// [Honeycomb]: https://www.honeycomb.io
 /// [Tokio console]: https://github.com/tokio-rs/console
-// Setting up OpenTelemetry in the background requires we are in a Tokio runtime
-// context, hence the `async`.
-#[allow(clippy::unused_async)]
-pub async fn configure<F>(
+///
+pub fn configure<F>(
     config: TracingConfig<F>,
 ) -> Result<(TracingHandle, TracingGuard), anyhow::Error>
 where
@@ -368,25 +369,24 @@ where
         // Manually set up an OpenSSL-backed, h2, proxied `Channel`,
         // with the timeout configured according to:
         // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/struct.TonicExporterBuilder.html#method.with_channel
-        let channel = Endpoint::from_shared(otel_config.endpoint)?
-            .timeout(Duration::from_secs(
-                opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
-            ))
-            // TODO(guswynn): investigate if this should be non-lazy.
-            .connect_with_connector_lazy({
-                let mut http = HttpConnector::new();
-                http.enforce_http(false);
-                HttpsConnector::from((
-                    http,
-                    // This is the same as the default, plus an h2 ALPN request.
-                    tokio_native_tls::TlsConnector::from(
-                        native_tls::TlsConnector::builder()
-                            .request_alpns(&["h2"])
-                            .build()
-                            .unwrap(),
-                    ),
-                ))
-            });
+
+        // This is the same as the default, plus an h2 ALPN request.
+        let tls_connector = tokio_native_tls::TlsConnector::from(
+            native_tls::TlsConnector::builder()
+                .request_alpns(&["h2"])
+                .build()
+                .unwrap(),
+        );
+        let endpoint = Endpoint::from_shared(otel_config.endpoint)?.timeout(Duration::from_secs(
+            opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
+        ));
+        let channel_future = endpoint.connect_with_connector({
+            let mut http = HttpConnector::new();
+            http.enforce_http(false);
+            HttpsConnector::from((http, tls_connector))
+        });
+        let channel = block_on(channel_future)?;
+
         let exporter = opentelemetry_otlp::new_exporter()
             .tonic()
             .with_channel(channel)
@@ -397,20 +397,22 @@ where
             .with_max_concurrent_exports(otel_config.max_concurrent_exports)
             .with_scheduled_delay(otel_config.batch_scheduled_delay)
             .with_max_export_timeout(otel_config.max_export_timeout);
+        let trace_config = trace::config()
+            .with_max_events_per_span(2048)
+            .with_max_links_per_span(2048)
+            .with_resource(
+                // The latter resources win, so if the user specifies
+                // `service.name` in the configuration, it will override the
+                // `service.name` value we configure here.
+                Resource::new([KeyValue::new(
+                    "service.name",
+                    config.service_name.to_string(),
+                )])
+                .merge(&otel_config.resource),
+            );
         let tracer = opentelemetry_otlp::new_pipeline()
             .tracing()
-            .with_trace_config(
-                trace::config().with_resource(
-                    // The latter resources win, so if the user specifies
-                    // `service.name` in the configuration, it will override the
-                    // `service.name` value we configure here.
-                    Resource::new([KeyValue::new(
-                        "service.name",
-                        config.service_name.to_string(),
-                    )])
-                    .merge(&otel_config.resource),
-                ),
-            )
+            .with_trace_config(trace_config)
             .with_exporter(exporter)
             .with_batch_config(batch_config)
             .install_batch(opentelemetry_sdk::runtime::Tokio)
@@ -468,12 +470,6 @@ where
         });
         let metrics_layer = MetricsLayer::new(&config.registry);
         let layer = tracing_opentelemetry::layer()
-            // OpenTelemetry does not handle long-lived Spans well, and they end up continuously
-            // eating memory until OOM. So we set a max number of events that are allowed to be
-            // logged to a Span, once this max is passed, old events will get dropped
-            //
-            // TODO(parker-timmerman|guswynn): make this configurable with LaunchDarkly
-            .max_events_per_span(2048)
             .with_tracer(tracer)
             .and_then(metrics_layer)
             // WARNING, ENTERING SPOOKY ZONE 2.0

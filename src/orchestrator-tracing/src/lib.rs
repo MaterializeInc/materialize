@@ -102,7 +102,7 @@ pub struct TracingCliArgs {
     #[clap(
         long,
         env = "OPENTELEMETRY_MAX_BATCH_QUEUE_SIZE",
-        default_value = "2048",
+        default_value = "4096",
         requires = "opentelemetry-endpoint"
     )]
     pub opentelemetry_max_batch_queue_size: usize,
@@ -118,7 +118,7 @@ pub struct TracingCliArgs {
     #[clap(
         long,
         env = "OPENTELEMETRY_MAX_CONCURRENT_EXPORTS",
-        default_value = "1",
+        default_value = "8",
         requires = "opentelemetry-endpoint"
     )]
     pub opentelemetry_max_concurrent_exports: usize,
@@ -126,7 +126,7 @@ pub struct TracingCliArgs {
     #[clap(
         long,
         env = "OPENTELEMETRY_SCHED_DELAY",
-        default_value = "5000ms",
+        default_value = "1000ms",
         requires = "opentelemetry-endpoint",
         parse(try_from_str = humantime::parse_duration)
     )]
