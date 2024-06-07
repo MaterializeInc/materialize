@@ -67,7 +67,7 @@
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% set deploy_cluster = cluster ~ "_dbt_deploy" %}
+    {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
     {% if not cluster_exists(cluster) %}
         {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " does not exist") }}
     {% endif %}
@@ -98,8 +98,8 @@ BEGIN;
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% set deploy_cluster = cluster ~ "_dbt_deploy" %}
-    {{ log("Swapping clusters " ~ cluster ~ " and " ~ deploy_cluster, info=True) }}
+    {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
+    {{ log("Swapping clusters " ~ adapter.generate_final_cluster_name(cluster) ~ " and " ~ deploy_cluster, info=True) }}
     ALTER CLUSTER {{ adapter.quote(cluster) }} SWAP WITH {{ adapter.quote(deploy_cluster) }};
 {% endfor %}
 

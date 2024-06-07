@@ -13,9 +13,10 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro generate_cluster_name(default_cluster) -%}
+{% macro generate_deploy_cluster_name(custom_cluster_name) -%}
+    {{ custom_cluster_name }}_dbt_deploy
+{%- endmacro %}
 
-    {%- set deploy_suffix = "_dbt_deploy" if var('deploy', False) else "" -%}
-    {{ default_cluster }}{{ deploy_suffix }}
-
+{% macro generate_cluster_name(custom_cluster_name) -%}
+    {{ custom_cluster_name }}
 {%- endmacro %}

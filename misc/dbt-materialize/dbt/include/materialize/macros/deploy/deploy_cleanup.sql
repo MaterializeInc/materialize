@@ -39,7 +39,7 @@
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% set deploy_cluster = cluster ~ "_dbt_deploy" %}
+    {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
     {{ log("Dropping cluster " ~ deploy_cluster ~ " for target " ~ current_target_name, info=True) }}
     {% set drop_cluster %}
     DROP CLUSTER IF EXISTS {{ adapter.quote(deploy_cluster) }} CASCADE;

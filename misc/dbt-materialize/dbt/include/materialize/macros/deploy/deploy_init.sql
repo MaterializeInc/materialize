@@ -95,7 +95,7 @@
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% set deploy_cluster = cluster ~ "_dbt_deploy" %}
+    {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
     {% if cluster_exists(deploy_cluster) %}
         {{ log("Deployment cluster " ~ deploy_cluster ~ " already exists", info=True) }}
         {% set cluster_empty %}
