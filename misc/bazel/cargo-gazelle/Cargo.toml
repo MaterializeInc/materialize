@@ -30,9 +30,6 @@ tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
 workspace-hack = { version = "0.0.0", path = "../../../src/workspace-hack", optional = true }
 
-[dev-dependencies]
-insta = "1.32"
-
 [features]
 default = ["workspace-hack"]
 
