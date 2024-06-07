@@ -51,8 +51,8 @@ breaking:
     - storage-client/src/statistics.proto
     # reason: currently does not require backward-compatibility
     - storage-types/src/connections/aws.proto
-    # reason: copy-to-s3 not yet released
-    - storage-types/src/sinks.proto
+    # reason: compatible change made single -> repeated `initial_gtid_set` field
+    - storage-types/src/sources/mysql.proto
 lint:
   use:
     - DEFAULT

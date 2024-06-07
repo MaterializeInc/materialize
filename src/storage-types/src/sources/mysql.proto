@@ -15,6 +15,8 @@ import "mysql-util/src/desc.proto";
 
 package mz_storage_types.sources.mysql;
 
+// buf breaking: ignore (compatible change made single -> repeated `initial_gtid_set` field)
+
 message ProtoMySqlColumnRef {
     string schema_name = 1;
     string table_name = 2;
