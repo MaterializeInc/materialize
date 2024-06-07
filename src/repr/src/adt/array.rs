@@ -14,6 +14,8 @@ use std::error::Error;
 use std::{fmt, mem};
 
 use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
+use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -229,6 +231,62 @@ impl RustType<ProtoInvalidArrayError> for InvalidArrayError {
     }
 }
 
+/// An encoded packed variant of [`ArrayDimension`].
+///
+/// We uphold the variant that [`PackedArrayDimension`] sorts the same as
+/// [`ArrayDimension`].
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PackedArrayDimension([u8; Self::SIZE]);
+
+// `as` conversions are okay here because we're doing bit level logic to make
+// sure the sort order of the packed binary is correct. This is implementation
+// is proptest-ed below.
+#[allow(clippy::as_conversions)]
+impl FixedSizeCodec<ArrayDimension> for PackedArrayDimension {
+    const SIZE: usize = 16;
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn from_bytes(slice: &[u8]) -> Result<Self, String> {
+        let buf: [u8; Self::SIZE] = slice.try_into().map_err(|_| {
+            format!(
+                "size for PackedArrayDimension is {} bytes, got {}",
+                Self::SIZE,
+                slice.len()
+            )
+        })?;
+        Ok(PackedArrayDimension(buf))
+    }
+
+    fn from_value(value: ArrayDimension) -> Self {
+        let mut buf = [0; 16];
+
+        let lower_bound = (i64::cast_from(value.lower_bound) as u64) ^ (0x8000_0000_0000_0000u64);
+        buf[..8].copy_from_slice(&lower_bound.to_be_bytes());
+        let length = u64::cast_from(value.length);
+        buf[8..].copy_from_slice(&length.to_be_bytes());
+
+        PackedArrayDimension(buf)
+    }
+
+    fn into_value(self) -> ArrayDimension {
+        let mut lower_bound: [u8; 8] = self.0[..8].try_into().unwrap();
+        lower_bound.copy_from_slice(&self.0[..8]);
+        let lower_bound = u64::from_be_bytes(lower_bound) ^ 0x8000_0000_0000_0000u64;
+
+        let mut length: [u8; 8] = self.0[8..].try_into().unwrap();
+        length.copy_from_slice(&self.0[8..]);
+        let length = u64::from_be_bytes(length);
+
+        ArrayDimension {
+            lower_bound: isize::cast_from(lower_bound as i64),
+            length: usize::cast_from(length),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mz_proto::protobuf_roundtrip;
@@ -243,5 +301,46 @@ mod tests {
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
+    }
+
+    fn arb_array_dimension() -> impl Strategy<Value = ArrayDimension> {
+        (any::<isize>(), any::<usize>()).prop_map(|(lower, length)| ArrayDimension {
+            lower_bound: lower,
+            length,
+        })
+    }
+
+    #[mz_ore::test]
+    fn proptest_packed_array_dimension_roundtrip() {
+        fn test(og: ArrayDimension) {
+            let packed = PackedArrayDimension::from_value(og);
+            let rnd = packed.into_value();
+            assert_eq!(og, rnd);
+        }
+
+        proptest!(|(dim in arb_array_dimension())| test(dim))
+    }
+
+    #[mz_ore::test]
+    fn proptest_packed_array_dimension_sorts() {
+        fn test(mut og: Vec<ArrayDimension>) {
+            let mut packed: Vec<_> = og
+                .iter()
+                .copied()
+                .map(PackedArrayDimension::from_value)
+                .collect();
+
+            packed.sort();
+            og.sort();
+
+            let rnd: Vec<_> = packed
+                .into_iter()
+                .map(PackedArrayDimension::into_value)
+                .collect();
+            assert_eq!(og, rnd);
+        }
+
+        let strat = proptest::collection::vec(arb_array_dimension(), 0..16);
+        proptest!(|(dim in strat)| test(dim))
     }
 }

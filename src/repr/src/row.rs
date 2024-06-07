@@ -47,6 +47,7 @@ use crate::{Datum, Timestamp};
 
 pub mod collection;
 pub(crate) mod encoding;
+pub(crate) mod encoding2;
 pub mod iter;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
@@ -1981,6 +1982,80 @@ impl RowPacker<'_> {
         let cardinality = match dims {
             [] => 0,
             dims => dims.iter().map(|d| d.length).product(),
+        };
+        if nelements != cardinality {
+            self.row.data.truncate(start);
+            return Err(InvalidArrayError::WrongCardinality {
+                actual: nelements,
+                expected: cardinality,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Pushes an [`Array`] that is built from a closure.
+    ///
+    /// __WARNING__: This is fairly "sharp" tool that is easy to get wrong. You
+    /// should prefer [`RowPacker::push_array`] when possible.
+    ///
+    /// Returns an error if the number of elements pushed does not match
+    /// the cardinality of the array as described by `dims`, or if the
+    /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`]. If an error
+    /// occurs, the packer's state will be unchanged.
+    pub fn push_array_with_row_major<F, I>(
+        &mut self,
+        dims: I,
+        f: F,
+    ) -> Result<(), InvalidArrayError>
+    where
+        I: IntoIterator<Item = ArrayDimension>,
+        F: FnOnce(&mut RowPacker) -> usize,
+    {
+        let start = self.row.data.len();
+        self.row.data.push(Tag::Array.into());
+
+        // Write dummy dimension length for now, we'll fix it up.
+        let dims_start = self.row.data.len();
+        self.row.data.push(42);
+
+        let mut num_dims: u8 = 0;
+        let mut cardinality: usize = 1;
+        for dim in dims {
+            num_dims += 1;
+            cardinality *= dim.length;
+
+            self.row
+                .data
+                .extend_from_slice(&i64::cast_from(dim.lower_bound).to_le_bytes());
+            self.row
+                .data
+                .extend_from_slice(&u64::cast_from(dim.length).to_le_bytes());
+        }
+
+        if num_dims > MAX_ARRAY_DIMENSIONS {
+            // Reset the packer state so we don't have invalid data.
+            self.row.data.truncate(start);
+            return Err(InvalidArrayError::TooManyDimensions(usize::from(num_dims)));
+        }
+        // Fix up our dimension length.
+        self.row.data[dims_start..dims_start + size_of::<u8>()]
+            .copy_from_slice(&num_dims.to_le_bytes());
+
+        // Write elements.
+        let off = self.row.data.len();
+        self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
+
+        let nelements = f(self);
+
+        let len = u64::cast_from(self.row.data.len() - off - size_of::<u64>());
+        self.row.data[off..off + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
+
+        // Check that the number of elements written matches the dimension
+        // information.
+        let cardinality = match num_dims {
+            0 => 0,
+            _ => cardinality,
         };
         if nelements != cardinality {
             self.row.data.truncate(start);

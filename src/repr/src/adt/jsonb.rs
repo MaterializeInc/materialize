@@ -174,7 +174,7 @@ impl<'a> JsonbRef<'a> {
         JsonbRef { datum }
     }
 
-    /// Unwrapps a `JsonbRef` and returns the inner [`Datum`].
+    /// Unwraps a `JsonbRef` and returns the inner [`Datum`].
     pub fn into_datum(self) -> Datum<'a> {
         self.datum
     }
