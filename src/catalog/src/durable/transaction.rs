@@ -88,8 +88,8 @@ pub struct Transaction<'a> {
     txn_wal_shard: TableTransaction<(), TxnWalShardValue>,
     // Don't make this a table transaction so that it's not read into the
     // in-memory cache.
-    audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
-    storage_usage_updates: Vec<(proto::StorageUsageKey, (), i64)>,
+    audit_log_updates: Vec<(AuditLogKey, Diff, Timestamp)>,
+    storage_usage_updates: Vec<(StorageUsageKey, Diff, Timestamp)>,
     /// The ID of the current operation of this transaction.
     op_id: Timestamp,
 }
@@ -179,7 +179,7 @@ impl<'a> Transaction<'a> {
     pub fn insert_audit_log_events(&mut self, events: impl IntoIterator<Item = VersionedEvent>) {
         let events = events
             .into_iter()
-            .map(|event| (AuditLogKey { event }.into_proto(), (), 1));
+            .map(|event| (AuditLogKey { event }, 1, self.op_id));
         self.audit_log_updates.extend(events);
     }
 
@@ -193,7 +193,7 @@ impl<'a> Transaction<'a> {
     ) {
         let metrics = metrics
             .into_iter()
-            .map(|metric| (StorageUsageKey { metric }.into_proto(), (), 1));
+            .map(|metric| (StorageUsageKey { metric }, 1, self.op_id));
         self.storage_usage_updates.extend(metrics);
     }
 
@@ -1007,7 +1007,7 @@ impl<'a> Transaction<'a> {
     pub(crate) fn remove_storage_usage_events(&mut self, events: Vec<VersionedStorageUsage>) {
         let events = events
             .into_iter()
-            .map(|event| (StorageUsageKey { metric: event }.into_proto(), (), -1));
+            .map(|event| (StorageUsageKey { metric: event }, -1, self.op_id));
         self.storage_usage_updates.extend(events);
     }
 
@@ -1694,7 +1694,7 @@ impl<'a> Transaction<'a> {
     // TODO(jkosh44) This is a temporary placeholder so the in-memory catalog can pretend to be
     // collecting updates from the durable catalog.
     /// Returns the current value of all objects in the form of a positive [`StateUpdate`].
-    pub fn get_updates(&self) -> impl Iterator<Item = StateUpdate> {
+    pub fn get_bootstrap_updates(&self) -> impl Iterator<Item = StateUpdate> {
         fn get_collection_updates<K, V, T>(
             table_txn: &TableTransaction<K, V>,
             kind_fn: impl FnMut(T) -> StateUpdateKind,
@@ -1721,19 +1721,20 @@ impl<'a> Transaction<'a> {
             clusters,
             cluster_replicas,
             introspection_sources,
-            id_allocator: _,
-            configs: _,
-            settings: _,
             system_gid_mapping,
             system_configurations,
             default_privileges,
             system_privileges,
+            // Handled separately during bootstrap.
+            audit_log_updates: _,
+            storage_usage_updates: _,
             storage_collection_metadata,
             unfinalized_shards,
             // Not representable as a `StateUpdate`.
+            id_allocator: _,
+            configs: _,
+            settings: _,
             txn_wal_shard: _,
-            audit_log_updates: _,
-            storage_usage_updates: _,
             op_id: _,
         } = &self;
 
@@ -1801,6 +1802,23 @@ impl<'a> Transaction<'a> {
                 .map(move |(update, diff)| (kind_fn(update), diff))
         }
 
+        fn get_large_collection_op_updates<'a, K, T>(
+            collection: &'a Vec<(K, Diff, Timestamp)>,
+            kind_fn: impl Fn(T) -> StateUpdateKind + 'a,
+            op: Timestamp,
+        ) -> impl Iterator<Item = (StateUpdateKind, Diff)> + 'a
+        where
+            K: Ord + Eq + Clone + Debug,
+            T: DurableType<K, ()>,
+        {
+            collection
+                .iter()
+                .filter(move |(_k, _diff, ts)| *ts == op)
+                .map(|(k, diff, _ts)| (k.clone(), (), diff.clone()))
+                .map(|(k, v, diff)| (DurableType::from_key_value(k, v), diff))
+                .map(move |(update, diff)| (kind_fn(update), diff))
+        }
+
         let Transaction {
             durable_catalog: _,
             databases,
@@ -1811,19 +1829,19 @@ impl<'a> Transaction<'a> {
             clusters,
             cluster_replicas,
             introspection_sources,
-            id_allocator: _,
-            configs: _,
-            settings: _,
             system_gid_mapping,
             system_configurations,
             default_privileges,
             system_privileges,
+            audit_log_updates,
+            storage_usage_updates,
             storage_collection_metadata,
             unfinalized_shards,
             // Not representable as a `StateUpdate`.
+            id_allocator: _,
+            configs: _,
+            settings: _,
             txn_wal_shard: _,
-            audit_log_updates: _,
-            storage_usage_updates: _,
             op_id: _,
         } = &self;
 
@@ -1898,10 +1916,31 @@ impl<'a> Transaction<'a> {
                 StateUpdateKind::UnfinalizedShard,
                 self.op_id,
             ))
+            .chain(get_large_collection_op_updates(
+                audit_log_updates,
+                StateUpdateKind::AuditLog,
+                self.op_id,
+            ))
+            .chain(get_large_collection_op_updates(
+                storage_usage_updates,
+                StateUpdateKind::StorageUsage,
+                self.op_id,
+            ))
             .map(|(kind, diff)| StateUpdate { kind, diff })
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
+        let audit_log_updates = self
+            .audit_log_updates
+            .into_iter()
+            .map(|(k, diff, _op)| (k.into_proto(), (), diff))
+            .collect();
+        let storage_usage_updates = self
+            .storage_usage_updates
+            .into_iter()
+            .map(|(k, diff, _op)| (k.into_proto(), (), diff))
+            .collect();
+
         let txn_batch = TransactionBatch {
             databases: self.databases.pending(),
             schemas: self.schemas.pending(),
@@ -1921,8 +1960,8 @@ impl<'a> Transaction<'a> {
             storage_collection_metadata: self.storage_collection_metadata.pending(),
             unfinalized_shards: self.unfinalized_shards.pending(),
             txn_wal_shard: self.txn_wal_shard.pending(),
-            audit_log_updates: self.audit_log_updates,
-            storage_usage_updates: self.storage_usage_updates,
+            audit_log_updates,
+            storage_usage_updates,
         };
         (txn_batch, self.durable_catalog)
     }

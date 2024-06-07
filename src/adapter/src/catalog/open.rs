@@ -291,7 +291,7 @@ impl Catalog {
             let mut pre_item_updates = Vec::new();
             let mut item_updates = Vec::new();
             let mut post_item_updates = Vec::new();
-            for update in txn.get_updates() {
+            for update in txn.get_bootstrap_updates() {
                 match update.kind {
                     StateUpdateKind::Role(_)
                     | StateUpdateKind::Database(_)
@@ -578,7 +578,7 @@ impl Catalog {
                 .await
                 .transaction()
                 .await?
-                .get_updates()
+                .get_bootstrap_updates()
                 .collect();
             let mut builtin_table_updates = catalog.state.generate_builtin_table_updates(updates);
 
