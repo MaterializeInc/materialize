@@ -994,13 +994,10 @@ where
     // from our input frontiers that we have seen all batches for a given batch
     // description.
 
-    let shutdown_button = append_op.build(move |mut capabilities| async move {
+    let shutdown_button = append_op.build(move |_capabilities| async move {
         if !active_worker {
             return;
         }
-
-        // Explicitly pop away the capability, we don't need it.
-        capabilities.pop().expect("missing capability");
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
