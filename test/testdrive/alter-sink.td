@@ -9,6 +9,9 @@
 
 $ set-arg-default single-replica-cluster=quickstart
 
+$ set-sql-timeout duration=1s
+$ set-max-tries max-tries=30
+
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
