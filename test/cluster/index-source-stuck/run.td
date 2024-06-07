@@ -83,7 +83,7 @@ Explained Query:
 Used Indexes:
   - materialize.public.mv_counter_idx (*** full scan ***)
 
-Target cluster: quickstart
+Target cluster: cluster2
 
 > SELECT 1
 1
