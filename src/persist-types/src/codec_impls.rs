@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, BinaryArray, BinaryBuilder, BooleanArray, BooleanBufferBuilder, BooleanBuilder,
-    PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder,
+    NullArray, PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder,
 };
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::{
@@ -27,8 +27,8 @@ use timely::order::Product;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::{
-    ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, OpaqueData, PartDecoder,
-    PartEncoder, Schema,
+    ColumnCfg, ColumnDecoder, ColumnEncoder, ColumnFormat, ColumnGet, ColumnPush, Data, DataType,
+    OpaqueData, PartDecoder, PartEncoder, Schema, Schema2,
 };
 use crate::dyn_col::DynColumnMut;
 use crate::dyn_struct::{
@@ -100,6 +100,67 @@ impl Codec for () {
             return Err(format!("decode expected empty buf got {} bytes", buf.len()));
         }
         Ok(())
+    }
+}
+
+/// An encoder and decoder for [`UnitSchema`].
+#[derive(Debug)]
+pub struct UnitColumnar {
+    /// Number of entries in this column.
+    len: usize,
+}
+
+impl UnitColumnar {
+    /// Returns a new [`UnitColumnar`] with the number of entries specified.
+    pub fn new(len: usize) -> Self {
+        UnitColumnar { len }
+    }
+}
+
+impl ColumnDecoder<()> for UnitColumnar {
+    fn decode(&self, idx: usize, _val: &mut ()) {
+        if idx >= self.len {
+            panic!("index out of bounds, idx: {idx}, len: {}", self.len);
+        }
+    }
+
+    fn is_null(&self, idx: usize) -> bool {
+        if idx < self.len {
+            true
+        } else {
+            panic!("index out of bounds, idx: {idx}, len: {}", self.len);
+        }
+    }
+}
+
+impl ColumnEncoder<()> for UnitColumnar {
+    type FinishedColumn = NullArray;
+
+    fn append(&mut self, _val: &()) {
+        self.len += 1;
+    }
+
+    fn append_null(&mut self) {
+        self.len += 1;
+    }
+
+    fn finish(self) -> Self::FinishedColumn {
+        NullArray::new(self.len)
+    }
+}
+
+impl Schema2<()> for UnitSchema {
+    type ArrowColumn = NullArray;
+
+    type Decoder = UnitColumnar;
+    type Encoder = UnitColumnar;
+
+    fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+        Ok(UnitColumnar::new(col.len()))
+    }
+
+    fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+        Ok(UnitColumnar::new(0))
     }
 }
 
