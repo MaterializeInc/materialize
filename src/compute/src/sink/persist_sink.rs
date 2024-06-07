@@ -422,7 +422,14 @@ where
             loop {
                 write.wait_for_upper_past(&current_upper).await;
                 current_upper = write.shared_upper();
-                yield current_upper.clone()
+
+                if current_upper.is_empty() {
+                    // We are done! Report the final upper and then break out.
+                    yield current_upper;
+                    break;
+                } else {
+                    yield current_upper.clone()
+                }
             }
         });
         let mut upper_stream = pin::pin!(upper_stream);
