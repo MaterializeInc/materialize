@@ -1832,6 +1832,23 @@ impl<'a> Transaction<'a> {
             })
         }
 
+        fn get_large_collection_op_updates<'a, K, T>(
+            collection: &'a Vec<(K, Diff, Timestamp)>,
+            kind_fn: impl Fn(T) -> StateUpdateKind + 'a,
+            op: Timestamp,
+        ) -> impl Iterator<Item = (StateUpdateKind, Diff)> + 'a
+        where
+            K: Ord + Eq + Clone + Debug,
+            T: DurableType<K, ()>,
+        {
+            collection
+                .iter()
+                .filter(move |(_k, _diff, ts)| *ts == op)
+                .map(|(k, diff, _ts)| (k.clone(), (), diff.clone()))
+                .map(|(k, v, diff)| (DurableType::from_key_value(k, v), diff))
+                .map(move |(update, diff)| (kind_fn(update), diff))
+        }
+
         let Transaction {
             durable_catalog: _,
             databases,
