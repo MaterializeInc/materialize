@@ -13,6 +13,7 @@ from textwrap import dedent
 from typing import Any
 
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
 
@@ -38,7 +39,10 @@ class Executor:
         self._known_fragments.add(fragment)
         return result
 
-    def DockerMem(self) -> int:
+    def DockerMemMz(self) -> int:
+        raise NotImplementedError
+
+    def DockerMemClusterd(self) -> int:
         raise NotImplementedError
 
     def Messages(self) -> int | None:
@@ -47,18 +51,25 @@ class Executor:
 
 class Docker(Executor):
     def __init__(
-        self, composition: Composition, seed: int, materialized: Materialized
+        self,
+        composition: Composition,
+        seed: int,
+        materialized: Materialized,
+        clusterd: Clusterd,
     ) -> None:
         self._composition = composition
         self._seed = seed
         self._materialized = materialized
+        self._clusterd = clusterd
 
-    def RestartMz(self) -> None:
+    def RestartMzClusterd(self) -> None:
         self._composition.kill("materialized")
+        self._composition.kill("clusterd")
         # Make sure we are restarting Materialized() with the
         # same parameters (docker tag, SIZE) it was initially started with
-        with self._composition.override(self._materialized):
+        with self._composition.override(self._materialized, self._clusterd):
             self._composition.up("materialized")
+            self._composition.up("clusterd")
         return None
 
     def Td(self, input: str) -> Any:
@@ -79,8 +90,11 @@ class Docker(Executor):
             "kgen", f"--topic=testdrive-{topic}-{self._seed}", *args
         )
 
-    def DockerMem(self) -> int:
+    def DockerMemMz(self) -> int:
         return self._composition.mem("materialized")
+
+    def DockerMemClusterd(self) -> int:
+        return self._composition.mem("clusterd")
 
     def Messages(self) -> int | None:
         """Return the sum of all messages in the system from mz_internal.mz_message_counts_per_worker"""

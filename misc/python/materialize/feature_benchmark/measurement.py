@@ -12,7 +12,8 @@ from enum import Enum, auto
 
 class MeasurementType(Enum):
     WALLCLOCK = auto()
-    MEMORY = auto()
+    MEMORY_MZ = auto()
+    MEMORY_CLUSTERD = auto()
     MESSAGES = auto()
 
     def __str__(self) -> str:
