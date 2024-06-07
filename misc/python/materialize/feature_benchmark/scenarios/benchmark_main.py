@@ -1140,7 +1140,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 
     def benchmark(self) -> BenchmarkingSequence:
         return [
-            Lambda(lambda e: e.RestartMz()),
+            Lambda(lambda e: e.RestartMzClusterd()),
             Td(
                 f"""
 > SELECT COUNT(*) /* {self.n()} */ FROM s1;
@@ -1218,7 +1218,7 @@ true
 
     def benchmark(self) -> BenchmarkingSequence:
         return [
-            Lambda(lambda e: e.RestartMz()),
+            Lambda(lambda e: e.RestartMzClusterd()),
             Td(
                 """
 > SELECT * FROM s1_is_complete
@@ -1720,7 +1720,7 @@ class StartupEmpty(Startup):
 
     def benchmark(self) -> BenchmarkingSequence:
         return [
-            Lambda(lambda e: e.RestartMz()),
+            Lambda(lambda e: e.RestartMzClusterd()),
             Td(
                 """
 > SELECT 1;
@@ -1831,7 +1831,7 @@ ALTER SYSTEM SET max_clusters = {self.n() * 6};
         )
 
         return [
-            Lambda(lambda e: e.RestartMz()),
+            Lambda(lambda e: e.RestartMzClusterd()),
             Td(
                 f"""
 {check_views}
