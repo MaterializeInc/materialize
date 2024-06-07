@@ -87,3 +87,9 @@ default = ["mz-build-tools/default"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[package.metadata.cargo-gazelle.test.lib]
+data = ["src/snapshots/**"]
+
+[package.metadata.cargo-gazelle.test.lib.env]
+INSTA_WORKSPACE_ROOT = "."
