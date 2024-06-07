@@ -6382,6 +6382,7 @@ name = "mz-storage-types"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arrow",
  "async-trait",
  "aws-config",
  "aws-credential-types",
