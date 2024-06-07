@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 
 use chrono::{DateTime, Utc};
@@ -61,6 +62,17 @@ use tracing::debug;
 
 use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
+use crate::durable::objects::{
+    AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterKey, ClusterReplicaKey, CommentKey,
+    DatabaseKey, DefaultPrivilegesKey, DurableType, GidMappingKey, ItemKey, RoleKey, SchemaKey,
+    ServerConfigurationKey, StorageCollectionMetadataKey, StorageUsageKey, SystemPrivilegesKey,
+    UnfinalizedShardKey,
+};
+
+/// TODO(jkosh44) Better name
+pub trait TodoTraitName<T>: From<T> {
+    fn update_from(&mut self, durable: T);
+}
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Database {
@@ -86,6 +98,47 @@ impl From<Database> for durable::Database {
     }
 }
 
+impl From<durable::Database> for Database {
+    fn from(
+        durable::Database {
+            id,
+            oid,
+            name,
+            owner_id,
+            privileges,
+        }: durable::Database,
+    ) -> Database {
+        Database {
+            id,
+            oid,
+            schemas_by_id: BTreeMap::new(),
+            schemas_by_name: BTreeMap::new(),
+            name,
+            owner_id,
+            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+        }
+    }
+}
+
+impl TodoTraitName<durable::Database> for Database {
+    fn update_from(
+        &mut self,
+        durable::Database {
+            id,
+            oid,
+            name,
+            owner_id,
+            privileges,
+        }: durable::Database,
+    ) {
+        self.id = id;
+        self.oid = oid;
+        self.name = name;
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+    }
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Schema {
     pub name: QualifiedSchemaName,
@@ -98,6 +151,69 @@ pub struct Schema {
     pub privileges: PrivilegeMap,
 }
 
+impl From<Schema> for durable::Schema {
+    fn from(schema: Schema) -> durable::Schema {
+        durable::Schema {
+            id: schema.id.into(),
+            oid: schema.oid,
+            name: schema.name.schema,
+            database_id: schema.name.database.id(),
+            owner_id: schema.owner_id,
+            privileges: schema.privileges.into_all_values().collect(),
+        }
+    }
+}
+
+impl From<durable::Schema> for Schema {
+    fn from(
+        durable::Schema {
+            id,
+            oid,
+            name,
+            database_id,
+            owner_id,
+            privileges,
+        }: durable::Schema,
+    ) -> Schema {
+        Schema {
+            name: QualifiedSchemaName {
+                database: database_id.into(),
+                schema: name,
+            },
+            id: id.into(),
+            oid,
+            items: BTreeMap::new(),
+            functions: BTreeMap::new(),
+            types: BTreeMap::new(),
+            owner_id,
+            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+        }
+    }
+}
+
+impl TodoTraitName<durable::Schema> for Schema {
+    fn update_from(
+        &mut self,
+        durable::Schema {
+            id,
+            oid,
+            name,
+            database_id,
+            owner_id,
+            privileges,
+        }: durable::Schema,
+    ) {
+        self.name = QualifiedSchemaName {
+            database: database_id.into(),
+            schema: name,
+        };
+        self.id = id.into();
+        self.oid = oid.into();
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+    }
+}
+
 impl Schema {
     pub fn into_durable_schema(self, database_id: Option<DatabaseId>) -> durable::Schema {
         durable::Schema {
@@ -108,6 +224,28 @@ impl Schema {
             owner_id: self.owner_id,
             privileges: self.privileges.into_all_values().collect(),
         }
+    }
+
+    pub fn update_from_durable(
+        &mut self,
+        durable::Schema {
+            id,
+            oid,
+            name,
+            database_id,
+            owner_id,
+            privileges,
+        }: durable::Schema,
+    ) {
+        self.id = id.into();
+        self.oid = oid;
+        self.name.schema = name;
+        self.name.database = match database_id {
+            Some(id) => ResolvedDatabaseSpecifier::Id(id),
+            None => ResolvedDatabaseSpecifier::Ambient,
+        };
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
     }
 }
 
@@ -141,6 +279,49 @@ impl From<Role> for durable::Role {
             membership: role.membership,
             vars: role.vars,
         }
+    }
+}
+
+impl From<durable::Role> for Role {
+    fn from(
+        durable::Role {
+            id,
+            oid,
+            name,
+            attributes,
+            membership,
+            vars,
+        }: durable::Role,
+    ) -> Self {
+        Role {
+            name,
+            id,
+            oid,
+            attributes,
+            membership,
+            vars,
+        }
+    }
+}
+
+impl TodoTraitName<durable::Role> for Role {
+    fn update_from(
+        &mut self,
+        durable::Role {
+            id,
+            oid,
+            name,
+            attributes,
+            membership,
+            vars,
+        }: durable::Role,
+    ) {
+        self.id = id;
+        self.oid = oid;
+        self.name = name;
+        self.attributes = attributes;
+        self.membership = membership;
+        self.vars = vars;
     }
 }
 
@@ -267,6 +448,49 @@ impl From<Cluster> for durable::Cluster {
             privileges: cluster.privileges.into_all_values().collect(),
             config: cluster.config.into(),
         }
+    }
+}
+
+impl From<durable::Cluster> for Cluster {
+    fn from(
+        durable::Cluster {
+            id,
+            name,
+            owner_id,
+            privileges,
+            config,
+        }: durable::Cluster,
+    ) -> Self {
+        Cluster {
+            name: name.clone(),
+            id,
+            bound_objects: BTreeSet::new(),
+            log_indexes: BTreeMap::new(),
+            replica_id_by_name_: BTreeMap::new(),
+            replicas_by_id_: BTreeMap::new(),
+            owner_id,
+            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+            config: config.into(),
+        }
+    }
+}
+
+impl TodoTraitName<durable::Cluster> for Cluster {
+    fn update_from(
+        &mut self,
+        durable::Cluster {
+            id,
+            name,
+            owner_id,
+            privileges,
+            config,
+        }: durable::Cluster,
+    ) {
+        self.id = id;
+        self.name = name;
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+        self.config = config.into();
     }
 }
 
@@ -2227,12 +2451,139 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     }
 }
 
+/// TODO(jkosh44)
+#[derive(Debug, Clone)]
+pub enum StateDiff<T> {
+    Delete(T),
+    Insert(T),
+    Update { retraction: T, addition: T },
+}
+
+/// TODO(jkosh44) this is a bad name.
+#[derive(Debug, Clone)]
+pub enum StateDiffType {
+    Delete,
+    Insert,
+    Update,
+}
+
+impl<T> StateDiff<T> {
+    /// TODO(jkosh44)
+    pub fn diff_type(&self) -> StateDiffType {
+        match self {
+            StateDiff::Delete(_) => StateDiffType::Delete,
+            StateDiff::Insert(_) => StateDiffType::Insert,
+            StateDiff::Update { .. } => StateDiffType::Update,
+        }
+    }
+
+    pub fn retraction(&self) -> Option<&T> {
+        match self {
+            StateDiff::Delete(retraction) => Some(retraction),
+            StateDiff::Insert(_addition) => None,
+            StateDiff::Update {
+                retraction,
+                addition: _,
+            } => Some(retraction),
+        }
+    }
+
+    pub fn addition(&self) -> Option<&T> {
+        match self {
+            StateDiff::Delete(_retraction) => None,
+            StateDiff::Insert(addition) => Some(addition),
+            StateDiff::Update {
+                retraction: _,
+                addition,
+            } => Some(addition),
+        }
+    }
+}
+
+impl<T> StateDiff<T>
+where
+    T: DurableType + Debug,
+    T::Key: Ord + Debug,
+{
+    /// TODO(jkosh44)
+    pub fn new(updates: Vec<(T, Diff)>) -> Vec<StateDiff<T>> {
+        // First pass to see which updates have matching pairs.
+        let mut grouped_updates = BTreeMap::new();
+        for (update, diff) in &updates {
+            let key = update.key_ref();
+            if *diff == -1 {
+                let prev = grouped_updates.insert(key, false);
+                assert_eq!(
+                    prev, None,
+                    "cannot have multiple retractions for the same key for consolidated updates"
+                );
+            } else if *diff == 1 {
+                if let Some(addition) = grouped_updates.get_mut(&key) {
+                    assert!(
+                        !*addition,
+                        "cannot have multiple additions for the same key for consolidated updates: {key:?}"
+                    );
+                    *addition = true;
+                }
+            } else {
+                unreachable!("invalid update: ({update:?}, {diff:?})")
+            }
+        }
+
+        // Second pass groups the retractions and additions together.
+        let mut grouped_update_keys: BTreeSet<_> = grouped_updates
+            .into_iter()
+            .filter_map(|(update, addition)| if addition { Some(update) } else { None })
+            .collect();
+        let mut grouped_update_retractions = BTreeMap::new();
+        let mut grouped_updates = Vec::with_capacity(updates.len());
+        for (update, diff) in updates {
+            let key = update.key_ref();
+            if diff == -1 {
+                if grouped_update_keys.remove(&key) {
+                    grouped_update_retractions.insert(key, update);
+                } else {
+                    grouped_updates.push(StateDiff::Delete(update));
+                }
+            } else if diff == 1 {
+                if let Some(retraction) = grouped_update_retractions.remove(&key) {
+                    grouped_updates.push(StateDiff::Update {
+                        retraction,
+                        addition: update,
+                    });
+                } else {
+                    grouped_updates.push(StateDiff::Insert(update));
+                }
+            } else {
+                unreachable!("invalid update: ({update:?}, {diff:?})")
+            }
+        }
+
+        grouped_updates
+    }
+
+    /// TODO(jkosh44)
+    pub fn key_ref(&self) -> T::Key {
+        match self {
+            StateDiff::Insert(addition) => addition.key_ref(),
+            StateDiff::Delete(retraction) => retraction.key_ref(),
+            StateDiff::Update {
+                retraction,
+                addition,
+            } => {
+                let key = retraction.key_ref();
+                assert_eq!(key, addition.key_ref());
+                key
+            }
+        }
+    }
+}
+
 /// A single update to the catalog state.
 #[derive(Debug)]
 pub struct StateUpdate {
     pub kind: StateUpdateKind,
     // TODO(jkosh44) Add timestamps.
-    pub diff: Diff,
 }
 
 /// The contents of a single state update.
@@ -2240,6 +2591,229 @@ pub struct StateUpdate {
 /// Variants are listed in dependency order.
 #[derive(Debug, Clone)]
 pub enum StateUpdateKind {
+    Role(StateDiff<durable::objects::Role>),
+    Database(StateDiff<durable::objects::Database>),
+    Schema(StateDiff<durable::objects::Schema>),
+    DefaultPrivilege(StateDiff<durable::objects::DefaultPrivilege>),
+    SystemPrivilege(StateDiff<MzAclItem>),
+    SystemConfiguration(StateDiff<durable::objects::SystemConfiguration>),
+    Cluster(StateDiff<durable::objects::Cluster>),
+    IntrospectionSourceIndex(StateDiff<durable::objects::IntrospectionSourceIndex>),
+    ClusterReplica(StateDiff<durable::objects::ClusterReplica>),
+    SystemObjectMapping(StateDiff<durable::objects::SystemObjectMapping>),
+    Item(StateDiff<durable::objects::Item>),
+    Comment(StateDiff<durable::objects::Comment>),
+    AuditLog(StateDiff<durable::objects::AuditLog>),
+    StorageUsage(StateDiff<durable::objects::StorageUsage>),
+    // Storage updates.
+    StorageCollectionMetadata(StateDiff<durable::objects::StorageCollectionMetadata>),
+    UnfinalizedShard(StateDiff<durable::objects::UnfinalizedShard>),
+}
+
+impl StateUpdateKind {
+    /// TODO(jkosh44) This requires an annoying amount of cloning. Try and replace all the fields
+    /// of the keys with `CoW`.
+    pub fn key_ref(&self) -> StateUpdateKindKey {
+        match self {
+            StateUpdateKind::Role(kind) => StateUpdateKindKey::Role(kind.key_ref()),
+            StateUpdateKind::Database(kind) => StateUpdateKindKey::Database(kind.key_ref()),
+            StateUpdateKind::Schema(kind) => StateUpdateKindKey::Schema(kind.key_ref()),
+            StateUpdateKind::DefaultPrivilege(kind) => {
+                StateUpdateKindKey::DefaultPrivilege(kind.key_ref())
+            }
+            StateUpdateKind::SystemPrivilege(kind) => {
+                StateUpdateKindKey::SystemPrivilege(kind.key_ref())
+            }
+            StateUpdateKind::SystemConfiguration(kind) => {
+                StateUpdateKindKey::SystemConfiguration(kind.key_ref())
+            }
+            StateUpdateKind::Cluster(kind) => StateUpdateKindKey::Cluster(kind.key_ref()),
+            StateUpdateKind::IntrospectionSourceIndex(kind) => {
+                StateUpdateKindKey::IntrospectionSourceIndex(kind.key_ref())
+            }
+            StateUpdateKind::ClusterReplica(kind) => {
+                StateUpdateKindKey::ClusterReplica(kind.key_ref())
+            }
+            StateUpdateKind::SystemObjectMapping(kind) => {
+                StateUpdateKindKey::SystemObjectMapping(kind.key_ref())
+            }
+            StateUpdateKind::Item(kind) => StateUpdateKindKey::Item(kind.key_ref()),
+            StateUpdateKind::Comment(kind) => StateUpdateKindKey::Comment(kind.key_ref()),
+            StateUpdateKind::AuditLog(kind) => StateUpdateKindKey::AuditLog(kind.key_ref()),
+            StateUpdateKind::StorageUsage(kind) => StateUpdateKindKey::StorageUsage(kind.key_ref()),
+            StateUpdateKind::StorageCollectionMetadata(kind) => {
+                StateUpdateKindKey::StorageCollectionMetadata(kind.key_ref())
+            }
+            StateUpdateKind::UnfinalizedShard(kind) => {
+                StateUpdateKindKey::UnfinalizedShard(kind.key_ref())
+            }
+        }
+    }
+
+    /// TODO(jkosh44)
+    pub fn diff_type(&self) -> StateDiffType {
+        match self {
+            StateUpdateKind::Role(kind) => kind.diff_type(),
+            StateUpdateKind::Database(kind) => kind.diff_type(),
+            StateUpdateKind::Schema(kind) => kind.diff_type(),
+            StateUpdateKind::DefaultPrivilege(kind) => kind.diff_type(),
+            StateUpdateKind::SystemPrivilege(kind) => kind.diff_type(),
+            StateUpdateKind::SystemConfiguration(kind) => kind.diff_type(),
+            StateUpdateKind::Cluster(kind) => kind.diff_type(),
+            StateUpdateKind::IntrospectionSourceIndex(kind) => kind.diff_type(),
+            StateUpdateKind::ClusterReplica(kind) => kind.diff_type(),
+            StateUpdateKind::SystemObjectMapping(kind) => kind.diff_type(),
+            StateUpdateKind::Item(kind) => kind.diff_type(),
+            StateUpdateKind::Comment(kind) => kind.diff_type(),
+            StateUpdateKind::AuditLog(kind) => kind.diff_type(),
+            StateUpdateKind::StorageUsage(kind) => kind.diff_type(),
+            StateUpdateKind::StorageCollectionMetadata(kind) => kind.diff_type(),
+            StateUpdateKind::UnfinalizedShard(kind) => kind.diff_type(),
+        }
+    }
+
+    pub fn retraction(&self) -> Option<YetAnotherStateUpdateKind> {
+        match self {
+            StateUpdateKind::Role(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::Role),
+            StateUpdateKind::Database(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::Database),
+            StateUpdateKind::Schema(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::Schema),
+            StateUpdateKind::DefaultPrivilege(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::DefaultPrivilege),
+            StateUpdateKind::SystemPrivilege(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::SystemPrivilege),
+            StateUpdateKind::SystemConfiguration(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::SystemConfiguration),
+            StateUpdateKind::Cluster(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::Cluster),
+            StateUpdateKind::IntrospectionSourceIndex(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::IntrospectionSourceIndex),
+            StateUpdateKind::ClusterReplica(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::ClusterReplica),
+            StateUpdateKind::SystemObjectMapping(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::SystemObjectMapping),
+            StateUpdateKind::Item(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::Item),
+            StateUpdateKind::Comment(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::Comment),
+            StateUpdateKind::AuditLog(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::AuditLog),
+            StateUpdateKind::StorageUsage(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::StorageUsage),
+            StateUpdateKind::StorageCollectionMetadata(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::StorageCollectionMetadata),
+            StateUpdateKind::UnfinalizedShard(update) => update
+                .retraction()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::UnfinalizedShard),
+        }
+    }
+
+    pub fn addition(&self) -> Option<YetAnotherStateUpdateKind> {
+        match self {
+            StateUpdateKind::Role(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::Role),
+            StateUpdateKind::Database(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::Database),
+            StateUpdateKind::Schema(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::Schema),
+            StateUpdateKind::DefaultPrivilege(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::DefaultPrivilege),
+            StateUpdateKind::SystemPrivilege(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::SystemPrivilege),
+            StateUpdateKind::SystemConfiguration(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::SystemConfiguration),
+            StateUpdateKind::Cluster(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::Cluster),
+            StateUpdateKind::IntrospectionSourceIndex(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::IntrospectionSourceIndex),
+            StateUpdateKind::ClusterReplica(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::ClusterReplica),
+            StateUpdateKind::SystemObjectMapping(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::SystemObjectMapping),
+            StateUpdateKind::Item(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::Item),
+            StateUpdateKind::Comment(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::Comment),
+            StateUpdateKind::AuditLog(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::AuditLog),
+            StateUpdateKind::StorageUsage(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::StorageUsage),
+            StateUpdateKind::StorageCollectionMetadata(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::StorageCollectionMetadata),
+            StateUpdateKind::UnfinalizedShard(update) => update
+                .addition()
+                .cloned()
+                .map(YetAnotherStateUpdateKind::UnfinalizedShard),
+        }
+    }
+}
+
+/// TODO(jkosh44)
+#[derive(Debug, Clone)]
+pub enum YetAnotherStateUpdateKind {
     Role(durable::objects::Role),
     Database(durable::objects::Database),
     Schema(durable::objects::Schema),
@@ -2257,4 +2831,26 @@ pub enum StateUpdateKind {
     // Storage updates.
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),
+}
+
+/// TODO(jkosh44) This requires an annoying amount of cloning.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StateUpdateKindKey {
+    Role(RoleKey),
+    Database(DatabaseKey),
+    Schema(SchemaKey),
+    DefaultPrivilege(DefaultPrivilegesKey),
+    SystemPrivilege(SystemPrivilegesKey),
+    SystemConfiguration(ServerConfigurationKey),
+    Cluster(ClusterKey),
+    IntrospectionSourceIndex(ClusterIntrospectionSourceIndexKey),
+    ClusterReplica(ClusterReplicaKey),
+    SystemObjectMapping(GidMappingKey),
+    Item(ItemKey),
+    Comment(CommentKey),
+    AuditLog(AuditLogKey),
+    StorageUsage(StorageUsageKey),
+    // Storage updates.
+    StorageCollectionMetadata(StorageCollectionMetadataKey),
+    UnfinalizedShard(UnfinalizedShardKey),
 }

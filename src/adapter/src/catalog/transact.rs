@@ -2222,7 +2222,7 @@ impl Catalog {
         to_name: QualifiedItemName,
         to_item: CatalogItem,
     ) {
-        let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
+        let old_entry = state.entry_by_id.get(&id).expect("catalog out of sync");
         info!(
             "update {} {} ({})",
             old_entry.item_type(),
@@ -2230,87 +2230,14 @@ impl Catalog {
             id
         );
 
-        let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-        let schema = state.get_schema_mut(
-            &old_entry.name().qualifiers.database_spec,
-            &old_entry.name().qualifiers.schema_spec,
-            conn_id,
+        state.update_entry(
+            id,
+            old_entry.oid,
+            to_name,
+            to_item,
+            old_entry.owner_id,
+            old_entry.privileges.clone(),
         );
-        schema.items.remove(&old_entry.name().item);
-
-        // Dropped deps
-        let dropped_references: Vec<_> = old_entry
-            .references()
-            .0
-            .difference(&to_item.references().0)
-            .cloned()
-            .collect();
-        let dropped_uses: Vec<_> = old_entry
-            .uses()
-            .difference(&to_item.uses())
-            .cloned()
-            .collect();
-
-        // We only need to install this item on items in the `referenced_by` of new
-        // dependencies.
-        let new_references: Vec<_> = to_item
-            .references()
-            .0
-            .difference(&old_entry.references().0)
-            .cloned()
-            .collect();
-        // We only need to install this item on items in the `used_by` of new
-        // dependencies.
-        let new_uses: Vec<_> = to_item
-            .uses()
-            .difference(&old_entry.uses())
-            .cloned()
-            .collect();
-
-        let mut new_entry = old_entry.clone();
-        new_entry.name = to_name;
-        new_entry.item = to_item;
-
-        schema.items.insert(new_entry.name().item.clone(), id);
-
-        for u in dropped_references {
-            // OK if we no longer have this entry because we are dropping our
-            // dependency on it.
-            if let Some(metadata) = state.entry_by_id.get_mut(&u) {
-                metadata.referenced_by.retain(|dep_id| *dep_id != id)
-            }
-        }
-
-        for u in dropped_uses {
-            // OK if we no longer have this entry because we are dropping our
-            // dependency on it.
-            if let Some(metadata) = state.entry_by_id.get_mut(&u) {
-                metadata.used_by.retain(|dep_id| *dep_id != id)
-            }
-        }
-
-        for u in new_references {
-            match state.entry_by_id.get_mut(&u) {
-                Some(metadata) => metadata.referenced_by.push(new_entry.id()),
-                None => panic!(
-                    "Catalog: missing dependent catalog item {} while updating {}",
-                    &u,
-                    state.resolve_full_name(new_entry.name(), new_entry.conn_id())
-                ),
-            }
-        }
-        for u in new_uses {
-            match state.entry_by_id.get_mut(&u) {
-                Some(metadata) => metadata.used_by.push(new_entry.id()),
-                None => panic!(
-                    "Catalog: missing dependent catalog item {} while updating {}",
-                    &u,
-                    state.resolve_full_name(new_entry.name(), new_entry.conn_id())
-                ),
-            }
-        }
-
-        state.entry_by_id.insert(id, new_entry);
         let item_updates = state.resolve_builtin_table_updates(state.pack_item_update(id, 1));
         builtin_table_updates.extend(item_updates);
     }

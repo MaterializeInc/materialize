@@ -54,7 +54,7 @@ use crate::durable::{
     SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
     USER_ROLE_ID_ALLOC_KEY,
 };
-use crate::memory::objects::{StateUpdate, StateUpdateKind};
+use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
 type Timestamp = u64;
 
@@ -1695,20 +1695,22 @@ impl<'a> Transaction<'a> {
     // collecting updates from the durable catalog.
     /// Returns the current value of all objects in the form of a positive [`StateUpdate`].
     pub fn get_bootstrap_updates(&self) -> impl Iterator<Item = StateUpdate> {
-        fn get_collection_updates<K, V, T>(
-            table_txn: &TableTransaction<K, V>,
-            kind_fn: impl FnMut(T) -> StateUpdateKind,
+        fn get_collection_updates<T>(
+            table_txn: &TableTransaction<T::Key, T::Value>,
+            kind_fn: impl Fn(StateDiff<T>) -> StateUpdateKind,
         ) -> impl Iterator<Item = StateUpdateKind>
         where
-            K: Ord + Eq + Clone + Debug,
-            V: Ord + Clone + Debug,
-            T: DurableType<K, V>,
+            T::Key: Ord + Eq + Clone + Debug,
+            T::Value: Ord + Clone + Debug,
+            T: DurableType + Debug,
         {
-            table_txn
+            let updates = table_txn
                 .items()
                 .into_iter()
-                .map(|(k, v)| DurableType::from_key_value(k, v))
-                .map(kind_fn)
+                .map(|(k, v)| (DurableType::from_key_value(k, v), 1))
+                .collect();
+            let updates = StateDiff::new(updates);
+            updates.into_iter().map(kind_fn)
         }
 
         let Transaction {
@@ -1777,58 +1779,71 @@ impl<'a> Transaction<'a> {
                 unfinalized_shards,
                 StateUpdateKind::UnfinalizedShard,
             ))
-            .map(|kind| StateUpdate { kind, diff: 1 })
+            .map(|kind| StateUpdate { kind })
     }
 
-    /// Returns the updates of the current op.
+    /// Returns the consolidated updates of the current op.
     pub fn get_op_updates(&self) -> impl Iterator<Item = StateUpdate> + '_ {
-        fn get_collection_op_updates<'a, K, V, T>(
-            table_txn: &'a TableTransaction<K, V>,
-            kind_fn: impl Fn(T) -> StateUpdateKind + 'a,
+        fn get_collection_op_updates<'a, T>(
+            table_txn: &'a TableTransaction<T::Key, T::Value>,
+            kind_fn: impl Fn(StateDiff<T>) -> StateUpdateKind + 'a,
             op: Timestamp,
-        ) -> impl Iterator<Item = (StateUpdateKind, Diff)> + 'a
+        ) -> impl Iterator<Item = StateUpdate> + 'a
         where
-            K: Ord + Eq + Clone + Debug,
-            V: Ord + Clone + Debug,
-            T: DurableType<K, V>,
+            T::Key: Ord + Eq + Clone + Debug,
+            T::Value: Ord + Clone + Debug,
+            T: DurableType + Debug + 'a,
         {
-            table_txn
+            let mut updates = table_txn
                 .pending
                 .iter()
                 .flat_map(|(k, vs)| vs.into_iter().map(move |v| (k, v)))
                 .filter_map(move |(k, v)| {
                     if v.ts == op {
-                        let key = k.clone();
-                        let value = v.value.clone();
-                        let diff = v.diff.clone();
-                        let update = DurableType::from_key_value(key, value);
-                        let kind = kind_fn(update);
-                        Some((kind, diff))
+                        Some(((k.clone(), v.value.clone()), v.diff))
                     } else {
                         None
                     }
                 })
+                .collect();
+            differential_dataflow::consolidation::consolidate(&mut updates);
+            let updates = updates
+                .into_iter()
+                .map(|((key, value), diff)| (DurableType::from_key_value(key, value), diff))
+                .collect();
+            let updates = StateDiff::new(updates);
+            updates.into_iter().map(move |update| StateUpdate {
+                kind: kind_fn(update),
+            })
         }
 
-        fn get_large_collection_op_updates<'a, K, T>(
-            collection: &'a Vec<(K, Diff, Timestamp)>,
-            kind_fn: impl Fn(T) -> StateUpdateKind + 'a,
+        fn get_large_collection_op_updates<'a, T>(
+            collection: &'a Vec<(T::Key, Diff, Timestamp)>,
+            kind_fn: impl Fn(StateDiff<T>) -> StateUpdateKind + 'a,
             op: Timestamp,
-        ) -> impl Iterator<Item = (StateUpdateKind, Diff)> + 'a
+        ) -> impl Iterator<Item = StateUpdate> + 'a
         where
-            K: Ord + Eq + Clone + Debug,
-            T: DurableType<K, ()>,
+            T::Key: Ord + Eq + Clone + Debug,
+            T: DurableType<Value = ()> + Debug + 'a,
         {
-            collection.iter().filter_map(move |(k, diff, ts)| {
-                if *ts == op {
-                    let key = k.clone();
-                    let diff = diff.clone();
-                    let update = DurableType::from_key_value(key, ());
-                    let kind = kind_fn(update);
-                    Some((kind, diff))
-                } else {
-                    None
-                }
+            let mut updates = collection
+                .iter()
+                .filter_map(move |(k, diff, ts)| {
+                    if *ts == op {
+                        Some((k.clone(), diff.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            differential_dataflow::consolidation::consolidate(&mut updates);
+            let updates = updates
+                .into_iter()
+                .map(|(key, diff)| (DurableType::from_key_value(key, ()), diff))
+                .collect();
+            let updates = StateDiff::new(updates);
+            updates.into_iter().map(move |update| StateUpdate {
+                kind: kind_fn(update),
             })
         }
 
@@ -1939,7 +1954,6 @@ impl<'a> Transaction<'a> {
                 StateUpdateKind::StorageUsage,
                 self.op_id,
             ))
-            .map(|(kind, diff)| StateUpdate { kind, diff })
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {

@@ -30,7 +30,8 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges, StateUpdate, StateUpdateKind,
+    CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges, StateDiff, StateUpdate,
+    StateUpdateKind,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
@@ -346,7 +347,7 @@ impl Catalog {
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
                 // Throw the existing item updates away because they may have been re-written in
                 // the migration.
-                let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), diff: 1}).collect();
+                let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(StateDiff::Insert(item))}).collect();
                 let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
                 builtin_table_updates.extend(builtin_table_update);
             } else {
@@ -592,7 +593,7 @@ impl Catalog {
             let (state, builtin_migration_metadata, mut builtin_table_updates, last_seen_version) =
                 Self::initialize_state(config.state, &mut storage).await?;
 
-            let catalog = Catalog {
+            let mut catalog = Catalog {
                 state,
                 plans: CatalogPlans::default(),
                 transient_revision: 1,
@@ -643,13 +644,17 @@ impl Catalog {
                 .await?
                 .into_iter()
                 .map(|event| StateUpdate {
-                    kind: StateUpdateKind::AuditLog(mz_catalog::durable::objects::AuditLog {
-                        event,
-                    }),
-                    diff: 1,
+                    kind: StateUpdateKind::AuditLog(StateDiff::Insert(
+                        mz_catalog::durable::objects::AuditLog { event },
+                    )),
                 })
                 .collect();
-            builtin_table_updates.extend(catalog.state.generate_builtin_table_updates(audit_logs));
+            let audit_log_updates = catalog.state.apply_updates(audit_logs);
+            builtin_table_updates.extend(
+                catalog
+                    .state
+                    .resolve_builtin_table_updates(audit_log_updates),
+            );
 
             // To avoid reading over storage_usage events multiple times, do both
             // the table updates and delete calculations in a single read over the
@@ -668,16 +673,16 @@ impl Catalog {
                 .await?
                 .into_iter()
                 .map(|metric| StateUpdate {
-                    kind: StateUpdateKind::StorageUsage(
+                    kind: StateUpdateKind::StorageUsage(StateDiff::Insert(
                         mz_catalog::durable::objects::StorageUsage { metric },
-                    ),
-                    diff: 1,
+                    )),
                 })
                 .collect();
+            let storage_usage_updates = catalog.state.apply_updates(storage_usage_events);
             builtin_table_updates.extend(
                 catalog
                     .state
-                    .generate_builtin_table_updates(storage_usage_events),
+                    .resolve_builtin_table_updates(storage_usage_updates),
             );
 
             for ip in &catalog.state.egress_ips {
@@ -899,7 +904,7 @@ impl Catalog {
                     )
                 }),
         )?;
-        let updates = txn.get_op_updates().collect();
+        let updates: Vec<_> = txn.get_op_updates().collect();
         let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
         builtin_table_updates.extend(builtin_table_update);
         txn.commit_op();

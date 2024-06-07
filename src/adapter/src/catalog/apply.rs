@@ -16,22 +16,23 @@ use std::fmt::Debug;
 use std::iter;
 
 use mz_catalog::builtin::{Builtin, BuiltinTable, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP};
-use mz_catalog::durable::Item;
+use mz_catalog::durable::objects::SystemObjectDescription;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Log, Role, Schema,
-    Source, StateUpdate, StateUpdateKind, Table, Type,
+    CatalogItem, ClusterReplica, DataSourceDesc, Func, Log, Source, StateDiff, StateDiffType,
+    StateUpdate, StateUpdateKind, Table, TodoTraitName, Type, YetAnotherStateUpdateKind,
 };
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_ore::instrument;
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId};
 use mz_sql::catalog::{CatalogItemType, CatalogSchema, CatalogType, NameReference};
 use mz_sql::names::{
-    ItemQualifiers, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds,
-    SchemaSpecifier,
+    ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier,
 };
 use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
@@ -43,14 +44,17 @@ use tracing::warn;
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
 
 /// Sort [`StateUpdate`]s in dependency order.
+///
+/// Panics if `updates` is not consolidated.
 fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
-    fn push_update<T>(update: T, diff: Diff, retractions: &mut Vec<T>, additions: &mut Vec<T>) {
-        if diff == -1 {
-            retractions.push(update);
-        } else if diff == 1 {
-            additions.push(update);
-        } else {
-            unreachable!("invalid diff: {diff}");
+    fn push_update(
+        update: StateUpdate,
+        retractions: &mut Vec<StateUpdate>,
+        additions: &mut Vec<StateUpdate>,
+    ) {
+        match update.kind.diff_type() {
+            StateDiffType::Delete => retractions.push(update),
+            StateDiffType::Insert | StateDiffType::Update => additions.push(update),
         }
     }
 
@@ -65,7 +69,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let mut post_item_retractions = Vec::new();
     let mut post_item_additions = Vec::new();
     for update in updates {
-        let diff = update.diff.clone();
         match update.kind {
             StateUpdateKind::Role(_)
             | StateUpdateKind::Database(_)
@@ -74,66 +77,58 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | StateUpdateKind::SystemPrivilege(_)
             | StateUpdateKind::SystemConfiguration(_) => push_update(
                 update,
-                diff,
                 &mut pre_cluster_retractions,
                 &mut pre_cluster_additions,
             ),
             StateUpdateKind::Cluster(_)
             | StateUpdateKind::IntrospectionSourceIndex(_)
-            | StateUpdateKind::ClusterReplica(_) => push_update(
-                update,
-                diff,
-                &mut cluster_retractions,
-                &mut cluster_additions,
-            ),
-            StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
-                builtin_item_updates.push((system_object_mapping, update.diff))
+            | StateUpdateKind::ClusterReplica(_) => {
+                push_update(update, &mut cluster_retractions, &mut cluster_additions)
             }
-            StateUpdateKind::Item(item) => push_update(
-                (item, update.diff),
-                diff,
-                &mut item_retractions,
-                &mut item_additions,
-            ),
+            StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
+                builtin_item_updates.push(system_object_mapping)
+            }
+            StateUpdateKind::Item(item) => match item.diff_type() {
+                StateDiffType::Delete => item_retractions.push(item),
+                StateDiffType::Insert | StateDiffType::Update => item_additions.push(item),
+            },
             StateUpdateKind::Comment(_)
             | StateUpdateKind::AuditLog(_)
             | StateUpdateKind::StorageUsage(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
-            | StateUpdateKind::UnfinalizedShard(_) => push_update(
-                update,
-                diff,
-                &mut post_item_retractions,
-                &mut post_item_additions,
-            ),
+            | StateUpdateKind::UnfinalizedShard(_) => {
+                push_update(update, &mut post_item_retractions, &mut post_item_additions)
+            }
         }
     }
 
     // Sort builtin item updates by dependency.
     let builtin_item_updates = builtin_item_updates
         .into_iter()
-        .map(|(system_object_mapping, diff)| {
-            let idx = BUILTIN_LOOKUP
-                .get(&system_object_mapping.description)
-                .expect("missing builtin")
-                .0;
-            (idx, system_object_mapping, diff)
+        .map(|system_object_mapping| {
+            let key = system_object_mapping.key_ref();
+            let description = SystemObjectDescription {
+                schema_name: key.schema_name,
+                object_type: key.object_type,
+                object_name: key.object_name,
+            };
+            let idx = BUILTIN_LOOKUP.get(&description).expect("missing builtin").0;
+            (idx, system_object_mapping)
         })
-        .sorted_by_key(|(idx, _, _)| *idx)
-        .map(|(_, system_object_mapping, diff)| (system_object_mapping, diff));
+        .sorted_by_key(|(idx, _)| *idx)
+        .map(|(_, system_object_mapping)| system_object_mapping);
 
     // Further partition builtin item updates.
     let mut other_builtin_retractions = Vec::new();
     let mut other_builtin_additions = Vec::new();
     let mut builtin_index_retractions = Vec::new();
     let mut builtin_index_additions = Vec::new();
-    for (builtin_item_update, diff) in builtin_item_updates {
-        match &builtin_item_update.description.object_type {
+    for builtin_item_update in builtin_item_updates {
+        match &builtin_item_update.key_ref().object_type {
             CatalogItemType::Index => push_update(
                 StateUpdate {
                     kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                    diff,
                 },
-                diff,
                 &mut builtin_index_retractions,
                 &mut builtin_index_additions,
             ),
@@ -148,9 +143,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | CatalogItemType::Connection => push_update(
                 StateUpdate {
                     kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                    diff,
                 },
-                diff,
                 &mut other_builtin_retractions,
                 &mut other_builtin_additions,
             ),
@@ -158,13 +151,14 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     }
 
     // Sort item updates by GlobalId.
-    fn sort_item_updates(item_updates: Vec<(Item, Diff)>) -> Vec<StateUpdate> {
+    fn sort_item_updates(
+        item_updates: Vec<StateDiff<mz_catalog::durable::Item>>,
+    ) -> Vec<StateUpdate> {
         item_updates
             .into_iter()
-            .sorted_by_key(|(item, _diff)| item.id)
-            .map(|(item, diff)| StateUpdate {
+            .sorted_by_key(|item| item.key_ref().gid)
+            .map(|item| StateUpdate {
                 kind: StateUpdateKind::Item(item),
-                diff,
             })
             .collect()
     }
@@ -212,15 +206,6 @@ impl CatalogState {
             BuiltinViewAdditions(Vec<(&'static Builtin<NameReference>, GlobalId)>),
         }
 
-        fn lookup_builtin_view_addition(
-            system_object_mapping: mz_catalog::durable::SystemObjectMapping,
-        ) -> (&'static Builtin<NameReference>, GlobalId) {
-            let (_, builtin) = BUILTIN_LOOKUP
-                .get(&system_object_mapping.description)
-                .expect("missing builtin view");
-            (*builtin, system_object_mapping.unique_identifier.id)
-        }
-
         let mut state = ApplyState::Updates(Vec::new());
         let updates = sort_updates(updates);
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
@@ -230,8 +215,10 @@ impl CatalogState {
                 (
                     ApplyState::Updates(updates),
                     StateUpdate {
-                        kind: StateUpdateKind::SystemObjectMapping(system_object_mapping),
-                        diff: 1,
+                        kind:
+                            StateUpdateKind::SystemObjectMapping(StateDiff::Insert(
+                                system_object_mapping,
+                            )),
                     },
                 ) if matches!(
                     system_object_mapping.description.object_type,
@@ -251,8 +238,10 @@ impl CatalogState {
                 (
                     ApplyState::BuiltinViewAdditions(builtin_view_additions),
                     StateUpdate {
-                        kind: StateUpdateKind::SystemObjectMapping(system_object_mapping),
-                        diff: 1,
+                        kind:
+                            StateUpdateKind::SystemObjectMapping(StateDiff::Insert(
+                                system_object_mapping,
+                            )),
                     },
                 ) if matches!(
                     system_object_mapping.description.object_type,
@@ -298,65 +287,67 @@ impl CatalogState {
         updates: Vec<StateUpdate>,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        for StateUpdate { kind, diff } in updates {
-            if diff == -1 {
-                builtin_table_updates
-                    .extend(self.generate_builtin_table_update(kind.clone(), diff));
-                self.apply_update(kind, diff);
-            } else if diff == 1 {
-                self.apply_update(kind.clone(), diff);
-                builtin_table_updates
-                    .extend(self.generate_builtin_table_update(kind.clone(), diff));
-            } else {
-                unreachable!("invalid update in catalog updates: ({kind:?}, {diff:?})")
+
+        for update in &updates {
+            if let Some(retraction) = update.kind.retraction() {
+                builtin_table_updates.extend(self.generate_builtin_table_update(retraction, -1));
             }
         }
+
+        let additions: Vec<_> = updates
+            .iter()
+            .filter_map(|update| update.kind.addition())
+            .collect();
+
+        for update in updates {
+            self.apply_update(update);
+        }
+
+        for addition in additions {
+            builtin_table_updates.extend(self.generate_builtin_table_update(addition, 1));
+        }
+
         builtin_table_updates
     }
 
     #[instrument(level = "debug")]
-    fn apply_update(&mut self, kind: StateUpdateKind, diff: Diff) {
-        assert!(
-            diff == 1 || diff == -1,
-            "invalid update in catalog updates: ({kind:?}, {diff:?})"
-        );
-
-        match kind {
+    fn apply_update(&mut self, update: StateUpdate) {
+        match update.kind {
             StateUpdateKind::Role(role) => {
-                self.apply_role_update(role, diff);
+                self.apply_role_update(role);
             }
             StateUpdateKind::Database(database) => {
-                self.apply_database_update(database, diff);
+                self.apply_database_update(database);
             }
             StateUpdateKind::Schema(schema) => {
-                self.apply_schema_update(schema, diff);
+                self.apply_schema_update(schema);
             }
             StateUpdateKind::DefaultPrivilege(default_privilege) => {
-                self.apply_default_privilege_update(default_privilege, diff);
+                self.apply_default_privilege_update(default_privilege);
             }
             StateUpdateKind::SystemPrivilege(system_privilege) => {
-                self.apply_system_privilege_update(system_privilege, diff);
+                self.apply_system_privilege_update(system_privilege);
             }
             StateUpdateKind::SystemConfiguration(system_configuration) => {
-                self.apply_system_configuration_update(system_configuration, diff);
+                self.apply_system_configuration_update(system_configuration);
             }
             StateUpdateKind::Cluster(cluster) => {
-                self.apply_cluster_update(cluster, diff);
+                self.apply_cluster_update(cluster);
             }
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
-                self.apply_introspection_source_index_update(introspection_source_index, diff);
+                self.apply_introspection_source_index_update(introspection_source_index);
             }
             StateUpdateKind::ClusterReplica(cluster_replica) => {
-                self.apply_cluster_replica_update(cluster_replica, diff);
+                self.apply_cluster_replica_update(cluster_replica);
             }
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
-                self.apply_system_object_mapping_update(system_object_mapping, diff);
+                self.apply_system_object_mapping_update(system_object_mapping);
             }
             StateUpdateKind::Item(item) => {
-                self.apply_item_update(item, diff);
+                self.apply_item_update(item);
             }
             StateUpdateKind::Comment(comment) => {
-                self.apply_comment_update(comment, diff);
+                self.apply_comment_update(comment);
             }
             StateUpdateKind::AuditLog(_audit_log) => {
                 // Audit logs are not stored in-memory.
@@ -365,136 +356,183 @@ impl CatalogState {
                 // Storage usage events are not stored in-memory.
             }
             StateUpdateKind::StorageCollectionMetadata(storage_collection_metadata) => {
-                self.apply_storage_collection_metadata_update(storage_collection_metadata, diff);
+                self.apply_storage_collection_metadata_update(storage_collection_metadata);
             }
             StateUpdateKind::UnfinalizedShard(unfinalized_shard) => {
-                self.apply_unfinalized_shard_update(unfinalized_shard, diff);
+                self.apply_unfinalized_shard_update(unfinalized_shard);
             }
         }
     }
 
     #[instrument(level = "debug")]
-    fn apply_role_update(&mut self, role: mz_catalog::durable::Role, diff: Diff) {
-        apply(
-            &mut self.roles_by_id,
-            role.id,
-            || Role {
-                name: role.name.clone(),
-                id: role.id,
-                oid: role.oid,
-                attributes: role.attributes,
-                membership: role.membership,
-                vars: role.vars,
-            },
-            diff,
+    fn apply_role_update(&mut self, role: StateDiff<mz_catalog::durable::Role>) {
+        apply_inverted(
+            &mut self.roles_by_name,
+            |role| role.name.clone(),
+            |role| role.id,
+            &role,
         );
-        apply(&mut self.roles_by_name, role.name, || role.id, diff);
+        apply_catalog_type(&mut self.roles_by_id, |role| role.id, role);
     }
 
     #[instrument(level = "debug")]
-    fn apply_database_update(&mut self, database: mz_catalog::durable::Database, diff: Diff) {
-        apply(
-            &mut self.database_by_id,
-            database.id.clone(),
-            || Database {
-                name: database.name.clone(),
-                id: database.id.clone(),
-                oid: database.oid,
-                schemas_by_id: BTreeMap::new(),
-                schemas_by_name: BTreeMap::new(),
-                owner_id: database.owner_id,
-                privileges: PrivilegeMap::from_mz_acl_items(database.privileges),
-            },
-            diff,
-        );
-        apply(
+    fn apply_database_update(&mut self, database: StateDiff<mz_catalog::durable::Database>) {
+        apply_inverted(
             &mut self.database_by_name,
-            database.name,
-            || database.id.clone(),
-            diff,
+            |database| database.name.clone(),
+            |database| database.id.clone(),
+            &database,
         );
+        apply_catalog_type(&mut self.database_by_id, |database| database.id, database);
     }
 
     #[instrument(level = "debug")]
-    fn apply_schema_update(&mut self, schema: mz_catalog::durable::Schema, diff: Diff) {
-        let (schemas_by_id, schemas_by_name, database_spec) = match &schema.database_id {
-            Some(database_id) => {
-                let db = self
-                    .database_by_id
-                    .get_mut(database_id)
-                    .expect("catalog out of sync");
-                (
-                    &mut db.schemas_by_id,
-                    &mut db.schemas_by_name,
-                    ResolvedDatabaseSpecifier::Id(*database_id),
-                )
+    fn apply_schema_update(&mut self, schema: StateDiff<mz_catalog::durable::Schema>) {
+        // TODO(jkosh44) The complexity of finding the map is a good hint that database_id should
+        // go in the key.
+        match schema {
+            StateDiff::Delete(retraction) => {
+                let (schemas_by_id, schemas_by_name) = match &retraction.database_id {
+                    Some(database_id) => {
+                        let db = self
+                            .database_by_id
+                            .get_mut(database_id)
+                            .expect("catalog out of sync");
+                        (&mut db.schemas_by_id, &mut db.schemas_by_name)
+                    }
+                    None => (
+                        &mut self.ambient_schemas_by_id,
+                        &mut self.ambient_schemas_by_name,
+                    ),
+                };
+                let prev = schemas_by_name.remove(&retraction.name);
+                assert_eq!(
+                    prev,
+                    Some(retraction.id),
+                    "retraction does not match existing value: {:?}",
+                    retraction.name
+                );
+                let prev = schemas_by_id.remove(&retraction.id);
+                assert!(
+                    prev.is_some(),
+                    "retraction does not match existing value: {:?}",
+                    retraction.id
+                );
             }
-            None => (
-                &mut self.ambient_schemas_by_id,
-                &mut self.ambient_schemas_by_name,
-                ResolvedDatabaseSpecifier::Ambient,
-            ),
-        };
-        apply(
-            schemas_by_id,
-            schema.id.clone(),
-            || Schema {
-                name: QualifiedSchemaName {
-                    database: database_spec,
-                    schema: schema.name.clone(),
-                },
-                id: SchemaSpecifier::Id(schema.id.clone()),
-                oid: schema.oid,
-                items: BTreeMap::new(),
-                functions: BTreeMap::new(),
-                types: BTreeMap::new(),
-                owner_id: schema.owner_id,
-                privileges: PrivilegeMap::from_mz_acl_items(schema.privileges),
-            },
-            diff,
-        );
-        apply(schemas_by_name, schema.name.clone(), || schema.id, diff);
+            StateDiff::Insert(addition) => {
+                let (schemas_by_id, schemas_by_name) = match &addition.database_id {
+                    Some(database_id) => {
+                        let db = self
+                            .database_by_id
+                            .get_mut(database_id)
+                            .expect("catalog out of sync");
+                        (&mut db.schemas_by_id, &mut db.schemas_by_name)
+                    }
+                    None => (
+                        &mut self.ambient_schemas_by_id,
+                        &mut self.ambient_schemas_by_name,
+                    ),
+                };
+                let prev = schemas_by_name.insert(addition.name.clone(), addition.id);
+                assert_eq!(
+                    prev, None,
+                    "values must be explicitly retracted before inserting a new value: {:?}",
+                    addition.name
+                );
+                let prev = schemas_by_id.insert(addition.id, addition.into());
+                assert_eq!(
+                    prev, None,
+                    "values must be explicitly retracted before inserting a new value"
+                );
+            }
+            StateDiff::Update {
+                retraction,
+                addition,
+            } => {
+                assert_eq!(retraction.database_id, addition.database_id);
+                let (schemas_by_id, schemas_by_name) = match &retraction.database_id {
+                    Some(database_id) => {
+                        let db = self
+                            .database_by_id
+                            .get_mut(database_id)
+                            .expect("catalog out of sync");
+                        (&mut db.schemas_by_id, &mut db.schemas_by_name)
+                    }
+                    None => (
+                        &mut self.ambient_schemas_by_id,
+                        &mut self.ambient_schemas_by_name,
+                    ),
+                };
+                let prev = schemas_by_name.remove(&retraction.name);
+                assert_eq!(
+                    prev,
+                    Some(retraction.id),
+                    "retraction does not match existing value: {:?}",
+                    retraction.name
+                );
+                let prev = schemas_by_name.insert(addition.name.clone(), addition.id);
+                assert_eq!(
+                    prev, None,
+                    "values must be explicitly retracted before inserting a new value"
+                );
+                assert_eq!(retraction.id, addition.id);
+                let value = schemas_by_id
+                    .get_mut(&retraction.id)
+                    .unwrap_or_else(|| panic!("missing value for {:?}", retraction.id));
+                value.update_from(addition);
+            }
+        }
     }
 
     #[instrument(level = "debug")]
     fn apply_default_privilege_update(
         &mut self,
-        default_privilege: mz_catalog::durable::DefaultPrivilege,
-        diff: Diff,
+        default_privilege: StateDiff<mz_catalog::durable::DefaultPrivilege>,
     ) {
-        match diff {
-            1 => self
+        match default_privilege {
+            StateDiff::Delete(retraction) => self
                 .default_privileges
-                .grant(default_privilege.object, default_privilege.acl_item),
-            -1 => self
+                .revoke(&retraction.object, &retraction.acl_item),
+            StateDiff::Insert(addition) => self
                 .default_privileges
-                .revoke(&default_privilege.object, &default_privilege.acl_item),
-            _ => unreachable!("invalid diff: {diff}"),
+                .grant(addition.object, addition.acl_item),
+            StateDiff::Update {
+                retraction,
+                addition,
+            } => {
+                self.default_privileges
+                    .revoke(&retraction.object, &retraction.acl_item);
+                self.default_privileges
+                    .grant(addition.object, addition.acl_item);
+            }
         }
     }
 
     #[instrument(level = "debug")]
-    fn apply_system_privilege_update(&mut self, system_privilege: MzAclItem, diff: Diff) {
-        match diff {
-            1 => self.system_privileges.grant(system_privilege),
-            -1 => self.system_privileges.revoke(&system_privilege),
-            _ => unreachable!("invalid diff: {diff}"),
+    fn apply_system_privilege_update(&mut self, system_privilege: StateDiff<MzAclItem>) {
+        match system_privilege {
+            StateDiff::Delete(retraction) => self.system_privileges.revoke(&retraction),
+            StateDiff::Insert(addition) => self.system_privileges.grant(addition),
+            StateDiff::Update {
+                retraction,
+                addition,
+            } => {
+                self.system_privileges.revoke(&retraction);
+                self.system_privileges.grant(addition);
+            }
         }
     }
 
     #[instrument(level = "debug")]
     fn apply_system_configuration_update(
         &mut self,
-        system_configuration: mz_catalog::durable::SystemConfiguration,
-        diff: Diff,
+        system_configuration: StateDiff<mz_catalog::durable::SystemConfiguration>,
     ) {
-        let res = match diff {
-            1 => self.insert_system_configuration(
-                &system_configuration.name,
-                VarInput::Flat(&system_configuration.value),
-            ),
-            -1 => self.remove_system_configuration(&system_configuration.name),
-            _ => unreachable!("invalid diff: {diff}"),
+        let res = match system_configuration {
+            StateDiff::Delete(retraction) => self.remove_system_configuration(&retraction.name),
+            StateDiff::Insert(addition) | StateDiff::Update { addition, .. } => {
+                self.insert_system_configuration(&addition.name, VarInput::Flat(&addition.value))
+            }
         };
         match res {
             Ok(_) => (),
@@ -511,127 +549,254 @@ impl CatalogState {
     }
 
     #[instrument(level = "debug")]
-    fn apply_cluster_update(&mut self, cluster: mz_catalog::durable::Cluster, diff: Diff) {
-        apply(
-            &mut self.clusters_by_id,
-            cluster.id,
-            || Cluster {
-                name: cluster.name.clone(),
-                id: cluster.id,
-                bound_objects: BTreeSet::new(),
-                log_indexes: BTreeMap::new(),
-                replica_id_by_name_: BTreeMap::new(),
-                replicas_by_id_: BTreeMap::new(),
-                owner_id: cluster.owner_id,
-                privileges: PrivilegeMap::from_mz_acl_items(cluster.privileges),
-                config: cluster.config.into(),
-            },
-            diff,
-        );
-        apply(
+    fn apply_cluster_update(&mut self, cluster: StateDiff<mz_catalog::durable::Cluster>) {
+        apply_inverted(
             &mut self.clusters_by_name,
-            cluster.name,
-            || cluster.id,
-            diff,
+            |cluster| cluster.name.clone(),
+            |cluster| cluster.id,
+            &cluster,
         );
+        apply_catalog_type(&mut self.clusters_by_id, |cluster| cluster.id, cluster);
     }
 
     #[instrument(level = "debug")]
     fn apply_introspection_source_index_update(
         &mut self,
-        introspection_source_index: mz_catalog::durable::IntrospectionSourceIndex,
-        diff: Diff,
+        introspection_source_index: StateDiff<mz_catalog::durable::IntrospectionSourceIndex>,
     ) {
+        let key = introspection_source_index.key_ref();
         let log = BUILTIN_LOG_LOOKUP
-            .get(introspection_source_index.name.as_str())
+            .get(key.name.as_str())
             .expect("missing log");
-        match diff {
-            1 => {
-                self.insert_introspection_source_index(
-                    introspection_source_index.cluster_id,
-                    log,
-                    introspection_source_index.index_id,
-                    introspection_source_index.oid,
-                );
-            }
-            -1 => {
-                self.drop_item(introspection_source_index.index_id);
-            }
-            _ => unreachable!("invalid diff: {diff}"),
-        }
         let cluster = self
             .clusters_by_id
-            .get_mut(&introspection_source_index.cluster_id)
+            .get_mut(&key.cluster_id)
             .expect("catalog out of sync");
-        apply(
+        apply_inverted(
             &mut cluster.log_indexes,
-            log.variant,
-            || introspection_source_index.index_id,
-            diff,
+            |_| log.variant,
+            |introspection_source_index| introspection_source_index.index_id,
+            &introspection_source_index,
         );
+        match introspection_source_index {
+            StateDiff::Delete(retraction) => {
+                self.drop_item(retraction.index_id);
+            }
+            StateDiff::Insert(addition) => {
+                self.insert_introspection_source_index(
+                    addition.cluster_id,
+                    log,
+                    addition.index_id,
+                    addition.oid,
+                );
+            }
+            StateDiff::Update {
+                retraction,
+                addition,
+            } => {
+                // TODO(jkosh44) Is this right? Do we need to do some in place update stuff?
+                self.drop_item(retraction.index_id);
+                self.insert_introspection_source_index(
+                    addition.cluster_id,
+                    log,
+                    addition.index_id,
+                    addition.oid,
+                );
+            }
+        }
     }
 
     #[instrument(level = "debug")]
     fn apply_cluster_replica_update(
         &mut self,
-        cluster_replica: mz_catalog::durable::ClusterReplica,
-        diff: Diff,
+        cluster_replica: StateDiff<mz_catalog::durable::ClusterReplica>,
     ) {
-        let cluster = self
-            .clusters_by_id
-            .get(&cluster_replica.cluster_id)
-            .expect("catalog out of sync");
-        let azs = cluster.availability_zones();
-        let location = self
-            .concretize_replica_location(cluster_replica.config.location, &vec![], azs)
-            .expect("catalog in unexpected state");
-        let cluster = self
-            .clusters_by_id
-            .get_mut(&cluster_replica.cluster_id)
-            .expect("catalog out of sync");
-        apply(
-            &mut cluster.replicas_by_id_,
-            cluster_replica.replica_id,
-            || {
+        // TODO(jkosh44) The complexity of finding the map is a good hint that cluster_id should go
+        // in the key.
+        match cluster_replica {
+            StateDiff::Delete(retraction) => {
+                let cluster = self
+                    .clusters_by_id
+                    .get_mut(&retraction.cluster_id)
+                    .expect("catalog out of sync");
+                let replicas_by_id = &mut cluster.replicas_by_id_;
+                let replicas_by_name = &mut cluster.replica_id_by_name_;
+                let prev = replicas_by_name.remove(&retraction.name);
+                assert_eq!(
+                    prev,
+                    Some(retraction.replica_id),
+                    "retraction does not match existing value: {:?}",
+                    retraction.name
+                );
+                let prev = replicas_by_id.remove(&retraction.replica_id);
+                assert!(
+                    prev.is_some(),
+                    "retraction does not match existing value: {:?}",
+                    retraction.replica_id
+                );
+            }
+            StateDiff::Insert(addition) => {
+                let cluster = self
+                    .clusters_by_id
+                    .get(&addition.cluster_id)
+                    .expect("catalog out of sync");
+                let azs = cluster.availability_zones().clone();
+                let location = self
+                    .concretize_replica_location(addition.config.location, &vec![], azs)
+                    .expect("catalog in unexpected state");
                 let logging = ReplicaLogging {
-                    log_logging: cluster_replica.config.logging.log_logging,
-                    interval: cluster_replica.config.logging.interval,
+                    log_logging: addition.config.logging.log_logging,
+                    interval: addition.config.logging.interval,
                 };
                 let config = ReplicaConfig {
                     location,
                     compute: ComputeReplicaConfig { logging },
                 };
-                ClusterReplica {
-                    name: cluster_replica.name.clone(),
-                    cluster_id: cluster_replica.cluster_id,
-                    replica_id: cluster_replica.replica_id,
+                let replica = ClusterReplica {
+                    name: addition.name.clone(),
+                    cluster_id: addition.cluster_id,
+                    replica_id: addition.replica_id,
                     config,
-                    owner_id: cluster_replica.owner_id,
-                }
-            },
-            diff,
-        );
-        apply(
-            &mut cluster.replica_id_by_name_,
-            cluster_replica.name,
-            || cluster_replica.replica_id,
-            diff,
-        );
+                    owner_id: addition.owner_id,
+                };
+                let cluster = self
+                    .clusters_by_id
+                    .get_mut(&addition.cluster_id)
+                    .expect("catalog out of sync");
+                let replicas_by_id = &mut cluster.replicas_by_id_;
+                let replicas_by_name = &mut cluster.replica_id_by_name_;
+                let prev = replicas_by_name.insert(addition.name.clone(), addition.replica_id);
+                assert_eq!(
+                    prev, None,
+                    "values must be explicitly retracted before inserting a new value: {:?}",
+                    addition.name
+                );
+                let prev = replicas_by_id.insert(addition.replica_id, replica);
+                assert_eq!(
+                    prev, None,
+                    "values must be explicitly retracted before inserting a new value"
+                );
+            }
+            // TODO(jkosh44) Double check that there's no update in place stuff to do.
+            StateDiff::Update {
+                addition,
+                retraction,
+            } => {
+                assert_eq!(retraction.cluster_id, addition.cluster_id);
+                let cluster = self
+                    .clusters_by_id
+                    .get(&addition.cluster_id)
+                    .expect("catalog out of sync");
+                let azs = cluster.availability_zones().clone();
+                let location = self
+                    .concretize_replica_location(addition.config.location, &vec![], azs)
+                    .expect("catalog in unexpected state");
+                let logging = ReplicaLogging {
+                    log_logging: addition.config.logging.log_logging,
+                    interval: addition.config.logging.interval,
+                };
+                let config = ReplicaConfig {
+                    location,
+                    compute: ComputeReplicaConfig { logging },
+                };
+                let replica = ClusterReplica {
+                    name: addition.name.clone(),
+                    cluster_id: addition.cluster_id,
+                    replica_id: addition.replica_id,
+                    config,
+                    owner_id: addition.owner_id,
+                };
+                let cluster = self
+                    .clusters_by_id
+                    .get_mut(&addition.cluster_id)
+                    .expect("catalog out of sync");
+                let replicas_by_id = &mut cluster.replicas_by_id_;
+                let replicas_by_name = &mut cluster.replica_id_by_name_;
+                let prev = replicas_by_name.remove(&retraction.name);
+                assert_eq!(
+                    prev,
+                    Some(retraction.replica_id),
+                    "retraction does not match existing value: {:?}",
+                    retraction.name
+                );
+                let prev = replicas_by_name.insert(addition.name.clone(), addition.replica_id);
+                assert_eq!(
+                    prev, None,
+                    "values must be explicitly retracted before inserting a new value"
+                );
+                assert_eq!(retraction.replica_id, addition.replica_id);
+                let prev = replicas_by_id.insert(addition.replica_id, replica);
+                assert!(
+                    prev.is_some(),
+                    "cluster replica update does not match existing value: {:?}",
+                    addition.replica_id
+                );
+            }
+        }
     }
 
     #[instrument(level = "debug")]
     fn apply_system_object_mapping_update(
         &mut self,
+        system_object_mapping: StateDiff<mz_catalog::durable::SystemObjectMapping>,
+    ) {
+        match system_object_mapping {
+            StateDiff::Delete(retraction) => {
+                self.drop_item(retraction.unique_identifier.id);
+            }
+            StateDiff::Insert(addition) => {
+                self.apply_system_object_mapping_insert(addition);
+            }
+            StateDiff::Update {
+                retraction,
+                addition,
+            } => {
+                // TODO(jkosh44) Is there in place updates we need to do?
+                self.drop_item(retraction.unique_identifier.id);
+                if addition.description.object_type == CatalogItemType::View {
+                    // TODO(jkosh44) Gross, all copied from parse_views.
+                    let (builtin, id) = lookup_builtin_view_addition(addition);
+                    let Builtin::View(view) = builtin else {
+                        unreachable!("known to be view");
+                    };
+                    let create_sql = view.create_sql();
+                    let item = self
+                        .parse_item(&create_sql, None, false, None)
+                        .expect("invalid persisted SQL");
+                    let schema_id = self.ambient_schemas_by_name[view.schema];
+                    let name = QualifiedItemName {
+                        qualifiers: ItemQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Id(schema_id),
+                        },
+                        item: view.name.into(),
+                    };
+                    let mut acl_items = vec![rbac::owner_privilege(
+                        mz_sql::catalog::ObjectType::View,
+                        MZ_SYSTEM_ROLE_ID,
+                    )];
+                    acl_items.extend_from_slice(&view.access);
+                    self.insert_item(
+                        id,
+                        view.oid,
+                        name,
+                        item,
+                        MZ_SYSTEM_ROLE_ID,
+                        PrivilegeMap::from_mz_acl_items(acl_items),
+                    );
+                } else {
+                    self.apply_system_object_mapping_insert(addition);
+                }
+            }
+        }
+    }
+
+    #[instrument(level = "debug")]
+    fn apply_system_object_mapping_insert(
+        &mut self,
         system_object_mapping: mz_catalog::durable::SystemObjectMapping,
-        diff: Diff,
     ) {
         let id = system_object_mapping.unique_identifier.id;
-
-        if diff == -1 {
-            self.drop_item(id);
-            return;
-        }
-
         let builtin = BUILTIN_LOOKUP
             .get(&system_object_mapping.description)
             .expect("missing builtin")
@@ -823,125 +988,294 @@ impl CatalogState {
     }
 
     #[instrument(level = "debug")]
-    fn apply_item_update(&mut self, item: mz_catalog::durable::Item, diff: Diff) {
-        match diff {
-            1 => {
+    fn apply_item_update(&mut self, item: StateDiff<mz_catalog::durable::Item>) {
+        match item {
+            StateDiff::Delete(retraction) => {
+                self.drop_item(retraction.id);
+            }
+            StateDiff::Insert(addition) => {
                 let catalog_item = self
-                    .deserialize_item(&item.create_sql)
+                    .deserialize_item(&addition.create_sql)
                     .expect("invalid persisted SQL");
-                let schema = self.find_non_temp_schema(&item.schema_id);
+                let schema = self.find_non_temp_schema(&addition.schema_id);
                 let name = QualifiedItemName {
                     qualifiers: ItemQualifiers {
                         database_spec: schema.database().clone(),
                         schema_spec: schema.id().clone(),
                     },
-                    item: item.name,
+                    item: addition.name,
                 };
                 self.insert_item(
-                    item.id,
-                    item.oid,
+                    addition.id,
+                    addition.oid,
                     name,
                     catalog_item,
-                    item.owner_id,
-                    PrivilegeMap::from_mz_acl_items(item.privileges),
+                    addition.owner_id,
+                    PrivilegeMap::from_mz_acl_items(addition.privileges),
                 );
             }
-            -1 => {
-                self.drop_item(item.id);
+            StateDiff::Update {
+                retraction: _,
+                addition,
+            } => {
+                let catalog_item = self
+                    .deserialize_item(&addition.create_sql)
+                    .expect("invalid persisted SQL");
+                let schema = self.find_non_temp_schema(&addition.schema_id);
+                let name = QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec: schema.database().clone(),
+                        schema_spec: schema.id().clone(),
+                    },
+                    item: addition.name,
+                };
+                // TODO(jkosh44) assertions for update?
+                self.update_entry(
+                    addition.id,
+                    addition.oid,
+                    name,
+                    catalog_item,
+                    addition.owner_id,
+                    PrivilegeMap::from_mz_acl_items(addition.privileges),
+                );
             }
-            _ => unreachable!("invalid diff: {diff}"),
         }
     }
 
+    pub(crate) fn update_entry(
+        &mut self,
+        id: GlobalId,
+        oid: u32,
+        name: QualifiedItemName,
+        item: CatalogItem,
+        owner_id: RoleId,
+        privileges: PrivilegeMap,
+    ) {
+        let old_entry = self.entry_by_id.remove(&id).expect("catalog out of sync");
+        let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
+        let schema = self.get_schema_mut(
+            &old_entry.name().qualifiers.database_spec,
+            &old_entry.name().qualifiers.schema_spec,
+            conn_id,
+        );
+        schema.items.remove(&old_entry.name().item);
+
+        // Dropped deps
+        let dropped_references: Vec<_> = old_entry
+            .references()
+            .0
+            .difference(&item.references().0)
+            .cloned()
+            .collect();
+        let dropped_uses: Vec<_> = old_entry.uses().difference(&item.uses()).cloned().collect();
+
+        // We only need to install this item on items in the `referenced_by` of new
+        // dependencies.
+        let new_references: Vec<_> = item
+            .references()
+            .0
+            .difference(&old_entry.references().0)
+            .cloned()
+            .collect();
+        // We only need to install this item on items in the `used_by` of new
+        // dependencies.
+        let new_uses: Vec<_> = item.uses().difference(&old_entry.uses()).cloned().collect();
+
+        let mut new_entry = old_entry;
+        new_entry.item = item;
+        new_entry.id = id;
+        new_entry.oid = oid;
+        new_entry.name = name;
+        new_entry.owner_id = owner_id;
+        new_entry.privileges = privileges;
+
+        schema.items.insert(new_entry.name().item.clone(), id);
+
+        for u in dropped_references {
+            // OK if we no longer have this entry because we are dropping our
+            // dependency on it.
+            if let Some(metadata) = self.entry_by_id.get_mut(&u) {
+                metadata.referenced_by.retain(|dep_id| *dep_id != id)
+            }
+        }
+
+        for u in dropped_uses {
+            // OK if we no longer have this entry because we are dropping our
+            // dependency on it.
+            if let Some(metadata) = self.entry_by_id.get_mut(&u) {
+                metadata.used_by.retain(|dep_id| *dep_id != id)
+            }
+        }
+
+        for u in new_references {
+            match self.entry_by_id.get_mut(&u) {
+                Some(metadata) => metadata.referenced_by.push(new_entry.id()),
+                None => panic!(
+                    "Catalog: missing dependent catalog item {} while updating {}",
+                    &u,
+                    self.resolve_full_name(new_entry.name(), new_entry.conn_id())
+                ),
+            }
+        }
+        for u in new_uses {
+            match self.entry_by_id.get_mut(&u) {
+                Some(metadata) => metadata.used_by.push(new_entry.id()),
+                None => panic!(
+                    "Catalog: missing dependent catalog item {} while updating {}",
+                    &u,
+                    self.resolve_full_name(new_entry.name(), new_entry.conn_id())
+                ),
+            }
+        }
+
+        self.entry_by_id.insert(id, new_entry);
+    }
+
     #[instrument(level = "debug")]
-    fn apply_comment_update(&mut self, comment: mz_catalog::durable::Comment, diff: Diff) {
-        match diff {
-            1 => {
+    fn apply_comment_update(&mut self, comment: StateDiff<mz_catalog::durable::Comment>) {
+        match comment {
+            StateDiff::Delete(retraction) => {
                 let prev = self.comments.update_comment(
-                    comment.object_id,
-                    comment.sub_component,
-                    Some(comment.comment),
+                    retraction.object_id,
+                    retraction.sub_component,
+                    None,
+                );
+                assert_eq!(
+                    prev,
+                    Some(retraction.comment),
+                    "retraction does not match existing value: ({:?}, {:?})",
+                    retraction.object_id,
+                    retraction.sub_component,
+                );
+            }
+            StateDiff::Insert(addition) => {
+                let prev = self.comments.update_comment(
+                    addition.object_id,
+                    addition.sub_component,
+                    Some(addition.comment),
                 );
                 assert_eq!(
                     prev, None,
-                    "values must be explicitly retracted before inserting a new value"
+                    "values must be explicitly retracted before inserting a new value: ({:?}, {:?})",
+                    addition.object_id,
+                    addition.sub_component,
                 );
             }
-            -1 => {
-                let prev =
-                    self.comments
-                        .update_comment(comment.object_id, comment.sub_component, None);
+            StateDiff::Update {
+                retraction,
+                addition,
+            } => {
+                let prev = self.comments.update_comment(
+                    addition.object_id,
+                    addition.sub_component,
+                    Some(addition.comment),
+                );
                 assert_eq!(
                     prev,
-                    Some(comment.comment),
+                    Some(retraction.comment),
                     "retraction does not match existing value: ({:?}, {:?})",
-                    comment.object_id,
-                    comment.sub_component,
+                    retraction.object_id,
+                    retraction.sub_component,
                 );
             }
-            _ => unreachable!("invalid diff: {diff}"),
         }
     }
 
     #[instrument(level = "debug")]
     fn apply_storage_collection_metadata_update(
         &mut self,
-        storage_collection_metadata: mz_catalog::durable::StorageCollectionMetadata,
-        diff: Diff,
+        storage_collection_metadata: StateDiff<mz_catalog::durable::StorageCollectionMetadata>,
     ) {
-        apply(
-            &mut self.storage_metadata.collection_metadata,
-            storage_collection_metadata.id,
-            || storage_collection_metadata.shard,
-            diff,
-        );
+        match storage_collection_metadata {
+            StateDiff::Delete(retraction) => {
+                let prev = self
+                    .storage_metadata
+                    .collection_metadata
+                    .remove(&retraction.id);
+                assert_eq!(
+                    prev,
+                    Some(retraction.shard),
+                    "retraction does not match existing value: {:?}",
+                    retraction.id
+                );
+            }
+            StateDiff::Insert(addition) => {
+                let prev = self
+                    .storage_metadata
+                    .collection_metadata
+                    .insert(addition.id, addition.shard);
+                assert_eq!(
+                    prev, None,
+                    "values must be explicitly retracted before inserting a new value: {:?}",
+                    addition.id,
+                );
+            }
+            StateDiff::Update {
+                retraction,
+                addition,
+            } => {
+                let prev = self
+                    .storage_metadata
+                    .collection_metadata
+                    .insert(addition.id, addition.shard);
+                assert_eq!(
+                    prev,
+                    Some(retraction.shard),
+                    "retraction does not match existing value: {:?}",
+                    retraction.id
+                );
+            }
+        }
     }
 
     #[instrument(level = "debug")]
     fn apply_unfinalized_shard_update(
         &mut self,
-        unfinalized_shard: mz_catalog::durable::UnfinalizedShard,
-        diff: Diff,
+        unfinalized_shard: StateDiff<mz_catalog::durable::UnfinalizedShard>,
     ) {
-        match diff {
-            1 => {
-                let newly_inserted = self
-                    .storage_metadata
-                    .unfinalized_shards
-                    .insert(unfinalized_shard.shard.clone());
-                assert!(
-                    newly_inserted,
-                    "values must be explicitly retracted before inserting a new value: {unfinalized_shard:?}",
-                );
-            }
-            -1 => {
+        match unfinalized_shard {
+            StateDiff::Delete(retraction) => {
                 let removed = self
                     .storage_metadata
                     .unfinalized_shards
-                    .remove(&unfinalized_shard.shard);
+                    .remove(&retraction.shard);
                 assert!(
                     removed,
-                    "retraction does not match existing value: {unfinalized_shard:?}"
+                    "retraction does not match existing value: {retraction:?}"
                 );
             }
-            _ => unreachable!("invalid diff: {diff}"),
+            StateDiff::Insert(addition) => {
+                let newly_inserted = self
+                    .storage_metadata
+                    .unfinalized_shards
+                    .insert(addition.shard);
+                assert!(
+                    newly_inserted,
+                    "values must be explicitly retracted before inserting a new value",
+                );
+            }
+            StateDiff::Update {
+                retraction,
+                addition,
+            } => {
+                let removed = self
+                    .storage_metadata
+                    .unfinalized_shards
+                    .remove(&retraction.shard);
+                assert!(
+                    removed,
+                    "retraction does not match existing value: {retraction:?}"
+                );
+                let newly_inserted = self
+                    .storage_metadata
+                    .unfinalized_shards
+                    .insert(addition.shard);
+                assert!(
+                    newly_inserted,
+                    "values must be explicitly retracted before inserting a new value",
+                );
+            }
         }
-    }
-
-    /// Generate a list of `BuiltinTableUpdate`s that correspond to a list of updates made to the
-    /// durable catalog.
-    #[instrument]
-    pub(crate) fn generate_builtin_table_updates(
-        &self,
-        updates: Vec<StateUpdate>,
-    ) -> Vec<BuiltinTableUpdate> {
-        let mut builtin_table_updates = Vec::new();
-        for StateUpdate { kind, diff } in updates {
-            let builtin_table_update = self.generate_builtin_table_update(kind, diff);
-            let builtin_table_update = self.resolve_builtin_table_updates(builtin_table_update);
-            builtin_table_updates.extend(builtin_table_update);
-        }
-        builtin_table_updates
     }
 
     /// Generate a list of `BuiltinTableUpdate`s that correspond to a single update made to the
@@ -949,7 +1283,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn generate_builtin_table_update(
         &self,
-        kind: StateUpdateKind,
+        kind: YetAnotherStateUpdateKind,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         assert!(
@@ -957,7 +1291,7 @@ impl CatalogState {
             "invalid update in catalog updates: ({kind:?}, {diff:?})"
         );
         match kind {
-            StateUpdateKind::Role(role) => {
+            YetAnotherStateUpdateKind::Role(role) => {
                 let mut builtin_table_updates = self.pack_role_update(role.id, diff);
                 for group_id in role.membership.map.keys() {
                     builtin_table_updates
@@ -965,14 +1299,14 @@ impl CatalogState {
                 }
                 builtin_table_updates
             }
-            StateUpdateKind::Database(database) => {
+            YetAnotherStateUpdateKind::Database(database) => {
                 vec![self.pack_database_update(&database.id, diff)]
             }
-            StateUpdateKind::Schema(schema) => {
+            YetAnotherStateUpdateKind::Schema(schema) => {
                 let db_spec = schema.database_id.into();
                 vec![self.pack_schema_update(&db_spec, &schema.id, diff)]
             }
-            StateUpdateKind::DefaultPrivilege(default_privilege) => {
+            YetAnotherStateUpdateKind::DefaultPrivilege(default_privilege) => {
                 vec![self.pack_default_privileges_update(
                     &default_privilege.object,
                     &default_privilege.acl_item.grantee,
@@ -980,63 +1314,152 @@ impl CatalogState {
                     diff,
                 )]
             }
-            StateUpdateKind::SystemPrivilege(system_privilege) => {
+            YetAnotherStateUpdateKind::SystemPrivilege(system_privilege) => {
                 vec![self.pack_system_privileges_update(system_privilege, diff)]
             }
-            StateUpdateKind::SystemConfiguration(_) => Vec::new(),
-            StateUpdateKind::Cluster(cluster) => self.pack_cluster_update(&cluster.name, diff),
-            StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
+            YetAnotherStateUpdateKind::SystemConfiguration(_) => Vec::new(),
+            YetAnotherStateUpdateKind::Cluster(cluster) => {
+                self.pack_cluster_update(&cluster.name, diff)
+            }
+            YetAnotherStateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
                 self.pack_item_update(introspection_source_index.index_id, diff)
             }
-            StateUpdateKind::ClusterReplica(cluster_replica) => self.pack_cluster_replica_update(
-                cluster_replica.cluster_id,
-                &cluster_replica.name,
-                diff,
-            ),
-            StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
+            YetAnotherStateUpdateKind::ClusterReplica(cluster_replica) => self
+                .pack_cluster_replica_update(
+                    cluster_replica.cluster_id,
+                    &cluster_replica.name,
+                    diff,
+                ),
+            YetAnotherStateUpdateKind::SystemObjectMapping(system_object_mapping) => {
                 self.pack_item_update(system_object_mapping.unique_identifier.id, diff)
             }
-            StateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),
-            StateUpdateKind::Comment(comment) => vec![self.pack_comment_update(
+            YetAnotherStateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),
+            YetAnotherStateUpdateKind::Comment(comment) => vec![self.pack_comment_update(
                 comment.object_id,
                 comment.sub_component,
                 &comment.comment,
                 diff,
             )],
-            StateUpdateKind::AuditLog(audit_log) => {
+            YetAnotherStateUpdateKind::AuditLog(audit_log) => {
                 vec![self
                     .pack_audit_log_update(&audit_log.event, diff)
                     .expect("could not pack audit log update")]
             }
-            StateUpdateKind::StorageUsage(storage_usage) => {
+            YetAnotherStateUpdateKind::StorageUsage(storage_usage) => {
                 vec![self.pack_storage_usage_update(&storage_usage.metric, diff)]
             }
-            StateUpdateKind::StorageCollectionMetadata(_)
-            | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
+            YetAnotherStateUpdateKind::StorageCollectionMetadata(_)
+            | YetAnotherStateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
     }
 }
 
 /// Inserts `key` and `value` into `map` if `diff` is 1, otherwise remove them from `map` if `diff`
 /// is -1.
-fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: impl FnOnce() -> V, diff: Diff)
-where
-    K: Ord + Debug,
+/// TODO(jkosh44)
+fn apply_inverted<K, V, D>(
+    map: &mut BTreeMap<K, V>,
+    key_fn: impl Fn(&D) -> K,
+    value_fn: impl Fn(&D) -> V,
+    state_diff: &StateDiff<D>,
+) where
+    K: Ord + Debug + Clone,
     V: PartialEq + Debug,
 {
-    if diff == 1 {
-        let prev = map.insert(key, value());
-        assert_eq!(
-            prev, None,
-            "values must be explicitly retracted before inserting a new value"
-        );
-    } else if diff == -1 {
-        let prev = map.remove(&key);
-        // We can't assert the exact contents of the previous value, since we don't know
-        // what it should look like.
-        assert!(
-            prev.is_some(),
-            "retraction does not match existing value: {key:?}"
-        );
+    match state_diff {
+        StateDiff::Delete(retraction) => {
+            let key = key_fn(retraction);
+            let value = value_fn(retraction);
+            let prev = map.remove(&key);
+            assert_eq!(
+                prev,
+                Some(value),
+                "retraction does not match existing value: {key:?}"
+            );
+        }
+        StateDiff::Insert(addition) => {
+            let key = key_fn(addition);
+            let value = value_fn(addition);
+            let prev = map.insert(key.clone(), value);
+            assert_eq!(
+                prev, None,
+                "values must be explicitly retracted before inserting a new value: {key:?}"
+            );
+        }
+        StateDiff::Update {
+            retraction,
+            addition,
+        } => {
+            let retraction_key = key_fn(retraction);
+            let retraction_value = value_fn(retraction);
+            let prev = map.remove(&retraction_key);
+            assert_eq!(
+                prev,
+                Some(retraction_value),
+                "retraction does not match existing value: {retraction_key:?}"
+            );
+            let addition_key = key_fn(addition);
+            let addition_value = value_fn(addition);
+            let prev = map.insert(addition_key, addition_value);
+            assert_eq!(
+                prev, None,
+                "values must be explicitly retracted before inserting a new value"
+            );
+        }
     }
+}
+
+/// Inserts `key` and `value` into `map` if `diff` is 1, otherwise remove them from `map` if `diff`
+/// is -1.
+/// TODO(jkosh44)
+fn apply_catalog_type<K, V, D>(
+    map: &mut BTreeMap<K, V>,
+    key_fn: impl Fn(&D) -> K,
+    state_diff: StateDiff<D>,
+) where
+    K: Ord + Debug,
+    V: TodoTraitName<D> + PartialEq + Debug,
+{
+    match state_diff {
+        StateDiff::Delete(retraction) => {
+            let key = key_fn(&retraction);
+            let prev = map.remove(&key);
+            // We can't assert the exact contents of the previous value, since we don't know
+            // what it should look like.
+            assert!(
+                prev.is_some(),
+                "retraction does not match existing value: {key:?}"
+            );
+        }
+        StateDiff::Insert(addition) => {
+            let key = key_fn(&addition);
+            let value = addition.into();
+            let prev = map.insert(key, value);
+            assert_eq!(
+                prev, None,
+                "values must be explicitly retracted before inserting a new value"
+            );
+        }
+        StateDiff::Update {
+            retraction,
+            addition,
+        } => {
+            let key = key_fn(&retraction);
+            assert_eq!(key, key_fn(&addition));
+            let value = map
+                .get_mut(&key)
+                .unwrap_or_else(|| panic!("missing value for {key:?}"));
+            // TODO(jkosh44) Some assertions for retraction?
+            value.update_from(addition);
+        }
+    }
+}
+
+fn lookup_builtin_view_addition(
+    system_object_mapping: mz_catalog::durable::SystemObjectMapping,
+) -> (&'static Builtin<NameReference>, GlobalId) {
+    let (_, builtin) = BUILTIN_LOOKUP
+        .get(&system_object_mapping.description)
+        .expect("missing builtin view");
+    (*builtin, system_object_mapping.unique_identifier.id)
 }
