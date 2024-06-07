@@ -1161,9 +1161,9 @@ where
                         .delete().await;
                 }
             }
-            // WIP: It's annoying that we're first iterating and doing the
-            // retain, but we can't do the batch deletion inside retain because
-            // we need async.
+            // It's annoying that we're first iterating and doing the retain,
+            // but we can't do the batch deletion inside retain because we need
+            // async.
             in_flight_batches.retain(|(lower, _upper), batch_set| {
                 if PartialOrder::less_equal(&persist_upper, lower) {
                     return true;
