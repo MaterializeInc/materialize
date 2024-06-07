@@ -416,8 +416,7 @@ where
         // We go straight to the write handle to learn about the current upper
         // and upper advancements. The "persist_oks" stream is lying to us! For
         // example, when starting the persist_source with an as_of, the upper
-        // will jump to that as_of, and I believe REFRESH EVERY might also be
-        // playing tricks on us.
+        // will jump to that as_of.
         let gen_upper_future =
             |current_upper: Antichain<Timestamp>,
              mut handle: WriteHandle<SourceData, (), Timestamp, Diff>| {
