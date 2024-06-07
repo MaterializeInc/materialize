@@ -9,7 +9,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# ci-annotate-errors - Detect errors in junit xml as well as log files during
-# CI and find associated open GitHub issues in Materialize repository.
+# mzcompose — runs Docker Compose with Materialize customizations.
 
-exec "$(dirname "$0")"/ci-builder run stable "$(dirname "$0")"/mzcompose --mz-quiet --find ci-annotate-errors run default -- "$@"
+exec "$(dirname "$0")"/../../bin/pyactivate -m materialize.cli.mzcompose "$@"
