@@ -58,7 +58,6 @@ $ mysql-execute name=mysql
 ALTER TABLE t1 ADD COLUMN f3 INTEGER FIRST;
 INSERT INTO t1 VALUES (3, 3, 3);
 
-# TODO #24975 (ordered column change requires ALTER SOURCE support)
 ! SELECT * FROM t1;
 contains:incompatible schema change
 
