@@ -19,6 +19,7 @@ use crate::adt::system::Oid;
 use anyhow::{anyhow, Error};
 use bitflags::bitflags;
 use columnation::{Columnation, CopyRegion};
+use itertools::Itertools;
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
 use mz_persist_types::columnar::FixedSizeCodec;
@@ -792,6 +793,31 @@ impl PrivilegeMap {
 
         // Remove empty privileges.
         grantee_privileges.retain(|privilege| !privilege.acl_mode.is_empty());
+        if grantee_privileges.is_empty() {
+            self.0.remove(&privilege.grantee);
+        }
+    }
+
+    /// Set an [`MzAclItem`] in this map.
+    pub fn set(&mut self, privilege: MzAclItem) {
+        let grantee_privileges = self.0.entry(privilege.grantee).or_default();
+        if let Some((idx, existing_privilege)) = grantee_privileges
+            .iter_mut()
+            .find_position(|cur_privilege| cur_privilege.grantor == privilege.grantor)
+        {
+            // sanity check that the key is consistent.
+            assert_eq!(
+                privilege.grantee, existing_privilege.grantee,
+                "PrivilegeMap out of sync"
+            );
+            if !privilege.acl_mode.is_empty() {
+                existing_privilege.acl_mode = privilege.acl_mode;
+            } else {
+                grantee_privileges.remove(idx);
+            }
+        } else if !privilege.acl_mode.is_empty() {
+            grantee_privileges.push(privilege);
+        }
         if grantee_privileges.is_empty() {
             self.0.remove(&privilege.grantee);
         }

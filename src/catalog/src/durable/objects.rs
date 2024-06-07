@@ -60,13 +60,19 @@ use crate::durable::objects::serialization::proto;
 /// condensed type.
 ///
 /// [`RustType`]: mz_proto::RustType
-pub trait DurableType<K, V>: Sized {
+// TODO(jkosh44) Remove clone bound
+pub trait DurableType<K, V>: Sized + Clone {
     /// Consume and convert `Self` into a `(K, V)` key-value pair.
     fn into_key_value(self) -> (K, V);
 
     /// Consume and convert a `(K, V)` key-value pair back into a
     /// `Self` value.
     fn from_key_value(key: K, value: V) -> Self;
+
+    /// TODO(jkosh44) replace with a not clone method.
+    fn key_ref(&self) -> K {
+        self.clone().into_key_value().0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

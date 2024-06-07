@@ -61,6 +61,17 @@ use tracing::debug;
 
 use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
+use crate::durable::objects::{
+    AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterKey, ClusterReplicaKey, CommentKey,
+    DatabaseKey, DefaultPrivilegesKey, DurableType, GidMappingKey, ItemKey, RoleKey, SchemaKey,
+    ServerConfigurationKey, StorageCollectionMetadataKey, StorageUsageKey, SystemPrivilegesKey,
+    UnfinalizedShardKey,
+};
+
+/// TODO(jkosh44) Better name
+pub trait TodoTraitName<T>: From<T> {
+    fn update_from(&mut self, durable: T);
+}
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Database {
@@ -86,6 +97,47 @@ impl From<Database> for durable::Database {
     }
 }
 
+impl From<durable::Database> for Database {
+    fn from(
+        durable::Database {
+            id,
+            oid,
+            name,
+            owner_id,
+            privileges,
+        }: durable::Database,
+    ) -> Database {
+        Database {
+            id,
+            oid,
+            schemas_by_id: BTreeMap::new(),
+            schemas_by_name: BTreeMap::new(),
+            name,
+            owner_id,
+            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+        }
+    }
+}
+
+impl TodoTraitName<durable::Database> for Database {
+    fn update_from(
+        &mut self,
+        durable::Database {
+            id,
+            oid,
+            name,
+            owner_id,
+            privileges,
+        }: durable::Database,
+    ) {
+        self.id = id;
+        self.oid = oid;
+        self.name = name;
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+    }
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Schema {
     pub name: QualifiedSchemaName,
@@ -98,6 +150,69 @@ pub struct Schema {
     pub privileges: PrivilegeMap,
 }
 
+impl From<Schema> for durable::Schema {
+    fn from(schema: Schema) -> durable::Schema {
+        durable::Schema {
+            id: schema.id.into(),
+            oid: schema.oid,
+            name: schema.name.schema,
+            database_id: schema.name.database.id(),
+            owner_id: schema.owner_id,
+            privileges: schema.privileges.into_all_values().collect(),
+        }
+    }
+}
+
+impl From<durable::Schema> for Schema {
+    fn from(
+        durable::Schema {
+            id,
+            oid,
+            name,
+            database_id,
+            owner_id,
+            privileges,
+        }: durable::Schema,
+    ) -> Schema {
+        Schema {
+            name: QualifiedSchemaName {
+                database: database_id.into(),
+                schema: name,
+            },
+            id: id.into(),
+            oid,
+            items: BTreeMap::new(),
+            functions: BTreeMap::new(),
+            types: BTreeMap::new(),
+            owner_id,
+            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+        }
+    }
+}
+
+impl TodoTraitName<durable::Schema> for Schema {
+    fn update_from(
+        &mut self,
+        durable::Schema {
+            id,
+            oid,
+            name,
+            database_id,
+            owner_id,
+            privileges,
+        }: durable::Schema,
+    ) {
+        self.name = QualifiedSchemaName {
+            database: database_id.into(),
+            schema: name,
+        };
+        self.id = id.into();
+        self.oid = oid.into();
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+    }
+}
+
 impl Schema {
     pub fn into_durable_schema(self, database_id: Option<DatabaseId>) -> durable::Schema {
         durable::Schema {
@@ -108,6 +223,28 @@ impl Schema {
             owner_id: self.owner_id,
             privileges: self.privileges.into_all_values().collect(),
         }
+    }
+
+    pub fn update_from_durable(
+        &mut self,
+        durable::Schema {
+            id,
+            oid,
+            name,
+            database_id,
+            owner_id,
+            privileges,
+        }: durable::Schema,
+    ) {
+        self.id = id.into();
+        self.oid = oid;
+        self.name.schema = name;
+        self.name.database = match database_id {
+            Some(id) => ResolvedDatabaseSpecifier::Id(id),
+            None => ResolvedDatabaseSpecifier::Ambient,
+        };
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
     }
 }
 
@@ -141,6 +278,49 @@ impl From<Role> for durable::Role {
             membership: role.membership,
             vars: role.vars,
         }
+    }
+}
+
+impl From<durable::Role> for Role {
+    fn from(
+        durable::Role {
+            id,
+            oid,
+            name,
+            attributes,
+            membership,
+            vars,
+        }: durable::Role,
+    ) -> Self {
+        Role {
+            name,
+            id,
+            oid,
+            attributes,
+            membership,
+            vars,
+        }
+    }
+}
+
+impl TodoTraitName<durable::Role> for Role {
+    fn update_from(
+        &mut self,
+        durable::Role {
+            id,
+            oid,
+            name,
+            attributes,
+            membership,
+            vars,
+        }: durable::Role,
+    ) {
+        self.id = id;
+        self.oid = oid;
+        self.name = name;
+        self.attributes = attributes;
+        self.membership = membership;
+        self.vars = vars;
     }
 }
 
@@ -267,6 +447,49 @@ impl From<Cluster> for durable::Cluster {
             privileges: cluster.privileges.into_all_values().collect(),
             config: cluster.config.into(),
         }
+    }
+}
+
+impl From<durable::Cluster> for Cluster {
+    fn from(
+        durable::Cluster {
+            id,
+            name,
+            owner_id,
+            privileges,
+            config,
+        }: durable::Cluster,
+    ) -> Self {
+        Cluster {
+            name: name.clone(),
+            id,
+            bound_objects: BTreeSet::new(),
+            log_indexes: BTreeMap::new(),
+            replica_id_by_name_: BTreeMap::new(),
+            replicas_by_id_: BTreeMap::new(),
+            owner_id,
+            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+            config: config.into(),
+        }
+    }
+}
+
+impl TodoTraitName<durable::Cluster> for Cluster {
+    fn update_from(
+        &mut self,
+        durable::Cluster {
+            id,
+            name,
+            owner_id,
+            privileges,
+            config,
+        }: durable::Cluster,
+    ) {
+        self.id = id;
+        self.name = name;
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+        self.config = config.into();
     }
 }
 
@@ -1728,6 +1951,21 @@ impl DefaultPrivileges {
         }
     }
 
+    /// Set a default privilege into the set of all default privileges.
+    pub fn set(&mut self, object: DefaultPrivilegeObject, privilege: DefaultPrivilegeAclItem) {
+        if privilege.acl_mode.is_empty() {
+            self.privileges.remove(&object);
+            return;
+        }
+
+        let privileges = self.privileges.entry(object).or_default();
+        if let Some(default_privilege) = privileges.get_mut(&privilege.grantee) {
+            default_privilege.acl_mode = privilege.acl_mode;
+        } else {
+            privileges.insert(privilege.grantee, privilege);
+        }
+    }
+
     /// Get the privileges that will be granted on all objects matching `object` to `grantee`, if
     /// any exist.
     pub fn get_privileges_for_grantee(
@@ -2257,4 +2495,67 @@ pub enum StateUpdateKind {
     // Storage updates.
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),
+}
+
+impl StateUpdateKind {
+    /// TODO(jkosh44) This requires an annoying amount of cloning. Try and replace all the fields
+    /// of the keys with `CoW`.
+    pub fn key(&self) -> StateUpdateKindKey {
+        match self {
+            StateUpdateKind::Role(kind) => StateUpdateKindKey::Role(kind.key_ref()),
+            StateUpdateKind::Database(kind) => StateUpdateKindKey::Database(kind.key_ref()),
+            StateUpdateKind::Schema(kind) => StateUpdateKindKey::Schema(kind.key_ref()),
+            StateUpdateKind::DefaultPrivilege(kind) => {
+                StateUpdateKindKey::DefaultPrivilege(kind.key_ref())
+            }
+            StateUpdateKind::SystemPrivilege(kind) => {
+                StateUpdateKindKey::SystemPrivilege(kind.key_ref())
+            }
+            StateUpdateKind::SystemConfiguration(kind) => {
+                StateUpdateKindKey::SystemConfiguration(kind.key_ref())
+            }
+            StateUpdateKind::Cluster(kind) => StateUpdateKindKey::Cluster(kind.key_ref()),
+            StateUpdateKind::IntrospectionSourceIndex(kind) => {
+                StateUpdateKindKey::IntrospectionSourceIndex(kind.key_ref())
+            }
+            StateUpdateKind::ClusterReplica(kind) => {
+                StateUpdateKindKey::ClusterReplica(kind.key_ref())
+            }
+            StateUpdateKind::SystemObjectMapping(kind) => {
+                StateUpdateKindKey::SystemObjectMapping(kind.key_ref())
+            }
+            StateUpdateKind::Item(kind) => StateUpdateKindKey::Item(kind.key_ref()),
+            StateUpdateKind::Comment(kind) => StateUpdateKindKey::Comment(kind.key_ref()),
+            StateUpdateKind::AuditLog(kind) => StateUpdateKindKey::AuditLog(kind.key_ref()),
+            StateUpdateKind::StorageUsage(kind) => StateUpdateKindKey::StorageUsage(kind.key_ref()),
+            StateUpdateKind::StorageCollectionMetadata(kind) => {
+                StateUpdateKindKey::StorageCollectionMetadata(kind.key_ref())
+            }
+            StateUpdateKind::UnfinalizedShard(kind) => {
+                StateUpdateKindKey::UnfinalizedShard(kind.key_ref())
+            }
+        }
+    }
+}
+
+/// TODO(jkosh44) This requires an annoying amount of cloning.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StateUpdateKindKey {
+    Role(RoleKey),
+    Database(DatabaseKey),
+    Schema(SchemaKey),
+    DefaultPrivilege(DefaultPrivilegesKey),
+    SystemPrivilege(SystemPrivilegesKey),
+    SystemConfiguration(ServerConfigurationKey),
+    Cluster(ClusterKey),
+    IntrospectionSourceIndex(ClusterIntrospectionSourceIndexKey),
+    ClusterReplica(ClusterReplicaKey),
+    SystemObjectMapping(GidMappingKey),
+    Item(ItemKey),
+    Comment(CommentKey),
+    AuditLog(AuditLogKey),
+    StorageUsage(StorageUsageKey),
+    // Storage updates.
+    StorageCollectionMetadata(StorageCollectionMetadataKey),
+    UnfinalizedShard(UnfinalizedShardKey),
 }
