@@ -3560,6 +3560,9 @@ impl Arbitrary for ScalarType {
         // A strategy for generating the leaf cases of ScalarType
         let leaf = Union::new(vec![
             Just(ScalarType::Bool).boxed(),
+            Just(ScalarType::UInt16).boxed(),
+            Just(ScalarType::UInt32).boxed(),
+            Just(ScalarType::UInt64).boxed(),
             Just(ScalarType::Int16).boxed(),
             Just(ScalarType::Int32).boxed(),
             Just(ScalarType::Int64).boxed(),
@@ -3576,6 +3579,7 @@ impl Arbitrary for ScalarType {
             any::<Option<TimestampPrecision>>()
                 .prop_map(|precision| ScalarType::TimestampTz { precision })
                 .boxed(),
+            Just(ScalarType::MzTimestamp).boxed(),
             Just(ScalarType::Interval).boxed(),
             Just(ScalarType::PgLegacyChar).boxed(),
             Just(ScalarType::Bytes).boxed(),
@@ -3586,8 +3590,11 @@ impl Arbitrary for ScalarType {
             any::<Option<VarCharMaxLength>>()
                 .prop_map(|max_length| ScalarType::VarChar { max_length })
                 .boxed(),
+            Just(ScalarType::PgLegacyName).boxed(),
             Just(ScalarType::Jsonb).boxed(),
             Just(ScalarType::Uuid).boxed(),
+            Just(ScalarType::AclItem).boxed(),
+            Just(ScalarType::MzAclItem).boxed(),
             Just(ScalarType::Oid).boxed(),
             Just(ScalarType::RegProc).boxed(),
             Just(ScalarType::RegType).boxed(),
@@ -3765,7 +3772,7 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         arb_utc_date_time()
             .prop_map(|t| PropDatum::TimestampTz(CheckedTimestamp::from_timestamplike(t).unwrap()))
             .boxed(),
-        arb_interval().prop_map(PropDatum::Interval).boxed(),
+        any::<Interval>().prop_map(PropDatum::Interval).boxed(),
         arb_numeric().prop_map(PropDatum::Numeric).boxed(),
         prop::collection::vec(any::<u8>(), 1024)
             .prop_map(PropDatum::Bytes)
@@ -3861,7 +3868,7 @@ pub fn arb_datum_for_scalar(scalar_type: &ScalarType) -> impl Strategy<Value = P
             .prop_map(|t| PropDatum::TimestampTz(CheckedTimestamp::from_timestamplike(t).unwrap()))
             .boxed(),
         ScalarType::MzTimestamp => any::<u64>().prop_map(PropDatum::MzTimestamp).boxed(),
-        ScalarType::Interval => arb_interval().prop_map(PropDatum::Interval).boxed(),
+        ScalarType::Interval => any::<Interval>().prop_map(PropDatum::Interval).boxed(),
         ScalarType::Uuid => any::<[u8; 16]>()
             .prop_map(|x| PropDatum::Uuid(Uuid::from_bytes(x)))
             .boxed(),
@@ -3893,10 +3900,21 @@ pub fn arb_datum_for_scalar(scalar_type: &ScalarType) -> impl Strategy<Value = P
             arb_record(field_strats).prop_map(PropDatum::Record).boxed()
         }
         ScalarType::Jsonb => {
+            let int_value = any::<i128>()
+                .prop_map(|v| Numeric::try_from(v).unwrap())
+                .boxed();
+            // Numerics only support up to 39 digits.
+            let float_value = (1e-39f64..1e39)
+                .prop_map(|v| Numeric::try_from(v).unwrap())
+                .boxed();
+            // JSON does not support NaN or Infinite numbers, so we can't use
+            // the normal `arb_numeric` strategy.
+            let json_number = Union::new(vec![int_value, float_value]);
+
             let json_leaf = Union::new(vec![
                 any::<()>().prop_map(|_| PropDatum::JsonNull).boxed(),
                 any::<bool>().prop_map(PropDatum::Bool).boxed(),
-                arb_numeric().prop_map(PropDatum::Numeric).boxed(),
+                json_number.prop_map(PropDatum::Numeric).boxed(),
                 ".*".prop_map(PropDatum::String).boxed(),
             ]);
             json_leaf
@@ -4160,22 +4178,7 @@ fn arb_date() -> BoxedStrategy<Date> {
         .boxed()
 }
 
-fn arb_interval() -> BoxedStrategy<Interval> {
-    (
-        any::<i32>(),
-        any::<i32>(),
-        ((((i64::from(i32::MIN) * 60) - 59) * 60) * 1_000_000 - 59_999_999
-            ..(((i64::from(i32::MAX) * 60) + 59) * 60) * 1_000_000 + 59_999_999),
-    )
-        .prop_map(|(months, days, micros)| Interval {
-            months,
-            days,
-            micros,
-        })
-        .boxed()
-}
-
-pub(crate) fn add_arb_duration<T: 'static + Copy + Add<chrono::Duration> + std::fmt::Debug>(
+pub fn add_arb_duration<T: 'static + Copy + Add<chrono::Duration> + std::fmt::Debug>(
     to: T,
 ) -> BoxedStrategy<T::Output>
 where

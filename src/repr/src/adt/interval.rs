@@ -818,7 +818,12 @@ impl Arbitrary for Interval {
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (any::<i32>(), any::<i32>(), any::<i64>())
+        (
+            any::<i32>(),
+            any::<i32>(),
+            ((((i64::from(i32::MIN) * 60) - 59) * 60) * 1_000_000 - 59_999_999
+                ..(((i64::from(i32::MAX) * 60) + 59) * 60) * 1_000_000 + 59_999_999),
+        )
             .prop_map(|(months, days, micros)| Interval {
                 months,
                 days,
