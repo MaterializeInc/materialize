@@ -149,10 +149,9 @@ pub struct ComputeState {
     /// Everything running on this replica/cluster must obey this flag. At the
     /// time of writing the only part that is doing this is `persist_sink`.
     ///
-    /// NOTE: In the future, we might want a more complicated flag, something
-    /// that allows awaiting a change, or something that tells us after which
-    /// timestamp we are allowed to write. In this first version we are keeping
-    /// things as simple as possible!
+    /// NOTE: In the future, we might want a more complicated flag, for example
+    /// something that tells us after which timestamp we are allowed to write.
+    /// In this first version we are keeping things as simple as possible!
     pub read_only_rx: watch::Receiver<bool>,
 
     /// Send-side for read-only state.
