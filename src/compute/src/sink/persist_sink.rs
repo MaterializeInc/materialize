@@ -215,7 +215,7 @@ where
         obey_read_only_mode,
     );
 
-    let (_append_frontier_stream, append_token) = append_batches(
+    let append_token = append_batches(
         sink_id.clone(),
         operator_name,
         target,
@@ -968,7 +968,7 @@ fn append_batches<G>(
     persist_clients: Arc<PersistClientCache>,
     mut read_only: watch::Receiver<bool>,
     obey_read_only: bool,
-) -> (Stream<G, ()>, Rc<dyn Any>)
+) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -980,11 +980,6 @@ where
 
     let operator_name = format!("{} append_batches", operator_name);
     let mut append_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-
-    // We never output anything, but we update our capabilities based on the
-    // persist frontier we know about. So someone can listen on our output
-    // frontier and learn about the persist frontier advancing.
-    let (mut _output, output_stream) = append_op.new_output::<CapacityContainerBuilder<_>>();
 
     let hashed_id = sink_id.hashed();
     let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
@@ -1009,7 +1004,8 @@ where
             return;
         }
 
-        let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
+        // Explicitly pop away the capability, we don't need it.
+        capabilities.pop().expect("missing capability");
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -1278,11 +1274,9 @@ where
 
                 match result {
                     Ok(()) => {
-                        cap_set.downgrade(batch_upper);
+                        // Nothing to do!
                     }
                     Err(mismatch) => {
-                        cap_set.downgrade(mismatch.current.iter());
-
                         // Clean up in case we didn't manage to append the
                         // batches to persist.
                         for batch in batches {
@@ -1306,5 +1300,5 @@ where
     });
 
     let token = Rc::new(shutdown_button.press_on_drop());
-    (output_stream, token)
+    token
 }
