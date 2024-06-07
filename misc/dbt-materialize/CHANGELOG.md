@@ -4,6 +4,7 @@
 
 * Add support for overriding the `generate_cluster_name` macro to customize the
   cluster name generation logic in user projects.
+* Stop adding aliases to subqueries when calling with `--empty` flag.
 
 ## 1.8.0 - 2024-05-23
 
