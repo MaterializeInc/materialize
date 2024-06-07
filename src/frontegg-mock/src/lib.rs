@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::extract::Path;
 use axum::extract::State;
 use axum::headers::authorization::Bearer;
 use axum::headers::Authorization;
@@ -37,6 +38,9 @@ const AUTH_USER_PATH: &str = "/identity/resources/auth/v1/user";
 const AUTH_API_TOKEN_REFRESH_PATH: &str = "/identity/resources/auth/v1/api-token/token/refresh";
 const USERS_ME_PATH: &str = "/identity/resources/users/v2/me";
 const USERS_API_TOKENS_PATH: &str = "/identity/resources/users/api-tokens/v1";
+const USER_PATH: &str = "/identity/resources/users/v1/:id";
+const USER_CREATE_PATH: &str = "/identity/resources/users/v2";
+const ROLES_PATH: &str = "/identity/resources/roles/v2";
 
 pub struct FronteggMockServer {
     pub base_url: String,
@@ -59,6 +63,7 @@ impl FronteggMockServer {
         now: NowFn,
         expires_in_secs: i64,
         latency: Option<Duration>,
+        roles: Option<Vec<UserRole>>,
     ) -> Result<FronteggMockServer, anyhow::Error> {
         let (role_updates_tx, role_updates_rx) = unbounded_channel();
 
@@ -91,6 +96,22 @@ impl FronteggMockServer {
             ])
         });
 
+        // Provide default roles if None is provided
+        let roles = roles.unwrap_or_else(|| {
+            vec![
+                UserRole {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name: "Organization Admin".to_string(),
+                    key: "MaterializePlatformAdmin".to_string(),
+                },
+                UserRole {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name: "Organization Member".to_string(),
+                    key: "MaterializePlatform".to_string(),
+                },
+            ]
+        });
+
         let context = Arc::new(Context {
             issuer,
             encoding_key,
@@ -106,6 +127,7 @@ impl FronteggMockServer {
             refreshes: Arc::clone(&refreshes),
             enable_auth: Arc::clone(&enable_auth),
             auth_requests: Arc::clone(&auth_requests),
+            roles: Arc::new(roles),
         });
 
         let router = Router::new()
@@ -114,6 +136,9 @@ impl FronteggMockServer {
             .route(AUTH_API_TOKEN_REFRESH_PATH, post(handle_post_token_refresh))
             .route(USERS_ME_PATH, get(handle_get_user_profile))
             .route(USERS_API_TOKENS_PATH, post(handle_post_user_api_token))
+            .route(USER_PATH, get(handle_get_user).delete(handle_delete_user))
+            .route(USER_CREATE_PATH, post(handle_create_user))
+            .route(ROLES_PATH, get(handle_roles_request))
             .layer(middleware::from_fn_with_state(
                 Arc::clone(&context),
                 latency_middleware,
@@ -217,6 +242,25 @@ fn generate_refresh_token(context: &Context, email: String) -> String {
         .unwrap()
         .insert(refresh_token.clone(), email);
     refresh_token
+}
+
+fn get_user_roles(
+    role_ids_or_names: &[String],
+    role_mapping: &BTreeMap<String, UserRole>,
+) -> Vec<UserRole> {
+    role_ids_or_names
+        .iter()
+        .map(|id_or_name| {
+            role_mapping
+                .get(id_or_name)
+                .cloned()
+                .unwrap_or_else(|| UserRole {
+                    id: id_or_name.clone(),
+                    name: id_or_name.clone(),
+                    key: id_or_name.clone(),
+                })
+        })
+        .collect()
 }
 
 async fn latency_middleware<B>(
@@ -376,6 +420,128 @@ async fn handle_post_user_api_token<'a>(
     Ok(Json(new_token))
 }
 
+// https://docs.frontegg.com/reference/userscontrollerv2_getuserbyid
+async fn handle_get_user(
+    State(context): State<Arc<Context>>,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<UserResponse>, StatusCode> {
+    let users = context.users.lock().unwrap();
+    let role_mapping: BTreeMap<String, UserRole> = context
+        .roles
+        .iter()
+        .map(|role| (role.id.clone(), role.clone()))
+        .collect();
+
+    match users.iter().find(|(_, user)| user.id == Some(user_id)) {
+        Some((_, user)) => {
+            let roles = get_user_roles(&user.roles, &role_mapping);
+
+            let user_response = UserResponse {
+                id: user.id.unwrap_or_default(),
+                email: user.email.clone(),
+                verified: user.verified.unwrap_or(true),
+                metadata: user.metadata.clone().unwrap_or_default(),
+                provider: user.auth_provider.clone().unwrap_or_default(),
+                roles,
+            };
+
+            Ok(Json(user_response))
+        }
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+// https://docs.frontegg.com/reference/userscontrollerv2_createuser
+async fn handle_create_user(
+    State(context): State<Arc<Context>>,
+    Json(new_user): Json<UserCreate>,
+) -> Result<(StatusCode, Json<UserResponse>), StatusCode> {
+    let mut users = context.users.lock().unwrap();
+    let role_mapping: BTreeMap<String, UserRole> = context
+        .roles
+        .iter()
+        .map(|role| (role.id.clone(), role.clone()))
+        .collect();
+
+    if users.contains_key(&new_user.email) {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let default_tenant_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+
+    let role_ids = new_user.role_ids.as_deref().unwrap_or(&[]);
+    let mut role_names = Vec::new();
+
+    for role_id in role_ids {
+        match role_mapping.get(role_id) {
+            Some(role) => role_names.push(role.name.clone()),
+            None => return Err(StatusCode::BAD_REQUEST),
+        }
+    }
+
+    let user_config = UserConfig {
+        id: Some(user_id),
+        email: new_user.email.clone(),
+        password: Uuid::new_v4().to_string(),
+        tenant_id: default_tenant_id,
+        initial_api_tokens: vec![],
+        roles: role_names.clone(),
+        auth_provider: None,
+        verified: Some(true),
+        metadata: None,
+    };
+
+    users.insert(new_user.email.clone(), user_config);
+
+    let user_roles = role_ids
+        .iter()
+        .map(|role_id| role_mapping.get(role_id).unwrap().clone())
+        .collect();
+
+    let user_response = UserResponse {
+        id: user_id,
+        email: new_user.email.clone(),
+        verified: true,
+        metadata: String::new(),
+        provider: String::new(),
+        roles: user_roles,
+    };
+
+    Ok((StatusCode::CREATED, Json(user_response)))
+}
+
+// https://docs.frontegg.com/reference/userscontrollerv1_removeuserfromtenant
+async fn handle_delete_user(
+    State(context): State<Arc<Context>>,
+    Path(user_id): Path<Uuid>,
+) -> StatusCode {
+    let mut users = context.users.lock().unwrap();
+    let initial_count = users.len();
+    users.retain(|_, user| user.id != Some(user_id));
+
+    if users.len() < initial_count {
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+// https://docs.frontegg.com/reference/permissionscontrollerv2_getallroles
+async fn handle_roles_request(State(context): State<Arc<Context>>) -> Json<UserRolesResponse> {
+    let roles = Arc::<Vec<UserRole>>::clone(&context.roles);
+
+    let response = UserRolesResponse {
+        items: roles.to_vec(),
+        _metadata: UserRolesMetadata {
+            total_items: roles.len(),
+            total_pages: 1,
+        },
+    };
+
+    Json(response)
+}
+
 #[derive(Deserialize)]
 struct AuthUserRequest {
     email: String,
@@ -404,18 +570,23 @@ pub struct UserApiToken {
     pub secret: Uuid,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Serialize)]
 pub struct UserConfig {
+    pub id: Option<Uuid>,
     pub email: String,
     pub password: String,
     pub tenant_id: Uuid,
     pub initial_api_tokens: Vec<UserApiToken>,
     pub roles: Vec<String>,
+    pub auth_provider: Option<String>,
+    pub verified: Option<bool>,
+    pub metadata: Option<String>,
 }
 
 impl UserConfig {
     pub fn generate(tenant_id: Uuid, email: impl Into<String>, roles: Vec<String>) -> Self {
         Self {
+            id: Some(Uuid::new_v4()),
             email: email.into(),
             password: Uuid::new_v4().to_string(),
             tenant_id,
@@ -424,6 +595,9 @@ impl UserConfig {
                 secret: Uuid::new_v4(),
             }],
             roles,
+            auth_provider: None,
+            verified: None,
+            metadata: None,
         }
     }
 
@@ -440,6 +614,41 @@ impl UserConfig {
     }
 }
 
+#[derive(Deserialize, Clone, Serialize)]
+pub struct UserCreate {
+    pub email: String,
+    #[serde(rename = "roleIds")]
+    pub role_ids: Option<Vec<String>>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct UserRole {
+    pub id: String,
+    pub name: String,
+    pub key: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UserResponse {
+    pub id: Uuid,
+    pub email: String,
+    pub verified: bool,
+    pub metadata: String,
+    pub provider: String,
+    pub roles: Vec<UserRole>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct UserRolesResponse {
+    items: Vec<UserRole>,
+    _metadata: UserRolesMetadata,
+}
+
+#[derive(Serialize, Deserialize)]
+struct UserRolesMetadata {
+    total_items: usize,
+    total_pages: usize,
+}
 struct Context {
     issuer: String,
     encoding_key: EncodingKey,
@@ -456,6 +665,7 @@ struct Context {
     refreshes: Arc<Mutex<u64>>,
     enable_auth: Arc<AtomicBool>,
     auth_requests: Arc<Mutex<u64>>,
+    roles: Arc<Vec<UserRole>>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

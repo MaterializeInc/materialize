@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use mz_frontegg_mock::{FronteggMockServer, UserConfig};
+use mz_frontegg_mock::{FronteggMockServer, UserConfig, UserRole};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::now::SYSTEM_TIME;
@@ -51,6 +51,10 @@ struct Args {
     /// JSON of the form: `{"rolename": ["permission1", "permission2"]}`
     #[clap(long)]
     role_permissions: Option<String>,
+    /// Roles information.
+    /// JSON of the form: `[{"id":"1", "name": "Organization Admin"}, {"id":"2", "name": "Organization Member"}]`
+    #[clap(long)]
+    roles: Option<String>,
 }
 
 #[tokio::main]
@@ -99,6 +103,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         Some(s) => serde_json::from_str(s).with_context(|| "decoding --role-permissions")?,
         None => None,
     };
+    let roles = match &args.roles {
+        Some(s) => {
+            Some(serde_json::from_str::<Vec<UserRole>>(s).with_context(|| "decoding --roles")?)
+        }
+        None => None,
+    };
     let server = FronteggMockServer::start(
         Some(&addr),
         args.issuer,
@@ -109,6 +119,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         SYSTEM_TIME.clone(),
         500,
         None,
+        roles,
     )?;
 
     println!("frontegg-mock listening...");

@@ -432,11 +432,15 @@ async fn test_auth_expiry() {
     let users = BTreeMap::from([(
         email.clone(),
         UserConfig {
+            id: None,
             email,
             password,
             tenant_id,
             initial_api_tokens,
             roles,
+            auth_provider: None,
+            verified: None,
+            metadata: None,
         },
     )]);
 
@@ -454,6 +458,7 @@ async fn test_auth_expiry() {
         None,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
         None,
     )
     .unwrap();
@@ -553,21 +558,29 @@ async fn test_auth_base_require_tls_frontegg() {
         (
             "uSeR@_.com".to_string(),
             UserConfig {
+                id: None,
                 email: "uSeR@_.com".to_string(),
                 password,
                 tenant_id,
                 initial_api_tokens,
                 roles: Vec::new(),
+                auth_provider: None,
+                verified: None,
+                metadata: None,
             },
         ),
         (
             SYSTEM_USER.name.to_string(),
             UserConfig {
+                id: None,
                 email: SYSTEM_USER.name.to_string(),
                 password: system_password,
                 tenant_id,
                 initial_api_tokens: system_initial_api_tokens,
                 roles: Vec::new(),
+                auth_provider: None,
+                verified: None,
+                metadata: None,
             },
         ),
     ]);
@@ -627,6 +640,7 @@ async fn test_auth_base_require_tls_frontegg() {
         None,
         now.clone(),
         1_000,
+        None,
         None,
     )
     .unwrap();
@@ -1361,16 +1375,21 @@ async fn test_auth_admin_non_superuser() {
         (
             frontegg_user.to_string(),
             UserConfig {
+                id: None,
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
                 initial_api_tokens: vec![UserApiToken { client_id, secret }],
                 roles: Vec::new(),
+                auth_provider: None,
+                verified: None,
+                metadata: None,
             },
         ),
         (
             admin_frontegg_user.to_string(),
             UserConfig {
+                id: None,
                 email: admin_frontegg_user.to_string(),
                 password: admin_password,
                 tenant_id,
@@ -1379,6 +1398,9 @@ async fn test_auth_admin_non_superuser() {
                     secret: admin_secret,
                 }],
                 roles: vec![admin_role.to_string()],
+                auth_provider: None,
+                verified: None,
+                metadata: None,
             },
         ),
     ]);
@@ -1397,6 +1419,7 @@ async fn test_auth_admin_non_superuser() {
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
         None,
     )
     .unwrap();
@@ -1487,16 +1510,21 @@ async fn test_auth_admin_superuser() {
         (
             frontegg_user.to_string(),
             UserConfig {
+                id: None,
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
                 initial_api_tokens: vec![UserApiToken { client_id, secret }],
                 roles: Vec::new(),
+                auth_provider: None,
+                verified: None,
+                metadata: None,
             },
         ),
         (
             admin_frontegg_user.to_string(),
             UserConfig {
+                id: None,
                 email: admin_frontegg_user.to_string(),
                 password: admin_password,
                 tenant_id,
@@ -1505,6 +1533,9 @@ async fn test_auth_admin_superuser() {
                     secret: admin_secret,
                 }],
                 roles: vec![admin_role.to_string()],
+                auth_provider: None,
+                verified: None,
+                metadata: None,
             },
         ),
     ]);
@@ -1523,6 +1554,7 @@ async fn test_auth_admin_superuser() {
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
         None,
     )
     .unwrap();
@@ -1613,16 +1645,21 @@ async fn test_auth_admin_superuser_revoked() {
         (
             frontegg_user.to_string(),
             UserConfig {
+                id: None,
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
                 initial_api_tokens: vec![UserApiToken { client_id, secret }],
                 roles: Vec::new(),
+                auth_provider: None,
+                verified: None,
+                metadata: None,
             },
         ),
         (
             admin_frontegg_user.to_string(),
             UserConfig {
+                id: None,
                 email: admin_frontegg_user.to_string(),
                 password: admin_password,
                 tenant_id,
@@ -1631,6 +1668,9 @@ async fn test_auth_admin_superuser_revoked() {
                     secret: admin_secret,
                 }],
                 roles: vec![admin_role.to_string()],
+                auth_provider: None,
+                verified: None,
+                metadata: None,
             },
         ),
     ]);
@@ -1649,6 +1689,7 @@ async fn test_auth_admin_superuser_revoked() {
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
         None,
     )
     .unwrap();
@@ -1747,11 +1788,15 @@ async fn test_auth_deduplication() {
     let users = BTreeMap::from([(
         frontegg_user.to_string(),
         UserConfig {
+            id: None,
             email: frontegg_user.to_string(),
             password,
             tenant_id,
             initial_api_tokens: vec![UserApiToken { client_id, secret }],
             roles: Vec::new(),
+            auth_provider: None,
+            verified: None,
+            metadata: None,
         },
     )]);
     let issuer = "frontegg-mock".to_owned();
@@ -1769,6 +1814,7 @@ async fn test_auth_deduplication() {
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
         None,
     )
     .unwrap();
@@ -1906,11 +1952,15 @@ async fn test_refresh_task_metrics() {
     let users = BTreeMap::from([(
         frontegg_user.to_string(),
         UserConfig {
+            id: None,
             email: frontegg_user.to_string(),
             password,
             tenant_id,
             initial_api_tokens: vec![UserApiToken { client_id, secret }],
             roles: Vec::new(),
+            auth_provider: None,
+            verified: None,
+            metadata: None,
         },
     )]);
     let issuer = "frontegg-mock".to_owned();
@@ -1928,6 +1978,7 @@ async fn test_refresh_task_metrics() {
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
         None,
     )
     .unwrap();
@@ -2036,16 +2087,21 @@ async fn test_superuser_can_alter_cluster() {
         (
             frontegg_user.to_string(),
             UserConfig {
+                id: None,
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
                 initial_api_tokens: vec![UserApiToken { client_id, secret }],
                 roles: Vec::new(),
+                auth_provider: None,
+                verified: None,
+                metadata: None,
             },
         ),
         (
             admin_frontegg_user.to_string(),
             UserConfig {
+                id: None,
                 email: admin_frontegg_user.to_string(),
                 password: admin_password.clone(),
                 tenant_id,
@@ -2054,6 +2110,9 @@ async fn test_superuser_can_alter_cluster() {
                     secret: admin_secret,
                 }],
                 roles: vec![admin_role.to_string()],
+                auth_provider: None,
+                verified: None,
+                metadata: None,
             },
         ),
     ]);
@@ -2072,6 +2131,7 @@ async fn test_superuser_can_alter_cluster() {
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
         None,
     )
     .unwrap();
@@ -2161,11 +2221,15 @@ async fn test_refresh_dropped_session() {
     let users = BTreeMap::from([(
         frontegg_user.to_string(),
         UserConfig {
+            id: None,
             email: frontegg_user.to_string(),
             password,
             tenant_id,
             initial_api_tokens: vec![UserApiToken { client_id, secret }],
             roles: Vec::new(),
+            auth_provider: None,
+            verified: None,
+            metadata: None,
         },
     )]);
     let issuer = "frontegg-mock".to_owned();
@@ -2183,6 +2247,7 @@ async fn test_refresh_dropped_session() {
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
         None,
     )
     .unwrap();
@@ -2314,11 +2379,15 @@ async fn test_refresh_dropped_session_lru() {
         let secret = Uuid::new_v4();
 
         let user = UserConfig {
+            id: None,
             email: email.to_string(),
             password,
             tenant_id,
             initial_api_tokens: vec![UserApiToken { client_id, secret }],
             roles: Vec::new(),
+            auth_provider: None,
+            verified: None,
+            metadata: None,
         };
         users.insert(email.to_string(), user);
 
@@ -2348,6 +2417,7 @@ async fn test_refresh_dropped_session_lru() {
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
         None,
     )
     .unwrap();
@@ -2503,11 +2573,15 @@ async fn test_transient_auth_failures() {
     let users = BTreeMap::from([(
         frontegg_user.to_string(),
         UserConfig {
+            id: None,
             email: frontegg_user.to_string(),
             password,
             tenant_id,
             initial_api_tokens: vec![UserApiToken { client_id, secret }],
             roles: Vec::new(),
+            auth_provider: None,
+            verified: None,
+            metadata: None,
         },
     )]);
     let issuer = "frontegg-mock".to_owned();
@@ -2525,6 +2599,7 @@ async fn test_transient_auth_failures() {
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
         None,
     )
     .unwrap();
@@ -2614,11 +2689,15 @@ async fn test_transient_auth_failure_on_refresh() {
     let users = BTreeMap::from([(
         frontegg_user.to_string(),
         UserConfig {
+            id: None,
             email: frontegg_user.to_string(),
             password,
             tenant_id,
             initial_api_tokens: vec![UserApiToken { client_id, secret }],
             roles: Vec::new(),
+            auth_provider: None,
+            verified: None,
+            metadata: None,
         },
     )]);
     let issuer = "frontegg-mock".to_owned();
@@ -2636,6 +2715,7 @@ async fn test_transient_auth_failure_on_refresh() {
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
         None,
     )
     .unwrap();

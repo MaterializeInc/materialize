@@ -58,11 +58,15 @@ async fn test_balancer() {
     let users = BTreeMap::from([(
         email.clone(),
         UserConfig {
+            id: None,
             email,
             password,
             tenant_id,
             initial_api_tokens,
             roles,
+            auth_provider: None,
+            verified: None,
+            metadata: None,
         },
     )]);
 
@@ -83,6 +87,7 @@ async fn test_balancer() {
         EXPIRES_IN_SECS,
         // Add a bit of delay so we can test connection de-duplication.
         Some(Duration::from_millis(100)),
+        None,
     )
     .unwrap();
 

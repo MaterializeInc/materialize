@@ -2027,6 +2027,7 @@ async fn test_max_connections_limits() {
         SYSTEM_TIME.clone(),
         500,
         None,
+        None,
     )
     .unwrap();
 
@@ -4328,11 +4329,15 @@ async fn test_cert_reloading() {
     let users = BTreeMap::from([(
         email.clone(),
         UserConfig {
+            id: None,
             email,
             password,
             tenant_id,
             initial_api_tokens,
             roles,
+            auth_provider: None,
+            verified: None,
+            metadata: None,
         },
     )]);
 
@@ -4353,6 +4358,7 @@ async fn test_cert_reloading() {
         EXPIRES_IN_SECS,
         // Add a bit of delay so we can test connection de-duplication.
         Some(Duration::from_millis(100)),
+        None,
     )
     .unwrap();
 
