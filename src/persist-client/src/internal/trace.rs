@@ -719,9 +719,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 
     pub fn is_merging(&self) -> bool {
-        // We can't currently tell if a fueled merge is in progress or dropped on the floor,
-        // but for now we assume that it is active.
-        self.parts.len() > 1
+        self.active_compaction.is_some()
     }
 
     fn desc(&self) -> &Description<T> {
