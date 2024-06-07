@@ -148,9 +148,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             materialize_url="postgres://materialize@balancerd:6875",
             no_reset=True,
             seed=1,
-            default_timeout="600s",
+            # Timeout increased since Large Zippy occasionally runs into them
+            default_timeout="1200s",
             materialize_params={
-                "statement_timeout": "'900s'",
+                "statement_timeout": "'1800s'",
                 "transaction_isolation": f"'{args.transaction_isolation}'",
             },
         ),

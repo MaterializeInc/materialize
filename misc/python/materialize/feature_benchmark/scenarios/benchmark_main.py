@@ -287,7 +287,7 @@ class InsertBatch(DML):
 class InsertMultiRow(DML):
     """Measure the time it takes for a single multi-row INSERT statement to return."""
 
-    SCALE = 5
+    SCALE = 4  # FATAL:  request larger than 2.0 MB
 
     def benchmark(self) -> MeasurementSource:
         values = ", ".join(f"({i})" for i in range(0, self.n()))
