@@ -32,8 +32,7 @@ use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_ore::tracing::{
-    OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard,
-    TracingHandle,
+    OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard, TracingHandle
 };
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
@@ -448,14 +447,19 @@ impl Listeners {
                 }),
                 #[cfg(feature = "tokio-console")]
                 tokio_console: None,
-                sentry: None,
+                sentry: SentryConfig {
+                    dsn: None,
+                    environment: Some("environmentd-test-util".into()),
+                    tags: BTreeMap::default(),
+                    event_filter: mz_service::tracing::mz_sentry_event_filter,
+                },
                 build_version: crate::BUILD_INFO.version,
                 build_sha: crate::BUILD_INFO.sha,
                 build_time: crate::BUILD_INFO.time,
                 registry: metrics_registry.clone(),
                 capture: config.capture,
             };
-            let (tracing_handle, tracing_guard) = mz_ore::tracing::configure(config).await?;
+            let (tracing_handle, tracing_guard) = mz_ore::tracing::configure(config)?;
             (tracing_handle, Some(tracing_guard))
         } else {
             (TracingHandle::disabled(), None)

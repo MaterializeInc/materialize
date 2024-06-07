@@ -510,77 +510,73 @@ where
         None
     };
 
-    let (sentry_guard, sentry_layer, sentry_reloader): (_, _, DirectiveReloader) =
-        if let Some(sentry_config) = config.sentry {
-            let guard = sentry::init((
-                sentry_config.dsn,
-                sentry::ClientOptions {
-                    attach_stacktrace: true,
-                    release: Some(config.build_version.into()),
-                    environment: sentry_config.environment.map(Into::into),
-                    integrations: vec![Arc::new(DebugImagesIntegration::new())],
-                    ..Default::default()
-                },
-            ));
+    let mut sentry_config = sentry::ClientOptions {
+        attach_stacktrace: true,
+        release: Some(config.build_version.into()),
+        environment: config.sentry.environment.map(Into::into),
+        integrations: vec![Arc::new(DebugImagesIntegration::new())],
+        ..Default::default()
+    };
+    let sentry_guard = if let Some(dsn) = config.sentry.dsn {
+        sentry::init((dsn, sentry_config))
+    } else {
+        sentry_config.debug = true;
+        sentry::init(sentry_config)
+    };
 
-            sentry::configure_scope(|scope| {
-                scope.set_tag("service_name", config.service_name);
-                scope.set_tag("build_sha", config.build_sha.to_string());
-                scope.set_tag("build_time", config.build_time.to_string());
-                for (k, v) in sentry_config.tags {
-                    scope.set_tag(&k, v);
-                }
-            });
+    sentry::configure_scope(|scope| {
+        scope.set_tag("service_name", config.service_name);
+        scope.set_tag("build_sha", config.build_sha.to_string());
+        scope.set_tag("build_time", config.build_time.to_string());
+        for (k, v) in config.sentry.tags {
+            scope.set_tag(&k, v);
+        }
+    });
 
-            let (filter, filter_handle) = reload::Layer::new({
-                // Please see the comment on `with_filter` below.
-                let mut filter = EnvFilter::new("info");
-                for directive in SENTRY_DEFAULTS.iter() {
-                    filter = filter.add_directive(directive.clone());
-                }
-                filter
-            });
-            let layer = sentry_tracing::layer()
-                .event_filter(sentry_config.event_filter)
-                // WARNING, ENTERING THE SPOOKY ZONE
-                //
-                // While sentry provides an event filter above that maps events to types of sentry events, its `Layer`
-                // implementation does not participate in `tracing`'s level-fast-path implementation, which depends on
-                // a hidden api (<https://github.com/tokio-rs/tracing/blob/b28c9351dd4f34ed3c7d5df88bb5c2e694d9c951/tracing-subscriber/src/layer/mod.rs#L861-L867>)
-                // which is primarily manged by filters (like below). The fast path skips verbose log
-                // (and span) levels that no layer is interested by reading a single atomic. Usually, not implementing this
-                // api means "give me everything, including `trace`, unless you attach a filter to me.
-                //
-                // The curious thing here (and a bug in tracing) is that _some configurations of our layer stack above_,
-                // if you don't have this filter can cause the fast-path to trigger, despite the fact
-                // that the sentry layer would specifically communicating that it wants to see
-                // everything. This bug appears to be related to the presence of a `reload::Layer`
-                // _around a filter, not a layer_, and guswynn is tracking investigating it here:
-                // <https://github.com/MaterializeInc/materialize/issues/16556>. Because we don't
-                // enable a reload-able filter in CI/locally, but DO in production (the otel layer), it
-                // was once possible to trigger and rely on the fast path in CI, but not notice that it
-                // was disabled in production.
-                //
-                // The behavior of this optimization is now tested in various scenarios (in
-                // `test/tracing`). Regardless, when the upstream bug is fixed/resolved,
-                // we will continue to place this here, as the sentry layer only cares about
-                // events <= INFO, so we want to use the fast-path if no other layer
-                // is interested in high-fidelity events.
-                .with_filter(filter);
-            let reloader = Arc::new(move |defaults: Vec<Directive>| {
-                // Please see the comment on `with_filter` above.
-                let mut filter = EnvFilter::new("info");
-                // Re-apply our defaults on reload.
-                for directive in &defaults {
-                    filter = filter.add_directive(directive.clone());
-                }
-                Ok(filter_handle.reload(filter)?)
-            });
-            (Some(guard), Some(layer), reloader)
-        } else {
-            let reloader = Arc::new(|_| Ok(()));
-            (None, None, reloader)
-        };
+    let (filter, filter_handle) = reload::Layer::new({
+        // Please see the comment on `with_filter` below.
+        let mut filter = EnvFilter::new("info");
+        for directive in SENTRY_DEFAULTS.iter() {
+            filter = filter.add_directive(directive.clone());
+        }
+        filter
+    });
+    let sentry_layer = sentry_tracing::layer()
+        .event_filter(config.sentry.event_filter)
+        // WARNING, ENTERING THE SPOOKY ZONE
+        //
+        // While sentry provides an event filter above that maps events to types of sentry events, its `Layer`
+        // implementation does not participate in `tracing`'s level-fast-path implementation, which depends on
+        // a hidden api (<https://github.com/tokio-rs/tracing/blob/b28c9351dd4f34ed3c7d5df88bb5c2e694d9c951/tracing-subscriber/src/layer/mod.rs#L861-L867>)
+        // which is primarily manged by filters (like below). The fast path skips verbose log
+        // (and span) levels that no layer is interested by reading a single atomic. Usually, not implementing this
+        // api means "give me everything, including `trace`, unless you attach a filter to me.
+        //
+        // The curious thing here (and a bug in tracing) is that _some configurations of our layer stack above_,
+        // if you don't have this filter can cause the fast-path to trigger, despite the fact
+        // that the sentry layer would specifically communicating that it wants to see
+        // everything. This bug appears to be related to the presence of a `reload::Layer`
+        // _around a filter, not a layer_, and guswynn is tracking investigating it here:
+        // <https://github.com/MaterializeInc/materialize/issues/16556>. Because we don't
+        // enable a reload-able filter in CI/locally, but DO in production (the otel layer), it
+        // was once possible to trigger and rely on the fast path in CI, but not notice that it
+        // was disabled in production.
+        //
+        // The behavior of this optimization is now tested in various scenarios (in
+        // `test/tracing`). Regardless, when the upstream bug is fixed/resolved,
+        // we will continue to place this here, as the sentry layer only cares about
+        // events <= INFO, so we want to use the fast-path if no other layer
+        // is interested in high-fidelity events.
+        .with_filter(filter);
+    let sentry_reloader = Arc::new(move |defaults: Vec<Directive>| {
+        // Please see the comment on `with_filter` above.
+        let mut filter = EnvFilter::new("info");
+        // Re-apply our defaults on reload.
+        for directive in &defaults {
+            filter = filter.add_directive(directive.clone());
+        }
+        Ok(filter_handle.reload(filter)?)
+    });
 
     #[cfg(feature = "capture")]
     let capture = config.capture.map(|storage| CaptureLayer::new(&storage));
@@ -614,7 +610,7 @@ where
         sentry: sentry_reloader,
     };
     let guard = TracingGuard {
-        _sentry_guard: sentry_guard,
+        _sentry_guard: Some(sentry_guard),
     };
 
     Ok((handle, guard))

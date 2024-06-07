@@ -256,7 +256,7 @@ impl Default for TracingCliArgs {
 }
 
 impl TracingCliArgs {
-    pub async fn configure_tracing(
+    pub fn configure_tracing(
         &self,
         StaticTracingConfig {
             service_name,
@@ -305,8 +305,8 @@ impl TracingCliArgs {
                     retention: self.tokio_console_retention,
                 }
             }),
-            sentry: self.sentry_dsn.clone().map(|dsn| SentryConfig {
-                dsn,
+            sentry: SentryConfig {
+                dsn: self.sentry_dsn.clone(),
                 environment: self.sentry_environment.clone(),
                 tags: self
                     .opentelemetry_resource
@@ -316,7 +316,7 @@ impl TracingCliArgs {
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
                 event_filter: mz_service::tracing::mz_sentry_event_filter,
-            }),
+            },
             build_version: build_info.version,
             build_sha: build_info.sha,
             build_time: build_info.time,
@@ -324,7 +324,6 @@ impl TracingCliArgs {
             #[cfg(feature = "capture")]
             capture: self.capture.clone(),
         })
-        .await
     }
 }
 

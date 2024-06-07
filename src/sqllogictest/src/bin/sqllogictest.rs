@@ -20,6 +20,7 @@ use chrono::Utc;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::tracing::TracingHandle;
 use mz_sql::session::vars::{
     Var, VarInput, DISK_CLUSTER_REPLICAS_DEFAULT, ENABLE_LOGICAL_COMPACTION_WINDOW,
 };
@@ -104,8 +105,7 @@ struct Args {
     pub log_filter: CloneableEnvFilter,
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     mz_ore::panic::set_abort_on_panic();
 
     let args: Args = cli::parse_args(CliConfig {
@@ -125,9 +125,17 @@ async fn main() -> ExitCode {
             },
             MetricsRegistry::new(),
         )
-        .await
         .unwrap();
 
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to start runtime");
+
+    runtime.block_on(run(args, tracing_args, tracing_handle))
+}
+
+async fn run(args: Args, tracing_args: TracingCliArgs, tracing_handle: TracingHandle) -> ExitCode {
     // sqllogictest requires that Materialize have some system variables set to some specific value
     // to pass. If the caller hasn't set this variable, then we set it for them. If the caller has
     // set this variable, then we assert that it's set to the right value.

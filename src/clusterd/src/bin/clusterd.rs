@@ -27,6 +27,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
@@ -157,38 +158,52 @@ struct Args {
     worker_core_affinity: bool,
 }
 
-#[tokio::main]
-async fn main() {
-    let args = cli::parse_args(CliConfig {
+fn main() -> Result<(), anyhow::Error> {
+    mz_ore::panic::set_abort_on_panic();
+
+    let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),
         enable_version_flag: true,
     });
-    if let Err(err) = run(args).await {
-        eprintln!("clusterd: fatal: {}", err.display_with_causes());
-        process::exit(1);
-    }
-}
 
-async fn run(args: Args) -> Result<(), anyhow::Error> {
-    mz_ore::panic::set_abort_on_panic();
+    // Initialize our logging.
+    //
+    // Note: we want to do this _BEFORE_ we start our tokio runtime so any threads
+    // spawned by tokio are captured by Sentry.
+    //
+    // See: <https://github.com/getsentry/sentry-rust/issues/567#issuecomment-1508130859>
     let metrics_registry = MetricsRegistry::new();
-    let (tracing_handle, _tracing_guard) = args
-        .tracing
-        .configure_tracing(
-            StaticTracingConfig {
-                service_name: "clusterd",
-                build_info: BUILD_INFO,
-            },
-            metrics_registry.clone(),
-        )
-        .await?;
-
+    let (tracing_handle, _tracing_guard) = args.tracing.configure_tracing(
+        StaticTracingConfig {
+            service_name: "clusterd",
+            build_info: BUILD_INFO,
+        },
+        metrics_registry.clone(),
+    )?;
     let tracing_handle = Arc::new(tracing_handle);
 
     // Keep this _after_ the mz_ore::tracing::configure call so that its panic
     // hook runs _before_ the one that sends things to sentry.
     mz_timely_util::panic::halt_on_timely_communication_panic();
 
+    // Start our `tokio` runtime.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    if let Err(err) = runtime.block_on(run(args, tracing_handle, metrics_registry)) {
+        eprintln!("clusterd: fatal: {}", err.display_with_causes());
+        process::exit(1);
+    }
+
+    Ok(())
+}
+
+async fn run(
+    args: Args,
+    tracing_handle: Arc<TracingHandle>,
+    metrics_registry: MetricsRegistry,
+) -> Result<(), anyhow::Error> {
     let _failpoint_scenario = FailScenario::setup();
 
     emit_boot_diagnostics!(&BUILD_INFO);

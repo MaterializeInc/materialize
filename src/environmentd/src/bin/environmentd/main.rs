@@ -595,8 +595,32 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
 
-    // Start Tokio runtime.
+    // Configure tracing to log the service name when using the process
+    // orchestrator, which intermingles log output from multiple services. Other
+    // orchestrators separate log output from different services.
+    args.tracing.log_prefix = if matches!(args.orchestrator, OrchestratorKind::Process) {
+        Some("environmentd".to_string())
+    } else {
+        None
+    };
 
+    // Initialize our logging.
+    //
+    // Note: we want to do this _BEFORE_ we start our tokio runtime so any threads
+    // spawned by tokio are captured by Sentry.
+    //
+    // See: <https://github.com/getsentry/sentry-rust/issues/567#issuecomment-1508130859>
+    let metrics_registry = MetricsRegistry::new();
+    let (tracing_handle, _tracing_guard) = args.tracing.configure_tracing(
+        StaticTracingConfig {
+            service_name: "environmentd",
+            build_info: BUILD_INFO,
+        },
+        metrics_registry.clone(),
+    )?;
+    let span = tracing::info_span!("environmentd::run").entered();
+
+    // Start Tokio runtime.
     let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
     let runtime = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
@@ -611,26 +635,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .enable_all()
             .build()?,
     );
-
-    // Configure tracing to log the service name when using the process
-    // orchestrator, which intermingles log output from multiple services. Other
-    // orchestrators separate log output from different services.
-    args.tracing.log_prefix = if matches!(args.orchestrator, OrchestratorKind::Process) {
-        Some("environmentd".to_string())
-    } else {
-        None
-    };
-
-    let metrics_registry = MetricsRegistry::new();
-    let (tracing_handle, _tracing_guard) = runtime.block_on(args.tracing.configure_tracing(
-        StaticTracingConfig {
-            service_name: "environmentd",
-            build_info: BUILD_INFO,
-        },
-        metrics_registry.clone(),
-    ))?;
-
-    let span = tracing::info_span!("environmentd::run").entered();
 
     let metrics = Metrics::register_into(&metrics_registry, BUILD_INFO);
 

@@ -39,6 +39,23 @@ enum Command {
 fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
+    // Initialize our logging.
+    //
+    // Note: we want to do this _BEFORE_ we start our tokio runtime so any threads
+    // spawned by tokio are captured by Sentry.
+    //
+    // See: <https://github.com/getsentry/sentry-rust/issues/567#issuecomment-1508130859>
+    let (_, _tracing_guard) = args
+        .tracing
+        .configure_tracing(
+            StaticTracingConfig {
+                service_name: "balancerd",
+                build_info: BUILD_INFO,
+            },
+            MetricsRegistry::new(),
+        )
+        .expect("failed to init tracing");
+
     // Mirror the tokio Runtime configuration in our production binaries.
     let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -46,16 +63,6 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed building the Runtime");
-
-    let (_, _tracing_guard) = runtime
-        .block_on(args.tracing.configure_tracing(
-            StaticTracingConfig {
-                service_name: "balancerd",
-                build_info: BUILD_INFO,
-            },
-            MetricsRegistry::new(),
-        ))
-        .expect("failed to init tracing");
 
     let root_span = info_span!("balancer");
     let res = match args.command {

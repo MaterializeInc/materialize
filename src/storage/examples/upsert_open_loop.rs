@@ -268,21 +268,22 @@ impl std::fmt::Display for KeyValueStore {
 fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(args.num_async_workers)
-        .enable_all()
-        .build()
-        .expect("Failed building the Runtime");
-
-    let _ = runtime
-        .block_on(args.tracing.configure_tracing(
+    let _ = args
+        .tracing
+        .configure_tracing(
             StaticTracingConfig {
                 service_name: "upsert-open-loop",
                 build_info: BUILD_INFO,
             },
             MetricsRegistry::new(),
-        ))
+        )
         .expect("failed to init tracing");
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(args.num_async_workers)
+        .enable_all()
+        .build()
+        .expect("Failed building the Runtime");
 
     let root_span = info_span!("upsert_open_loop");
     let res = runtime.block_on(run(args).instrument(root_span));

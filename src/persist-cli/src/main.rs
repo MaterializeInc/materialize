@@ -49,6 +49,17 @@ enum Command {
 fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
+    let (_, _tracing_guard) = args
+        .tracing
+        .configure_tracing(
+            StaticTracingConfig {
+                service_name: "persistcli",
+                build_info: mz_persist_client::BUILD_INFO,
+            },
+            MetricsRegistry::new(),
+        )
+        .expect("failed to init tracing");
+
     // Mirror the tokio Runtime configuration in our production binaries.
     let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -56,16 +67,6 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed building the Runtime");
-
-    let (_, _tracing_guard) = runtime
-        .block_on(args.tracing.configure_tracing(
-            StaticTracingConfig {
-                service_name: "persistcli",
-                build_info: mz_persist_client::BUILD_INFO,
-            },
-            MetricsRegistry::new(),
-        ))
-        .expect("failed to init tracing");
 
     let res = match args.command {
         Command::Maelstrom(args) => runtime.block_on(crate::maelstrom::run::<

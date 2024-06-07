@@ -135,8 +135,7 @@ enum Action {
     },
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("MZ_CATALOG_DEBUG_"),
         enable_version_flag: true,
@@ -151,10 +150,14 @@ async fn main() {
             },
             MetricsRegistry::new(),
         )
-        .await
         .expect("failed to init tracing");
 
-    if let Err(err) = run(args).await {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to start Tokio runtime");
+
+    if let Err(err) = runtime.block_on(run(args)) {
         eprintln!(
             "catalog-debug: fatal: {}\nbacktrace: {}",
             err.display_with_causes(),
