@@ -851,7 +851,7 @@ where
             // shard succesfully.
             let persist_upper = write.shared_upper();
             in_flight_batches
-                .retain(|(_lower, upper), _cap| PartialOrder::less_equal(&persist_upper, upper));
+                .retain(|(lower, _upper), _cap| PartialOrder::less_equal(&persist_upper, lower));
 
             if obey_read_only && read_only.borrow().clone() {
                 // We are not allowed to do writes, so go back to the beginning
@@ -1019,6 +1019,10 @@ where
             incomplete: Option<BatchBuilder<SourceData, (), Timestamp, Diff>>,
         }
 
+        // We use iteration only for weeding out batches that no longer have a
+        // chance of being applied. Otherwise we only use insertion and
+        // deletion. We don't use iteration order for determining what batches
+        // get written in which order.
         #[allow(clippy::disallowed_types)]
         let mut in_flight_batches = std::collections::HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
@@ -1136,12 +1140,12 @@ where
             // Only retain descriptions and batches that still have a chance of
             // being applied.
             let persist_upper = write.shared_upper();
-            in_flight_descriptions.retain(|(_lower, upper)| {
-                PartialOrder::less_equal(&persist_upper, upper)
+            in_flight_descriptions.retain(|(lower, _upper)| {
+                PartialOrder::less_equal(&persist_upper, lower)
             });
 
-            for ((_lower, upper), batch_set) in in_flight_batches.iter_mut() {
-                if PartialOrder::less_equal(&persist_upper, upper) {
+            for ((lower, upper), batch_set) in in_flight_batches.iter_mut() {
+                if PartialOrder::less_equal(&persist_upper, lower) {
                     continue;
                 }
 
@@ -1160,8 +1164,8 @@ where
             // WIP: It's annoying that we're first iterating and doing the
             // retain, but we can't do the batch deletion inside retain because
             // we need async.
-            in_flight_batches.retain(|(_lower, upper), batch_set| {
-                if PartialOrder::less_equal(&persist_upper, upper) {
+            in_flight_batches.retain(|(lower, _upper), batch_set| {
+                if PartialOrder::less_equal(&persist_upper, lower) {
                     return true;
                 }
 
