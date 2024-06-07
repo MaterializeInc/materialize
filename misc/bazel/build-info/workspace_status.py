@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import subprocess
-import sys
 
 """
 Script executed by Bazel before every build via [`workspace_status_command`]
@@ -42,21 +41,13 @@ def main():
 
 
 def get_git_hash(path):
-    p = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=path, stdout=subprocess.PIPE, text=True
-    )
-    if p.returncode != 0:
-        sys.exit(p.returncode)
-    return p.stdout.strip()
+    out = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=path, text=True)
+    return out.strip()
 
 
 def get_build_time():
-    p = subprocess.run(
-        ["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], stdout=subprocess.PIPE, text=True
-    )
-    if p.returncode != 0:
-        sys.exit(p.returncode)
-    return p.stdout.strip()
+    out = subprocess.check_output(["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], text=True)
+    return out.strip()
 
 
 if __name__ == "__main__":
