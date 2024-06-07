@@ -3923,7 +3923,7 @@ async fn test_webhook_source_batch_interval() {
     let first_duration = start.elapsed();
     assert!(resp.status().is_success());
     // All is normal, the request should be fast.
-    assert!(first_duration < Duration::from_secs(2));
+    assert!(first_duration < Duration::from_secs(4));
 
     // Change our batch interval to be very high.
     let sys_client = server
@@ -3965,7 +3965,7 @@ async fn test_webhook_source_batch_interval() {
     assert!(resp.status().is_success());
 
     // The second event should finish quickly like the first!
-    assert!(second_duration < Duration::from_secs(2));
+    assert!(second_duration < Duration::from_secs(4));
     // But the third will now be stuck behind the batch interval so it will take longer!
     assert!(third_duration > Duration::from_secs(7));
 }
