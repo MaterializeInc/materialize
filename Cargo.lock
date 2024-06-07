@@ -4434,6 +4434,7 @@ name = "mz-compute"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "bytesize",
  "clap",
