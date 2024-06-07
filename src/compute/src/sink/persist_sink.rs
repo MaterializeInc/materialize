@@ -16,6 +16,7 @@ use std::sync::Arc;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
 use futures::FutureExt;
+use mz_compute_types::dyncfgs::PERSIST_SINK_OBEY_READ_ONLY;
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
@@ -187,6 +188,8 @@ where
         );
     }
 
+    let obey_read_only_mode = PERSIST_SINK_OBEY_READ_ONLY.get(&compute_state.worker_config);
+
     let (batch_descriptions, desired_oks, desired_errs, mint_token) = mint_batch_descriptions(
         sink_id,
         operator_name.clone(),
@@ -209,6 +212,7 @@ where
         &persist_errs,
         Arc::clone(&persist_clients),
         compute_state.read_only_rx.clone(),
+        obey_read_only_mode,
     );
 
     let (_append_frontier_stream, append_token) = append_batches(
@@ -219,6 +223,7 @@ where
         &written_batches,
         persist_clients,
         compute_state.read_only_rx.clone(),
+        obey_read_only_mode,
     );
 
     let token = Rc::new((mint_token, write_token, append_token));
@@ -594,6 +599,7 @@ fn write_batches<G>(
     persist_errs: &Stream<G, (DataflowError, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
     mut read_only: watch::Receiver<bool>,
+    obey_read_only: bool,
 ) -> (Stream<G, BatchOrData>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -852,7 +858,7 @@ where
             in_flight_batches
                 .retain(|(_lower, upper), _cap| PartialOrder::less_equal(&persist_upper, upper));
 
-            if read_only.borrow().clone() {
+            if obey_read_only && read_only.borrow().clone() {
                 // We are not allowed to do writes, so go back to the beginning
                 // of the loop.
                 //
@@ -961,6 +967,7 @@ fn append_batches<G>(
     batches: &Stream<G, BatchOrData>,
     persist_clients: Arc<PersistClientCache>,
     mut read_only: watch::Receiver<bool>,
+    obey_read_only: bool,
 ) -> (Stream<G, ()>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1175,7 +1182,7 @@ where
                 false
             });
 
-            if read_only.borrow().clone() {
+            if obey_read_only && read_only.borrow().clone() {
                 // We are not allowed to do writes, so go back to the beginning
                 // of the loop.
                 //
