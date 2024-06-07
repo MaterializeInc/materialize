@@ -767,6 +767,7 @@ DATA_TYPES_FOR_AVRO = sorted(
             Timestamp,
             Oid,
             Numeric,
+            Numeric383,
             UInt2,
             UInt4,
             UInt8,
