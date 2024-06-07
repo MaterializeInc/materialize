@@ -10,19 +10,19 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
-use futures::FutureExt;
+use futures::StreamExt;
 use mz_compute_types::dyncfgs::PERSIST_SINK_OBEY_READ_ONLY;
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::operators::shard_source::SnapshotMode;
-use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -417,19 +417,22 @@ where
         // and upper advancements. The "persist_oks" stream is lying to us! For
         // example, when starting the persist_source with an as_of, the upper
         // will jump to that as_of.
-        let gen_upper_future =
-            |current_upper: Antichain<Timestamp>,
-             mut handle: WriteHandle<SourceData, (), Timestamp, Diff>| {
-                let fut = async move {
-                    handle.wait_for_upper_past(&current_upper).await;
-                    let new_upper = handle.shared_upper();
-                    (handle, new_upper)
-                };
+        let mut current_upper = persist_frontier.clone();
+        let upper_stream = async_stream::stream!({
+            loop {
+                write.wait_for_upper_past(&current_upper).await;
+                current_upper = write.shared_upper();
 
-                fut.boxed()
-            };
-
-        let mut upper_future = gen_upper_future(persist_frontier.clone(), write);
+                if current_upper.is_empty() {
+                    // We are done! Report the final upper and then break out.
+                    yield current_upper;
+                    break;
+                } else {
+                    yield current_upper.clone()
+                }
+            }
+        });
+        let mut upper_stream = pin::pin!(upper_stream);
 
         loop {
             tokio::select! {
@@ -457,10 +460,10 @@ where
                         }
                     }
                 }
-                (write_handle, upper) = &mut upper_future => {
+                // `StreamExt::next()` only borrows the stream, and the next-fut
+                // itself doesn't hold state. So the combination is cancel-safe.
+                Some(upper) = upper_stream.next() => {
                     persist_frontier = upper;
-                    let fut = gen_upper_future(persist_frontier.clone(), write_handle);
-                    upper_future = fut;
                 }
                 else => {
                     // All inputs are exhausted, so we can shut down.
