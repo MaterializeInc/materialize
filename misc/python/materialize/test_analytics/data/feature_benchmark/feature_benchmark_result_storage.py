@@ -24,7 +24,8 @@ class FeatureBenchmarkResultEntry:
     scale: str
     wallclock: float | None
     messages: int | None
-    memory: float | None
+    memory_mz: float | None
+    memory_clusterd: float | None
 
 
 def insert_result(
@@ -52,7 +53,8 @@ def insert_result(
                 scale,
                 wallclock,
                 messages,
-                memory
+                memory_mz,
+                memory_clusterd
             )
             SELECT
                 '{build_id}',
@@ -63,7 +65,8 @@ def insert_result(
                 '{result_entry.scale}',
                 {result_entry.wallclock or 'NULL::DOUBLE'},
                 {result_entry.messages or 'NULL::INT'},
-                {result_entry.memory or 'NULL::DOUBLE'}
+                {result_entry.memory_mz or 'NULL::DOUBLE'},
+                {result_entry.memory_clusterd or 'NULL::DOUBLE'}
             ;
             """
         )

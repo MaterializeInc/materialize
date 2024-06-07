@@ -24,5 +24,6 @@ CREATE TABLE feature_benchmark_result (
    scale TEXT NOT NULL,
    wallclock DOUBLE,
    messages INT,
-   memory DOUBLE
+   memory_mz DOUBLE,
+   memory_clusterd DOUBLE
 );

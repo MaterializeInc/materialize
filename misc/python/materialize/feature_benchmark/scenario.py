@@ -24,7 +24,8 @@ class RootScenario:
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
         MeasurementType.WALLCLOCK: 0.10,
         MeasurementType.MESSAGES: 0.10,
-        MeasurementType.MEMORY: 0.10,
+        MeasurementType.MEMORY_MZ: 0.10,
+        MeasurementType.MEMORY_CLUSTERD: 0.10,
     }
 
     def __init__(

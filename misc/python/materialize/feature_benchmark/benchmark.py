@@ -51,7 +51,8 @@ class Benchmark:
         self._seed = seed
 
         if measure_memory:
-            self._memory_aggregation = aggregation_class()
+            self._memory_mz_aggregation = aggregation_class()
+            self._memory_clusterd_aggregation = aggregation_class()
 
     def create_scenario_instance(self) -> Scenario:
         scale = self._scenario_cls.SCALE
@@ -155,23 +156,41 @@ class Benchmark:
                 print(f"{i}: {messages_measurement}")
                 self._messages_aggregation.append(messages_measurement)
 
-            if self._memory_aggregation:
-                memory_measurement = Measurement(
-                    type=MeasurementType.MEMORY,
-                    value=self._executor.DockerMem() / 2**20,  # Convert to Mb
+            if self._memory_mz_aggregation:
+                memory_mz_measurement = Measurement(
+                    type=MeasurementType.MEMORY_MZ,
+                    value=self._executor.DockerMemMz() / 2**20,  # Convert to Mb
                 )
 
-                if memory_measurement.value > 0:
-                    if not self._filter or not self._filter.filter(memory_measurement):
-                        print(f"{i} {memory_measurement}")
-                        self._memory_aggregation.append(memory_measurement)
+                if memory_mz_measurement.value > 0:
+                    if not self._filter or not self._filter.filter(
+                        memory_mz_measurement
+                    ):
+                        print(f"{i} {memory_mz_measurement}")
+                        self._memory_mz_aggregation.append(memory_mz_measurement)
+
+            if self._memory_clusterd_aggregation:
+                memory_clusterd_measurement = Measurement(
+                    type=MeasurementType.MEMORY_CLUSTERD,
+                    value=self._executor.DockerMemClusterd() / 2**20,  # Convert to Mb
+                )
+
+                if memory_clusterd_measurement.value > 0:
+                    if not self._filter or not self._filter.filter(
+                        memory_clusterd_measurement
+                    ):
+                        print(f"{i} {memory_clusterd_measurement}")
+                        self._memory_clusterd_aggregation.append(
+                            memory_clusterd_measurement
+                        )
 
             for termination_condition in self._termination_conditions:
                 if termination_condition.terminate(performance_measurement):
                     return [
                         self._performance_aggregation,
                         self._messages_aggregation,
-                        self._memory_aggregation,
+                        self._memory_mz_aggregation,
+                        self._memory_clusterd_aggregation,
                     ]
 
         assert False, "unreachable"
@@ -191,14 +210,14 @@ class Report:
         output_lines = []
 
         output_lines.append(
-            f"{'NAME':<35} | {'TYPE':<9} | {'THIS':^15} | {'OTHER':^15} | {'Regression?':^13} | 'THIS' is:"
+            f"{'NAME':<35} | {'TYPE':<15} | {'THIS':^15} | {'OTHER':^15} | {'Regression?':^13} | 'THIS' is:"
         )
         output_lines.append("-" * 100)
 
         for comparison in self._comparisons:
             regression = "!!YES!!" if comparison.is_regression() else "no"
             output_lines.append(
-                f"{comparison.name:<35} | {comparison.type:<9} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {regression:^13} | {comparison.human_readable(use_colors)}"
+                f"{comparison.name:<35} | {comparison.type:<15} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {regression:^13} | {comparison.human_readable(use_colors)}"
             )
 
         return "\n".join(output_lines)

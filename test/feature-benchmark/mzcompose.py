@@ -74,6 +74,7 @@ from materialize.feature_benchmark.termination import (
 )
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
+from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
@@ -134,6 +135,7 @@ SERVICES = [
     Balancerd(),
     # Overridden below
     Materialized(),
+    Clusterd(),
     Testdrive(),
 ]
 
@@ -146,7 +148,8 @@ def run_one_scenario(
 
     measurement_types = [MeasurementType.WALLCLOCK, MeasurementType.MESSAGES]
     if args.measure_memory:
-        measurement_types.append(MeasurementType.MEMORY)
+        measurement_types.append(MeasurementType.MEMORY_MZ)
+        measurement_types.append(MeasurementType.MEMORY_CLUSTERD)
 
     comparators = [
         make_comparator(
@@ -186,6 +189,10 @@ def run_one_scenario(
 
         mz_image = f"materialize/materialized:{tag}" if tag else None
         mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+        clusterd_image = f"materialize/clusterd:{tag}" if tag else None
+        clusterd = create_clusterd_service(
+            clusterd_image, size, additional_system_parameter_defaults
+        )
 
         if tag is not None and not c.try_pull_service_image(mz):
             print(
@@ -193,8 +200,12 @@ def run_one_scenario(
             )
             mz_image = "materialize/materialized:latest"
             mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+            clusterd_image = f"materialize/clusterd:{tag}" if tag else None
+            clusterd = create_clusterd_service(
+                clusterd_image, size, additional_system_parameter_defaults
+            )
 
-        start_overridden_mz_and_cockroach(c, mz, instance)
+        start_overridden_mz_clusterd_and_cockroach(c, mz, clusterd, instance)
         if balancerd:
             c.up("balancerd")
 
@@ -205,7 +216,25 @@ def run_one_scenario(
                 materialize_params={"statement_timeout": f"'{default_timeout}'"},
             )
         ):
-            executor = Docker(composition=c, seed=common_seed, materialized=mz)
+            c.testdrive(
+                dedent(
+                    """
+                    $[version>=9000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                    ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
+
+                    $[version<9000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                    ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
+
+                    $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                    CREATE CLUSTER cluster_default REPLICAS (r1 (STORAGECTL ADDRESSES ['clusterd:2100'], STORAGE ADDRESSES ['clusterd:2103'], COMPUTECTL ADDRESSES ['clusterd:2101'], COMPUTE ADDRESSES ['clusterd:2102'], WORKERS 1));
+                    ALTER SYSTEM SET cluster = cluster_default;
+                    GRANT ALL PRIVILEGES ON CLUSTER cluster_default TO materialize;"""
+                ),
+            )
+
+            executor = Docker(
+                composition=c, seed=common_seed, materialized=mz, clusterd=clusterd
+            )
             mz_version = MzVersion.parse_mz(c.query_mz_version())
 
             benchmark = Benchmark(
@@ -234,8 +263,8 @@ def run_one_scenario(
                     comparator.set_scenario_version(scenario_version)
                     comparator.append(aggregation.aggregate())
 
-        c.kill("cockroach", "materialized", "testdrive")
-        c.rm("cockroach", "materialized", "testdrive")
+        c.kill("cockroach", "materialized", "clusterd", "testdrive")
+        c.rm("cockroach", "materialized", "clusterd", "testdrive")
         c.rm_volumes("mzdata")
 
         if early_abort:
@@ -272,10 +301,18 @@ def create_mz_service(
     )
 
 
-def start_overridden_mz_and_cockroach(
-    c: Composition, mz: Materialized, instance: str
+def create_clusterd_service(
+    clusterd_image: str | None,
+    default_size: int,
+    additional_system_parameter_defaults: dict[str, str] | None,
+) -> Clusterd:
+    return Clusterd(image=clusterd_image)
+
+
+def start_overridden_mz_clusterd_and_cockroach(
+    c: Composition, mz: Materialized, clusterd: Clusterd, instance: str
 ) -> None:
-    with c.override(mz):
+    with c.override(mz, clusterd):
         version_request_command = c.run(
             "materialized",
             "-c",
@@ -287,7 +324,7 @@ def start_overridden_mz_and_cockroach(
         version = version_request_command.stdout.strip()
         print(f"The version of the '{instance.upper()}' Mz instance is: {version}")
 
-        c.up("cockroach", "materialized")
+        c.up("cockroach", "materialized", "clusterd")
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -669,7 +706,10 @@ def upload_results_to_test_analytics(
                     scale=scale or "default",
                     wallclock=report_measurements[MeasurementType.WALLCLOCK],
                     messages=report_measurements[MeasurementType.MESSAGES],
-                    memory=report_measurements[MeasurementType.MEMORY],
+                    memory_mz=report_measurements[MeasurementType.MEMORY_MZ],
+                    memory_clusterd=report_measurements[
+                        MeasurementType.MEMORY_CLUSTERD
+                    ],
                 )
             )
 
