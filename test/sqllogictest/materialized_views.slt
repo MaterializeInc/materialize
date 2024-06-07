@@ -1619,3 +1619,116 @@ create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","ob
 create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:00:00"}
 create  cluster-replica  "c_schedule_4"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:00:00"}
 create  cluster-replica  "c_schedule_rehydration_time_estimate"  "schedule"  false  {"decision":"on","objects_needing_refresh":["uXXX"],"rehydration_time_estimate":"00:16:35"}
+
+# Materialized views in this file can be explained
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_explain_pushdown = true
+----
+COMPLETE 0
+
+# Pulling stats for refresh-every and similar MVs can time out,
+# since data may not yet be available...
+
+statement ok
+SET statement_timeout = '1s'
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW const_mv;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW const_mv2;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv3;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv5;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv8;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv9;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv12;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_aligned_to_future;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_aligned_to_past;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_assertion_at_begin;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_assertion_at_end;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_assertion_plus_refresh_every;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_desugar1;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_desugar2;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_good_assertion_on_renamed_column;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_greatest;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_misordered_assertions;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_multiple_refresh_options;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_multiple_refresh_options;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_no_assertions;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_no_creation_refresh;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_on_commit;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv_two_assertions;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mvi1;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mvi2;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mvi3;
+
+statement ok
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mvi3;
+
+# Attempting to explain MVs which are not readable at the current time can block
+
+statement error db error: ERROR: canceling statement due to statement timeout
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv4;
+
+statement error db error: ERROR: canceling statement due to statement timeout
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv10;
+
+statement error db error: ERROR: canceling statement due to statement timeout
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv11;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_explain_pushdown = false
+----
+COMPLETE 0
