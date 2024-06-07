@@ -340,7 +340,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             }
             CancelPeek { uuid } => self.handle_cancel_peek(uuid),
             AllowWrites => {
-                // Now we're cooking!
                 self.compute_state
                     .read_only_tx
                     .send(false)
