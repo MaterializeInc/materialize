@@ -460,10 +460,8 @@ where
                         }
                     }
                 }
-                upper = upper_stream.next() => {
-                    if let Some(upper) = upper {
-                        persist_frontier = upper;
-                    }
+                Some(upper) = upper_stream.next() => {
+                    persist_frontier = upper;
                 }
                 else => {
                     // All inputs are exhausted, so we can shut down.
