@@ -196,6 +196,9 @@ pub struct TestConfig {
     /// ["size"](https://bazel.build/reference/be/common-definitions#common-attributes-tests)
     /// of the test target, this defines how many resources Bazel provides to the test.
     size: Option<RustTestSize>,
+    /// Set of environment variables to set when the test is executed.
+    #[serde(default)]
+    env: BTreeMap<String, String>,
 }
 
 impl TestConfig {
@@ -205,6 +208,10 @@ impl TestConfig {
 
     pub fn size(&self) -> Option<&RustTestSize> {
         self.size.as_ref()
+    }
+
+    pub fn env(&self) -> &BTreeMap<String, String> {
+        &self.env
     }
 }
 

@@ -306,11 +306,30 @@ impl<K, V> Dict<K, V> {
         }
     }
 
-    pub fn insert(&mut self, key: K, val: V)
+    pub fn empty() -> Self {
+        Dict {
+            items: BTreeMap::default(),
+        }
+    }
+
+    pub fn insert<M, N>(&mut self, key: M, val: N)
     where
+        M: Into<K>,
+        N: Into<V>,
         K: Ord,
     {
-        self.items.insert(key, val);
+        self.items.insert(key.into(), val.into());
+    }
+
+    pub fn extend<M, N, I>(&mut self, vals: I)
+    where
+        M: Into<K>,
+        N: Into<V>,
+        I: IntoIterator<Item = (M, N)>,
+        K: Ord,
+    {
+        self.items
+            .extend(vals.into_iter().map(|(k, v)| (k.into(), v.into())));
     }
 }
 

@@ -16,3 +16,6 @@ build --copt=-Wno-error=deprecated-declarations
 #
 # This script gets run before every build, see the script for more info.
 build --workspace_status_command "python3 misc/bazel/build-info/workspace_status.py"
+
+# Stream all test output by default, otherwise Bazel captures it all.
+test --test_output=streamed

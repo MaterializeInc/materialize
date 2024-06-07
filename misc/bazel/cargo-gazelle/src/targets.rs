@@ -194,6 +194,7 @@ pub struct RustTest {
     size: Field<RustTestSize>,
     data: Field<List<QuotedString>>,
     compile_data: Field<List<QuotedString>>,
+    env: Field<Dict<QuotedString, QuotedString>>,
     rustc_flags: Field<List<QuotedString>>,
     rustc_env: Field<Dict<QuotedString, QuotedString>>,
 }
@@ -254,6 +255,7 @@ impl RustTest {
         let (paths, globs) = test_common.compile_data();
         let compile_data = List::new(paths).concat_other(globs.map(Glob::new));
 
+        let env = Dict::new(test_config.env());
         let rustc_flags = List::new(test_common.rustc_flags());
         let rustc_env = Dict::new(test_common.rustc_env());
 
@@ -269,6 +271,7 @@ impl RustTest {
             size: Field::new("size", size),
             data: Field::new("data", data),
             compile_data: Field::new("compile_data", compile_data),
+            env: Field::new("env", env),
             rustc_flags: Field::new("rustc_flags", rustc_flags),
             rustc_env: Field::new("rustc_env", rustc_env),
         })
@@ -339,6 +342,7 @@ impl ToBazelDefinition for RustTest {
 
             self.compile_data.format(&mut w)?;
             self.data.format(&mut w)?;
+            self.env.format(&mut w)?;
             self.rustc_flags.format(&mut w)?;
             self.rustc_env.format(&mut w)?;
         }
