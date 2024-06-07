@@ -104,7 +104,7 @@ pub struct TracingConfig<F> {
 #[derive(Debug, Clone)]
 pub struct SentryConfig<F> {
     /// Sentry data source name to submit events to.
-    /// 
+    ///
     /// If unset the client will not report any panics.
     pub dsn: Option<String>,
     /// The environment name to report to Sentry.
@@ -385,6 +385,8 @@ where
             http.enforce_http(false);
             HttpsConnector::from((http, tls_connector))
         });
+        // We need to initialize logging before we start our runtime.
+        #[allow(clippy::disallowed_methods)]
         let channel = block_on(channel_future)?;
 
         let exporter = opentelemetry_otlp::new_exporter()

@@ -32,7 +32,8 @@ use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_ore::tracing::{
-    OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard, TracingHandle
+    OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig,
+    TracingGuard, TracingHandle,
 };
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
