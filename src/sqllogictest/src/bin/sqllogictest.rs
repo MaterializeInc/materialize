@@ -15,6 +15,7 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Instant;
 
 use chrono::Utc;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
@@ -27,7 +28,6 @@ use mz_sql::session::vars::{
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
 use mz_tracing::CloneableEnvFilter;
-use time::Instant;
 use walkdir::WalkDir;
 
 /// Runs sqllogictest scripts to verify database engine correctness.
@@ -244,14 +244,14 @@ async fn run(args: Args, tracing_args: TracingCliArgs, tracing_handle: TracingHa
                                 let mut test_case = if o.any_failed() {
                                     junit_report::TestCase::failure(
                                         &entry.path().to_string_lossy(),
-                                        start_time.elapsed(),
+                                        start_time.elapsed().try_into().unwrap(),
                                         "failure",
                                         &o.display(false).to_string(),
                                     )
                                 } else {
                                     junit_report::TestCase::success(
                                         &entry.path().to_string_lossy(),
-                                        start_time.elapsed(),
+                                        start_time.elapsed().try_into().unwrap(),
                                     )
                                 };
                                 test_case.set_classname("sqllogictest");

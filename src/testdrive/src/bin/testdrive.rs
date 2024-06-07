@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{io, process};
 
 use aws_credential_types::Credentials;
@@ -25,7 +25,6 @@ use mz_testdrive::{CatalogConfig, Config, ConsistencyCheckLevel};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-use time::Instant;
 use tracing::info;
 use tracing_subscriber::filter::EnvFilter;
 use url::Url;
@@ -475,12 +474,13 @@ async fn main() {
         };
         if let Some((_, junit_suite)) = &mut junit {
             let mut test_case = match &res {
-                Ok(()) => {
-                    junit_report::TestCase::success(&file.to_string_lossy(), start_time.elapsed())
-                }
+                Ok(()) => junit_report::TestCase::success(
+                    &file.to_string_lossy(),
+                    start_time.elapsed().try_into().unwrap(),
+                ),
                 Err(error) => junit_report::TestCase::failure(
                     &file.to_string_lossy(),
-                    start_time.elapsed(),
+                    start_time.elapsed().try_into().unwrap(),
                     "failure",
                     &error.to_string(),
                 ),
