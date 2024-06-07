@@ -782,37 +782,32 @@ where
 
     /// Receives the next response from any replica of this instance.
     ///
-    /// Returns `Err` if receiving from a replica has failed, to signal that it is in need of
-    /// rehydration.
-    ///
     /// This method is cancellation safe.
-    pub async fn recv(&mut self) -> Result<(ReplicaId, ComputeResponse<T>), ReplicaId> {
-        // Receive responses from any of the replicas, and take appropriate
-        // action.
-        let response = self
-            .replicas
-            .iter_mut()
-            .map(|(id, replica)| async { (*id, replica.client.recv().await) })
-            .collect::<FuturesUnordered<_>>()
-            .next()
-            .await;
+    pub async fn recv(&mut self) -> (ReplicaId, ComputeResponse<T>) {
+        loop {
+            let live_replicas = self.replicas.iter_mut().filter(|(_, r)| !r.failed);
+            let response = live_replicas
+                .map(|(id, replica)| async { (*id, replica.client.recv().await) })
+                .collect::<FuturesUnordered<_>>()
+                .next()
+                .await;
 
-        match response {
-            None => {
-                // There were no replicas in the set. Block forever to
-                // communicate that no response is ready.
-                future::pending().await
-            }
-            Some((replica_id, None)) => {
-                // A replica has failed and requires rehydration.
-                let replica = self.replicas.get_mut(&replica_id).unwrap();
-                replica.failed = true;
-                Err(replica_id)
-            }
-            Some((replica_id, Some(response))) => {
-                // A replica has produced a response. Return it.
-                self.register_replica_heartbeat(replica_id);
-                Ok((replica_id, response))
+            match response {
+                None => {
+                    // There are no live replicas left.
+                    // Block forever to communicate that no response is ready.
+                    future::pending().await
+                }
+                Some((replica_id, None)) => {
+                    // A replica has failed and requires rehydration.
+                    let replica = self.replicas.get_mut(&replica_id).unwrap();
+                    replica.failed = true;
+                }
+                Some((replica_id, Some(response))) => {
+                    // A replica has produced a response. Return it.
+                    self.register_replica_heartbeat(replica_id);
+                    return (replica_id, response);
+                }
             }
         }
     }

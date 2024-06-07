@@ -496,17 +496,9 @@ where
         };
 
         tokio::select! {
-             ((instance_id, result), _index, _remaining) = receives => {
-                match result {
-                    Ok((replica_id, resp)) => {
-                        self.stashed_replica_response = Some((instance_id, replica_id, resp));
-                    }
-                    Err(_) => {
-                        // There is nothing to do here. `recv` has already added the failed replica to
-                        // `instance.failed_replicas`, so it will be rehydrated in the next call to
-                        // [`ComputeController::process`].
-                    }
-                }
+            (response, _index, _remaining) = receives => {
+                let (instance_id, (replica_id, resp)) = response;
+                self.stashed_replica_response = Some((instance_id, replica_id, resp));
             },
             _ = self.maintenance_ticker.tick() => {
                 self.maintenance_scheduled = true;
