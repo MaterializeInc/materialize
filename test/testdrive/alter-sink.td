@@ -9,9 +9,6 @@
 
 $ set-arg-default single-replica-cluster=quickstart
 
-$ set-sql-timeout duration=1s
-$ set-max-tries max-tries=30
-
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
@@ -19,7 +16,7 @@ $ set-max-tries max-tries=30
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE TABLE pre_alter (pre_name string);
+> CREATE TABLE pre_alter (pre_name string NOT NULL);
 > INSERT INTO pre_alter VALUES ('fish');
 
 > CREATE TABLE post_alter (post_name string, post_value int);
@@ -57,7 +54,7 @@ $ kafka-verify-data format=json sink=materialize.public.sink key=false
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE TABLE post_alter_incompatible (post_value int);
+> CREATE TABLE post_alter_incompatible (post_value int NOT NULL);
 
 > CREATE SINK incompatible_sink
   IN CLUSTER ${arg.single-replica-cluster}
@@ -67,7 +64,7 @@ $ kafka-verify-data format=json sink=materialize.public.sink key=false
   ENVELOPE DEBEZIUM
 
 $ kafka-verify-data format=avro sink=materialize.public.incompatible_sink sort-messages=true
-{"before": null, "after": {"row": {"pre_name": {"string": "fish"}}}}
+{"before": null, "after": {"row": {"pre_name": "fish"}}}
 
 > ALTER SINK incompatible_sink SET FROM post_alter_incompatible;
 
