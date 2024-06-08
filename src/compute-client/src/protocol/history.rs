@@ -14,10 +14,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
+use mz_ore::soft_assert_or_log;
 use timely::progress::Antichain;
+use timely::PartialOrder;
 
 use crate::metrics::HistoryMetrics;
-use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
+use crate::protocol::command::{ComputeCommand, ComputeParameters};
 
 /// TODO(#25239): Add documentation.
 #[derive(Debug)]
@@ -138,35 +140,27 @@ where
             }
         }
 
-        // Determine the required antichains to support live peeks;
-        let mut live_peek_frontiers = std::collections::BTreeMap::new();
-        for Peek {
-            target, timestamp, ..
-        } in live_peeks.values()
-        {
-            // Introduce `time` as a constraint on the `as_of` frontier of `id`.
-            live_peek_frontiers
-                .entry(target.id())
-                .or_insert_with(Antichain::new)
-                .insert(timestamp.clone());
-        }
-
-        // Update dataflow `as_of` frontiers, constrained by live peeks and allowed compaction.
+        // Update dataflow `as_of` frontiers according to allowed compaction.
         // One possible frontier is the empty frontier, indicating that the dataflow can be removed.
         for dataflow in created_dataflows.iter_mut() {
             let mut as_of = Antichain::new();
+            let initial_as_of = dataflow.as_of.as_ref().unwrap();
             for id in dataflow.export_ids() {
                 // If compaction has been allowed use that; otherwise use the initial `as_of`.
                 if let Some(frontier) = final_frontiers.get(&id) {
                     as_of.extend(frontier.clone());
                 } else {
-                    as_of.extend(dataflow.as_of.clone().unwrap());
-                }
-                // If we have requirements from peeks, apply them to hold `as_of` back.
-                if let Some(frontier) = live_peek_frontiers.get(&id) {
-                    as_of.extend(frontier.clone());
+                    as_of.extend(initial_as_of.clone());
                 }
             }
+
+            soft_assert_or_log!(
+                PartialOrder::less_equal(initial_as_of, &as_of),
+                "dataflow as-of regression: {:?} -> {:?} (exports={})",
+                initial_as_of.elements(),
+                as_of.elements(),
+                dataflow.display_export_ids(),
+            );
 
             // Remove compaction for any collection that brought us to `as_of`.
             for id in dataflow.export_ids() {
