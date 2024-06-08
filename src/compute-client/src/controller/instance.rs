@@ -1797,13 +1797,14 @@ where
         // to avoid the edge case that caused #16615.
         self.send(ComputeCommand::CancelPeek { uuid });
 
-        let update = (peek.target.id(), ChangeBatch::new_from(peek.time, -1));
-        let mut updates = [update].into();
+        let change = ChangeBatch::new_from(peek.time, -1);
         match &peek.target {
-            PeekTarget::Index { .. } => self.update_read_capabilities(updates),
-            PeekTarget::Persist { .. } => self
-                .storage_collections
-                .update_read_capabilities(&mut updates),
+            PeekTarget::Index { id } => self.update_read_capabilities([(*id, change)].into()),
+            PeekTarget::Persist { id, .. } => {
+                let mut updates = [(*id, change)].into();
+                self.storage_collections
+                    .update_read_capabilities(&mut updates);
+            }
         }
     }
 
