@@ -11,6 +11,7 @@
 //! client via some external Materialize API (ex: HTTP and psql).
 
 use differential_dataflow::lattice::Lattice;
+use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -310,13 +311,18 @@ impl Coordinator {
                     self.handle_terminate(conn_id).await;
                 }
             }
-            Err(_) => {
+            Err(e) => {
                 // Error during startup or sending to adapter, cleanup possible state created by
                 // handle_startup_inner. A user may have been created and it can stay; no need to
                 // delete it.
                 self.catalog_mut()
                     .drop_temporary_schema(&conn_id)
                     .unwrap_or_terminate("unable to drop temporary schema");
+
+                // Communicate the error back to the client. No need to
+                // handle failures to send the error back; we've already
+                // cleaned up all necessary state.
+                let _ = tx.send(Err(e));
             }
         }
     }
@@ -344,6 +350,11 @@ impl Coordinator {
             .try_get_role_by_name(&user.name)
             .expect("created above")
             .id;
+
+        if role_id.is_user() && !ALLOW_USER_SESSIONS.get(self.catalog().system_config().dyncfgs()) {
+            return Err(AdapterError::UserSessionsDisallowed);
+        }
+
         self.catalog_mut()
             .create_temporary_schema(conn_id, role_id)?;
         Ok(role_id)

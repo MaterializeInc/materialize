@@ -1929,7 +1929,7 @@ fn test_max_connections_on_all_interfaces() {
         let status = res.status();
         let text = res.text().expect("no body?");
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+        assert!(text.contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"));
     }
 
     {
@@ -1948,7 +1948,7 @@ fn test_max_connections_on_all_interfaces() {
             let res = Client::new().post(http_url.clone()).json(&json).send().unwrap();
             let status = res.status();
             if status == StatusCode::INTERNAL_SERVER_ERROR {
-                assert_eq!(res.text().expect("expect body"), "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+                assert!(res.text().expect("expect body").contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"));
                 return Err(());
             }
             assert_eq!(status, StatusCode::OK);
@@ -1992,7 +1992,7 @@ fn test_max_connections_on_all_interfaces() {
     let status = res.status();
     let text = res.text().expect("no body?");
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+    assert!(text.contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"));
 }
 
 // Test max_connections and superuser_reserved_connections.

@@ -11,6 +11,12 @@
 
 use mz_dyncfg::{Config, ConfigSet};
 
+pub const ALLOW_USER_SESSIONS: Config<bool> = Config::new(
+    "allow_user_sessions",
+    true,
+    "Whether to allow user roles to create new sessions. When false, only system roles will be permitted to create new sessions.",
+);
+
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "enable_statement_lifecycle_logging",
@@ -20,5 +26,7 @@ pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
 
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
-    configs.add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
+    configs
+        .add(&ALLOW_USER_SESSIONS)
+        .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
 }

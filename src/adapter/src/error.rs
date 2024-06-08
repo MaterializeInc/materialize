@@ -224,6 +224,8 @@ pub enum AdapterError {
     RtrDropFailure(String),
     /// The collection requested to be sinked cannot be read at any timestamp
     UnreadableSinkCollection,
+    /// User sessions have been blocked.
+    UserSessionsDisallowed,
 }
 
 impl AdapterError {
@@ -336,6 +338,7 @@ impl AdapterError {
             }
             AdapterError::RtrTimeout(name) => Some(format!("{name} failed to ingest data up to the real-time recency point")),
             AdapterError::RtrDropFailure(name) => Some(format!("{name} dropped before ingesting data to the real-time recency point")),
+            AdapterError::UserSessionsDisallowed => Some(format!("Your organization has been blocked. Please contact support.")),
             _ => None,
         }
     }
@@ -528,6 +531,7 @@ impl AdapterError {
             AdapterError::RtrTimeout(_) => SqlState::QUERY_CANCELED,
             AdapterError::RtrDropFailure(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnreadableSinkCollection => SqlState::from_code("MZ009"),
+            AdapterError::UserSessionsDisallowed => SqlState::from_code("MZ010"),
         }
     }
 
@@ -756,6 +760,7 @@ impl fmt::Display for AdapterError {
             AdapterError::UnreadableSinkCollection => {
                 write!(f, "collection is not readable at any time")
             }
+            AdapterError::UserSessionsDisallowed => write!(f, "login blocked"),
         }
     }
 }

@@ -62,6 +62,7 @@ use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
+use crate::http::sql::SqlError;
 use crate::BUILD_INFO;
 
 mod catalog;
@@ -591,7 +592,7 @@ impl<S> FromRequestParts<S> for AuthedClient
 where
     S: Send + Sync,
 {
-    type Rejection = (StatusCode, String);
+    type Rejection = Response;
 
     async fn from_request_parts(
         req: &mut http::request::Parts,
@@ -613,10 +614,7 @@ where
             .unwrap()
             .clone();
         let adapter_client = adapter_client.await.map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "adapter client missing".into(),
-            )
+            (StatusCode::INTERNAL_SERVER_ERROR, "adapter client missing").into_response()
         })?;
         let active_connection_count = req.extensions.get::<SharedConnectionCounter>().unwrap();
 
@@ -631,7 +629,7 @@ where
                     // If we fail to deserialize options, fail the request.
                     let code = StatusCode::BAD_REQUEST;
                     let msg = format!("Failed to deserialize {} map", "options".quoted());
-                    return Err((code, msg));
+                    return Err((code, msg).into_response());
                 }
             }
         };
@@ -649,7 +647,13 @@ where
             options,
         )
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            let status = match e {
+                AdapterError::UserSessionsDisallowed => StatusCode::FORBIDDEN,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (status, Json(SqlError::from(e))).into_response()
+        })?;
 
         Ok(client)
     }
