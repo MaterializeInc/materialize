@@ -15,9 +15,14 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use differential_dataflow::lattice::antichain_join;
+use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
+use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::TraceReader;
 use mz_repr::{Diff, GlobalId, Timestamp};
+use timely::dataflow::operators::CapabilitySet;
+use timely::dataflow::Scope;
 use timely::progress::frontier::{Antichain, AntichainRef};
+use timely::PartialOrder;
 
 use crate::metrics::TraceMetrics;
 use crate::typedefs::{ErrAgent, RowRowAgent};
@@ -92,8 +97,8 @@ impl TraceManager {
     }
 
     /// Removes the trace for `id`.
-    pub fn del_trace(&mut self, id: &GlobalId) -> bool {
-        self.traces.remove(id).is_some()
+    pub fn remove(&mut self, id: &GlobalId) -> Option<TraceBundle> {
+        self.traces.remove(id)
     }
 }
 
@@ -102,8 +107,8 @@ impl TraceManager {
 /// the lifetime of the bundled traces (`to_drop`).
 #[derive(Clone)]
 pub struct TraceBundle {
-    oks: RowRowAgent<Timestamp, Diff>,
-    errs: ErrAgent<Timestamp, Diff>,
+    oks: TraceHandle<RowRowAgent<Timestamp, Diff>>,
+    errs: TraceHandle<ErrAgent<Timestamp, Diff>>,
     to_drop: Option<Rc<dyn Any>>,
 }
 
@@ -111,8 +116,8 @@ impl TraceBundle {
     /// Constructs a new trace bundle out of an `oks` trace and `errs` trace.
     pub fn new(oks: RowRowAgent<Timestamp, Diff>, errs: ErrAgent<Timestamp, Diff>) -> TraceBundle {
         TraceBundle {
-            oks,
-            errs,
+            oks: TraceHandle::new(oks),
+            errs: TraceHandle::new(errs),
             to_drop: None,
         }
     }
@@ -129,12 +134,12 @@ impl TraceBundle {
     }
 
     /// Returns a mutable reference to the `oks` trace.
-    pub fn oks_mut(&mut self) -> &mut RowRowAgent<Timestamp, Diff> {
+    pub fn oks_mut(&mut self) -> &mut TraceHandle<RowRowAgent<Timestamp, Diff>> {
         &mut self.oks
     }
 
     /// Returns a mutable reference to the `errs` trace.
-    pub fn errs_mut(&mut self) -> &mut ErrAgent<Timestamp, Diff> {
+    pub fn errs_mut(&mut self) -> &mut TraceHandle<ErrAgent<Timestamp, Diff>> {
         &mut self.errs
     }
 
@@ -149,5 +154,132 @@ impl TraceBundle {
             &self.oks.get_logical_compaction(),
             &self.errs.get_logical_compaction(),
         )
+    }
+
+    /// Turns this trace bundle into a padded version that reports empty data for all times less
+    /// than the traces' current logical compaction frontier.
+    ///
+    /// Note that the padded bundle represents a different TVC than the original one, it is unsound
+    /// to use it to "uncompact" an existing TVC. The only valid use of the padded bundle is to
+    /// initializa a new TVC.
+    pub fn into_padded(self) -> Self {
+        Self {
+            oks: self.oks.into_padded(),
+            errs: self.errs.into_padded(),
+            to_drop: self.to_drop,
+        }
+    }
+}
+
+/// Handle to a trace managed by the `TraceManager`.
+///
+/// A trace can be optionally padded. A padded trace contains empty data for all times greater than
+/// or equal to its `padded_since` and less than the logical compaction frontier of the inner
+/// `trace`.
+#[derive(Clone)]
+pub struct TraceHandle<Tr> {
+    /// The wrapped trace.
+    trace: Tr,
+    /// The frontier from which the trace is padded, or `None` if it is not padded.
+    padded_since: Option<Antichain<Timestamp>>,
+}
+
+impl<Tr> TraceHandle<Tr> {
+    /// Creates a new `TraceHandle` wrapping `trace`.
+    fn new(trace: Tr) -> Self {
+        Self {
+            trace,
+            padded_since: None,
+        }
+    }
+
+    /// Turns this trace into a padded version that reports empty data for all times less than the
+    /// trace's current logical compaction frontier.
+    fn into_padded(mut self) -> Self {
+        self.padded_since = Some(Antichain::from_elem(Timestamp::MIN));
+        self
+    }
+}
+
+impl<Tr> TraceReader for TraceHandle<Tr>
+where
+    Tr: TraceReader<Time = Timestamp>,
+{
+    type Key<'a> = Tr::Key<'a>;
+    type Val<'a> = Tr::Val<'a>;
+    type Time = Tr::Time;
+    type TimeGat<'a> = Tr::TimeGat<'a>;
+    type Diff = Tr::Diff;
+    type DiffGat<'a> = Tr::DiffGat<'a>;
+    type Batch = Tr::Batch;
+    type Storage = Tr::Storage;
+    type Cursor = Tr::Cursor;
+
+    fn cursor_through(
+        &mut self,
+        upper: AntichainRef<Self::Time>,
+    ) -> Option<(Self::Cursor, Self::Storage)> {
+        self.trace.cursor_through(upper)
+    }
+
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Self::Time>) {
+        let Some(padded_since) = &mut self.padded_since else {
+            self.trace.set_logical_compaction(frontier);
+            return;
+        };
+
+        // If a padded trace is compacted to some frontier less than the inner trace's compaction
+        // frontier, advance the `padded_since`. Otherwise discard the padding and apply the
+        // compaction to the inner trace instead.
+        let trace_since = self.trace.get_logical_compaction();
+        if PartialOrder::less_than(&frontier, &trace_since) {
+            if PartialOrder::less_than(&padded_since.borrow(), &frontier) {
+                *padded_since = frontier.to_owned();
+            }
+        } else {
+            self.padded_since = None;
+            self.trace.set_logical_compaction(frontier);
+        }
+    }
+
+    fn get_logical_compaction(&mut self) -> AntichainRef<Self::Time> {
+        match &self.padded_since {
+            Some(since) => since.borrow(),
+            None => self.trace.get_logical_compaction(),
+        }
+    }
+
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<Self::Time>) {
+        self.trace.set_physical_compaction(frontier);
+    }
+
+    fn get_physical_compaction(&mut self) -> AntichainRef<Self::Time> {
+        self.trace.get_logical_compaction()
+    }
+
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {
+        // TODO: need to insert empty batch?
+        self.trace.map_batches(f)
+    }
+}
+
+impl<Tr> TraceHandle<TraceAgent<Tr>>
+where
+    Tr: TraceReader + 'static,
+{
+    pub fn import_frontier_core<G>(
+        &mut self,
+        scope: &G,
+        name: &str,
+        since: Antichain<Tr::Time>,
+        until: Antichain<Tr::Time>,
+    ) -> (
+        Arranged<G, TraceFrontier<TraceAgent<Tr>>>,
+        ShutdownButton<CapabilitySet<Tr::Time>>,
+    )
+    where
+        G: Scope<Timestamp = Tr::Time>,
+    {
+        self.trace.import_frontier_core(scope, name, since, until)
     }
 }

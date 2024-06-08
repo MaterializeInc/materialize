@@ -508,7 +508,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             .expect("dropped untracked collection");
 
         // If this collection is an index, remove its trace.
-        self.compute_state.traces.del_trace(&id);
+        self.compute_state.traces.remove(&id);
         // If this collection is a sink, drop its sink token.
         collection.sink_token.take();
 

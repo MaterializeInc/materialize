@@ -768,6 +768,23 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // We must drop the subscribe response buffer as it is global across all subscribes.
             // If it were broken out by `GlobalId` then we could drop only those of dataflows we drop.
             compute_state.subscribe_response_buffer = Rc::new(RefCell::new(Vec::new()));
+
+            // The controller expects the logging collections to be readable from the minimum time
+            // initially. We cannot recreate the logging arrangements without restarting the
+            // instance, but we can pad the compacted times with empty data. Doing so is sound
+            // because logging collections from different replica incarnations are considered
+            // distinct TVCs, so the controller doesn't expect any historical consistency from
+            // these collections when it reconnects to a replica.
+            if let Some(config) = old_instance_config {
+                for id in config.logging.index_logs.values() {
+                    let trace = compute_state
+                        .traces
+                        .remove(id)
+                        .expect("logging trace exists");
+                    let padded = trace.into_padded();
+                    compute_state.traces.set(*id, padded);
+                }
+            }
         } else {
             todo_commands.clone_from(&new_commands);
         }
