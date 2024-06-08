@@ -2038,7 +2038,9 @@ pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        ),
+        )
+        .with_key(vec![0])
+        .with_key(vec![1]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2055,7 +2057,9 @@ pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        ),
+        )
+        .with_key(vec![0])
+        .with_key(vec![1]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2064,7 +2068,7 @@ pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_COLUMNS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false)) // not a key
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("position", ScalarType::UInt64.nullable(false))
         .with_column("nullable", ScalarType::Bool.nullable(false))
@@ -2087,7 +2091,9 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column("create_sql", ScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
+        .with_column("redacted_create_sql", ScalarType::String.nullable(false))
+        .with_key(vec![0])
+        .with_key(vec![1]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2119,7 +2125,9 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
         .with_column("create_sql", ScalarType::String.nullable(true))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(true)),
+        .with_column("redacted_create_sql", ScalarType::String.nullable(true))
+        .with_key(vec![0])
+        .with_key(vec![1]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2139,7 +2147,9 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
         .with_column("create_sql", ScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
+        .with_column("redacted_create_sql", ScalarType::String.nullable(false))
+        .with_key(vec![0])
+        .with_key(vec![1]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2176,7 +2186,9 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
         .with_column("create_sql", ScalarType::String.nullable(true))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(true)),
+        .with_column("redacted_create_sql", ScalarType::String.nullable(true))
+        .with_key(vec![0])
+        .with_key(vec![1]),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2197,7 +2209,9 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column("create_sql", ScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
+        .with_column("redacted_create_sql", ScalarType::String.nullable(false))
+        .with_key(vec![0])
+        .with_key(vec![1]),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -2217,7 +2231,9 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
         .with_column("create_sql", ScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
+        .with_column("redacted_create_sql", ScalarType::String.nullable(false))
+        .with_key(vec![0])
+        .with_key(vec![1]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2238,7 +2254,9 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
         .with_column("create_sql", ScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
+        .with_column("redacted_create_sql", ScalarType::String.nullable(false))
+        .with_key(vec![0])
+        .with_key(vec![1]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2278,7 +2296,9 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         )
         .with_column("create_sql", ScalarType::String.nullable(true))
-        .with_column("redacted_create_sql", ScalarType::String.nullable(true)),
+        .with_column("redacted_create_sql", ScalarType::String.nullable(true))
+        .with_key(vec![0])
+        .with_key(vec![1]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2366,7 +2386,9 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("inherit", ScalarType::Bool.nullable(false)),
+        .with_column("inherit", ScalarType::Bool.nullable(false))
+        .with_key(vec![0])
+        .with_key(vec![1]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2405,7 +2427,7 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     oid: oid::TABLE_MZ_FUNCTIONS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false)) // not a key!
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
@@ -2473,7 +2495,8 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
                 custom_id: None,
             }
             .nullable(true),
-        ),
+        )
+        .with_key(vec![0]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -2601,7 +2624,8 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column(
             "occurred_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
-        ),
+        )
+        .with_key(vec![0]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });

@@ -428,7 +428,7 @@ Explained Query:
     Filter ((#4 = "materialized-view") OR ((#4 = "view") AND (#1 != "doesntmatter"))) // { arity: 5 }
       Join on=(#0 = #2) type=differential // { arity: 5 }
         implementation
-          %1[#0]Kef » %0:mz_schemas[#0]Kef
+          %0:mz_schemas[#0]UK » %1[#0]Kef
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Project (#0, #3) // { arity: 2 }
             ReadIndex on=mz_schemas mz_show_schemas_ind=[*** full scan ***] // { arity: 6 }
