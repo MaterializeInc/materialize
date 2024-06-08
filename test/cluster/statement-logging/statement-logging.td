@@ -168,6 +168,7 @@ COMMIT execution-finished
 "EXECUTE p('hello world')" compute-dependencies-finished
 "EXECUTE p('hello world')" execution-began
 "EXECUTE p('hello world')" execution-finished
+"EXECUTE p('hello world')" optimization-finished
 "EXECUTE p('hello world')" storage-dependencies-finished
 "FETCH c" compute-dependencies-finished
 "FETCH c" execution-began
@@ -176,6 +177,7 @@ COMMIT execution-finished
 "FETCH c" execution-finished
 "FETCH c" execution-finished
 "FETCH c" execution-finished
+"FETCH c" optimization-finished
 "FETCH c" storage-dependencies-finished
 "INSERT INTO t VALUES (1)" execution-began
 "INSERT INTO t VALUES (1)" execution-finished
@@ -184,18 +186,22 @@ COMMIT execution-finished
 "SELECT 'beginning real test!'" compute-dependencies-finished
 "SELECT 'beginning real test!'" execution-began
 "SELECT 'beginning real test!'" execution-finished
+"SELECT 'beginning real test!'" optimization-finished
 "SELECT 'beginning real test!'" storage-dependencies-finished
 "SELECT 'serializable'" compute-dependencies-finished
 "SELECT 'serializable'" execution-began
 "SELECT 'serializable'" execution-finished
+"SELECT 'serializable'" optimization-finished
 "SELECT 'serializable'" storage-dependencies-finished
 "SELECT * FROM t" compute-dependencies-finished
 "SELECT * FROM t" execution-began
 "SELECT * FROM t" execution-finished
+"SELECT * FROM t" optimization-finished
 "SELECT * FROM t" storage-dependencies-finished
 "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" compute-dependencies-finished
 "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" execution-began
 "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" execution-finished
+"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" optimization-finished
 "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" storage-dependencies-finished
 "SELECT count(*) FROM t" compute-dependencies-finished
 "SELECT count(*) FROM t" compute-dependencies-finished
@@ -203,11 +209,14 @@ COMMIT execution-finished
 "SELECT count(*) FROM t" execution-began
 "SELECT count(*) FROM t" execution-finished
 "SELECT count(*) FROM t" execution-finished
+"SELECT count(*) FROM t" optimization-finished
+"SELECT count(*) FROM t" optimization-finished
 "SELECT count(*) FROM t" storage-dependencies-finished
 "SELECT count(*) FROM t" storage-dependencies-finished
 "SELECT f/0 FROM t" compute-dependencies-finished
 "SELECT f/0 FROM t" execution-began
 "SELECT f/0 FROM t" execution-finished
+"SELECT f/0 FROM t" optimization-finished
 "SELECT f/0 FROM t" storage-dependencies-finished
 "SET cluster TO c" execution-began
 "SET cluster TO c" execution-finished

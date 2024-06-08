@@ -542,6 +542,7 @@ pub struct PeekStageFinish {
     /// notice.
     plan_insights_optimizer_trace: Option<OptimizerTrace>,
     global_lir_plan: optimize::peek::GlobalLirPlan,
+    optimization_finished_at: EpochMillis,
 }
 
 #[derive(Debug)]
@@ -549,6 +550,7 @@ pub struct PeekStageCopyTo {
     validity: PlanValidity,
     optimizer: optimize::copy_to::Optimizer,
     global_lir_plan: optimize::copy_to::GlobalLirPlan,
+    optimization_finished_at: EpochMillis,
 }
 
 #[derive(Debug)]
