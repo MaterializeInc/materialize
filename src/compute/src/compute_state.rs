@@ -15,7 +15,6 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
-use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Hashable;
@@ -59,7 +58,7 @@ use tokio::sync::oneshot;
 use tracing::{debug, error, info, span, warn, Level};
 use uuid::Uuid;
 
-use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceManager};
+use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent};
 use crate::metrics::ComputeMetrics;
@@ -1115,50 +1114,24 @@ impl IndexPeek {
             cursor.step_key(&storage);
         }
 
-        self.dispatch_collect_ok_finished_data(max_result_size)
-    }
-
-    /// Dispatches peek finishing of data in the ok stream according to
-    /// arrangement key-value types.
-    fn dispatch_collect_ok_finished_data(
-        &mut self,
-        max_result_size: u64,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
-        let peek = &mut self.peek;
-        let oks = self.trace_bundle.oks_mut();
-        match oks {
-            SpecializedTraceHandle::RowRow(oks_handle) => {
-                // Explicit types required due to Rust type inference limitations.
-                use crate::typedefs::RowRowSpine;
-                Self::collect_ok_finished_data::<RowRowSpine<_, _>>(
-                    peek,
-                    oks_handle,
-                    max_result_size,
-                )
-            }
-        }
+        self.collect_ok_finished_data(max_result_size)
     }
 
     /// Collects data for a known-complete peek from the ok stream.
-    fn collect_ok_finished_data<Tr>(
-        peek: &mut Peek<Timestamp>,
-        oks_handle: &mut TraceAgent<Tr>,
+    fn collect_ok_finished_data(
+        &mut self,
         max_result_size: u64,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String>
-    where
-        for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
-        for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
-        for<'a> Tr::Val<'a>: ToDatumIter,
-        for<'a> Tr::TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-    {
+    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = std::mem::size_of::<NonZeroUsize>();
 
         // Cursor and bound lifetime for `Row` data in the backing trace.
-        let (mut cursor, storage) = oks_handle.cursor();
+        let (mut cursor, storage) = self.trace_bundle.oks_mut().cursor();
         // Accumulated `Vec<(row, count)>` results that we are likely to return.
         let mut results = Vec::new();
         let mut total_size: usize = 0;
+
+        let peek = &mut self.peek;
 
         // When set, a bound on the number of records we need to return.
         // The requirements on the records are driven by the finishing's

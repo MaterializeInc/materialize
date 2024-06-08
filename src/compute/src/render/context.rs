@@ -39,7 +39,6 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use tracing::error;
 
-use crate::arrangement::manager::SpecializedTraceHandle;
 use crate::compute_state::{ComputeState, HydrationEvent};
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
@@ -344,9 +343,9 @@ where
     S: ScopeParent<Timestamp = mz_repr::Timestamp>,
 {
     /// Obtains a `SpecializedTraceHandle` for the underlying arrangement.
-    pub fn trace_handle(&self) -> SpecializedTraceHandle {
+    pub fn trace_handle(&self) -> RowRowAgent<<S as ScopeParent>::Timestamp, Diff> {
         match self {
-            MzArrangement::RowRow(inner) => SpecializedTraceHandle::RowRow(inner.trace.clone()),
+            MzArrangement::RowRow(inner) => inner.trace.clone(),
         }
     }
 }

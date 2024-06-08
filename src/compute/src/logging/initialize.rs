@@ -20,7 +20,7 @@ use timely::communication::Allocate;
 use timely::logging::{Logger, TimelyEvent};
 use timely::progress::reachability::logging::TrackerEvent;
 
-use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle};
+use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::ComputeEvent;
 use crate::logging::reachability::ReachabilityEvent;
@@ -131,11 +131,8 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         collections
             .into_iter()
             .map(|(log, collection)| {
-                let bundle = TraceBundle::new(
-                    SpecializedTraceHandle::RowRow(collection.trace),
-                    errs.clone(),
-                )
-                .with_drop(collection.token);
+                let bundle =
+                    TraceBundle::new(collection.trace, errs.clone()).with_drop(collection.token);
                 (log, (bundle, collection.dataflow_index))
             })
             .collect()

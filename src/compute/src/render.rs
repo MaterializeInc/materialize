@@ -407,18 +407,18 @@ where
             );
 
             let token = traces.to_drop().clone();
-            // Import the specialized trace handle as a specialized arrangement import.
-            //
-            // Note that we incorporate probe setup as part of this process, since a specialized
-            // arrangement import requires us to enter a scope, but we can only enter after the
-            // probe is attached.
-            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier(
-                &self.scope,
+            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
+                &self.scope.parent,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
-                input_probe,
             );
+            let ok_arranged = Arranged {
+                stream: ok_arranged.stream.probe_with(&input_probe),
+                trace: ok_arranged.trace,
+            }
+            .enter(&self.scope);
+
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 &self.scope.parent,
                 &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
@@ -434,7 +434,11 @@ where
                 Id::Global(idx.on_id),
                 CollectionBundle::from_expressions(
                     idx.key.clone(),
-                    ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
+                    ArrangementFlavor::Trace(
+                        idx_id,
+                        MzArrangementImport::RowRow(ok_arranged),
+                        err_arranged,
+                    ),
                 ),
             );
             tokens.insert(
