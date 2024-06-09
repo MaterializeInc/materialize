@@ -486,7 +486,7 @@ where
                 if let Some(jh) = metrics_task_join_handle {
                     self.metrics_tasks.insert(replica_id, jh);
                 }
-                self.active_compute().add_replica_to_instance(
+                self.compute.add_replica_to_instance(
                     cluster_id,
                     replica_id,
                     compute_location,
@@ -511,7 +511,7 @@ where
         self.deprovision_replica(cluster_id, replica_id).await?;
         self.metrics_tasks.remove(&replica_id);
 
-        self.active_compute().drop_replica(cluster_id, replica_id)?;
+        self.compute.drop_replica(cluster_id, replica_id)?;
         self.storage.drop_replica(cluster_id, replica_id);
         Ok(())
     }

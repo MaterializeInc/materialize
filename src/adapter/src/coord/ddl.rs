@@ -629,7 +629,7 @@ impl Coordinator {
                 for (dropped_name, uuid) in peeks_to_drop {
                     if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
                         self.controller
-                            .active_compute()
+                            .compute
                             .cancel_peek(pending_peek.cluster_id, uuid)
                             .unwrap_or_terminate("unable to cancel peek");
                         self.retire_execution(
@@ -852,8 +852,8 @@ impl Coordinator {
                 .push(sink_id);
             by_id.insert(sink_id, sink);
         }
-        let mut compute = self.controller.active_compute();
         for (cluster_id, ids) in by_cluster {
+            let compute = &mut self.controller.compute;
             // A cluster could have been dropped, so verify it exists.
             if compute.instance_exists(cluster_id) {
                 compute
@@ -926,8 +926,8 @@ impl Coordinator {
                 tracing::error!("Instructed to drop a non-index index");
             }
         }
-        let mut compute = self.controller.active_compute();
         for (cluster_id, ids) in by_cluster {
+            let compute = &mut self.controller.compute;
             // A cluster could have been dropped, so verify it exists.
             if compute.instance_exists(cluster_id) {
                 compute
@@ -947,8 +947,8 @@ impl Coordinator {
         }
 
         // Drop compute sinks.
-        let mut compute = self.controller.active_compute();
         for (cluster_id, ids) in by_cluster {
+            let compute = &mut self.controller.compute;
             // A cluster could have been dropped, so verify it exists.
             if compute.instance_exists(cluster_id) {
                 compute

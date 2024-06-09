@@ -32,8 +32,7 @@ use futures::stream::{Peekable, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::{
-    ActiveComputeController, ComputeController, ComputeControllerResponse,
-    ComputeControllerTimestamp,
+    ComputeController, ComputeControllerResponse, ComputeControllerTimestamp,
 };
 use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
@@ -197,10 +196,6 @@ pub struct Controller<T = mz_repr::Timestamp> {
 }
 
 impl<T: ComputeControllerTimestamp> Controller<T> {
-    pub fn active_compute(&mut self) -> ActiveComputeController<T> {
-        self.compute.activate(&mut *self.storage)
-    }
-
     pub fn set_arrangement_exert_proportionality(&mut self, value: u32) {
         self.compute.set_arrangement_exert_proportionality(value);
     }
@@ -463,7 +458,7 @@ where
     async fn process_compute_response(
         &mut self,
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let response = self.active_compute().process().await;
+        let response = self.compute.process(&mut *self.storage).await;
 
         let response = response.and_then(|r| match r {
             ComputeControllerResponse::PeekResponse(uuid, peek, otel_ctx) => {
@@ -642,8 +637,10 @@ where
         )
         .await;
 
+        let storage_collections = Arc::clone(&collections_ctl);
         let compute_controller = ComputeController::new(
             config.build_info,
+            storage_collections,
             envd_epoch,
             config.metrics_registry.clone(),
         );

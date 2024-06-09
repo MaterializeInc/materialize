@@ -591,23 +591,6 @@ pub trait StorageController: Debug {
         Ok(hold)
     }
 
-    /// Acquires and returns a read hold at `desired_time`. Returns
-    /// [ReadHoldError::SinceViolation] when that is not possible.
-    fn acquire_read_hold_at_time(
-        &mut self,
-        id: GlobalId,
-        desired_hold: Antichain<Self::Timestamp>,
-    ) -> Result<ReadHold<Self::Timestamp>, ReadHoldError> {
-        let mut hold = self.acquire_read_holds(vec![id])?.into_element();
-
-        let res = match hold.try_downgrade(desired_hold) {
-            Ok(()) => Ok(hold),
-            Err(_e) => Err(ReadHoldError::SinceViolation(id)),
-        };
-
-        res
-    }
-
     /// Applies `updates` and sends any appropriate compaction command.
     fn update_read_capabilities(
         &mut self,

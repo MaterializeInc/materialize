@@ -1859,7 +1859,7 @@ impl Coordinator {
                             .extend(df_desc.export_ids());
 
                         self.controller
-                            .active_compute()
+                            .compute
                             .create_dataflow(idx.cluster_id, df_desc)
                             .unwrap_or_terminate("cannot fail to create dataflows");
 
@@ -2935,7 +2935,7 @@ impl Coordinator {
         let export_ids = dataflow.exported_index_ids().collect();
 
         self.controller
-            .active_compute()
+            .compute
             .create_dataflow(instance, dataflow)
             .unwrap_or_terminate("dataflow creation cannot fail");
 

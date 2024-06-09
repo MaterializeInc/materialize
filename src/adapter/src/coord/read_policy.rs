@@ -423,9 +423,10 @@ impl crate::coord::Coordinator {
                 stashed_storage_holds.push(storage_hold);
             }
             for (compute_instance, compute_ids) in id_bundle.compute_ids.iter() {
-                let compute = coord.controller.active_compute();
                 for id in compute_ids.iter() {
-                    let collection = compute
+                    let collection = coord
+                        .controller
+                        .compute
                         .collection(*compute_instance, *id)
                         .expect("collection does not exist");
                     let read_frontier = collection.read_capability().clone();
@@ -507,7 +508,7 @@ impl crate::coord::Coordinator {
         // Apply read capabilities.
         for (compute_instance, compute_policy_updates) in compute_policy_updates {
             self.controller
-                .active_compute()
+                .compute
                 .set_read_policy(compute_instance, compute_policy_updates)
                 .unwrap_or_terminate("cannot fail to set read policy");
         }
@@ -565,9 +566,10 @@ impl crate::coord::Coordinator {
                 }
 
                 for (compute_instance, compute_ids) in id_bundle.compute_ids {
-                    let compute = self.controller.active_compute();
                     for id in compute_ids {
-                        let collection = compute
+                        let collection = self
+                            .controller
+                            .compute
                             .collection(compute_instance, id)
                             .expect("id does not exist");
                         assert!(collection.read_capability().le(&new_time.borrow()),
@@ -609,9 +611,9 @@ impl crate::coord::Coordinator {
             .set_read_policy(storage_policy_changes);
 
         // Update COMPUTE read policies
-        let mut compute = self.controller.active_compute();
         for (compute_instance, compute_policy_changes) in compute_policy_changes {
-            compute
+            self.controller
+                .compute
                 .set_read_policy(compute_instance, compute_policy_changes)
                 .unwrap_or_terminate("cannot fail to set read policy");
         }
@@ -644,8 +646,9 @@ impl crate::coord::Coordinator {
                     None => {
                         // We didn't get an initial policy, so set the current
                         // since as a static policy.
-                        let compute = self.controller.active_compute();
-                        let collection = compute
+                        let collection = self
+                            .controller
+                            .compute
                             .collection(*instance_id, *id)
                             .expect("collection does not exist");
                         let read_frontier = collection.read_capability().clone();
@@ -733,7 +736,7 @@ impl crate::coord::Coordinator {
                 })
                 .collect::<Vec<_>>();
             self.controller
-                .active_compute()
+                .compute
                 .set_read_policy(cluster_id, group)
                 .unwrap_or_terminate("cannot fail to set read policy");
         }
@@ -801,9 +804,10 @@ impl crate::coord::Coordinator {
         }
 
         for (compute_instance, compute_ids) in id_bundle.compute_ids.iter() {
-            let compute = self.controller.active_compute();
             for id in compute_ids.iter() {
-                let collection = compute
+                let collection = self
+                    .controller
+                    .compute
                     .collection(*compute_instance, *id)
                     .expect("collection does not exist");
                 let read_frontier = collection.read_capability().clone();
@@ -826,9 +830,9 @@ impl crate::coord::Coordinator {
                 .push((*id, read_needs.policy()));
         }
 
-        let mut compute = self.controller.active_compute();
         for (compute_instance, policy_changes) in policy_changes {
-            compute
+            self.controller
+                .compute
                 .set_read_policy(compute_instance, policy_changes)
                 .unwrap_or_terminate("cannot fail to set read policy");
         }
@@ -883,8 +887,8 @@ impl crate::coord::Coordinator {
                 }
             }
         }
-        let mut compute = self.controller.active_compute();
         for (compute_instance, policy_changes) in policy_changes_per_instance {
+            let compute = &mut self.controller.compute;
             if compute.instance_exists(*compute_instance) {
                 compute
                     .set_read_policy(*compute_instance, policy_changes)
