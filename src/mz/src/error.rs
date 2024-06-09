@@ -32,6 +32,9 @@ pub enum Error {
     /// A Materialize Cloud API error from the [mz_cloud_api] crate.
     #[error(transparent)]
     ApiError(#[from] mz_cloud_api::error::Error),
+    /// A Frontegg authentication error.
+    #[error(transparent)]
+    AuthError(#[from] mz_frontegg_auth::Error),
     /// Indicates an error parsing an endpoint.
     #[error("Error parsing URL: {0}.\n\nTo resolve this issue, please verify the correctness of the URLs in the configuration file or the ones passed as parameters.")]
     UrlParseError(#[from] ParseError),

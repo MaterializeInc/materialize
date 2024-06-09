@@ -89,10 +89,9 @@ pub async fn enable(
                     Some(region_info) => {
                         loading_spinner.set_message("Waiting for the region to be resolvable...");
                         if region_info.resolvable {
-                            if cx
-                                .sql_client()
-                                .is_ready(&region_info, cx.admin_client().claims().await?.email)?
-                            {
+                            let claims = cx.admin_client().claims().await?;
+                            let user = claims.user()?;
+                            if cx.sql_client().is_ready(&region_info, user)? {
                                 return Ok(());
                             }
                             Err(Error::NotPgReadyError)
@@ -191,7 +190,7 @@ pub async fn show(cx: RegionContext) -> Result<(), Error> {
     loading_spinner.set_message("Checking environment health...");
     let claims = cx.admin_client().claims().await?;
     let sql_client = cx.sql_client();
-    let environment_health = match sql_client.is_ready(&region_info, claims.email) {
+    let environment_health = match sql_client.is_ready(&region_info, claims.user()?) {
         Ok(healthy) => match healthy {
             true => "yes",
             _ => "no",

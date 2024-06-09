@@ -53,15 +53,10 @@ impl Client {
     }
 
     /// Build the PSQL url to connect into a environment
-    fn build_psql_url(
-        &self,
-        region_info: &RegionInfo,
-        email: String,
-        cluster: Option<String>,
-    ) -> Url {
+    fn build_psql_url(&self, region_info: &RegionInfo, user: &str, cluster: Option<String>) -> Url {
         let mut url = Url::parse(&format!("postgres://{}", region_info.sql_address))
             .expect("url known to be valid");
-        url.set_username(&email).unwrap();
+        url.set_username(user).unwrap();
         url.set_path("materialize");
 
         if let Some(cert_file) = openssl_probe::probe().cert_file {
@@ -133,12 +128,7 @@ impl Client {
     }
 
     /// Returns a sql shell command associated with this context
-    pub fn shell(
-        &self,
-        region_info: &RegionInfo,
-        email: String,
-        cluster: Option<String>,
-    ) -> Command {
+    pub fn shell(&self, region_info: &RegionInfo, user: &str, cluster: Option<String>) -> Command {
         // Feels ok to avoid stopping the executing if
         // we can't configure the file.
         // Worst case scenario timing will not be enabled.
@@ -146,7 +136,7 @@ impl Client {
 
         let mut command = Command::new("psql");
         command
-            .arg(self.build_psql_url(region_info, email, cluster).as_str())
+            .arg(self.build_psql_url(region_info, user, cluster).as_str())
             .env("PGPASSWORD", &self.app_password.to_string())
             .env("PGAPPNAME", PG_APPLICATION_NAME)
             .env("PSQLRC", "~/.psqlrc-mz");
@@ -173,14 +163,14 @@ impl Client {
     }
 
     /// Runs pg_isready to check if an environment is healthy
-    pub fn is_ready(&self, region_info: &RegionInfo, email: String) -> Result<bool, Error> {
+    pub fn is_ready(&self, region_info: &RegionInfo, user: &str) -> Result<bool, Error> {
         if self.find("pg_isready").is_some() {
             let mut command = Command::new("pg_isready");
             Ok(command
                 .args(vec![
                     "-q",
                     "-d",
-                    self.build_psql_url(region_info, email, None).as_str(),
+                    self.build_psql_url(region_info, user, None).as_str(),
                 ])
                 .env("PGPASSWORD", &self.app_password.to_string())
                 .env("PGAPPNAME", PG_APPLICATION_NAME)

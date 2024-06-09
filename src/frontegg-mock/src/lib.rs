@@ -25,7 +25,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router, TypedHeader};
 use jsonwebtoken::{DecodingKey, EncodingKey, TokenData};
-use mz_frontegg_auth::{ApiTokenResponse, Claims};
+use mz_frontegg_auth::{ApiTokenResponse, ClaimMetadata, ClaimTokenType, Claims};
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::JoinHandle;
@@ -59,6 +59,7 @@ impl FronteggMockServer {
         encoding_key: EncodingKey,
         decoding_key: DecodingKey,
         users: BTreeMap<String, UserConfig>,
+        tenant_api_tokens: BTreeMap<ApiToken, TenantApiTokenConfig>,
         role_permissions: Option<BTreeMap<String, Vec<String>>>,
         now: NowFn,
         expires_in_secs: i64,
@@ -71,7 +72,7 @@ impl FronteggMockServer {
         let refreshes = Arc::new(Mutex::new(0u64));
         let auth_requests = Arc::new(Mutex::new(0u64));
 
-        let user_api_tokens: BTreeMap<UserApiToken, String> = users
+        let user_api_tokens: BTreeMap<ApiToken, String> = users
             .iter()
             .map(|(email, user)| {
                 user.initial_api_tokens
@@ -118,6 +119,7 @@ impl FronteggMockServer {
             decoding_key,
             users: Mutex::new(users),
             user_api_tokens: Mutex::new(user_api_tokens),
+            tenant_api_tokens: Mutex::new(tenant_api_tokens),
             role_updates_rx: Mutex::new(role_updates_rx),
             role_permissions,
             now,
@@ -205,9 +207,13 @@ fn decode_access_token(
 
 fn generate_access_token(
     context: &Context,
-    email: String,
+    token_type: ClaimTokenType,
+    sub: Uuid,
+    email: Option<String>,
+    user_id: Option<Uuid>,
     tenant_id: Uuid,
     roles: Vec<String>,
+    metadata: Option<ClaimMetadata>,
 ) -> String {
     let mut permissions = Vec::new();
     roles.iter().for_each(|role| {
@@ -220,27 +226,29 @@ fn generate_access_token(
     jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
         &Claims {
+            token_type,
             exp: context.now.as_secs() + context.expires_in_secs,
             email,
             iss: context.issuer.clone(),
-            sub: Uuid::new_v4(),
-            user_id: None,
+            sub,
+            user_id,
             tenant_id,
             roles,
             permissions,
+            metadata,
         },
         &context.encoding_key,
     )
     .unwrap()
 }
 
-fn generate_refresh_token(context: &Context, email: String) -> String {
+fn generate_refresh_token(context: &Context, target: RefreshTokenTarget) -> String {
     let refresh_token = Uuid::new_v4().to_string();
     context
         .refresh_tokens
         .lock()
         .unwrap()
-        .insert(refresh_token.clone(), email);
+        .insert(refresh_token.clone(), target);
     refresh_token
 }
 
@@ -292,7 +300,7 @@ async fn role_update_middleware<B>(
 
 async fn handle_post_auth_api_token(
     State(context): State<Arc<Context>>,
-    Json(request): Json<UserApiToken>,
+    Json(request): Json<ApiToken>,
 ) -> Result<Json<ApiTokenResponse>, StatusCode> {
     *context.auth_requests.lock().unwrap() += 1;
 
@@ -301,23 +309,41 @@ async fn handle_post_auth_api_token(
     }
 
     let user_api_tokens = context.user_api_tokens.lock().unwrap();
-    let (email, user) = match user_api_tokens.get(&request) {
+    let access_token = match user_api_tokens.get(&request) {
         Some(email) => {
             let users = context.users.lock().unwrap();
             let user = users
                 .get(email)
                 .expect("API tokens are only created by logged in valid users.");
-            (email, user.to_owned())
+            generate_access_token(
+                &context,
+                ClaimTokenType::UserApiToken,
+                request.client_id,
+                Some(email.to_owned()),
+                Some(user.id),
+                user.tenant_id,
+                user.roles.clone(),
+                None,
+            )
         }
-        None => return Err(StatusCode::UNAUTHORIZED),
+        None => {
+            let tenant_api_tokens = context.tenant_api_tokens.lock().unwrap();
+            match tenant_api_tokens.get(&request) {
+                Some(config) => generate_access_token(
+                    &context,
+                    ClaimTokenType::TenantApiToken,
+                    request.client_id,
+                    None,
+                    None,
+                    config.tenant_id,
+                    config.roles.clone(),
+                    config.metadata.clone(),
+                ),
+                None => return Err(StatusCode::UNAUTHORIZED),
+            }
+        }
     };
-    let refresh_token = generate_refresh_token(&context, email.clone());
-    let access_token = generate_access_token(
-        &context,
-        email.to_owned(),
-        user.tenant_id,
-        user.roles.clone(),
-    );
+    let refresh_token = generate_refresh_token(&context, RefreshTokenTarget::ApiToken(request));
     Ok(Json(ApiTokenResponse {
         expires: "".to_string(),
         expires_in: context.expires_in_secs,
@@ -341,9 +367,17 @@ async fn handle_post_auth_user(
         Some(user) if request.password == user.password => user.to_owned(),
         _ => return Err(StatusCode::UNAUTHORIZED),
     };
-    let refresh_token = generate_refresh_token(&context, request.email.clone());
-    let access_token =
-        generate_access_token(&context, request.email, user.tenant_id, user.roles.clone());
+    let access_token = generate_access_token(
+        &context,
+        ClaimTokenType::UserToken,
+        user.id,
+        Some(request.email.clone()),
+        Some(user.id),
+        user.tenant_id,
+        user.roles.clone(),
+        None,
+    );
+    let refresh_token = generate_refresh_token(&context, RefreshTokenTarget::User(request));
     Ok(Json(ApiTokenResponse {
         expires: "".to_string(),
         expires_in: context.expires_in_secs,
@@ -363,29 +397,23 @@ async fn handle_post_token_refresh(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let maybe_email = context
+    let maybe_target = context
         .refresh_tokens
         .lock()
         .unwrap()
         .remove(&previous_refresh_token.refresh_token);
-    let Some(email) = maybe_email else {
+    let Some(target) = maybe_target else {
         return Err(StatusCode::UNAUTHORIZED);
     };
 
-    let users = context.users.lock().unwrap();
-    let user = match users.get(&email) {
-        Some(user) => user.to_owned(),
-        None => return Err(StatusCode::UNAUTHORIZED),
-    };
-    let refresh_token = generate_refresh_token(&context, email.clone());
-    let access_token = generate_access_token(&context, email, user.tenant_id, user.roles.clone());
-
-    Ok(Json(ApiTokenResponse {
-        expires: "".to_string(),
-        expires_in: context.expires_in_secs,
-        access_token,
-        refresh_token,
-    }))
+    match target {
+        RefreshTokenTarget::User(request) => {
+            handle_post_auth_user(State(context), Json(request)).await
+        }
+        RefreshTokenTarget::ApiToken(request) => {
+            handle_post_auth_api_token(State(context), Json(request)).await
+        }
+    }
 }
 
 // https://docs.frontegg.com/reference/userscontrollerv2_getuserprofile
@@ -406,17 +434,17 @@ async fn handle_get_user_profile<'a>(
 async fn handle_post_user_api_token<'a>(
     State(context): State<Arc<Context>>,
     TypedHeader(authorization): TypedHeader<Authorization<Bearer>>,
-) -> Result<Json<UserApiToken>, StatusCode> {
+) -> Result<Json<ApiToken>, StatusCode> {
     let claims: Claims = match decode_access_token(&context, authorization.token()) {
         Ok(TokenData { claims, .. }) => claims,
         Err(_) => return Err(StatusCode::UNAUTHORIZED),
     };
     let mut tokens = context.user_api_tokens.lock().unwrap();
-    let new_token = UserApiToken {
+    let new_token = ApiToken {
         client_id: Uuid::new_v4(),
         secret: Uuid::new_v4(),
     };
-    tokens.insert(new_token.clone(), claims.email);
+    tokens.insert(new_token.clone(), claims.email.unwrap());
     Ok(Json(new_token))
 }
 
@@ -432,12 +460,12 @@ async fn handle_get_user(
         .map(|role| (role.id.clone(), role.clone()))
         .collect();
 
-    match users.iter().find(|(_, user)| user.id == Some(user_id)) {
+    match users.iter().find(|(_, user)| user.id == user_id) {
         Some((_, user)) => {
             let roles = get_user_roles(&user.roles, &role_mapping);
 
             let user_response = UserResponse {
-                id: user.id.unwrap_or_default(),
+                id: user.id,
                 email: user.email.clone(),
                 verified: user.verified.unwrap_or(true),
                 metadata: user.metadata.clone().unwrap_or_default(),
@@ -481,7 +509,7 @@ async fn handle_create_user(
     }
 
     let user_config = UserConfig {
-        id: Some(user_id),
+        id: user_id,
         email: new_user.email.clone(),
         password: Uuid::new_v4().to_string(),
         tenant_id: default_tenant_id,
@@ -518,7 +546,7 @@ async fn handle_delete_user(
 ) -> StatusCode {
     let mut users = context.users.lock().unwrap();
     let initial_count = users.len();
-    users.retain(|_, user| user.id != Some(user_id));
+    users.retain(|_, user| user.id != user_id);
 
     if users.len() < initial_count {
         StatusCode::OK
@@ -564,19 +592,25 @@ struct UserProfileResponse {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
-pub struct UserApiToken {
+pub struct ApiToken {
     #[serde(alias = "client_id")]
     pub client_id: Uuid,
     pub secret: Uuid,
 }
 
+pub struct TenantApiTokenConfig {
+    pub tenant_id: Uuid,
+    pub metadata: Option<ClaimMetadata>,
+    pub roles: Vec<String>,
+}
+
 #[derive(Deserialize, Clone, Serialize)]
 pub struct UserConfig {
-    pub id: Option<Uuid>,
+    pub id: Uuid,
     pub email: String,
     pub password: String,
     pub tenant_id: Uuid,
-    pub initial_api_tokens: Vec<UserApiToken>,
+    pub initial_api_tokens: Vec<ApiToken>,
     pub roles: Vec<String>,
     pub auth_provider: Option<String>,
     pub verified: Option<bool>,
@@ -586,11 +620,11 @@ pub struct UserConfig {
 impl UserConfig {
     pub fn generate(tenant_id: Uuid, email: impl Into<String>, roles: Vec<String>) -> Self {
         Self {
-            id: Some(Uuid::new_v4()),
+            id: Uuid::new_v4(),
             email: email.into(),
             password: Uuid::new_v4().to_string(),
             tenant_id,
-            initial_api_tokens: vec![UserApiToken {
+            initial_api_tokens: vec![ApiToken {
                 client_id: Uuid::new_v4(),
                 secret: Uuid::new_v4(),
             }],
@@ -649,27 +683,27 @@ struct UserRolesMetadata {
     total_items: usize,
     total_pages: usize,
 }
+
+enum RefreshTokenTarget {
+    User(AuthUserRequest),
+    ApiToken(ApiToken),
+}
+
 struct Context {
     issuer: String,
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
     users: Mutex<BTreeMap<String, UserConfig>>,
-    user_api_tokens: Mutex<BTreeMap<UserApiToken, String>>,
+    user_api_tokens: Mutex<BTreeMap<ApiToken, String>>,
+    tenant_api_tokens: Mutex<BTreeMap<ApiToken, TenantApiTokenConfig>>,
     role_updates_rx: Mutex<UnboundedReceiver<(String, Vec<String>)>>,
     role_permissions: BTreeMap<String, Vec<String>>,
     now: NowFn,
     expires_in_secs: i64,
     latency: Option<Duration>,
-    // Uuid -> email
-    refresh_tokens: Mutex<BTreeMap<String, String>>,
+    refresh_tokens: Mutex<BTreeMap<String, RefreshTokenTarget>>,
     refreshes: Arc<Mutex<u64>>,
     enable_auth: Arc<AtomicBool>,
     auth_requests: Arc<Mutex<u64>>,
     roles: Arc<Vec<UserRole>>,
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RefreshToken<'a> {
-    refresh_token: &'a str,
 }

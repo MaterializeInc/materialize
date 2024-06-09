@@ -22,14 +22,20 @@ pub enum Error {
     ReqwestError(Arc<reqwest::Error>),
     #[error("middleware programming error: {0}")]
     MiddlewareError(Arc<anyhow::Error>),
+    #[error("authentication token missing claims")]
+    MissingClaims,
     #[error("authentication token expired")]
     TokenExpired,
     #[error("unauthorized organization")]
     UnauthorizedTenant,
     #[error("the app password was not valid")]
     InvalidAppPassword,
-    #[error("email in access token did not match the expected email")]
-    WrongEmail,
+    #[error("user in access token did not match the expected user")]
+    WrongUser,
+    #[error("user name too long")]
+    UserNameTooLong,
+    #[error("user declared by tenant access token cannot be an email address")]
+    InvalidTenantApiTokenUser,
     #[error("request timeout")]
     Timeout(Arc<tokio::time::error::Elapsed>),
     #[error("internal error")]

@@ -34,12 +34,12 @@ pub struct RunArgs {
 /// The SQL shell command is running `psql` behind the scenes.
 pub async fn run(cx: &RegionContext, RunArgs { cluster, psql_args }: RunArgs) -> Result<(), Error> {
     let sql_client = cx.sql_client();
-    let claims = cx.admin_client().claims();
+    let claims = cx.admin_client().claims().await?;
     let region_info = cx.get_region_info().await?;
-    let email = claims.await?.email;
+    let user = claims.user()?;
 
     let _error = sql_client
-        .shell(&region_info, email, cluster)
+        .shell(&region_info, user, cluster)
         .args(psql_args)
         .exec();
 

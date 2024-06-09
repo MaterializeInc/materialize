@@ -35,7 +35,7 @@ use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
     DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
-use mz_frontegg_mock::{FronteggMockServer, UserApiToken, UserConfig};
+use mz_frontegg_mock::{ApiToken, FronteggMockServer, UserConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
@@ -2023,6 +2023,7 @@ async fn test_max_connections_limits() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         SYSTEM_TIME.clone(),
         500,
@@ -4321,7 +4322,7 @@ async fn test_cert_reloading() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
-    let initial_api_tokens = vec![UserApiToken {
+    let initial_api_tokens = vec![ApiToken {
         client_id: client_id.clone(),
         secret: secret.clone(),
     }];
@@ -4329,7 +4330,7 @@ async fn test_cert_reloading() {
     let users = BTreeMap::from([(
         email.clone(),
         UserConfig {
-            id: None,
+            id: Uuid::new_v4(),
             email,
             password,
             tenant_id,
@@ -4353,6 +4354,7 @@ async fn test_cert_reloading() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         SYSTEM_TIME.clone(),
         EXPIRES_IN_SECS,

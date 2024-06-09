@@ -60,11 +60,11 @@ pub async fn create(
     // Retrieve information to open the psql shell sessions.
     let loading_spinner = cx.output_formatter().loading_spinner("Creating secret...");
 
-    let claims = cx.admin_client().claims();
+    let claims = cx.admin_client().claims().await?;
     let region_info = cx.get_region_info().await?;
-    let email = claims.await?.email;
+    let user = claims.user()?;
 
-    let mut client = cx.sql_client().shell(&region_info, email, None);
+    let mut client = cx.sql_client().shell(&region_info, user, None);
 
     // Build the queries to create the secret.
     let mut commands: Vec<String> = vec![];

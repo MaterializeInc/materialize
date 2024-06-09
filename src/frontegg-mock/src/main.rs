@@ -99,6 +99,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .into_iter()
         .map(|user| (user.email.clone(), user))
         .collect();
+    let tenant_api_tokens = BTreeMap::new();
     let role_permissions = match &args.role_permissions {
         Some(s) => serde_json::from_str(s).with_context(|| "decoding --role-permissions")?,
         None => None,
@@ -115,6 +116,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         encoding_key,
         decoding_key,
         users,
+        tenant_api_tokens,
         role_permissions,
         SYSTEM_TIME.clone(),
         500,

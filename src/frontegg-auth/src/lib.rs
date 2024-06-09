@@ -16,8 +16,8 @@ mod metrics;
 use std::path::PathBuf;
 
 pub use auth::{
-    Authenticator, AuthenticatorConfig, Claims, DEFAULT_REFRESH_DROP_FACTOR,
-    DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+    Authenticator, AuthenticatorConfig, ClaimMetadata, ClaimTokenType, Claims,
+    DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
 pub use client::tokens::{ApiTokenArgs, ApiTokenResponse};
 pub use client::Client;
