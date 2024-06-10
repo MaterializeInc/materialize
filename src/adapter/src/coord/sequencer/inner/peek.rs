@@ -486,7 +486,7 @@ impl Coordinator {
             session,
             &plan.when,
             cluster_id,
-            timeline_context,
+            timeline_context.clone(),
             oracle_read_ts,
             &id_bundle,
             &source_ids,
@@ -504,6 +504,8 @@ impl Coordinator {
             determination,
             optimizer,
             explain_ctx,
+            cluster_id,
+            timeline_context,
         });
         Ok(StageResult::Immediate(Box::new(stage)))
     }
@@ -520,15 +522,43 @@ impl Coordinator {
             id_bundle,
             target_replica,
             determination,
-            mut optimizer,
             explain_ctx,
+            cluster_id,
+            timeline_context,
+            mut optimizer,
         }: PeekStageOptimize,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
         let timestamp_context = determination.timestamp_context.clone();
+
+        // Generate a stats timestamp. This needs to be as fresh as possible that can return
+        // immediately. So use serializable isolation without oracles. Ignore read_holds here since,
+        // on the main coord thread, the timestamps will not be GC'd after determination.
+        let stats_when = match plan.when {
+            // Freshest wants a linearized timestamp, so convert to immediately.
+            QueryWhen::FreshestTableWrite => &QueryWhen::Immediately,
+            QueryWhen::Immediately | QueryWhen::AtTimestamp(_) | QueryWhen::AtLeastTimestamp(_) => {
+                &plan.when
+            }
+        };
+        let stats_ts = self.determine_timestamp_for(
+            session,
+            &id_bundle,
+            stats_when,
+            cluster_id,
+            &timeline_context,
+            None,
+            None,
+            &mz_sql::session::vars::IsolationLevel::Serializable,
+        );
+        let stats_ts_ctx = match stats_ts {
+            Ok((ts, _read_holds)) => ts.timestamp_context,
+            Err(_) => timestamp_context.clone(),
+        };
+
         let stats = self
-            .statistics_oracle(session, &source_ids, &timestamp_context.antichain(), true)
+            .statistics_oracle(session, &source_ids, &stats_ts_ctx.antichain(), true)
             .await
             .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
         let session = session.meta();
