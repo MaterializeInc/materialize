@@ -562,7 +562,7 @@ impl Catalog {
                     id,
                     new_entry.name.clone(),
                     new_entry.item().clone(),
-                )?;
+                );
                 tx.update_item(id, new_entry.into())?;
             }
             Op::AlterRole {
@@ -1774,7 +1774,7 @@ impl Catalog {
                 builtin_table_updates.extend(state.pack_item_update(id, -1));
                 updates.push((id, to_qualified_name, new_entry.item));
                 for (id, to_name, to_item) in updates {
-                    Self::update_item(state, builtin_table_updates, id, to_name, to_item)?;
+                    Self::update_item(state, builtin_table_updates, id, to_name, to_item);
                 }
             }
             Op::RenameSchema {
@@ -1924,7 +1924,7 @@ impl Catalog {
                 builtin_table_updates.push(state.pack_schema_update(&database_spec, &schema_id, 1));
 
                 for (id, new_name, new_item) in updates {
-                    Self::update_item(state, builtin_table_updates, id, new_name, new_item)?;
+                    Self::update_item(state, builtin_table_updates, id, new_name, new_item);
                 }
             }
             Op::UpdateOwner { id, new_owner } => {
@@ -2095,7 +2095,7 @@ impl Catalog {
                     id,
                     name.clone(),
                     to_item.clone(),
-                )?;
+                );
                 let entry = state.get_entry(&id);
                 tx.update_item(id, entry.clone().into())?;
 
@@ -2165,7 +2165,7 @@ impl Catalog {
         id: GlobalId,
         to_name: QualifiedItemName,
         to_item: CatalogItem,
-    ) -> Result<(), AdapterError> {
+    ) {
         let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
         info!(
             "update {} {} ({})",
@@ -2256,7 +2256,6 @@ impl Catalog {
 
         state.entry_by_id.insert(id, new_entry);
         builtin_table_updates.extend(state.pack_item_update(id, 1));
-        Ok(())
     }
 
     pub(crate) fn update_system_configuration(
