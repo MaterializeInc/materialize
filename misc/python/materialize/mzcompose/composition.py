@@ -1384,9 +1384,10 @@ class Composition:
         )
         self.up("materialized")
 
-    def cloud_hostname(self) -> str:
+    def cloud_hostname(self, quiet: bool = False) -> str:
         """Uses the mz command line tool to get the hostname of the cloud instance"""
-        print("Obtaining hostname of cloud instance ...")
+        if not quiet:
+            print("Obtaining hostname of cloud instance ...")
         region_status = self.run("mz", "region", "show", capture=True)
         sql_line = region_status.stdout.split("\n")[2]
         cloud_url = sql_line.split("\t")[1].strip()
