@@ -9,6 +9,7 @@
 
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mz_kafka_util::client::DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL;
@@ -50,9 +51,13 @@ generate_extracted_config!(
         Default(KafkaSinkCompressionType::None)
     ),
     (ProgressGroupIdPrefix, String),
-    (Topic, String),
     (TransactionalIdPrefix, String),
-    (LegacyIds, bool)
+    (LegacyIds, bool),
+    (Topic, String),
+    (TopicConfig, BTreeMap<String, String>),
+    (TopicPartitionCount, i32),
+    (TopicReplicationFactor, i32),
+    (ProgressTopicReplicationFactor, i32)
 );
 
 impl TryFromValue<Value> for KafkaSinkCompressionType {

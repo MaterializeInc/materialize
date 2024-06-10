@@ -94,7 +94,6 @@ use mz_ore::task;
 use mz_ore::vec::VecExt;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
-use mz_storage_client::sink::{TopicCleanupPolicy, TopicConfig};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
@@ -615,15 +614,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                         &connection,
                         &storage_configuration,
                         &connection.topic,
-                        // TODO: allow users to configure these parameters.
-                        TopicConfig {
-                            partition_count: -1,
-                            replication_factor: -1,
-                            cleanup_policy: TopicCleanupPolicy::Retention {
-                                ms: Some(-1),
-                                bytes: Some(-1),
-                            },
-                        },
+                        &connection.topic_options,
                     )
                     .await?;
                     Antichain::from_elem(Timestamp::minimum())
@@ -864,13 +855,7 @@ async fn determine_sink_progress(
         connection,
         storage_configuration,
         &progress_topic,
-        TopicConfig {
-            partition_count: 1,
-            // TODO: introduce and use `PROGRESS TOPIC REPLICATION FACTOR`
-            // on Kafka connections.
-            replication_factor: -1,
-            cleanup_policy: TopicCleanupPolicy::Compaction,
-        },
+        &connection.progress_topic_options,
     )
     .await
     .add_context("error registering kafka progress topic for sink")?;

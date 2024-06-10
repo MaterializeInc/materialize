@@ -919,6 +919,10 @@ pub enum KafkaSinkConfigOptionName {
     Topic,
     TransactionalIdPrefix,
     LegacyIds,
+    TopicConfig,
+    TopicPartitionCount,
+    TopicReplicationFactor,
+    ProgressTopicReplicationFactor,
 }
 
 impl AstDisplay for KafkaSinkConfigOptionName {
@@ -929,6 +933,12 @@ impl AstDisplay for KafkaSinkConfigOptionName {
             KafkaSinkConfigOptionName::Topic => "TOPIC",
             KafkaSinkConfigOptionName::TransactionalIdPrefix => "TRANSACTIONAL ID PREFIX",
             KafkaSinkConfigOptionName::LegacyIds => "LEGACY IDS",
+            KafkaSinkConfigOptionName::TopicConfig => "TOPIC CONFIG",
+            KafkaSinkConfigOptionName::TopicPartitionCount => "TOPIC PARTITION COUNT",
+            KafkaSinkConfigOptionName::TopicReplicationFactor => "TOPIC REPLICATION FACTOR",
+            KafkaSinkConfigOptionName::ProgressTopicReplicationFactor => {
+                "PROGRESS TOPIC REPLICATION FACTOR"
+            }
         })
     }
 }
@@ -946,7 +956,11 @@ impl WithOptionName for KafkaSinkConfigOptionName {
             | KafkaSinkConfigOptionName::ProgressGroupIdPrefix
             | KafkaSinkConfigOptionName::Topic
             | KafkaSinkConfigOptionName::TransactionalIdPrefix
-            | KafkaSinkConfigOptionName::LegacyIds => false,
+            | KafkaSinkConfigOptionName::LegacyIds
+            | KafkaSinkConfigOptionName::TopicConfig
+            | KafkaSinkConfigOptionName::TopicPartitionCount
+            | KafkaSinkConfigOptionName::TopicReplicationFactor
+            | KafkaSinkConfigOptionName::ProgressTopicReplicationFactor => false,
         }
     }
 }

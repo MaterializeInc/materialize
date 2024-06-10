@@ -18,6 +18,7 @@ use std::iter;
 use std::time::Duration;
 
 use itertools::{Either, Itertools};
+use maplit::btreemap;
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
 use mz_controller_types::{
     is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
@@ -76,7 +77,8 @@ use mz_sql_parser::parser::StatementParseResult;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
-    KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
+    KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkTopicOptions, SinkEnvelope,
+    StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
@@ -2924,6 +2926,10 @@ fn kafka_sink_builder(
         progress_group_id_prefix,
         transactional_id_prefix,
         legacy_ids,
+        topic_config,
+        topic_partition_count,
+        topic_replication_factor,
+        progress_topic_replication_factor,
         seen: _,
     }: KafkaSinkConfigOptionExtracted = options.try_into()?;
 
@@ -2944,6 +2950,22 @@ fn kafka_sink_builder(
     };
 
     let topic_name = topic.ok_or_else(|| sql_err!("KAFKA CONNECTION must specify TOPIC"))?;
+
+    let assert_positive = |val: Option<i32>, name: &str| {
+        if let Some(val) = val {
+            if val <= 0 {
+                sql_bail!("{} must be a positive integer", name);
+            }
+        }
+        Ok(val)
+    };
+    let topic_partition_count = assert_positive(topic_partition_count, "TOPIC PARTITION COUNT")?;
+    let topic_replication_factor =
+        assert_positive(topic_replication_factor, "TOPIC REPLICATION FACTOR")?;
+    let progress_topic_replication_factor = assert_positive(
+        progress_topic_replication_factor,
+        "PROGRESS TOPIC REPLICATION FACTOR",
+    )?;
 
     let format = match format {
         Some(Format::Avro(AvroSchema::Csr {
@@ -3035,6 +3057,19 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
+    let mut topic_config = topic_config.unwrap_or_default();
+    // If the user did not provide a cleanup policy for the topic, default to infinite
+    // retention.
+    if !topic_config.contains_key("cleanup.policy") {
+        topic_config.insert("cleanup.policy".to_string(), "delete".to_string());
+        if topic_config.contains_key("retention.bytes") || topic_config.contains_key("retention.ms")
+        {
+            sql_bail!("Cannot specify retention.bytes or retention.ms without cleanup.policy");
+        }
+        topic_config.insert("retention.bytes".to_string(), "-1".to_string());
+        topic_config.insert("retention.ms".to_string(), "-1".to_string());
+    }
+
     Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
         connection_id,
         connection: connection_id,
@@ -3047,6 +3082,19 @@ fn kafka_sink_builder(
         compression_type,
         progress_group_id,
         transactional_id,
+        topic_options: KafkaSinkTopicOptions {
+            partition_count: topic_partition_count,
+            replication_factor: topic_replication_factor,
+            topic_config,
+        },
+        progress_topic_options: KafkaSinkTopicOptions {
+            // We only allow configuring the progress topic replication factor for now.
+            partition_count: Some(1),
+            replication_factor: progress_topic_replication_factor,
+            topic_config: btreemap! {
+                "cleanup.policy".to_string() => "compact".to_string(),
+            },
+        },
     }))
 }
 

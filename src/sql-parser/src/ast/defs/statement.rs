@@ -18,6 +18,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use enum_kinds::EnumKind;
@@ -3534,6 +3535,7 @@ pub enum WithOptionValue<T: AstInfo> {
     Item(T::ItemName),
     UnresolvedItemName(UnresolvedItemName),
     Sequence(Vec<WithOptionValue<T>>),
+    Map(BTreeMap<String, WithOptionValue<T>>),
     // Special cases.
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
     ConnectionKafkaBroker(KafkaBroker<T>),
@@ -3551,6 +3553,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             match self {
                 WithOptionValue::Value(_)
                 | WithOptionValue::Sequence(_)
+                | WithOptionValue::Map(_)
                 | WithOptionValue::RetainHistoryFor(_)
                 | WithOptionValue::Refresh(_) => {
                     // These are redact-aware.
@@ -3574,6 +3577,20 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_str("(");
                 f.write_node(&display::comma_separated(values));
                 f.write_str(")");
+            }
+            WithOptionValue::Map(values) => {
+                f.write_str("MAP[");
+                let len = values.len();
+                for (i, (key, value)) in values.iter().enumerate() {
+                    f.write_str("'");
+                    f.write_str(key.as_str());
+                    f.write_str("' => ");
+                    f.write_node(value);
+                    if i + 1 < len {
+                        f.write_str(", ");
+                    }
+                }
+                f.write_str("]");
             }
             WithOptionValue::Value(value) => f.write_node(value),
             WithOptionValue::DataType(typ) => f.write_node(typ),

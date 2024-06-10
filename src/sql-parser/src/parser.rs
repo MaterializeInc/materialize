@@ -20,6 +20,7 @@
 
 //! SQL Parser
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
@@ -2415,11 +2416,32 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(TYPE)?;
                 KafkaSinkConfigOptionName::CompressionType
             }
-            PROGRESS => {
-                self.expect_keywords(&[GROUP, ID, PREFIX])?;
-                KafkaSinkConfigOptionName::ProgressGroupIdPrefix
-            }
-            TOPIC => KafkaSinkConfigOptionName::Topic,
+            PROGRESS => match self.expect_one_of_keywords(&[GROUP, TOPIC])? {
+                GROUP => {
+                    self.expect_keywords(&[ID, PREFIX])?;
+                    KafkaSinkConfigOptionName::ProgressGroupIdPrefix
+                }
+                TOPIC => {
+                    self.expect_keywords(&[TOPIC, REPLICATION, FACTOR])?;
+                    KafkaSinkConfigOptionName::ProgressTopicReplicationFactor
+                }
+                _ => unreachable!(),
+            },
+            TOPIC => match self.parse_one_of_keywords(&[PARTITION, REPLICATION, CONFIG]) {
+                None => KafkaSinkConfigOptionName::Topic,
+                Some(PARTITION) => {
+                    self.expect_keyword(COUNT)?;
+                    KafkaSinkConfigOptionName::TopicPartitionCount
+                }
+                Some(REPLICATION) => {
+                    self.expect_keyword(FACTOR)?;
+                    KafkaSinkConfigOptionName::TopicReplicationFactor
+                }
+                Some(CONFIG) => KafkaSinkConfigOptionName::TopicConfig,
+                Some(other) => {
+                    return parser_err!(self, self.peek_prev_pos(), "unexpected keyword {}", other)
+                }
+            },
             TRANSACTIONAL => {
                 self.expect_keywords(&[ID, PREFIX])?;
                 KafkaSinkConfigOptionName::TransactionalIdPrefix
@@ -4399,9 +4421,44 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_option_map<T, F>(
+        &mut self,
+        mut f: F,
+    ) -> Result<Option<BTreeMap<String, T>>, ParserError>
+    where
+        F: FnMut(&mut Self) -> Result<T, ParserError>,
+    {
+        Ok(if self.parse_keyword(MAP) {
+            self.expect_token(&Token::LBracket)?;
+            let mut map: BTreeMap<String, T> = BTreeMap::new();
+            loop {
+                if let Some(Token::RBracket) = self.peek_token() {
+                    break;
+                }
+                let key = match self.next_token() {
+                    Some(Token::String(s)) => s,
+                    Some(Token::Ident(s)) => s.into_inner(),
+                    token => return self.expected(self.peek_pos(), "string", token),
+                };
+                self.expect_token(&Token::Arrow)?;
+                let value = f(self)?;
+                map.insert(key, value);
+                if !self.consume_token(&Token::Comma) {
+                    break;
+                }
+            }
+            self.expect_token(&Token::RBracket)?;
+            Some(map)
+        } else {
+            None
+        })
+    }
+
     fn parse_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         if let Some(seq) = self.parse_option_sequence(Parser::parse_option_value)? {
             Ok(WithOptionValue::Sequence(seq))
+        } else if let Some(map) = self.parse_option_map(Parser::parse_option_value)? {
+            Ok(WithOptionValue::Map(map))
         } else if self.parse_keyword(SECRET) {
             if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
                 Ok(WithOptionValue::Secret(secret))

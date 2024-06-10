@@ -198,7 +198,7 @@ fn gen_fold_element(buf: &mut CodegenBuf, binding: &str, ty: &Type) {
         }
         Type::Map { key, value } => {
             buf.write(format!(
-                "{{ std::collections::BTreeMap::from_iter({binding}.iter().map(|(k, v)| {{("
+                "{{ std::collections::BTreeMap::from_iter({binding}.into_iter().map(|(k, v)| {{("
             ));
             gen_fold_element(buf, "k", key);
             buf.write(".to_owned(), ");

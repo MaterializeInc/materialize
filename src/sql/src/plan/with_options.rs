@@ -9,6 +9,7 @@
 
 //! Provides tooling to handle `WITH` options.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use mz_repr::adt::interval::Interval;
@@ -469,6 +470,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             }
             WithOptionValue::RetainHistoryFor(v) => V::try_from_value(v),
             WithOptionValue::Sequence(_)
+            | WithOptionValue::Map(_)
             | WithOptionValue::Item(_)
             | WithOptionValue::UnresolvedItemName(_)
             | WithOptionValue::Secret(_)
@@ -484,6 +486,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::Value(_) => unreachable!(),
                     WithOptionValue::RetainHistoryFor(_) => unreachable!(),
                     WithOptionValue::Sequence(_) => "sequences",
+                    WithOptionValue::Map(_) => "maps",
                     WithOptionValue::Item(_) => "object references",
                     WithOptionValue::UnresolvedItemName(_) => "object names",
                     WithOptionValue::Secret(_) => "secrets",
@@ -617,5 +620,28 @@ impl TryFromValue<WithOptionValue<Aug>> for ClusterScheduleOptionValue {
 
     fn name() -> String {
         "cluster schedule option value".to_string()
+    }
+}
+
+impl<V: ImpliedValue> ImpliedValue for BTreeMap<String, V> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a map of key-value pairs")
+    }
+}
+
+impl<V: TryFromValue<WithOptionValue<Aug>>> TryFromValue<WithOptionValue<Aug>>
+    for BTreeMap<String, V>
+{
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match v {
+            WithOptionValue::Map(a) => a
+                .into_iter()
+                .map(|(k, v)| Ok((k, V::try_from_value(v)?)))
+                .collect(),
+            _ => sql_bail!("cannot use value as map"),
+        }
+    }
+    fn name() -> String {
+        format!("map of string to {}", V::name())
     }
 }
