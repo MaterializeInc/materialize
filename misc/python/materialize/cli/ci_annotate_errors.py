@@ -153,10 +153,11 @@ ci-annotate-errors detects errors in junit xml as well as log files during CI
 and finds associated open GitHub issues in Materialize repository.""",
     )
 
+    parser.add_argument("--cloud-hostname", type=str)
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    return annotate_logged_errors(args.log_files)
+    return annotate_logged_errors(args.log_files, cloud_hostname=args.cloud_hostname)
 
 
 def annotate_errors(
@@ -208,7 +209,7 @@ def group_identical_errors(errors: list[str]) -> list[str]:
     return consolidated_errors
 
 
-def annotate_logged_errors(log_files: list[str]) -> int:
+def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
     were no errors logged. This will be used to fail a test even if the test
