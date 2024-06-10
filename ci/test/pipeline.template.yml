@@ -688,6 +688,17 @@ steps:
     agents:
       queue: linux-aarch64-small
 
+  - id: rtr-combined
+    label: RTR with all sources
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/rtr-combined]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: rtr-combined
+    agents:
+      queue: linux-aarch64-small
+
   - id: skip-version-upgrade
     label: "Skip Version Upgrade"
     depends_on: build-aarch64
