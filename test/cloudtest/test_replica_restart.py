@@ -69,7 +69,7 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
             )
             while True:
                 cur.execute("FETCH ALL c")
-                for (_, diff, status, reason) in cur.fetchall():
+                for _, diff, status, reason in cur.fetchall():
                     if diff < 1:
                         continue
                     if status == "not-ready" and reason == "oom-killed":

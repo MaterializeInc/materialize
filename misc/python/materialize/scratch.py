@@ -353,7 +353,7 @@ def launch_cluster(
         mssh(i, "sudo tee -a /etc/hosts", input=hosts_str.encode())
 
     env = " ".join(f"{k}={shlex.quote(v)}" for k, v in extra_env.items())
-    for (i, d) in zip(instances, descs):
+    for i, d in zip(instances, descs):
         if d.launch_script:
             mssh(
                 i,

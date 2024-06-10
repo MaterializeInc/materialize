@@ -117,8 +117,7 @@ class RelativeThresholdComparator(Comparator[float | None]):
 
 
 class Overlappable(Protocol):
-    def overlap(self, other: "Overlappable") -> float:
-        ...
+    def overlap(self, other: "Overlappable") -> float: ...
 
 
 class OverlapComparator(Comparator[Overlappable]):

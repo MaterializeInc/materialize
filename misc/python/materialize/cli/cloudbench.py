@@ -271,7 +271,7 @@ sudo systemctl start confluent-schema-registry
 
     # TODO - Do these in parallel
     launched = []
-    for (i, rev) in clusters:
+    for i, rev in clusters:
         launched += scratch.launch_cluster(
             descs=descs,
             nonce=f"{bench_id}-{i}-{rev}",

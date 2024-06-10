@@ -68,9 +68,11 @@ class Insert(Definition):
                 break
 
             values = [
-                field.data_type.numeric_value(self.current_key)
-                if field.is_key
-                else field.data_type.random_value(rng, self.record_size)
+                (
+                    field.data_type.numeric_value(self.current_key)
+                    if field.is_key
+                    else field.data_type.random_value(rng, self.record_size)
+                )
                 for field in fields
             ]
             self.current_key += 1
@@ -100,9 +102,11 @@ class Upsert(Definition):
 
         for i in range(self.count):
             values = [
-                field.data_type.numeric_value(0)
-                if field.is_key
-                else field.data_type.random_value(rng, self.record_size)
+                (
+                    field.data_type.numeric_value(0)
+                    if field.is_key
+                    else field.data_type.random_value(rng, self.record_size)
+                )
                 for field in fields
             ]
 

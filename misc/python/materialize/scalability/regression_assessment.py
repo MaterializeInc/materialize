@@ -76,9 +76,9 @@ class RegressionAssessment:
             )
 
             if len(commits_with_accepted_regressions) > 0:
-                self.endpoints_with_regressions_and_justifications[
-                    endpoint
-                ] = ", ".join(commits_with_accepted_regressions)
+                self.endpoints_with_regressions_and_justifications[endpoint] = (
+                    ", ".join(commits_with_accepted_regressions)
+                )
             else:
                 self.endpoints_with_regressions_and_justifications[endpoint] = None
 

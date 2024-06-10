@@ -569,7 +569,7 @@ class KafkaRoundtripExecutor(Executor):
         keys = [field.name for field in self.fields if field.is_key]
 
         self.mz_conn.autocommit = True
-        with (self.mz_conn.cursor() as cur):
+        with self.mz_conn.cursor() as cur:
             self.execute(cur, f"DROP TABLE IF EXISTS {identifier(self.table_original)}")
             self.execute(
                 cur,

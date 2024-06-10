@@ -154,7 +154,9 @@ class Executor:
                 while True:
                     try:
                         result = json.loads(self.ws.recv())
-                    except websocket._exceptions.WebSocketConnectionClosedException as e:
+                    except (
+                        websocket._exceptions.WebSocketConnectionClosedException
+                    ) as e:
                         raise QueryError(str(e), query)
                     if result["type"] in (
                         "CommandStarting",

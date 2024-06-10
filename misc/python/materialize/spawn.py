@@ -25,6 +25,7 @@ from materialize import ui
 
 CalledProcessError = subprocess.CalledProcessError
 
+
 # NOTE(benesch): Please think twice before adding additional parameters to this
 # method! It is meant to serve 95% of callers with a small ands understandable
 # set of parameters. If your needs are niche, consider calling `subprocess.run`

@@ -92,9 +92,11 @@ def workflow_default(c: Composition) -> None:
         # max_result_size system parameter.
         ld_client.create_flag(
             LD_FEATURE_FLAG_KEY,
-            tags=["ci-test", f"gh-{BUILDKITE_PULL_REQUEST}"]
-            if BUILDKITE_PULL_REQUEST
-            else ["ci-test"],
+            tags=(
+                ["ci-test", f"gh-{BUILDKITE_PULL_REQUEST}"]
+                if BUILDKITE_PULL_REQUEST
+                else ["ci-test"]
+            ),
         )
         # Turn on targeting. The default rule will now serve 2GiB for the test
         # feature.
@@ -296,24 +298,28 @@ class LaunchDarklyClient:
                     patch=JSONPatch(
                         list(
                             chain(
-                                [
-                                    PatchOperation(
-                                        op="replace",
-                                        path=f"/environments/{self.environment_key}/on",
-                                        value=on,
-                                    )
-                                ]
-                                if on is not None
-                                else [],
-                                [
-                                    PatchOperation(
-                                        op="replace",
-                                        path=f"/environments/{self.environment_key}/contextTargets",
-                                        value=contextTargets,
-                                    ),
-                                ]
-                                if contextTargets is not None
-                                else [],
+                                (
+                                    [
+                                        PatchOperation(
+                                            op="replace",
+                                            path=f"/environments/{self.environment_key}/on",
+                                            value=on,
+                                        )
+                                    ]
+                                    if on is not None
+                                    else []
+                                ),
+                                (
+                                    [
+                                        PatchOperation(
+                                            op="replace",
+                                            path=f"/environments/{self.environment_key}/contextTargets",
+                                            value=contextTargets,
+                                        ),
+                                    ]
+                                    if contextTargets is not None
+                                    else []
+                                ),
                             )
                         )
                     )

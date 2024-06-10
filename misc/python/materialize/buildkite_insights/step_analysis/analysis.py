@@ -221,9 +221,11 @@ if __name__ == "__main__":
         [
             BuildStepMatcher(
                 build_step_key,
-                args.build_step_parallel_index
-                if len(args.build_step_key) == 1
-                else None,
+                (
+                    args.build_step_parallel_index
+                    if len(args.build_step_key) == 1
+                    else None
+                ),
             )
             for build_step_key in args.build_step_key
         ],

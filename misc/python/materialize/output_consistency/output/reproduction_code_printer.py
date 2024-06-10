@@ -115,9 +115,11 @@ class ReproductionCodePrinter(BaseOutputPrinter):
             query_template.storage_layout,
             row_selection,
             table_column_selection,
-            override_db_object_name=query_template.custom_db_object_name
-            if query_template.custom_db_object_name is not None
-            else evaluation_strategy.simple_db_object_name,
+            override_db_object_name=(
+                query_template.custom_db_object_name
+                if query_template.custom_db_object_name is not None
+                else evaluation_strategy.simple_db_object_name
+            ),
         )
 
         for line in setup_code_lines:

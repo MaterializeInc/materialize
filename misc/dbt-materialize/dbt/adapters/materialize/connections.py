@@ -29,6 +29,7 @@ SUPPORTED_MATERIALIZE_VERSIONS = ">=0.68.0"
 
 logger = AdapterLogger("Materialize")
 
+
 # Override the psycopg2 connect function in order to inject Materialize-specific
 # session parameter defaults.
 #

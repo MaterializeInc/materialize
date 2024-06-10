@@ -57,9 +57,9 @@ DATA_TYPES: list[DataType] = list(
 
 _DATA_TYPE_NAME_BY_INTERNAL_IDENTIFIER: dict[str, str] = {}
 for data_type in DATA_TYPES:
-    _DATA_TYPE_NAME_BY_INTERNAL_IDENTIFIER[
-        data_type.internal_identifier
-    ] = data_type.type_name
+    _DATA_TYPE_NAME_BY_INTERNAL_IDENTIFIER[data_type.internal_identifier] = (
+        data_type.type_name
+    )
 
 
 def get_data_type_name_by_internal_identifier(internal_type_identifier: str) -> str:
