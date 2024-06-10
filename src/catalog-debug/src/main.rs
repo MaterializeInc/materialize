@@ -140,22 +140,30 @@ fn main() {
         env_prefix: Some("MZ_CATALOG_DEBUG_"),
         enable_version_flag: true,
     });
+    let tracing_config = args.tracing.to_tracing_config(
+        StaticTracingConfig {
+            service_name: "catalog-debug",
+            build_info: BUILD_INFO,
+        },
+        MetricsRegistry::new(),
+    );
 
-    let (_, _tracing_guard) = args
-        .tracing
-        .configure_tracing(
-            StaticTracingConfig {
-                service_name: "catalog-debug",
-                build_info: BUILD_INFO,
-            },
-            MetricsRegistry::new(),
-        )
-        .expect("failed to init tracing");
+    // Initialize our exception reporting __before__ we start tokio.
+    let exception_guard = mz_ore::tracing::init_exception_reporting(&tracing_config);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("failed to start Tokio runtime");
+
+    // Initialize our tracing __after__ we start tokio because we create a connection with `tonic`
+    // which requires the `tokio` runtime.
+    let (_, _tracing_guard) = runtime
+        .block_on(mz_ore::tracing::init_tracing(
+            tracing_config,
+            exception_guard,
+        ))
+        .expect("failed to init tracing");
 
     if let Err(err) = runtime.block_on(run(args)) {
         eprintln!(

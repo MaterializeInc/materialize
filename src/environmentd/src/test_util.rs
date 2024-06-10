@@ -32,8 +32,8 @@ use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_ore::tracing::{
-    OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig,
-    TracingGuard, TracingHandle,
+    ExceptionReportingGuard, OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat,
+    TracingConfig, TracingGuard, TracingHandle,
 };
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
@@ -460,7 +460,8 @@ impl Listeners {
                 registry: metrics_registry.clone(),
                 capture: config.capture,
             };
-            let (tracing_handle, tracing_guard) = mz_ore::tracing::configure(config)?;
+            let (tracing_handle, tracing_guard) =
+                mz_ore::tracing::init_tracing(config, ExceptionReportingGuard::new_test()).await?;
             (tracing_handle, Some(tracing_guard))
         } else {
             (TracingHandle::disabled(), None)

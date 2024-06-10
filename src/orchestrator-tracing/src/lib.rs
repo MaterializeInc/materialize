@@ -36,11 +36,11 @@ use mz_ore::netio::SocketAddr;
 use mz_ore::tracing::TokioConsoleConfig;
 use mz_ore::tracing::{
     OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig,
-    TracingGuard, TracingHandle,
 };
 use mz_tracing::CloneableEnvFilter;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::resource::Resource;
+use sentry_tracing::EventFilter;
 
 /// Command line arguments for application tracing.
 ///
@@ -256,15 +256,16 @@ impl Default for TracingCliArgs {
 }
 
 impl TracingCliArgs {
-    pub fn configure_tracing(
+    /// Returns a [`TracingConfig`] derived from these [`TracingCliArgs`].
+    pub fn to_tracing_config(
         &self,
         StaticTracingConfig {
             service_name,
             build_info,
         }: StaticTracingConfig,
         registry: MetricsRegistry,
-    ) -> Result<(TracingHandle, TracingGuard), anyhow::Error> {
-        mz_ore::tracing::configure(TracingConfig {
+    ) -> TracingConfig<fn(&tracing::Metadata) -> EventFilter> {
+        TracingConfig {
             service_name,
             stderr_log: StderrLogConfig {
                 format: match self.log_format {
@@ -323,7 +324,7 @@ impl TracingCliArgs {
             registry,
             #[cfg(feature = "capture")]
             capture: self.capture.clone(),
-        })
+        }
     }
 }
 

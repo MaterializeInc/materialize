@@ -603,22 +603,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         None
     };
-
-    // Initialize our logging.
-    //
-    // Note: we want to do this _BEFORE_ we start our tokio runtime so any threads
-    // spawned by tokio are captured by Sentry.
-    //
-    // See: <https://github.com/getsentry/sentry-rust/issues/567#issuecomment-1508130859>
     let metrics_registry = MetricsRegistry::new();
-    let (tracing_handle, _tracing_guard) = args.tracing.configure_tracing(
+    let tracing_config = args.tracing.to_tracing_config(
         StaticTracingConfig {
             service_name: "environmentd",
             build_info: BUILD_INFO,
         },
         metrics_registry.clone(),
-    )?;
-    let span = tracing::info_span!("environmentd::run").entered();
+    );
+
+    // Initialize our exception reporting __before__ we start tokio.
+    let exception_guard = mz_ore::tracing::init_exception_reporting(&tracing_config);
 
     // Start Tokio runtime.
     let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
@@ -636,6 +631,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .build()?,
     );
 
+    // Initialize our tracing __after__ we start tokio because we create a connection with `tonic`
+    // which requires the `tokio` runtime.
+    let (tracing_handle, _tracing_guard) = runtime.block_on(mz_ore::tracing::init_tracing(
+        tracing_config,
+        exception_guard,
+    ))?;
+
+    let span = tracing::info_span!("environmentd::run").entered();
     let metrics = Metrics::register_into(&metrics_registry, BUILD_INFO);
 
     runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));

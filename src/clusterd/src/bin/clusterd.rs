@@ -166,30 +166,32 @@ fn main() -> Result<(), anyhow::Error> {
         enable_version_flag: true,
     });
 
-    // Initialize our logging.
-    //
-    // Note: we want to do this _BEFORE_ we start our tokio runtime so any threads
-    // spawned by tokio are captured by Sentry.
-    //
-    // See: <https://github.com/getsentry/sentry-rust/issues/567#issuecomment-1508130859>
     let metrics_registry = MetricsRegistry::new();
-    let (tracing_handle, _tracing_guard) = args.tracing.configure_tracing(
+    let tracing_config = args.tracing.to_tracing_config(
         StaticTracingConfig {
             service_name: "clusterd",
             build_info: BUILD_INFO,
         },
         metrics_registry.clone(),
-    )?;
-    let tracing_handle = Arc::new(tracing_handle);
+    );
 
-    // Keep this _after_ the mz_ore::tracing::configure call so that its panic
-    // hook runs _before_ the one that sends things to sentry.
+    // Initialize our exception reporting __before__ we start tokio.
+    let exception_guard = mz_ore::tracing::init_exception_reporting(&tracing_config);
+
+    // Keep this _after_ the mz_ore::tracing::init_exception_reporting call so
+    // that its panic hook runs _before_ the one that sends things to sentry.
     mz_timely_util::panic::halt_on_timely_communication_panic();
 
     // Start our `tokio` runtime.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
+
+    let (tracing_handle, _tracing_guard) = runtime.block_on(mz_ore::tracing::init_tracing(
+        tracing_config,
+        exception_guard,
+    ))?;
+    let tracing_handle = Arc::new(tracing_handle);
 
     if let Err(err) = runtime.block_on(run(args, tracing_handle, metrics_registry)) {
         eprintln!("clusterd: fatal: {}", err.display_with_causes());

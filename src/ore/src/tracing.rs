@@ -35,7 +35,6 @@ use std::time::Duration;
 #[cfg(feature = "tokio-console")]
 use console_subscriber::ConsoleLayer;
 use derivative::Derivative;
-use futures::executor::block_on;
 use http::HeaderMap;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
@@ -249,11 +248,12 @@ impl std::fmt::Debug for TracingHandle {
 /// This guard should be kept alive for the lifetime of the program.
 #[must_use = "Must hold for the lifetime of the program, otherwise tracing will be shutdown"]
 pub struct TracingGuard {
-    _sentry_guard: Option<sentry::ClientInitGuard>,
+    _exceptions: ExceptionReportingGuard,
 }
 
 impl Drop for TracingGuard {
     fn drop(&mut self) {
+        eprintln!("dropping TracingGuard");
         opentelemetry::global::shutdown_tracer_provider();
     }
 }
@@ -301,6 +301,77 @@ type GlobalSubscriber = Arc<dyn Subscriber + Send + Sync + 'static>;
 /// [`configure`]. The value is written when [`configure`] runs.
 pub static GLOBAL_SUBSCRIBER: OnceLock<GlobalSubscriber> = OnceLock::new();
 
+/// Initialize our [`sentry`] exception reporting.
+///
+/// # Panics
+///   * If a [`tokio`] runtime is started before calling this method. See the
+///     following link for more details: <https://github.com/getsentry/sentry-rust/issues/567#issuecomment-1508130859>
+///
+pub fn init_exception_reporting<F>(config: &TracingConfig<F>) -> ExceptionReportingGuard
+where
+    F: Fn(&tracing::Metadata<'_>) -> sentry_tracing::EventFilter + Send + Sync + 'static,
+{
+    // This __must__ be called before tokio is started.
+    assert!(
+        tokio::runtime::Handle::try_current().is_err(),
+        "exception reporting must be initialized before starting tokio"
+    );
+
+    let mut sentry_config = sentry::ClientOptions {
+        attach_stacktrace: true,
+        release: Some(config.build_version.into()),
+        environment: config.sentry.environment.clone().map(Into::into),
+        integrations: vec![Arc::new(DebugImagesIntegration::new())],
+        ..Default::default()
+    };
+    let sentry_guard = if let Some(dsn) = config.sentry.dsn.as_ref() {
+        sentry::init((dsn.clone(), sentry_config))
+    } else {
+        sentry_config.debug = true;
+        sentry::init(sentry_config)
+    };
+
+    sentry::configure_scope(|scope| {
+        scope.set_tag("service_name", config.service_name);
+        scope.set_tag("build_sha", config.build_sha.to_string());
+        scope.set_tag("build_time", config.build_time.to_string());
+        for (k, v) in &config.sentry.tags {
+            scope.set_tag(k, v);
+        }
+    });
+
+    ExceptionReportingGuard {
+        _sentry: Some(sentry_guard),
+    }
+}
+
+/// A guard that when dropped shuts down our exception reporting.
+#[must_use = "Must hold for the lifetime of the program, otherwise exception reporting will be shutdown"]
+pub struct ExceptionReportingGuard {
+    _sentry: Option<sentry::ClientInitGuard>,
+}
+
+impl ExceptionReportingGuard {
+    /// Return a new [`ExceptionReportingGuard`] that is suitable for tests.
+    pub fn new_test() -> Self {
+        ExceptionReportingGuard { _sentry: None }
+    }
+}
+
+impl std::fmt::Debug for ExceptionReportingGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExceptionReportingGuard")
+            .field("_sentry", &self._sentry.is_some())
+            .finish()
+    }
+}
+
+impl Drop for ExceptionReportingGuard {
+    fn drop(&mut self) {
+        eprintln!("dropping {self:?}");
+    }
+}
+
 /// Enables application tracing via the [`tracing`] and [`opentelemetry`]
 /// libraries.
 ///
@@ -320,8 +391,9 @@ pub static GLOBAL_SUBSCRIBER: OnceLock<GlobalSubscriber> = OnceLock::new();
 /// [Honeycomb]: https://www.honeycomb.io
 /// [Tokio console]: https://github.com/tokio-rs/console
 ///
-pub fn configure<F>(
+pub async fn init_tracing<F>(
     config: TracingConfig<F>,
+    exceptions: ExceptionReportingGuard,
 ) -> Result<(TracingHandle, TracingGuard), anyhow::Error>
 where
     F: Fn(&tracing::Metadata<'_>) -> sentry_tracing::EventFilter + Send + Sync + 'static,
@@ -380,14 +452,13 @@ where
         let endpoint = Endpoint::from_shared(otel_config.endpoint)?.timeout(Duration::from_secs(
             opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
         ));
-        let channel_future = endpoint.connect_with_connector({
-            let mut http = HttpConnector::new();
-            http.enforce_http(false);
-            HttpsConnector::from((http, tls_connector))
-        });
-        // We need to initialize logging before we start our runtime.
-        #[allow(clippy::disallowed_methods)]
-        let channel = block_on(channel_future)?;
+        let channel = endpoint
+            .connect_with_connector({
+                let mut http = HttpConnector::new();
+                http.enforce_http(false);
+                HttpsConnector::from((http, tls_connector))
+            })
+            .await?;
 
         let exporter = opentelemetry_otlp::new_exporter()
             .tonic()
@@ -508,29 +579,6 @@ where
         None
     };
 
-    let mut sentry_config = sentry::ClientOptions {
-        attach_stacktrace: true,
-        release: Some(config.build_version.into()),
-        environment: config.sentry.environment.map(Into::into),
-        integrations: vec![Arc::new(DebugImagesIntegration::new())],
-        ..Default::default()
-    };
-    let sentry_guard = if let Some(dsn) = config.sentry.dsn {
-        sentry::init((dsn, sentry_config))
-    } else {
-        sentry_config.debug = true;
-        sentry::init(sentry_config)
-    };
-
-    sentry::configure_scope(|scope| {
-        scope.set_tag("service_name", config.service_name);
-        scope.set_tag("build_sha", config.build_sha.to_string());
-        scope.set_tag("build_time", config.build_time.to_string());
-        for (k, v) in config.sentry.tags {
-            scope.set_tag(&k, v);
-        }
-    });
-
     let (filter, filter_handle) = reload::Layer::new({
         // Please see the comment on `with_filter` below.
         let mut filter = EnvFilter::new("info");
@@ -608,7 +656,7 @@ where
         sentry: sentry_reloader,
     };
     let guard = TracingGuard {
-        _sentry_guard: Some(sentry_guard),
+        _exceptions: exceptions,
     };
 
     Ok((handle, guard))

@@ -48,17 +48,16 @@ enum Command {
 
 fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
+    let tracing_config = args.tracing.to_tracing_config(
+        StaticTracingConfig {
+            service_name: "persistcli",
+            build_info: mz_persist_client::BUILD_INFO,
+        },
+        MetricsRegistry::new(),
+    );
 
-    let (_, _tracing_guard) = args
-        .tracing
-        .configure_tracing(
-            StaticTracingConfig {
-                service_name: "persistcli",
-                build_info: mz_persist_client::BUILD_INFO,
-            },
-            MetricsRegistry::new(),
-        )
-        .expect("failed to init tracing");
+    // Initialize our exception reporting __before__ we start tokio.
+    let exception_guard = mz_ore::tracing::init_exception_reporting(&tracing_config);
 
     // Mirror the tokio Runtime configuration in our production binaries.
     let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
@@ -67,6 +66,15 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed building the Runtime");
+
+    // Initialize our tracing __after__ we start tokio because we create a connection with `tonic`
+    // which requires the `tokio` runtime.
+    let (_, _tracing_guard) = runtime
+        .block_on(mz_ore::tracing::init_tracing(
+            tracing_config,
+            exception_guard,
+        ))
+        .expect("failed to init tracing");
 
     let res = match args.command {
         Command::Maelstrom(args) => runtime.block_on(crate::maelstrom::run::<

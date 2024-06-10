@@ -117,20 +117,29 @@ fn main() -> ExitCode {
         startup_log_filter: args.log_filter.clone(),
         ..Default::default()
     };
-    let (tracing_handle, _tracing_guard) = tracing_args
-        .configure_tracing(
-            StaticTracingConfig {
-                service_name: "sqllogictest",
-                build_info: mz_environmentd::BUILD_INFO,
-            },
-            MetricsRegistry::new(),
-        )
-        .unwrap();
+    let tracing_config = tracing_args.to_tracing_config(
+        StaticTracingConfig {
+            service_name: "sqllogictest",
+            build_info: mz_environmentd::BUILD_INFO,
+        },
+        MetricsRegistry::new(),
+    );
+    // Initialize our exception reporting __before__ we start tokio.
+    let exception_guard = mz_ore::tracing::init_exception_reporting(&tracing_config);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("failed to start runtime");
+
+    // Initialize our tracing __after__ we start tokio because we create a connection with `tonic`
+    // which requires the `tokio` runtime.
+    let (tracing_handle, _tracing_guard) = runtime
+        .block_on(mz_ore::tracing::init_tracing(
+            tracing_config,
+            exception_guard,
+        ))
+        .expect("failed to init tracing");
 
     runtime.block_on(run(args, tracing_args, tracing_handle))
 }

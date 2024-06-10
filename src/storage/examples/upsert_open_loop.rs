@@ -267,23 +267,31 @@ impl std::fmt::Display for KeyValueStore {
 
 fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
+    let tracing_config = args.tracing.to_tracing_config(
+        StaticTracingConfig {
+            service_name: "upsert-open-loop",
+            build_info: BUILD_INFO,
+        },
+        MetricsRegistry::new(),
+    );
 
-    let _ = args
-        .tracing
-        .configure_tracing(
-            StaticTracingConfig {
-                service_name: "upsert-open-loop",
-                build_info: BUILD_INFO,
-            },
-            MetricsRegistry::new(),
-        )
-        .expect("failed to init tracing");
+    // Initialize our exception reporting __before__ we start tokio.
+    let exception_guard = mz_ore::tracing::init_exception_reporting(&tracing_config);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(args.num_async_workers)
         .enable_all()
         .build()
         .expect("Failed building the Runtime");
+
+    // Initialize our tracing __after__ we start tokio because we create a connection with `tonic`
+    // which requires the `tokio` runtime.
+    let (_, _tracing_guard) = runtime
+        .block_on(mz_ore::tracing::init_tracing(
+            tracing_config,
+            exception_guard,
+        ))
+        .expect("failed to init tracing");
 
     let root_span = info_span!("upsert_open_loop");
     let res = runtime.block_on(run(args).instrument(root_span));
