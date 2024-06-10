@@ -97,6 +97,14 @@ message ProtoKafkaSinkConnectionV2 {
     }
     ProtoKafkaIdStyle progress_group_id = 19;
     ProtoKafkaIdStyle transactional_id = 20;
+    ProtoKafkaSinkTopicOptions topic_options = 23;
+    ProtoKafkaSinkTopicOptions progress_topic_options = 24;
+}
+
+message ProtoKafkaSinkTopicOptions {
+    optional int32 replication_factor = 1;
+    optional int32 partition_count = 2;
+    map<string, string> topic_config = 3;
 }
 
 message ProtoKafkaIdStyle {

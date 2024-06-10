@@ -87,6 +87,7 @@ Compaction
 Compression
 Compute
 Computectl
+Config
 Confluent
 Connection
 Connections
