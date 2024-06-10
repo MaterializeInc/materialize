@@ -147,19 +147,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
 
-    /// Keep track of subsources of ingestions that we have dropped. With this,
-    /// we can synthesize `DroppedIds` messages when we see one for the "main"
-    /// ingestion. We do this because the cluster will not send one back by
-    /// itself.
-    ///
-    /// We populate this in `drop_sources_unvalidated` and take it out again in
-    /// `process`, when receiving a `DroppedIds` message for the "main"
-    /// ingestion.
-    ///
-    /// TODO: Make the cluster send back `DroppedIds` messages for subsources
-    /// and remove this.
-    dropped_ingestions: BTreeMap<GlobalId, Vec<GlobalId>>,
-
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
@@ -679,7 +666,7 @@ where
                         .get_mut(ingestion_id)
                         .expect("known to exist");
 
-                    match &mut ingestion_state.data_source {
+                    let instance_id = match &mut ingestion_state.data_source {
                         DataSource::Ingestion(ingestion_desc) => {
                             ingestion_desc.source_exports.insert(
                                 id,
@@ -689,7 +676,13 @@ where
                                     )),
                                     storage_metadata: (),
                                 },
-                            )
+                            );
+
+                            // Record the ingestion's cluster ID for the
+                            // ingestion export. This way we always have a
+                            // record of it, even if the ingestion's collection
+                            // description disappears.
+                            ingestion_desc.instance_id
                         }
                         _ => unreachable!(
                             "SourceExport must only refer to primary sources that already exist"
@@ -706,7 +699,7 @@ where
                         derived_since: dependency_since,
                         write_frontier: Antichain::from_elem(Self::Timestamp::minimum()),
                         hold_policy: ReadPolicy::step_back(),
-                        instance_id: None,
+                        instance_id,
                     };
 
                     collection_state.extra_state = CollectionStateExtra::Ingestion(ingestion_state);
@@ -737,7 +730,7 @@ where
                         derived_since: dependency_since,
                         write_frontier: Antichain::from_elem(Self::Timestamp::minimum()),
                         hold_policy: ReadPolicy::step_back(),
-                        instance_id: Some(ingestion_desc.instance_id.clone()),
+                        instance_id: ingestion_desc.instance_id,
                     };
 
                     collection_state.extra_state = CollectionStateExtra::Ingestion(ingestion_state);
@@ -1464,14 +1457,7 @@ where
                         self.pending_compaction_commands
                             .push(pending_compaction_command);
                     }
-                    DataSource::Ingestion(ref ingestion) => {
-                        // Keep track of subsources, so that we can synthesize
-                        // `DroppedIds` messages for the remap shard.
-                        self.dropped_ingestions
-                            .entry(*id)
-                            .or_default()
-                            .push(ingestion.remap_collection_id);
-
+                    DataSource::Ingestion(_) => {
                         ingestions_to_drop.insert(id);
                     }
                     DataSource::IngestionExport { ingestion_id, .. } => {
@@ -1500,13 +1486,6 @@ where
                                     removed.is_some(),
                                     "dropped subsource {id} already removed from source exports"
                                 );
-
-                                // So that we can synthesize `DroppedIds` messages for
-                                // the sources exports (aka. subsources).
-                                self.dropped_ingestions
-                                    .entry(ingestion_id)
-                                    .or_default()
-                                    .push(*id);
                             }
                             _ => unreachable!("SourceExport must only refer to primary sources that already exist"),
                         };
@@ -1814,25 +1793,9 @@ where
                 for id in ids.iter() {
                     tracing::debug!("DroppedIds for collections {id}");
 
-                    if let Some(collection) = self.collections.remove(id) {
-                        match collection.data_source {
-                            DataSource::Ingestion(_ingestion) => {
-                                let dropped_subsources = self
-                                    .dropped_ingestions
-                                    .remove(id)
-                                    .expect("missing dropped subsources");
-
-                                // The cluster is not sending these, so we take
-                                // matters into our own hands!
-                                tracing::debug!(?dropped_subsources, "synthesizing DroppedIds messages for subsources and the remap shard");
-                                self.internal_response_sender
-                                    .send(StorageResponse::DroppedIds(
-                                        dropped_subsources.into_iter().collect(),
-                                    ))
-                                    .expect("we are still alive");
-                            }
-                            _ => (),
-                        }
+                    if let Some(_collection) = self.collections.remove(id) {
+                        // Nothing to do, we already dropped read holds in
+                        // `drop_sources_unvalidated`.
                     } else if let Some(export) = self.exports.get_mut(id) {
                         // TODO: Current main never drops export state, so we
                         // also don't do that, because it would be yet more
@@ -2159,11 +2122,11 @@ where
                 CollectionStateExtra::None => continue,
             };
 
-            let replica_id = ingestion_state
-                .instance_id
-                .as_ref()
-                .and_then(|c| self.replicas.get(c))
+            let replica_id = self
+                .replicas
+                .get(&ingestion_state.instance_id)
                 .and_then(|r| uppers.remove(object_id).map(|uppers| (r.clone(), uppers)));
+
             if let Some((replica_id, upper)) = replica_id {
                 frontiers.insert((*object_id, replica_id), upper);
             }
@@ -2586,7 +2549,6 @@ where
 
         Self {
             build_info,
-            dropped_ingestions: BTreeMap::new(),
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
             persist_table_worker,
@@ -2801,11 +2763,7 @@ where
 
                 let (changes, frontier, _cluster_id) =
                     collections_net.entry(key).or_insert_with(|| {
-                        (
-                            ChangeBatch::new(),
-                            Antichain::new(),
-                            ingestion.instance_id.clone(),
-                        )
+                        (ChangeBatch::new(), Antichain::new(), ingestion.instance_id)
                     });
 
                 changes.extend(update.drain());
@@ -2821,14 +2779,9 @@ where
 
                 // Make sure we also send `AllowCompaction` commands for sinks,
                 // which drives updating the sink's `as_of`, among other things.
-                let (changes, frontier, _cluster_id) =
-                    exports_net.entry(key).or_insert_with(|| {
-                        (
-                            ChangeBatch::new(),
-                            Antichain::new(),
-                            Some(export.cluster_id()),
-                        )
-                    });
+                let (changes, frontier, _cluster_id) = exports_net
+                    .entry(key)
+                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new(), export.cluster_id()));
 
                 changes.extend(update.drain());
                 *frontier = staged_read_hold.frontier().to_owned();
@@ -2894,7 +2847,7 @@ where
                 .push(PendingCompactionCommand {
                     id,
                     read_frontier,
-                    cluster_id,
+                    cluster_id: Some(cluster_id),
                 });
         }
     }
@@ -3590,5 +3543,5 @@ struct IngestionState<T: TimelyTimestamp> {
     pub hold_policy: ReadPolicy<T>,
 
     /// The ID of the instance in which the ingestion is running.
-    pub instance_id: Option<StorageInstanceId>,
+    pub instance_id: StorageInstanceId,
 }
