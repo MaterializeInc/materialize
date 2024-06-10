@@ -75,6 +75,10 @@ pub struct CrateConfig {
     #[serde(alias = "test")]
     #[serde(default)]
     tests: BTreeMap<String, TestConfig>,
+    /// Extra config for any binary targets.
+    #[serde(alias = "binary")]
+    #[serde(default)]
+    binaries: BTreeMap<String, BinaryConfig>,
 }
 
 impl CrateConfig {
@@ -115,6 +119,11 @@ impl CrateConfig {
     pub fn test(&self, name: &str) -> &TestConfig {
         static EMPTY_TEST: Lazy<TestConfig> = Lazy::new(TestConfig::default);
         self.tests.get(name).unwrap_or(&*EMPTY_TEST)
+    }
+
+    pub fn binary(&self, name: &str) -> &BinaryConfig {
+        static EMPTY_BINARY: Lazy<BinaryConfig> = Lazy::new(BinaryConfig::default);
+        self.binaries.get(name).unwrap_or(&*EMPTY_BINARY)
     }
 }
 
@@ -208,6 +217,29 @@ impl TestConfig {
 
     pub fn size(&self) -> Option<&RustTestSize> {
         self.size.as_ref()
+    }
+
+    pub fn env(&self) -> &BTreeMap<String, String> {
+        &self.env
+    }
+}
+
+/// Extra configuration for a [`RustBinary`] target.
+///
+/// [`RustBinary`]: crate::targets::RustBinary
+#[derive(Default, Debug, serde::Deserialize)]
+pub struct BinaryConfig {
+    #[serde(flatten)]
+    common: CommonConfig,
+
+    /// Additional environment variables that get set when invoked by `bazel run`.
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+}
+
+impl BinaryConfig {
+    pub fn common(&self) -> &CommonConfig {
+        &self.common
     }
 
     pub fn env(&self) -> &BTreeMap<String, String> {

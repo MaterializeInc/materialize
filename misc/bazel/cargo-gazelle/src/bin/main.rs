@@ -17,7 +17,7 @@ use cargo_gazelle::args::Args;
 use cargo_gazelle::config::{CrateConfig, GlobalConfig};
 use cargo_gazelle::context::CrateContext;
 use cargo_gazelle::header::BazelHeader;
-use cargo_gazelle::targets::{CargoBuildScript, RustLibrary, RustTarget, RustTest};
+use cargo_gazelle::targets::{CargoBuildScript, RustBinary, RustLibrary, RustTarget, RustTest};
 use cargo_gazelle::BazelBuildFile;
 use guppy::graph::{BuildTargetId, PackageMetadata};
 use tracing_subscriber::EnvFilter;
@@ -71,11 +71,18 @@ fn main() -> Result<(), anyhow::Error> {
             .map(|target| RustTest::integration(&config, &package, &crate_config, &target))
             .collect::<Result<_, _>>()?;
 
+        let binaries: Vec<_> = package
+            .build_targets()
+            .filter(|target| matches!(target.id(), BuildTargetId::Binary(_)))
+            .map(|target| RustBinary::generate(&config, &package, &crate_config, &target))
+            .collect::<Result<_, _>>()?;
+
         #[allow(clippy::as_conversions)]
         let targets: Vec<&dyn RustTarget> = [&library as &dyn RustTarget]
             .into_iter()
             .chain(build_script.iter().map(|x| x as &dyn RustTarget))
             .chain(integration_tests.iter().map(|x| x as &dyn RustTarget))
+            .chain(binaries.iter().map(|x| x as &dyn RustTarget))
             .chain(additive_content.as_ref().map(|x| x as &dyn RustTarget))
             .collect();
 

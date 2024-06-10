@@ -18,6 +18,7 @@ pub enum Rule {
     RustProcMacro,
     RustTest,
     RustDocTest,
+    RustBinary,
     CargoBuildScript,
     // TODO(parkmycar): Include these rules. The tricky part is they need to
     // get imported from the crates_universe repository that is created.
@@ -28,9 +29,11 @@ pub enum Rule {
 impl Rule {
     pub fn module(&self) -> Module {
         match self {
-            Rule::RustLibrary | Rule::RustProcMacro | Rule::RustTest | Rule::RustDocTest => {
-                Module::Rust
-            }
+            Rule::RustLibrary
+            | Rule::RustProcMacro
+            | Rule::RustTest
+            | Rule::RustDocTest
+            | Rule::RustBinary => Module::Rust,
             Rule::CargoBuildScript => Module::Cargo,
         }
     }
@@ -43,6 +46,7 @@ impl ToBazelDefinition for Rule {
             Rule::RustProcMacro => "rust_proc_macro",
             Rule::RustTest => "rust_test",
             Rule::RustDocTest => "rust_doc_test",
+            Rule::RustBinary => "rust_binary",
             Rule::CargoBuildScript => "cargo_build_script",
         };
         let s = QuotedString::new(s);
