@@ -145,7 +145,7 @@ name                nullable    type
  rolsuper           true        boolean
  rolinherit         false       boolean
  rolcreaterole      true        boolean
- rolcreatedb        false       boolean
+ rolcreatedb        true        boolean
  rolcanlogin        false       boolean
  rolreplication     false       boolean
  rolbypassrls       false       boolean

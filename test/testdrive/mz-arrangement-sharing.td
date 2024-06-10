@@ -724,28 +724,28 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(0)]]"                     80
 "ArrangeBy[[Column(1), Column(3)]]"           2
 "ArrangeBy[[Column(1)]]-errors"               6
-ArrangeBy[[Column(13)]]                       2
-"ArrangeBy[[Column(1)]]"                     17
+ArrangeBy[[Column(13)]]                       1
+"ArrangeBy[[Column(1)]]"                     16
 "ArrangeBy[[Column(2)]]-errors"               9
 "ArrangeBy[[Column(2)]]"                     20
 "ArrangeBy[[Column(3)]]"                      3
 "ArrangeBy[[Column(4)]]-errors"               2
-"ArrangeBy[[Column(4)]]"                      6
+"ArrangeBy[[Column(4)]]"                      5
 "ArrangeBy[[Column(5)]]-errors"               2
 "ArrangeBy[[Column(5)]]"                      4
-"ArrangeBy[[Column(6)]]"                      2
-"ArrangeBy[[Column(9)]]"                      2
+"ArrangeBy[[Column(6)]]"                      1
+"ArrangeBy[[Column(9)]]"                      1
 "ArrangeBy[[Column(18)]]"                     1
 "ArrangeBy[[Column(18)]]-errors"              1
 "ArrangeBy[[If { cond: CallUnary { func: IsNull(IsNull), expr: Column(2) }, then: Literal(Ok(Row{[Null]}), ColumnType { scalar_type: String, nullable: true }), els: Column(1) }]]" 1
 "ArrangeBy[[]]"                               10
-"Arranged DistinctBy"                         26
+"Arranged DistinctBy"                         21
 "Arranged MinsMaxesHierarchical input"        7
 "Arranged ReduceInaccumulable"                1
 "Arranged TopK input"                        16
 "Distinct recursive err"                      1
-"DistinctBy"                                  26
-"DistinctByErrorCheck"                        26
+"DistinctBy"                                  21
+"DistinctByErrorCheck"                        21
 "ReduceAccumulable"                           8
 "ReduceCollation Errors"                      1
 "ReduceCollation"                             1
