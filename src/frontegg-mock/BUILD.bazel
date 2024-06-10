@@ -80,7 +80,9 @@ rust_doc_test(
 rust_test(
 	name = "mz_frontegg_mock_local_tests",
 	version = "0.0.0",
+	crate_name = "local",
 	srcs = ["tests/local.rs"],
+	crate_features = [],
 	aliases = aliases(
 		normal = True,
 		normal_dev = True,
