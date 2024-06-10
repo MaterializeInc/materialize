@@ -15,9 +15,14 @@ from materialize.test_analytics.config.mz_db_config import MzDbConfig
 
 
 def create_test_analytics_config(c: Composition) -> MzDbConfig:
-    username = os.getenv("PRODUCTION_ANALYTICS_USERNAME", "infra+bot@materialize.com")
     app_password = os.environ["PRODUCTION_ANALYTICS_APP_PASSWORD"]
     hostname = get_cloud_hostname(c, app_password=app_password)
+    return create_test_analytics_config_with_hostname(hostname)
+
+
+def create_test_analytics_config_with_hostname(hostname: str) -> MzDbConfig:
+    username = os.getenv("PRODUCTION_ANALYTICS_USERNAME", "infra+bot@materialize.com")
+    app_password = os.environ["PRODUCTION_ANALYTICS_APP_PASSWORD"]
     database = "raw"
     search_path = "test_analytics"
 
