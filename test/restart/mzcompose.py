@@ -6,9 +6,13 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 import json
 import time
 from textwrap import dedent
+
+import pg8000.exceptions
+import requests
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -330,6 +334,76 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             """
         ),
     )
+
+
+def workflow_allow_user_sessions(c: Composition) -> None:
+    c.up("materialized")
+    http_port = c.port("materialized", 6876)
+
+    # Ensure new user sessions are allowed.
+    c.sql(
+        "ALTER SYSTEM SET allow_user_sessions = true",
+        port=6877,
+        user="mz_system",
+    )
+
+    # SQL and HTTP user sessions should work.
+    assert c.sql_query("SELECT 1") == ([1],)
+    assert requests.post(
+        f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
+    ).json()["results"][0]["rows"] == [["1"]]
+
+    # Save a cursor for later.
+    cursor = c.sql_cursor()
+
+    # Disallow new user sessions.
+    c.sql(
+        "ALTER SYSTEM SET allow_user_sessions = false",
+        port=6877,
+        user="mz_system",
+    )
+
+    # New SQL and HTTP user sessions should now fail.
+    try:
+        c.sql_query("SELECT 1")
+    except pg8000.exceptions.DatabaseError as e:
+        assert e.args[0]["C"] == "MZ010"
+        assert e.args[0]["M"] == "login blocked"
+        assert (
+            e.args[0]["D"]
+            == "Your organization has been blocked. Please contact support."
+        )
+
+    res = requests.post(
+        f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
+    )
+    assert res.status_code == 403
+    assert res.json() == {
+        "message": "login blocked",
+        "code": "MZ010",
+        "detail": "Your organization has been blocked. Please contact support.",
+    }
+
+    # The cursor from the beginning of the test should still work.
+    cursor.execute("SELECT 1")
+    assert cursor.fetchall() == ([1],)
+
+    # Re-allow new user sessions.
+    c.sql(
+        "ALTER SYSTEM SET allow_user_sessions = true",
+        port=6877,
+        user="mz_system",
+    )
+
+    # SQL and HTTP user sessions should work again.
+    assert c.sql_query("SELECT 1") == ([1],)
+    assert requests.post(
+        f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
+    ).json()["results"][0]["rows"] == [["1"]]
+
+    # The cursor from the beginning of the test should still work.
+    cursor.execute("SELECT 1")
+    assert cursor.fetchall() == ([1],)
 
 
 def workflow_drop_materialize_database(c: Composition) -> None:
