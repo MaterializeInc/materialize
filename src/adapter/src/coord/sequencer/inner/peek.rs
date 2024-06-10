@@ -571,6 +571,7 @@ impl Coordinator {
             .await
             .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
         let session = ctx.session().meta();
+        let now = self.catalog().config().now.clone();
 
         mz_ore::task::spawn_blocking(
             || "optimize peek",
@@ -606,6 +607,8 @@ impl Coordinator {
                     }
                 };
 
+                let optimization_finished_at = (now)();
+
                 let stage = match pipeline() {
                     Ok(Either::Left(global_lir_plan)) => {
                         let optimizer = optimizer.unwrap_left();
@@ -630,6 +633,7 @@ impl Coordinator {
                                     optimizer,
                                     plan_insights_optimizer_trace: Some(optimizer_trace),
                                     global_lir_plan,
+                                    optimization_finished_at,
                                 })
                             }
                             ExplainContext::None => PeekStage::Finish(PeekStageFinish {
@@ -642,6 +646,7 @@ impl Coordinator {
                                 optimizer,
                                 plan_insights_optimizer_trace: None,
                                 global_lir_plan,
+                                optimization_finished_at,
                             }),
                             ExplainContext::Pushdown => {
                                 let (plan, _, _) = global_lir_plan.unapply();
@@ -670,6 +675,7 @@ impl Coordinator {
                             validity,
                             optimizer,
                             global_lir_plan,
+                            optimization_finished_at,
                         })
                     }
                     // Internal optimizer errors are handled differently
@@ -805,8 +811,17 @@ impl Coordinator {
             optimizer,
             plan_insights_optimizer_trace,
             global_lir_plan,
+            optimization_finished_at,
         }: PeekStageFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
+        if let Some(id) = ctx.extra.contents() {
+            self.record_statement_lifecycle_event(
+                &id,
+                &StatementLifecycleEvent::OptimizationFinished,
+                optimization_finished_at,
+            );
+        }
+
         let session = ctx.session_mut();
         let conn_id = session.conn_id().clone();
 
@@ -930,8 +945,17 @@ impl Coordinator {
             validity,
             optimizer,
             global_lir_plan,
+            optimization_finished_at,
         }: PeekStageCopyTo,
     ) {
+        if let Some(id) = ctx.extra.contents() {
+            self.record_statement_lifecycle_event(
+                &id,
+                &StatementLifecycleEvent::OptimizationFinished,
+                optimization_finished_at,
+            );
+        }
+
         let sink_id = global_lir_plan.sink_id();
         let cluster_id = optimizer.cluster_id();
 
