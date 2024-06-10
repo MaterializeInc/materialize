@@ -166,7 +166,7 @@ class MzCloud(Executor):
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         ]
 
-    def RestartMz(self) -> None:
+    def RestartMzClusterd(self) -> None:
         # We can't restart the cloud, so complain.
         assert False
 

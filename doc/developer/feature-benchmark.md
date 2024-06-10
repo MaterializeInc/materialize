@@ -260,7 +260,7 @@ Available `Action`s:
 
 * `TdAction(...)` - executes the testdrive fragment provided
 * `Kgen(...)` - executes the `Kgen` to ingest data into a Kafka topic (see the KafkaRecoveryBig scenario for an example)
-* `Lambda(lambda e: e.RestartMz())` - restarts the Mz service
+* `Lambda(lambda e: e.RestartMzClusterd())` - restarts the Mz and Clusterd services
 
 
 ## Running the same scenario multiple times within the same run
