@@ -2527,19 +2527,17 @@ impl Coordinator {
 
         let oracle_read_ts = self.oracle_read_ts(session, &timeline_context, &when).await;
 
-        let determination = self
-            .sequence_peek_timestamp(
-                session,
-                &when,
-                cluster_id,
-                timeline_context,
-                oracle_read_ts,
-                &id_bundle,
-                &source_ids,
-                real_time_recency_ts,
-                RequireLinearization::NotRequired,
-            )
-            .await?;
+        let determination = self.sequence_peek_timestamp(
+            session,
+            &when,
+            cluster_id,
+            timeline_context,
+            oracle_read_ts,
+            &id_bundle,
+            &source_ids,
+            real_time_recency_ts,
+            RequireLinearization::NotRequired,
+        )?;
         let explanation = self.explain_timestamp(session, cluster_id, &id_bundle, determination);
 
         let s = if is_json {

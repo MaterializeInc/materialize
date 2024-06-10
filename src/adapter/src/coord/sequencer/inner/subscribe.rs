@@ -236,17 +236,15 @@ impl Coordinator {
         // Timestamp selection
         let oracle_read_ts = self.oracle_read_ts(ctx.session(), &timeline, when).await;
         let bundle = &global_mir_plan.id_bundle(optimizer.cluster_id());
-        let (determination, read_holds) = self
-            .determine_timestamp(
-                ctx.session(),
-                bundle,
-                when,
-                optimizer.cluster_id(),
-                &timeline,
-                oracle_read_ts,
-                None,
-            )
-            .await?;
+        let (determination, read_holds) = self.determine_timestamp(
+            ctx.session(),
+            bundle,
+            when,
+            optimizer.cluster_id(),
+            &timeline,
+            oracle_read_ts,
+            None,
+        )?;
 
         let as_of = determination.timestamp_context.timestamp_or_default();
 

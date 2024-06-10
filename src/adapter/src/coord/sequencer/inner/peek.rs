@@ -255,8 +255,7 @@ impl Coordinator {
                 }
                 TimestampReadHold(stage) => {
                     let next = return_if_err!(
-                        self.peek_stage_timestamp_read_hold(ctx.session_mut(), stage)
-                            .await,
+                        self.peek_stage_timestamp_read_hold(ctx.session_mut(), stage),
                         ctx
                     );
                     (ctx, PeekStage::Optimize(next))
@@ -487,7 +486,7 @@ impl Coordinator {
 
     /// Determine a read timestamp and create appropriate read holds.
     #[instrument]
-    async fn peek_stage_timestamp_read_hold(
+    fn peek_stage_timestamp_read_hold(
         &mut self,
         session: &mut Session,
         PeekStageTimestampReadHold {
@@ -514,19 +513,17 @@ impl Coordinator {
         // sufficient collections for safety.
         validity.dependency_ids.extend(id_bundle.iter());
 
-        let determination = self
-            .sequence_peek_timestamp(
-                session,
-                &plan.when,
-                cluster_id,
-                timeline_context,
-                oracle_read_ts,
-                &id_bundle,
-                &source_ids,
-                real_time_recency_ts,
-                (&explain_ctx).into(),
-            )
-            .await?;
+        let determination = self.sequence_peek_timestamp(
+            session,
+            &plan.when,
+            cluster_id,
+            timeline_context,
+            oracle_read_ts,
+            &id_bundle,
+            &source_ids,
+            real_time_recency_ts,
+            (&explain_ctx).into(),
+        )?;
 
         Ok(PeekStageOptimize {
             validity,
@@ -1056,7 +1053,7 @@ impl Coordinator {
     /// Determines the query timestamp and acquires read holds on dependent sources
     /// if necessary.
     #[instrument]
-    pub(super) async fn sequence_peek_timestamp(
+    pub(super) fn sequence_peek_timestamp(
         &mut self,
         session: &mut Session,
         when: &QueryWhen,
@@ -1097,17 +1094,15 @@ impl Coordinator {
                     // If not in a transaction, use the source.
                     source_bundle
                 };
-                let (determination, read_holds) = self
-                    .determine_timestamp(
-                        session,
-                        determine_bundle,
-                        when,
-                        cluster_id,
-                        &timeline_context,
-                        oracle_read_ts,
-                        real_time_recency_ts,
-                    )
-                    .await?;
+                let (determination, read_holds) = self.determine_timestamp(
+                    session,
+                    determine_bundle,
+                    when,
+                    cluster_id,
+                    &timeline_context,
+                    oracle_read_ts,
+                    real_time_recency_ts,
+                )?;
                 // We only need read holds if the read depends on a timestamp.
                 let read_holds = match determination.timestamp_context.timestamp() {
                     Some(_ts) => Some(read_holds),

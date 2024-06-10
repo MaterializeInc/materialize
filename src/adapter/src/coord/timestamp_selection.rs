@@ -260,7 +260,7 @@ pub trait TimestampProvider {
     /// after `since` and sure to be available not after `upper`.
     ///
     /// The timeline that `id_bundle` belongs to is also returned, if one exists.
-    async fn determine_timestamp_for(
+    fn determine_timestamp_for(
         &mut self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
@@ -546,7 +546,7 @@ impl Coordinator {
     /// The caller is responsible for eventually dropping those read holds using
     /// [Coordinator::release_read_holds]!
     #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn determine_timestamp(
+    pub(crate) fn determine_timestamp(
         &mut self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
@@ -563,18 +563,16 @@ impl Coordinator {
         AdapterError,
     > {
         let isolation_level = session.vars().transaction_isolation();
-        let (det, read_holds) = self
-            .determine_timestamp_for(
-                session,
-                id_bundle,
-                when,
-                compute_instance,
-                timeline_context,
-                oracle_read_ts,
-                real_time_recency_ts,
-                isolation_level,
-            )
-            .await?;
+        let (det, read_holds) = self.determine_timestamp_for(
+            session,
+            id_bundle,
+            when,
+            compute_instance,
+            timeline_context,
+            oracle_read_ts,
+            real_time_recency_ts,
+            isolation_level,
+        )?;
         self.metrics
             .determine_timestamp
             .with_label_values(&[
@@ -591,18 +589,16 @@ impl Coordinator {
             && real_time_recency_ts.is_none()
         {
             if let Some(strict) = det.timestamp_context.timestamp() {
-                let (serializable_det, _tmp_read_holds) = self
-                    .determine_timestamp_for(
-                        session,
-                        id_bundle,
-                        when,
-                        compute_instance,
-                        timeline_context,
-                        oracle_read_ts,
-                        real_time_recency_ts,
-                        &IsolationLevel::Serializable,
-                    )
-                    .await?;
+                let (serializable_det, _tmp_read_holds) = self.determine_timestamp_for(
+                    session,
+                    id_bundle,
+                    when,
+                    compute_instance,
+                    timeline_context,
+                    oracle_read_ts,
+                    real_time_recency_ts,
+                    &IsolationLevel::Serializable,
+                )?;
 
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     self.metrics

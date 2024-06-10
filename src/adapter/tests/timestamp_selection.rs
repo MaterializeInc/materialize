@@ -290,17 +290,18 @@ fn test_timestamp_selection() {
                         Some(_) | None => None,
                     };
 
-                    let (ts, _read_holds) = block_on(f.determine_timestamp_for(
-                        &session,
-                        &det.id_bundle.into(),
-                        &parse_query_when(&det.when),
-                        det.instance.parse().unwrap(),
-                        &TimelineContext::TimestampDependent,
-                        oracle_read_ts,
-                        None, /* real_time_recency_ts */
-                        &IsolationLevel::from(isolation),
-                    ))
-                    .unwrap();
+                    let (ts, _read_holds) = f
+                        .determine_timestamp_for(
+                            &session,
+                            &det.id_bundle.into(),
+                            &parse_query_when(&det.when),
+                            det.instance.parse().unwrap(),
+                            &TimelineContext::TimestampDependent,
+                            oracle_read_ts,
+                            None, /* real_time_recency_ts */
+                            &IsolationLevel::from(isolation),
+                        )
+                        .unwrap();
 
                     if tc.args.contains_key("full") {
                         format!("{}\n", serde_json::to_string_pretty(&ts).unwrap())
