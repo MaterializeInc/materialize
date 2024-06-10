@@ -18,8 +18,9 @@ def get_cloud_hostname(
     app_password: str,
     region: str = "aws/us-east-1",
     environment: str = "production",
+    quiet: bool = False,
 ) -> str:
     with c.override(
         Mz(region=region, environment=environment, app_password=app_password)
     ):
-        return c.cloud_hostname()
+        return c.cloud_hostname(quiet=quiet)

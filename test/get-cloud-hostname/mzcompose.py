@@ -25,6 +25,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up("materialized")
 
-    hostname = get_cloud_hostname(c, app_password=args.app_password)
+    hostname = get_cloud_hostname(c, app_password=args.app_password, quiet=True)
 
     print(hostname)
