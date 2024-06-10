@@ -183,6 +183,144 @@ impl ToBazelDefinition for RustLibrary {
     }
 }
 
+/// [`rust_binary`](https://bazelbuild.github.io/rules_rust/defs.html#rust_binary)
+#[derive(Debug)]
+pub struct RustBinary {
+    name: Field<QuotedString>,
+    crate_root: Field<QuotedString>,
+    features: Field<List<QuotedString>>,
+    aliases: Field<Aliases>,
+    deps: Field<List<QuotedString>>,
+    proc_macro_deps: Field<List<QuotedString>>,
+    data: Field<List<QuotedString>>,
+    compile_data: Field<List<QuotedString>>,
+    env: Field<Dict<QuotedString, QuotedString>>,
+    rustc_flags: Field<List<QuotedString>>,
+    rustc_env: Field<Dict<QuotedString, QuotedString>>,
+}
+
+impl RustTarget for RustBinary {
+    fn rules(&self) -> Vec<Rule> {
+        vec![Rule::RustBinary]
+    }
+}
+
+impl RustBinary {
+    pub fn generate(
+        config: &GlobalConfig,
+        metadata: &PackageMetadata,
+        crate_config: &CrateConfig,
+        target: &BuildTarget,
+    ) -> Result<Self, anyhow::Error> {
+        let crate_root_path = metadata
+            .manifest_path()
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("crate is at the root of the filesystem?"))?;
+        let name = match target.id() {
+            BuildTargetId::Binary(name) => name,
+            x => panic!(
+                "can only generate `rust_binary` rules for binary build targets, found {x:?}"
+            ),
+        };
+        let target_name = QuotedString::new(name.to_case(Case::Snake));
+
+        let binary_path = target.path();
+        let binary_path = binary_path
+            .strip_prefix(crate_root_path)
+            .map_err(|_| anyhow::anyhow!("binary is not inside workspace?"))?;
+        let binary_path = QuotedString::new(binary_path.to_string());
+
+        // Collect all dependencies.
+        let all_deps = WorkspaceDependencies::new(config, metadata);
+        let mut deps = all_deps
+            .iter(DependencyKind::Normal, false)
+            .map(QuotedString::new)
+            .collect::<List<_>>()
+            .concat_other(AllCrateDeps::default().normal());
+        let mut proc_macro_deps = all_deps
+            .iter(DependencyKind::Normal, true)
+            .map(QuotedString::new)
+            .collect::<List<_>>()
+            .concat_other(AllCrateDeps::default().proc_macro());
+
+        // Add the library crate as a dep if it isn't already.
+        let crate_has_lib = metadata
+            .build_targets()
+            .any(|target| matches!(target.id(), BuildTargetId::Library));
+        if crate_has_lib {
+            let dep = format!(":{}", metadata.name().to_case(Case::Snake));
+            if metadata.is_proc_macro() {
+                if !proc_macro_deps.iter().any(|d| d.unquoted().ends_with(&dep)) {
+                    proc_macro_deps.push_front(dep);
+                }
+            } else {
+                if !deps.iter().any(|d| d.unquoted().ends_with(&dep)) {
+                    deps.push_front(dep);
+                }
+            }
+        }
+
+        // Extend with any extra config specified in the Cargo.toml.
+        let bin_config = crate_config.binary(name);
+
+        deps.extend(crate_config.lib().extra_deps());
+        proc_macro_deps.extend(crate_config.lib().extra_proc_macro_deps());
+
+        let (paths, globs) = bin_config.common().data();
+        let data = List::new(paths).concat_other(globs.map(Glob::new));
+
+        let (paths, globs) = bin_config.common().compile_data();
+        let compile_data = List::new(paths).concat_other(globs.map(Glob::new));
+
+        let env = Dict::new(bin_config.env());
+        let rustc_flags = List::new(bin_config.common().rustc_flags());
+        let rustc_env = Dict::new(bin_config.common().rustc_env());
+
+        Ok(RustBinary {
+            name: Field::new("name", target_name),
+            crate_root: Field::new("crate_root", binary_path),
+            features: Field::new("features", List::empty()),
+            aliases: Field::new("aliases", Aliases::default().normal().proc_macro()),
+            deps: Field::new("deps", deps),
+            proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
+            data: Field::new("data", data),
+            compile_data: Field::new("compile_data", compile_data),
+            env: Field::new("env", env),
+            rustc_flags: Field::new("rustc_flags", rustc_flags),
+            rustc_env: Field::new("rustc_env", rustc_env),
+        })
+    }
+}
+
+impl ToBazelDefinition for RustBinary {
+    fn format(&self, w: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
+        let mut w = AutoIndentingWriter::new(w);
+
+        writeln!(w, "rust_binary(")?;
+        {
+            let mut w = w.indent();
+
+            self.name.format(&mut w)?;
+            self.crate_root.format(&mut w)?;
+
+            writeln!(w, r#"srcs = glob(["src/**/*.rs"]),"#)?;
+
+            self.features.format(&mut w)?;
+            self.aliases.format(&mut w)?;
+            self.deps.format(&mut w)?;
+            self.proc_macro_deps.format(&mut w)?;
+            self.compile_data.format(&mut w)?;
+            self.data.format(&mut w)?;
+            self.env.format(&mut w)?;
+            self.rustc_flags.format(&mut w)?;
+            self.rustc_env.format(&mut w)?;
+        }
+        writeln!(w, ")\n")?;
+
+        Ok(())
+    }
+}
+
 /// [`rust_test`](https://bazelbuild.github.io/rules_rust/defs.html#rust_test)
 #[derive(Debug)]
 pub struct RustTest {
