@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
+use mz_compute_types::dyncfgs::ENABLE_PERSIST_SINK_V2;
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
@@ -43,6 +44,7 @@ use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
 use crate::render::StartSignal;
 use crate::sink::correction::Correction;
+use crate::sink::persist_sink_v2;
 use crate::sink::refresh::apply_refresh;
 
 impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
@@ -71,15 +73,28 @@ where
             )
         }
 
-        persist_sink(
-            sink_id,
-            &self.storage_metadata,
-            ok_collection,
-            err_collection,
-            as_of,
-            compute_state,
-            start_signal,
-        )
+        if ENABLE_PERSIST_SINK_V2.get(&compute_state.worker_config) {
+            let token = persist_sink_v2::persist_sink(
+                sink_id,
+                &self.storage_metadata,
+                ok_collection,
+                err_collection,
+                as_of,
+                compute_state,
+                start_signal,
+            );
+            Some(token)
+        } else {
+            persist_sink(
+                sink_id,
+                &self.storage_metadata,
+                ok_collection,
+                err_collection,
+                as_of,
+                compute_state,
+                start_signal,
+            )
+        }
     }
 }
 
@@ -794,10 +809,9 @@ where
                 }
                 Some(event) = persist_oks_input.next() => {
                     match event {
-                        Event::Data(_cap, mut data) => {
+                        Event::Data(_cap, data) => {
                             // Extract persist rows as negative contributions to `correction_oks`.
-                            let updates = data.drain(..).map(|(d, t, r)| (d, t, -r)).collect();
-                            correction_oks.insert(updates);
+                            correction_oks.insert_negated(data);
 
                             continue;
                         }
@@ -808,10 +822,9 @@ where
                 }
                 Some(event) = persist_errs_input.next() => {
                     match event {
-                        Event::Data(_cap, mut data) => {
+                        Event::Data(_cap, data) => {
                             // Extract persist rows as negative contributions to `correction_errs`.
-                            let updates = data.drain(..).map(|(d, t, r)| (d, t, -r)).collect();
-                            correction_errs.insert(updates);
+                            correction_errs.insert_negated(data);
 
                             continue;
                         }
