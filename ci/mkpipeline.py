@@ -147,9 +147,9 @@ so it is executed.""",
 
             # Nightly required for sanitizers
             if step.get("id") in ("build-x86_64", "build-aarch64"):
-                step[
-                    "command"
-                ] = "bin/ci-builder run nightly bin/pyactivate -m ci.test.build"
+                step["command"] = (
+                    "bin/ci-builder run nightly bin/pyactivate -m ci.test.build"
+                )
 
         for step in pipeline["steps"]:
             visit(step)

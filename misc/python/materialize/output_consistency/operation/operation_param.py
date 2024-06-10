@@ -25,8 +25,9 @@ class OperationParam:
         type_category: DataTypeCategory,
         optional: bool = False,
         incompatibilities: set[ExpressionCharacteristics] | None = None,
-        incompatibility_combinations: list[set[ExpressionCharacteristics]]
-        | None = None,
+        incompatibility_combinations: (
+            list[set[ExpressionCharacteristics]] | None
+        ) = None,
     ):
         """
         Create a parameter for an operation.

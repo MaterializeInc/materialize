@@ -22,8 +22,9 @@ class AnyOperationParam(OperationParam):
         self,
         optional: bool = False,
         incompatibilities: set[ExpressionCharacteristics] | None = None,
-        incompatibility_combinations: list[set[ExpressionCharacteristics]]
-        | None = None,
+        incompatibility_combinations: (
+            list[set[ExpressionCharacteristics]] | None
+        ) = None,
     ):
         super().__init__(
             DataTypeCategory.ANY,
@@ -44,8 +45,9 @@ class AnyLikeOtherOperationParam(OperationParam):
         index_of_previous_param: int,
         optional: bool = False,
         incompatibilities: set[ExpressionCharacteristics] | None = None,
-        incompatibility_combinations: list[set[ExpressionCharacteristics]]
-        | None = None,
+        incompatibility_combinations: (
+            list[set[ExpressionCharacteristics]] | None
+        ) = None,
     ):
         super().__init__(
             DataTypeCategory.ANY,

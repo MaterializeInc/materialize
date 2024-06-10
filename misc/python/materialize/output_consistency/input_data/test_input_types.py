@@ -19,9 +19,9 @@ class ConsistencyTestTypesInput:
     def __init__(
         self,
     ) -> None:
-        self.all_data_types_with_values: list[
-            DataTypeWithValues
-        ] = ALL_DATA_TYPES_WITH_VALUES
+        self.all_data_types_with_values: list[DataTypeWithValues] = (
+            ALL_DATA_TYPES_WITH_VALUES
+        )
         self.max_value_count = self._get_max_value_count_of_all_types()
 
     def remove_postgres_incompatible_data(self) -> None:

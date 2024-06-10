@@ -119,7 +119,8 @@ class Expression:
         """
         True if any leaf is not directly consumed by an aggregation,
         hence false if all leaves of this expression are directly consumed by an aggregation.
-        This is relevant because when using non-aggregate functions on multiple rows, different evaluation strategies may yield different error messages due to a different row processing order."""
+        This is relevant because when using non-aggregate functions on multiple rows, different evaluation strategies may yield different error messages due to a different row processing order.
+        """
         raise NotImplementedError
 
     def matches(

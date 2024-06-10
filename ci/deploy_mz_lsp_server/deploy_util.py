@@ -70,7 +70,8 @@ def upload_latest_redirect(platform: str, version: str) -> None:
     """Uploads an S3 object containing the latest version number of the package,
     not the package itself. This is useful for determining the
     latest available version number of the package.
-    As an example, mz (CLI) uses this information to check if there is a new update available."""
+    As an example, mz (CLI) uses this information to check if there is a new update available.
+    """
     upload_redirect(
         f"mz-lsp-server-latest-{platform}.tar.gz",
         f"/mz-lsp-server-{version}-{platform}.tar.gz",

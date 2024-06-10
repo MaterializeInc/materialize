@@ -446,9 +446,9 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
             workload_name,
             subfigure,
             results_by_endpoint,
-            baseline_version_name=baseline_endpoint.try_load_version()
-            if baseline_endpoint
-            else None,
+            baseline_version_name=(
+                baseline_endpoint.try_load_version() if baseline_endpoint else None
+            ),
             include_zero_in_y_axis=INCLUDE_ZERO_IN_Y_AXIS,
             include_workload_in_title=True,
         )

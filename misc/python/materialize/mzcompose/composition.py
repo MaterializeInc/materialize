@@ -897,7 +897,7 @@ class Composition:
             AND {exclusion_clause}
             """
         )
-        for (name, status, error, details) in results:
+        for name, status, error, details in results:
             return f"Source {name} is expected to be running/created, but is {status}, error: {error}, details: {details}"
 
         results = self.sql_query(
@@ -908,7 +908,7 @@ class Composition:
             AND {exclusion_clause}
             """
         )
-        for (name, status, error, details) in results:
+        for name, status, error, details in results:
             return f"Sink {name} is expected to be running/dropped, but is {status}, error: {error}, details: {details}"
 
         results = self.sql_query(
@@ -921,7 +921,7 @@ class Composition:
             WHERE status NOT IN ('ready', 'not-ready')
             """
         )
-        for (cluster_name, replica_name, status, reason) in results:
+        for cluster_name, replica_name, status, reason in results:
             return f"Cluster replica {cluster_name}.{replica_name} is expected to be ready/not-ready, but is {status}, reason: {reason}"
 
         return None

@@ -161,9 +161,9 @@ def main() -> None:
         "Job [% failed]",
         job_failures,
         include_pipeline=True,
-        print_fn=lambda x, key: f"{x[key].failures * 100 / x[key].total:.2f}"
-        if x[key].total
-        else "",
+        print_fn=lambda x, key: (
+            f"{x[key].failures * 100 / x[key].total:.2f}" if x[key].total else ""
+        ),
     )
 
 

@@ -32,8 +32,9 @@ class NumericOperationParam(OperationParam):
         self,
         optional: bool = False,
         incompatibilities: set[ExpressionCharacteristics] | None = None,
-        incompatibility_combinations: list[set[ExpressionCharacteristics]]
-        | None = None,
+        incompatibility_combinations: (
+            list[set[ExpressionCharacteristics]] | None
+        ) = None,
         only_int_type: bool = False,
         no_int_type_larger_int4: bool = False,
         no_floating_point_type: bool = False,

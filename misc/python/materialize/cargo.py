@@ -58,7 +58,7 @@ class Crate:
         self.path_build_dependencies: set[str] = set()
         self.path_dev_dependencies: set[str] = set()
         self.path_dependencies: set[str] = set()
-        for (dep_type, field) in [
+        for dep_type, field in [
             ("build-dependencies", self.path_build_dependencies),
             ("dev-dependencies", self.path_dev_dependencies),
             ("dependencies", self.path_dependencies),

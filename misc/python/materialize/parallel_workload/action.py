@@ -196,8 +196,10 @@ class FetchAction(Action):
         obj = self.rng.choice(exe.db.db_objects())
         # Unsupported via this API
         # See https://github.com/MaterializeInc/materialize/issues/20474
-        exe.rollback(http=Http.NO) if self.rng.choice([True, False]) else exe.commit(
-            http=Http.NO
+        (
+            exe.rollback(http=Http.NO)
+            if self.rng.choice([True, False])
+            else exe.commit(http=Http.NO)
         )
         query = f"SUBSCRIBE {obj}"
         if self.rng.choice([True, False]):
@@ -213,8 +215,10 @@ class FetchAction(Action):
             exe.execute(query, http=Http.NO, fetch=True)
             if self.rng.choice([True, False]):
                 break
-        exe.rollback(http=Http.NO) if self.rng.choice([True, False]) else exe.commit(
-            http=Http.NO
+        (
+            exe.rollback(http=Http.NO)
+            if self.rng.choice([True, False])
+            else exe.commit(http=Http.NO)
         )
         return True
 
@@ -416,9 +420,11 @@ class InsertAction(Action):
                 if t.table_id == exe.insert_table:
                     table = t
                     if table.num_rows >= MAX_ROWS:
-                        exe.commit() if self.rng.choice(
-                            [True, False]
-                        ) else exe.rollback()
+                        (
+                            exe.commit()
+                            if self.rng.choice([True, False])
+                            else exe.rollback()
+                        )
                         table = None
                     break
             else:
@@ -452,9 +458,11 @@ class InsertReturningAction(Action):
                 if t.table_id == exe.insert_table:
                     table = t
                     if table.num_rows >= MAX_ROWS:
-                        exe.commit() if self.rng.choice(
-                            [True, False]
-                        ) else exe.rollback()
+                        (
+                            exe.commit()
+                            if self.rng.choice([True, False])
+                            else exe.rollback()
+                        )
                         table = None
                     break
             else:
@@ -909,20 +917,20 @@ class FlipFlagsAction(Action):
 
         self.flags_with_values: dict[str, list[str]] = dict()
         for flag in ["catalog", "snapshot", "txn"]:
-            self.flags_with_values[
-                f"persist_use_critical_since_{flag}"
-            ] = BOOLEAN_FLAG_VALUES
+            self.flags_with_values[f"persist_use_critical_since_{flag}"] = (
+                BOOLEAN_FLAG_VALUES
+            )
         self.flags_with_values["persist_roundtrip_spine"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values[
-            "persist_optimize_ignored_data_fetch"
-        ] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values[
-            "persist_optimize_ignored_data_decode"
-        ] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_optimize_ignored_data_fetch"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["persist_optimize_ignored_data_decode"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["persist_write_diffs_sum"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values[
-            "enable_variadic_left_join_lowering"
-        ] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_variadic_left_join_lowering"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_columnar_format"] = ["row", "both"]
 
@@ -1863,9 +1871,11 @@ class HttpPostAction(Action):
                 header_fields.extend(["x-event-type", "signature", "x-mz-api-key"])
 
             headers = {
-                header: f"{datetime.datetime.now()}"
-                if header == "timestamp"
-                else f'"{Text.random_value(self.rng)}"'.encode()
+                header: (
+                    f"{datetime.datetime.now()}"
+                    if header == "timestamp"
+                    else f'"{Text.random_value(self.rng)}"'.encode()
+                )
                 for header in self.rng.sample(header_fields, len(header_fields))
             }
 

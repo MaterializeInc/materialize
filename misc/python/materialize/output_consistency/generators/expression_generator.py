@@ -104,9 +104,9 @@ class ExpressionGenerator:
                 self.operations_by_return_type_category.get(category, [])
             )
             operations_with_return_category.append(operation)
-            self.operations_by_return_type_category[
-                category
-            ] = operations_with_return_category
+            self.operations_by_return_type_category[category] = (
+                operations_with_return_category
+            )
 
     def _initialize_types(self) -> None:
         for (

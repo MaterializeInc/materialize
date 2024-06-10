@@ -50,9 +50,9 @@ class BenchmarkResult:
             not in self.df_total_by_endpoint_name_and_workload.keys()
         ):
             self.df_total_by_endpoint_name_and_workload[endpoint_version_info] = dict()
-            self.df_details_by_endpoint_name_and_workload[
-                endpoint_version_info
-            ] = dict()
+            self.df_details_by_endpoint_name_and_workload[endpoint_version_info] = (
+                dict()
+            )
 
         workload_name = result.workload.name()
         if (

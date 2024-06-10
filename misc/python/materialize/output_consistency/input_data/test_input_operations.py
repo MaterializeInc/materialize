@@ -17,9 +17,9 @@ class ConsistencyTestOperationsInput:
     def __init__(
         self,
     ) -> None:
-        self.all_operation_types: list[
-            DbOperationOrFunction
-        ] = self._get_without_disabled_operations(ALL_OPERATION_TYPES)
+        self.all_operation_types: list[DbOperationOrFunction] = (
+            self._get_without_disabled_operations(ALL_OPERATION_TYPES)
+        )
 
     def _get_without_disabled_operations(
         self, operations: list[DbOperationOrFunction]

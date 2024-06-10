@@ -106,17 +106,21 @@ class ResultComparator:
                         strategy=outcome1.strategy,
                         value=outcome1.__class__.__name__,
                         sql=outcome1.sql,
-                        sql_error=outcome1.error_message
-                        if isinstance(outcome1, QueryFailure)
-                        else None,
+                        sql_error=(
+                            outcome1.error_message
+                            if isinstance(outcome1, QueryFailure)
+                            else None
+                        ),
                     ),
                     details2=ValidationErrorDetails(
                         strategy=outcome2.strategy,
                         value=outcome2.__class__.__name__,
                         sql=outcome2.sql,
-                        sql_error=outcome2.error_message
-                        if isinstance(outcome2, QueryFailure)
-                        else None,
+                        sql_error=(
+                            outcome2.error_message
+                            if isinstance(outcome2, QueryFailure)
+                            else None
+                        ),
                     ),
                 ),
             )

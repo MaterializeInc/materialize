@@ -171,9 +171,9 @@ class Test:
         self._actions: list[Action] = []
         self._final_actions: list[Action] = []
         self._capabilities = Capabilities()
-        self._actions_with_weight: dict[
-            ActionOrFactory, float
-        ] = self._scenario.actions_with_weight()
+        self._actions_with_weight: dict[ActionOrFactory, float] = (
+            self._scenario.actions_with_weight()
+        )
         self._max_execution_time: timedelta = max_execution_time
 
         for action_or_factory in self._scenario.bootstrap():
