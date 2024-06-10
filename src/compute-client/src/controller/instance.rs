@@ -153,6 +153,12 @@ pub(super) struct Instance<T> {
     build_info: &'static BuildInfo,
     /// Whether instance initialization has been completed.
     initialized: bool,
+    /// Whether or not this instance is in read-only mode.
+    ///
+    /// When in read-only mode, neither the controller nor the instances
+    /// controlled by it are allowed to affect changes to external systems
+    /// (largely persist).
+    read_only: bool,
     /// The replicas of this compute instance.
     replicas: BTreeMap<ReplicaId, ReplicaState<T>>,
     /// Currently installed compute collections.
@@ -585,6 +591,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let Self {
             build_info: _,
             initialized,
+            read_only,
             replicas,
             collections,
             log_sources: _,
@@ -632,6 +639,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
         let map = serde_json::Map::from_iter([
             field("initialized", initialized)?,
+            field("read_only", read_only)?,
             field("replicas", replicas)?,
             field("collections", collections)?,
             field("peeks", peeks)?,
@@ -671,6 +679,7 @@ where
         let mut instance = Self {
             build_info,
             initialized: false,
+            read_only: true,
             replicas: Default::default(),
             collections,
             log_sources: arranged_logs,
@@ -713,6 +722,16 @@ where
         if !self.initialized {
             self.send(ComputeCommand::InitializationComplete);
             self.initialized = true;
+        }
+    }
+
+    /// Allows this instance to affect writes to external systems (persist).
+    ///
+    /// Calling this method repeatedly has no effect.
+    pub fn allow_writes(&mut self) {
+        if self.read_only {
+            self.read_only = false;
+            self.send(ComputeCommand::AllowWrites);
         }
     }
 

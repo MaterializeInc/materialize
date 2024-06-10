@@ -10,14 +10,16 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
+use futures::StreamExt;
+use mz_compute_types::dyncfgs::PERSIST_SINK_OBEY_READ_ONLY;
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashMap;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::operators::shard_source::SnapshotMode;
@@ -31,12 +33,11 @@ use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuild
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{
-    Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
-};
+use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
+use tokio::sync::watch;
 use tracing::trace;
 
 use crate::compute_state::ComputeState;
@@ -187,17 +188,7 @@ where
         );
     }
 
-    let mut scope = desired_oks.scope();
-
-    // The append operator keeps capabilities that it downgrades to match the
-    // current upper frontier of the persist shard. This frontier can be
-    // observed on the persist_feedback_stream. This is used by the minter
-    // operator to learn about the current persist frontier, driving it's
-    // decisions on when to mint new batches.
-    //
-    // This stream should never carry data, so we don't bother about increasing
-    // the timestamp on feeding back using the summary.
-    let (persist_feedback_handle, persist_feedback_stream) = scope.feedback(Timestamp::default());
+    let obey_read_only_mode = PERSIST_SINK_OBEY_READ_ONLY.get(&compute_state.worker_config);
 
     let (batch_descriptions, desired_oks, desired_errs, mint_token) = mint_batch_descriptions(
         sink_id,
@@ -205,7 +196,6 @@ where
         target,
         &desired_oks,
         &desired_errs,
-        &persist_feedback_stream,
         as_of,
         Arc::clone(&persist_clients),
         compute_state,
@@ -221,18 +211,20 @@ where
         &persist_oks,
         &persist_errs,
         Arc::clone(&persist_clients),
+        compute_state.read_only_rx.clone(),
+        obey_read_only_mode,
     );
 
-    let (append_frontier_stream, append_token) = append_batches(
+    let append_token = append_batches(
         sink_id.clone(),
         operator_name,
         target,
         &batch_descriptions,
         &written_batches,
         persist_clients,
+        compute_state.read_only_rx.clone(),
+        obey_read_only_mode,
     );
-
-    append_frontier_stream.connect_loop(persist_feedback_handle);
 
     let token = Rc::new((mint_token, write_token, append_token));
 
@@ -256,7 +248,6 @@ fn mint_batch_descriptions<G>(
     target: &CollectionMetadata,
     desired_oks: &Stream<G, (Row, Timestamp, Diff)>,
     desired_errs: &Stream<G, (DataflowError, Timestamp, Diff)>,
-    persist_feedback_stream: &Stream<G, ()>,
     as_of: Antichain<Timestamp>,
     persist_clients: Arc<PersistClientCache>,
     compute_state: &mut crate::compute_state::ComputeState,
@@ -313,10 +304,6 @@ where
         mint_op.new_input_for_many(desired_oks, Pipeline, [&output, &desired_oks_output]);
     let mut desired_errs_input =
         mint_op.new_input_for_many(desired_errs, Pipeline, [&output, &desired_errs_output]);
-
-    // Neither output's capabilities should depend on the feedback input.
-    let mut persist_feedback_input =
-        mint_op.new_disconnected_input(persist_feedback_stream, Pipeline);
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
         // Non-active workers should just pass the data through.
@@ -426,6 +413,27 @@ where
         // do this, we would be stuck at `[minimum]`.
         let mut emitted_persist_frontier: Option<Antichain<_>> = None;
 
+        // We go straight to the write handle to learn about the current upper
+        // and upper advancements. The "persist_oks" stream is lying to us! For
+        // example, when starting the persist_source with an as_of, the upper
+        // will jump to that as_of.
+        let mut current_upper = persist_frontier.clone();
+        let upper_stream = async_stream::stream!({
+            loop {
+                write.wait_for_upper_past(&current_upper).await;
+                current_upper = write.shared_upper();
+
+                if current_upper.is_empty() {
+                    // We are done! Report the final upper and then break out.
+                    yield current_upper;
+                    break;
+                } else {
+                    yield current_upper.clone()
+                }
+            }
+        });
+        let mut upper_stream = pin::pin!(upper_stream);
+
         loop {
             tokio::select! {
                 Some(event) = desired_oks_input.next() => {
@@ -452,16 +460,10 @@ where
                         }
                     }
                 }
-                Some(event) = persist_feedback_input.next() => {
-                    match event {
-                        Event::Data(_cap, _data) => {
-                            // This input produces no data.
-                            continue;
-                        }
-                        Event::Progress(frontier) => {
-                            persist_frontier = frontier;
-                        }
-                    }
+                // `StreamExt::next()` only borrows the stream, and the next-fut
+                // itself doesn't hold state. So the combination is cancel-safe.
+                Some(upper) = upper_stream.next() => {
+                    persist_frontier = upper;
                 }
                 else => {
                     // All inputs are exhausted, so we can shut down.
@@ -598,6 +600,8 @@ fn write_batches<G>(
     persist_oks: &Stream<G, (Row, Timestamp, Diff)>,
     persist_errs: &Stream<G, (DataflowError, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
+    mut read_only: watch::Receiver<bool>,
+    obey_read_only: bool,
 ) -> (Stream<G, BatchOrData>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -820,6 +824,10 @@ where
                         }
                     }
                 }
+                _it_changed = read_only.changed() => {
+                    // We might have to append some batches that we stashed
+                    // while in read-only mode.
+                }
                 else => {
                     // All inputs are exhausted, so we can shut down.
                     return;
@@ -844,6 +852,24 @@ where
             // Advance all updates to `persist`'s frontier.
             correction_oks.advance_by(&persist_frontier);
             correction_errs.advance_by(&persist_frontier);
+
+            // Discard batch descriptions whose upper is already not beyond the
+            // persist frontier. Those have no chance of being applied to the
+            // shard succesfully.
+            let persist_upper = write.shared_upper();
+            in_flight_batches
+                .retain(|(lower, _upper), _cap| PartialOrder::less_equal(&persist_upper, lower));
+
+            if obey_read_only && read_only.borrow().clone() {
+                // We are not allowed to do writes, so go back to the beginning
+                // of the loop.
+                //
+                // We are bailing here and not earlier to make sure that we keep
+                // our corrections buffers up to date, which will potentially
+                // consolidate things out, and to make sure that we weed out
+                // batches that we can never apply.
+                continue;
+            }
 
             // We can write updates for a given batch description when
             // a) the batch is not beyond `batch_descriptions_frontier`,
@@ -942,7 +968,9 @@ fn append_batches<G>(
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     batches: &Stream<G, BatchOrData>,
     persist_clients: Arc<PersistClientCache>,
-) -> (Stream<G, ()>, Rc<dyn Any>)
+    mut read_only: watch::Receiver<bool>,
+    obey_read_only: bool,
+) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -954,11 +982,6 @@ where
 
     let operator_name = format!("{} append_batches", operator_name);
     let mut append_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-
-    // We never output anything, but we update our capabilities based on the
-    // persist frontier we know about. So someone can listen on our output
-    // frontier and learn about the persist frontier advancing.
-    let (mut _output, output_stream) = append_op.new_output::<CapacityContainerBuilder<_>>();
 
     let hashed_id = sink_id.hashed();
     let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
@@ -978,12 +1001,10 @@ where
     // from our input frontiers that we have seen all batches for a given batch
     // description.
 
-    let shutdown_button = append_op.build(move |mut capabilities| async move {
+    let shutdown_button = append_op.build(move |_capabilities| async move {
         if !active_worker {
             return;
         }
-
-        let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -1002,7 +1023,12 @@ where
             incomplete: Option<BatchBuilder<SourceData, (), Timestamp, Diff>>,
         }
 
-        let mut in_flight_batches = HashMap::<
+        // We use iteration only for weeding out batches that no longer have a
+        // chance of being applied. Otherwise we only use insertion and
+        // deletion. We don't use iteration order for determining what batches
+        // get written in which order.
+        #[allow(clippy::disallowed_types)]
+        let mut in_flight_batches = std::collections::HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
             BatchSet,
         >::new();
@@ -1105,11 +1131,65 @@ where
                         }
                     }
                 }
+                _it_changed = read_only.changed() => {
+                    // We might have to append some batches that we stashed
+                    // while in read-only mode.
+                }
                 else => {
                     // All inputs are exhausted, so we can shut down.
                     return;
                 }
             };
+
+            // Only retain descriptions and batches that still have a chance of
+            // being applied.
+            let persist_upper = write.shared_upper();
+            in_flight_descriptions.retain(|(lower, _upper)| {
+                PartialOrder::less_equal(&persist_upper, lower)
+            });
+
+            for ((lower, upper), batch_set) in in_flight_batches.iter_mut() {
+                if PartialOrder::less_equal(&persist_upper, lower) {
+                    continue;
+                }
+
+                // We're not keeping this batch. Be nice and delete any data
+                // that has been written.
+                for batch in batch_set.finished.drain(..) {
+                    batch.delete().await;
+                }
+                if let Some(batch) = batch_set.incomplete.take() {
+                    batch
+                        .finish(upper.clone()).await
+                        .expect("invalid usage")
+                        .delete().await;
+                }
+            }
+            // It's annoying that we're first iterating and doing the retain,
+            // but we can't do the batch deletion inside retain because we need
+            // async.
+            in_flight_batches.retain(|(lower, _upper), batch_set| {
+                if PartialOrder::less_equal(&persist_upper, lower) {
+                    return true;
+                }
+
+                // We're not keeping this batch, make sure that the above loop
+                // cleared and deleted all the batches.
+                assert!(batch_set.finished.is_empty());
+                assert!(batch_set.incomplete.is_none());
+
+                false
+            });
+
+            if obey_read_only && read_only.borrow().clone() {
+                // We are not allowed to do writes, so go back to the beginning
+                // of the loop.
+                //
+                // We are bailing here and not earlier to make sure that we weed
+                // out batches that we can never apply and that we keep reading
+                // our inputs.
+                continue;
+            }
 
             // Peel off any batches that are not beyond the frontier
             // anymore.
@@ -1197,11 +1277,9 @@ where
 
                 match result {
                     Ok(()) => {
-                        cap_set.downgrade(batch_upper);
+                        // Nothing to do!
                     }
                     Err(mismatch) => {
-                        cap_set.downgrade(mismatch.current.iter());
-
                         // Clean up in case we didn't manage to append the
                         // batches to persist.
                         for batch in batches {
@@ -1225,5 +1303,5 @@ where
     });
 
     let token = Rc::new(shutdown_button.press_on_drop());
-    (output_stream, token)
+    token
 }
