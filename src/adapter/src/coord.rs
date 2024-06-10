@@ -521,6 +521,8 @@ pub struct PeekStageOptimize {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
+    cluster_id: ComputeInstanceId,
+    timeline_context: TimelineContext,
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
