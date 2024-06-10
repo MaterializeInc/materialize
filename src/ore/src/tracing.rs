@@ -470,19 +470,16 @@ where
             .with_max_concurrent_exports(otel_config.max_concurrent_exports)
             .with_scheduled_delay(otel_config.batch_scheduled_delay)
             .with_max_export_timeout(otel_config.max_export_timeout);
-        let trace_config = trace::config()
-            .with_max_events_per_span(2048)
-            .with_max_links_per_span(2048)
-            .with_resource(
-                // The latter resources win, so if the user specifies
-                // `service.name` in the configuration, it will override the
-                // `service.name` value we configure here.
-                Resource::new([KeyValue::new(
-                    "service.name",
-                    config.service_name.to_string(),
-                )])
-                .merge(&otel_config.resource),
-            );
+        let trace_config = trace::config().with_resource(
+            // The latter resources win, so if the user specifies
+            // `service.name` in the configuration, it will override the
+            // `service.name` value we configure here.
+            Resource::new([KeyValue::new(
+                "service.name",
+                config.service_name.to_string(),
+            )])
+            .merge(&otel_config.resource),
+        );
         let tracer = opentelemetry_otlp::new_pipeline()
             .tracing()
             .with_trace_config(trace_config)
@@ -543,6 +540,12 @@ where
         });
         let metrics_layer = MetricsLayer::new(&config.registry);
         let layer = tracing_opentelemetry::layer()
+            // OpenTelemetry does not handle long-lived Spans well, and they end up continuously
+            // eating memory until OOM. So we set a max number of events that are allowed to be
+            // logged to a Span, once this max is passed, old events will get dropped
+            //
+            // TODO(parker-timmerman|guswynn): make this configurable with LaunchDarkly
+            .max_events_per_span(2048)
             .with_tracer(tracer)
             .and_then(metrics_layer)
             // WARNING, ENTERING SPOOKY ZONE 2.0
