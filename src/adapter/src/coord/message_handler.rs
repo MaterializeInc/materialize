@@ -199,6 +199,13 @@ impl Coordinator {
                 } => {
                     self.sequence_staged(ctx, span, stage).await;
                 }
+                Message::SecretStageReady {
+                    ctx,
+                    span,
+                    stage,
+                } => {
+                    self.sequence_staged(ctx, span, stage).await;
+                }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;
                 }
