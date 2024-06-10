@@ -4977,7 +4977,7 @@ WHERE a = c and d = e and b = f
                                     "User": 9
                                   },
                                   {
-                                    "DeltaJoin": false
+                                    "DeltaJoin": "Lookup"
                                   }
                                 ],
                                 [
@@ -4985,7 +4985,7 @@ WHERE a = c and d = e and b = f
                                     "User": 10
                                   },
                                   {
-                                    "DeltaJoin": false
+                                    "DeltaJoin": "Lookup"
                                   }
                                 ]
                               ]
@@ -5378,7 +5378,7 @@ WHERE b = c and d = e
                                     "User": 12
                                   },
                                   {
-                                    "DeltaJoin": true
+                                    "DeltaJoin": "FirstInputFullScan"
                                   }
                                 ]
                               ]
@@ -5423,7 +5423,7 @@ WHERE b = c and d = e
                                     "User": 9
                                   },
                                   {
-                                    "DeltaJoin": false
+                                    "DeltaJoin": "Lookup"
                                   }
                                 ],
                                 [
@@ -5431,7 +5431,7 @@ WHERE b = c and d = e
                                     "User": 10
                                   },
                                   {
-                                    "DeltaJoin": false
+                                    "DeltaJoin": "Lookup"
                                   }
                                 ]
                               ]
@@ -5481,7 +5481,7 @@ WHERE b = c and d = e
                                     "User": 11
                                   },
                                   {
-                                    "DeltaJoin": false
+                                    "DeltaJoin": "Lookup"
                                   }
                                 ]
                               ]

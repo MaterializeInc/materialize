@@ -891,6 +891,38 @@ Target cluster: quickstart
 
 EOF
 
+# Test a delta join where the first input has both a full scan and a lookup.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
+SELECT a, b, c, d, e, f
+FROM t, u, v
+WHERE a = c and b = e
+----
+Explained Query:
+  Project (#0, #1, #0, #3, #1, #5)
+    Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+      Join on=(#0 = #2 AND #1 = #4) type=delta
+        implementation
+          %0:t » %1:u[#0]KA » %2:v[#0]KA
+          %1:u » %0:t[#0]KA » %2:v[#0]KA
+          %2:v » %0:t[#1]KA » %1:u[#0]KA
+        ArrangeBy keys=[[#0], [#1]]
+          ReadIndex on=t t_a_idx=[delta join 1st input (full scan)] t_b_idx=[delta join lookup]
+        ArrangeBy keys=[[#0]]
+          ReadIndex on=u u_c_idx=[delta join lookup]
+        ArrangeBy keys=[[#0]]
+          ReadIndex on=v v_e_idx=[delta join lookup]
+
+Used Indexes:
+  - materialize.public.t_a_idx (delta join 1st input (full scan))
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.v_e_idx (delta join lookup)
+  - materialize.public.t_b_idx (delta join lookup)
+
+Target cluster: quickstart
+
+EOF
+
 # Test an IndexedFilter join.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR

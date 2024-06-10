@@ -635,7 +635,7 @@ Explained Query:
               %4:country » %3:city[#3]KA » %2:person[#8]KA » %1:forum[#3]KA » %0:message[#10]KA » %5[#0]UKA
               %5 » %0:message[#1]KA » %1:forum[#1]KA » %2:person[#1]KA » %3:city[#0]KA » %4:country[#0]KAef
             ArrangeBy keys=[[#1{messageid}], [#10{containerforumid}]] // { arity: 13 }
-              ReadIndex on=message message_messageid=[delta join 1st input (full scan)] message_containerforumid=[delta join 1st input (full scan)] // { arity: 13 }
+              ReadIndex on=message message_messageid=[delta join 1st input (full scan)] message_containerforumid=[delta join lookup] // { arity: 13 }
             ArrangeBy keys=[[#1{id}], [#3{moderatorpersonid}]] // { arity: 4 }
               ReadIndex on=forum forum_id=[delta join lookup] forum_moderatorpersonid=[delta join lookup] // { arity: 4 }
             ArrangeBy keys=[[#1{id}], [#8{locationcityid}]] // { arity: 11 }
@@ -673,7 +673,7 @@ Used Indexes:
   - materialize.public.city_partofcountryid (delta join lookup)
   - materialize.public.message_hastag_tag_tagid (delta join lookup)
   - materialize.public.message_messageid (delta join 1st input (full scan))
-  - materialize.public.message_containerforumid (delta join 1st input (full scan))
+  - materialize.public.message_containerforumid (delta join lookup)
 
 Target cluster: quickstart
 
@@ -1900,7 +1900,7 @@ Explained Query:
               %2:country » %1:city[#3]KA » %0:person[#8]KA » %3:person_knows_person[#1]KAiif
               %3:person_knows_person » %0:person[#1]KA » %1:city[#0]KA » %2:country[#0]KAef
             ArrangeBy keys=[[#1{id}], [#8{locationcityid}]] // { arity: 11 }
-              ReadIndex on=person person_id=[delta join 1st input (full scan)] person_locationcityid=[delta join 1st input (full scan)] // { arity: 11 }
+              ReadIndex on=person person_id=[delta join 1st input (full scan)] person_locationcityid=[delta join lookup] // { arity: 11 }
             ArrangeBy keys=[[#0{id}], [#3{partofcountryid}]] // { arity: 4 }
               ReadIndex on=city city_id=[delta join lookup] city_partofcountryid=[delta join lookup] // { arity: 4 }
             ArrangeBy keys=[[#0{id}]] // { arity: 4 }
@@ -1910,7 +1910,7 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.person_id (delta join 1st input (full scan))
-  - materialize.public.person_locationcityid (delta join 1st input (full scan))
+  - materialize.public.person_locationcityid (delta join lookup)
   - materialize.public.person_knows_person_person1id (delta join lookup)
   - materialize.public.country_id (delta join lookup)
   - materialize.public.city_id (delta join lookup)
@@ -2647,7 +2647,7 @@ Explained Query:
               %1:message » %0:person_knows_person[#1]KA » %2:message[#0, #2]KK
               %2:message » %0:person_knows_person[#2]KA » %1:message[#0, #1]KK
             ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }
-              ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person2id=[delta join 1st input (full scan)] // { arity: 3 }
+              ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person2id=[delta join lookup] // { arity: 3 }
             ArrangeBy keys=[[#0{messageid}, #1{creatorpersonid}], [#1{creatorpersonid}]] // { arity: 4 }
               Project (#1{creatorpersonid}, #9, #10, #12) // { arity: 4 }
                 ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
@@ -2659,7 +2659,7 @@ Explained Query:
 Used Indexes:
   - materialize.public.forum_id (*** full scan ***)
   - materialize.public.person_knows_person_person1id (*** full scan ***, delta join 1st input (full scan))
-  - materialize.public.person_knows_person_person2id (delta join 1st input (full scan))
+  - materialize.public.person_knows_person_person2id (delta join lookup)
   - materialize.public.message_messageid (*** full scan ***)
 
 Target cluster: quickstart
@@ -3068,7 +3068,7 @@ Explained Query:
             %1:message » %0:person_knows_person[#1]KA » %2:message[#0, #2]KK
             %2:message » %0:person_knows_person[#2]KA » %1:message[#0, #1]KK
           ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }
-            ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person2id=[delta join 1st input (full scan)] // { arity: 3 }
+            ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person2id=[delta join lookup] // { arity: 3 }
           ArrangeBy keys=[[#0{messageid}, #1{creatorpersonid}], [#1{creatorpersonid}]] // { arity: 4 }
             Project (#1{creatorpersonid}, #9, #10, #12) // { arity: 4 }
               ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
@@ -3080,7 +3080,7 @@ Explained Query:
 Used Indexes:
   - materialize.public.forum_id (*** full scan ***)
   - materialize.public.person_knows_person_person1id (*** full scan ***, delta join 1st input (full scan))
-  - materialize.public.person_knows_person_person2id (delta join 1st input (full scan))
+  - materialize.public.person_knows_person_person2id (delta join lookup)
   - materialize.public.message_messageid (*** full scan ***)
 
 Target cluster: quickstart
