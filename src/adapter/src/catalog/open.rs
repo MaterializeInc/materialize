@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use futures::future::{self, BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::builtin::{
-    Builtin, BuiltinView, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
-    BUILTIN_PREFIXES, BUILTIN_ROLES,
+    Builtin, BuiltinTable, BuiltinView, Fingerprint, BUILTINS, BUILTIN_CLUSTERS,
+    BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -172,7 +172,18 @@ impl Catalog {
     pub fn initialize_state<'a>(
         config: StateConfig,
         storage: &'a mut Box<dyn mz_catalog::durable::DurableCatalogState>,
-    ) -> BoxFuture<'a, Result<(CatalogState, BuiltinMigrationMetadata, String), AdapterError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<
+            (
+                CatalogState,
+                BuiltinMigrationMetadata,
+                Vec<BuiltinTableUpdate>,
+                String,
+            ),
+            AdapterError,
+        >,
+    > {
         async move {
             for builtin_role in BUILTIN_ROLES {
                 assert!(
@@ -288,6 +299,8 @@ impl Catalog {
                 state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
             }
 
+            let mut builtin_table_updates = Vec::new();
+
             let mut pre_item_updates = Vec::new();
             let mut item_updates = Vec::new();
             let mut post_item_updates = Vec::new();
@@ -312,7 +325,8 @@ impl Catalog {
                 }
             }
 
-            state.apply_updates_for_bootstrap(pre_item_updates).await;
+            let builtin_table_update = state.apply_updates_for_bootstrap(pre_item_updates).await;
+            builtin_table_updates.extend(builtin_table_update);
 
             let last_seen_version = txn
                 .get_catalog_content_version()
@@ -333,12 +347,15 @@ impl Catalog {
                 // Throw the existing item updates away because they may have been re-written in
                 // the migration.
                 let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), diff: 1}).collect();
-                state.apply_updates_for_bootstrap(item_updates).await;
+                let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
+                builtin_table_updates.extend(builtin_table_update);
             } else {
-                state.apply_updates_for_bootstrap(item_updates).await;
+                let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
+                builtin_table_updates.extend(builtin_table_update);
             }
 
-            state.apply_updates_for_bootstrap(post_item_updates).await;
+            let builtin_table_update = state.apply_updates_for_bootstrap(post_item_updates).await;
+            builtin_table_updates.extend(builtin_table_update);
 
             // Migrate builtin items.
             let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
@@ -354,16 +371,20 @@ impl Catalog {
                 migrated_builtins,
                 id_fingerprint_map,
             )?;
-            Catalog::apply_builtin_migration(
+            let builtin_table_update = Catalog::apply_builtin_migration(
                 &mut state,
                 &mut txn,
                 &mut builtin_migration_metadata,
             ).await?;
+            builtin_table_updates.extend(builtin_table_update);
+
+            let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
 
             txn.commit().await?;
             Ok((
                 state,
                 builtin_migration_metadata,
+                builtin_table_updates,
                 last_seen_version,
             ))
         }
@@ -384,7 +405,7 @@ impl Catalog {
     pub(crate) async fn parse_views(
         state: &mut CatalogState,
         builtin_views: Vec<(&Builtin<NameReference>, GlobalId)>,
-    ) {
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut handles = Vec::new();
         let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<GlobalId>> = BTreeMap::new();
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<GlobalId>> = BTreeMap::new();
@@ -402,6 +423,7 @@ impl Catalog {
                 };
                 (id, *view)
             }));
+        let ids: Vec<_> = views.keys().copied().collect();
         let mut ready: VecDeque<GlobalId> = views.keys().cloned().collect();
         while !handles.is_empty() || !ready.is_empty() || !awaiting_all.is_empty() {
             if handles.is_empty() && ready.is_empty() {
@@ -533,6 +555,10 @@ impl Catalog {
         );
         assert!(awaiting_all.is_empty());
         assert!(views.is_empty());
+
+        ids.into_iter()
+            .flat_map(|id| state.pack_item_update(id, 1))
+            .collect()
     }
 
     /// Opens or creates a catalog that stores data at `path`.
@@ -563,7 +589,7 @@ impl Catalog {
     > {
         async move {
             let mut storage = config.storage;
-            let (state, builtin_migration_metadata, last_seen_version) =
+            let (state, builtin_migration_metadata, mut builtin_table_updates, last_seen_version) =
                 Self::initialize_state(config.state, &mut storage).await?;
 
             let mut catalog = Catalog {
@@ -572,15 +598,6 @@ impl Catalog {
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
-
-            let updates = catalog
-                .storage()
-                .await
-                .transaction()
-                .await?
-                .get_bootstrap_updates()
-                .collect();
-            let mut builtin_table_updates = catalog.state.generate_builtin_table_updates(updates);
 
             // Load public keys for SSH connections from the secrets store to the builtin tables.
             let secrets_reader = &catalog.state.config.connection_context.secrets_reader;
@@ -596,7 +613,11 @@ impl Catalog {
                             &public_key_pair,
                             1,
                         );
-                        builtin_table_updates.push(builtin_table_update);
+                        builtin_table_updates.push(
+                            catalog
+                                .state
+                                .resolve_builtin_table_update(builtin_table_update),
+                        );
                     }
                 }
             }
@@ -607,10 +628,8 @@ impl Catalog {
                 match func {
                     mz_sql::func::Func::Scalar(impls) => {
                         for imp in impls {
-                            builtin_table_updates.push(catalog.state.pack_op_update(
-                                op,
-                                imp.details(),
-                                1,
+                            builtin_table_updates.push(catalog.state.resolve_builtin_table_update(
+                                catalog.state.pack_op_update(op, imp.details(), 1),
                             ));
                         }
                     }
@@ -662,7 +681,11 @@ impl Catalog {
             );
 
             for ip in &catalog.state.egress_ips {
-                builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
+                builtin_table_updates.push(
+                    catalog
+                        .state
+                        .resolve_builtin_table_update(catalog.state.pack_egress_ip_update(ip)?),
+                );
             }
 
             Ok((
@@ -857,7 +880,8 @@ impl Catalog {
         state: &mut CatalogState,
         txn: &mut Transaction<'_>,
         migration_metadata: &mut BuiltinMigrationMetadata,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, Error> {
+        let mut builtin_table_updates = Vec::new();
         txn.commit_op();
         txn.remove_items(&migration_metadata.user_item_drop_ops.drain(..).collect())?;
         txn.update_system_object_mappings(std::mem::take(
@@ -876,7 +900,8 @@ impl Catalog {
                 }),
         )?;
         let updates = txn.get_op_updates().collect();
-        state.apply_updates_for_bootstrap(updates).await;
+        let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
+        builtin_table_updates.extend(builtin_table_update);
         txn.commit_op();
         for CreateOp {
             id,
@@ -900,10 +925,11 @@ impl Catalog {
                 privileges.all_values_owned().collect(),
             )?;
             let updates = txn.get_op_updates().collect();
-            state.apply_updates_for_bootstrap(updates).await;
+            let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
+            builtin_table_updates.extend(builtin_table_update);
             txn.commit_op();
         }
-        Ok(())
+        Ok(builtin_table_updates)
     }
 
     /// Politely releases all external resources that can only be released in an async context.

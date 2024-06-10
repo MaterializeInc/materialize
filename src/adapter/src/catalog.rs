@@ -1129,7 +1129,8 @@ impl Catalog {
     }
 
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
-        self.state.pack_item_update(id, diff)
+        self.state
+            .resolve_builtin_table_updates(self.state.pack_item_update(id, diff))
     }
 
     pub fn system_config(&self) -> &SystemVars {

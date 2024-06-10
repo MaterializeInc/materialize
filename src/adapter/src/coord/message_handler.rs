@@ -430,6 +430,10 @@ impl Coordinator {
                     } else {
                         insertions
                     };
+                    let updates = self
+                        .catalog()
+                        .state()
+                        .resolve_builtin_table_updates(updates);
                     self.builtin_table_update().background(updates);
                 }
             }
@@ -717,6 +721,10 @@ impl Coordinator {
                     old_process_status,
                     -1,
                 );
+            let builtin_table_retraction = self
+                .catalog()
+                .state()
+                .resolve_builtin_table_update(builtin_table_retraction);
 
             let new_process_status = ClusterReplicaProcessStatus {
                 status: event.status,
@@ -728,6 +736,10 @@ impl Coordinator {
                 &new_process_status,
                 1,
             );
+            let builtin_table_addition = self
+                .catalog()
+                .state()
+                .resolve_builtin_table_update(builtin_table_addition);
             self.cluster_replica_statuses.ensure_cluster_status(
                 event.cluster_id,
                 event.replica_id,

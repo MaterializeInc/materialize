@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::iter;
 
-use mz_catalog::builtin::{Builtin, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP};
+use mz_catalog::builtin::{Builtin, BuiltinTable, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP};
 use mz_catalog::durable::Item;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -192,18 +192,23 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
 impl CatalogState {
     /// Update in-memory catalog state from a list of updates made to the durable catalog state.
     ///
-    /// This is meant specifically for bootstrapping because it does not produce builtin table
-    /// updates. The builtin tables need to be loaded before we can produce builtin table updates
-    /// which creates a bootstrapping problem.
+    /// Returns builtin table updates corresponding to the changes to catalog state.
+    ///
+    /// This is meant specifically for bootstrapping because it batches and applies builtin view
+    /// additions separately from other update types.
+    #[must_use]
     #[instrument]
-    pub(crate) async fn apply_updates_for_bootstrap(&mut self, updates: Vec<StateUpdate>) {
-        // Most updates are applied one at a time, but builtin view additions are applied in a
-        // batch for performance reasons. A constraint is that updates must be applied in order.
-        // This method is modeled as a simple state machine that batches then applies all builtin
-        // view updates and immediately applies all other updates.
+    pub(crate) async fn apply_updates_for_bootstrap(
+        &mut self,
+        updates: Vec<StateUpdate>,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        // Most updates are applied one at a time, but builtin view additions are applied separately
+        // in a batch for performance reasons. A constraint is that updates must be applied in
+        // order. This method is modeled as a simple state machine that batches then applies groups
+        // of builtin view additions and all other updates.
 
         enum ApplyState {
-            Update,
+            Updates(Vec<StateUpdate>),
             BuiltinViewAdditions(Vec<(&'static Builtin<NameReference>, GlobalId)>),
         }
 
@@ -216,13 +221,14 @@ impl CatalogState {
             (*builtin, system_object_mapping.unique_identifier.id)
         }
 
-        let mut state = ApplyState::Update;
+        let mut state = ApplyState::Updates(Vec::new());
         let updates = sort_updates(updates);
+        let mut builtin_table_updates = Vec::with_capacity(updates.len());
 
         for update in updates {
             match (&mut state, update) {
                 (
-                    ApplyState::Update,
+                    ApplyState::Updates(updates),
                     StateUpdate {
                         kind: StateUpdateKind::SystemObjectMapping(system_object_mapping),
                         diff: 1,
@@ -232,13 +238,15 @@ impl CatalogState {
                     CatalogItemType::View
                 ) =>
                 {
-                    // Start batching builtin view additions.
+                    // Apply updates and start batching builtin view additions.
+                    let builtin_table_update = self.apply_updates(std::mem::take(updates));
+                    builtin_table_updates.extend(builtin_table_update);
                     let view_addition = lookup_builtin_view_addition(system_object_mapping);
                     state = ApplyState::BuiltinViewAdditions(vec![view_addition]);
                 }
-                (ApplyState::Update, StateUpdate { kind, diff }) => {
-                    // Apply updates normally.
-                    self.apply_update(kind, diff);
+                (ApplyState::Updates(updates), update) => {
+                    // Continue batching updates.
+                    updates.push(update);
                 }
                 (
                     ApplyState::BuiltinViewAdditions(builtin_view_additions),
@@ -251,21 +259,59 @@ impl CatalogState {
                     CatalogItemType::View
                 ) =>
                 {
-                    // Continue batching builtin view updates.
+                    // Continue batching builtin view additions.
                     let view_addition = lookup_builtin_view_addition(system_object_mapping);
                     builtin_view_additions.push(view_addition);
                 }
-                (
-                    ApplyState::BuiltinViewAdditions(builtin_view_additions),
-                    StateUpdate { kind, diff },
-                ) => {
-                    // Apply all builtin view additions in a batch and then apply update normally.
-                    Catalog::parse_views(self, std::mem::take(builtin_view_additions)).await;
-                    state = ApplyState::Update;
-                    self.apply_update(kind, diff);
+                (ApplyState::BuiltinViewAdditions(builtin_view_additions), update) => {
+                    // Apply all builtin view additions in a batch and start batching updates.
+                    let builtin_table_update =
+                        Catalog::parse_views(self, std::mem::take(builtin_view_additions)).await;
+                    builtin_table_updates.extend(builtin_table_update);
+                    state = ApplyState::Updates(vec![update]);
                 }
             }
         }
+
+        // Apply remaining state.
+        match state {
+            ApplyState::Updates(updates) => {
+                let builtin_table_update = self.apply_updates(updates);
+                builtin_table_updates.extend(builtin_table_update);
+            }
+            ApplyState::BuiltinViewAdditions(builtin_view_additions) => {
+                let builtin_table_update = Catalog::parse_views(self, builtin_view_additions).await;
+                builtin_table_updates.extend(builtin_table_update);
+            }
+        }
+
+        builtin_table_updates
+    }
+
+    /// Update in-memory catalog state from a list of updates made to the durable catalog state.
+    ///
+    /// Returns builtin table updates corresponding to the changes to catalog state.
+    #[must_use]
+    #[instrument]
+    pub(crate) fn apply_updates(
+        &mut self,
+        updates: Vec<StateUpdate>,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let mut builtin_table_updates = Vec::with_capacity(updates.len());
+        for StateUpdate { kind, diff } in updates {
+            if diff == -1 {
+                builtin_table_updates
+                    .extend(self.generate_builtin_table_update(kind.clone(), diff));
+                self.apply_update(kind, diff);
+            } else if diff == 1 {
+                self.apply_update(kind.clone(), diff);
+                builtin_table_updates
+                    .extend(self.generate_builtin_table_update(kind.clone(), diff));
+            } else {
+                unreachable!("invalid update in catalog updates: ({kind:?}, {diff:?})")
+            }
+        }
+        builtin_table_updates
     }
 
     #[instrument(level = "debug")]
@@ -274,6 +320,7 @@ impl CatalogState {
             diff == 1 || diff == -1,
             "invalid update in catalog updates: ({kind:?}, {diff:?})"
         );
+
         match kind {
             StateUpdateKind::Role(role) => {
                 self.apply_role_update(role, diff);
@@ -890,7 +937,9 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate> {
         let mut builtin_table_updates = Vec::new();
         for StateUpdate { kind, diff } in updates {
-            builtin_table_updates.extend(self.generate_builtin_table_update(kind, diff));
+            let builtin_table_update = self.generate_builtin_table_update(kind, diff);
+            let builtin_table_update = self.resolve_builtin_table_updates(builtin_table_update);
+            builtin_table_updates.extend(builtin_table_update);
         }
         builtin_table_updates
     }
@@ -902,7 +951,7 @@ impl CatalogState {
         &mut self,
         kind: StateUpdateKind,
         diff: Diff,
-    ) -> Vec<BuiltinTableUpdate> {
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         assert!(
             diff == 1 || diff == -1,
             "invalid update in catalog updates: ({kind:?}, {diff:?})"

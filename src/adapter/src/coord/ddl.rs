@@ -541,6 +541,9 @@ impl Coordinator {
                     &status,
                     -1,
                 );
+                let builtin_table_update = catalog
+                    .state()
+                    .resolve_builtin_table_update(builtin_table_update);
                 builtin_table_updates.push(builtin_table_update);
             }
         }
@@ -551,6 +554,9 @@ impl Coordinator {
                     let builtin_table_update = catalog
                         .state()
                         .pack_cluster_replica_status_update(replica_id, process_id, &status, -1);
+                    let builtin_table_update = catalog
+                        .state()
+                        .resolve_builtin_table_update(builtin_table_update);
                     builtin_table_updates.push(builtin_table_update);
                 }
             }
@@ -567,6 +573,9 @@ impl Coordinator {
                         status,
                         1,
                     );
+                    let builtin_table_update = catalog
+                        .state()
+                        .resolve_builtin_table_update(builtin_table_update);
                     builtin_table_updates.push(builtin_table_update);
                 }
             }
@@ -588,6 +597,9 @@ impl Coordinator {
                     status,
                     1,
                 );
+                let builtin_table_update = catalog
+                    .state()
+                    .resolve_builtin_table_update(builtin_table_update);
                 builtin_table_updates.push(builtin_table_update);
             }
         }
@@ -769,11 +781,15 @@ impl Coordinator {
         {
             let mut updates = vec![];
             if let Some(metrics) = metrics {
-                let retraction = self
+                let retractions = self
                     .catalog()
                     .state()
                     .pack_replica_metric_updates(replica_id, &metrics, -1);
-                updates.extend(retraction.into_iter());
+                let retractions = self
+                    .catalog()
+                    .state()
+                    .resolve_builtin_table_updates(retractions);
+                updates.extend(retractions);
             }
             self.builtin_table_update().background(updates);
         }

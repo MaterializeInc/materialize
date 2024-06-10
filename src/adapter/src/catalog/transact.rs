@@ -535,7 +535,9 @@ impl Catalog {
                         )))
                     })?;
 
-                builtin_table_updates.extend(state.pack_item_update(id, -1));
+                let item_updates =
+                    state.resolve_builtin_table_updates(state.pack_item_update(id, -1));
+                builtin_table_updates.extend(item_updates);
 
                 if Self::should_audit_log_item(new_entry.item()) {
                     let details =
@@ -572,13 +574,18 @@ impl Catalog {
                 vars,
             } => {
                 state.ensure_not_reserved_role(&id)?;
-                builtin_table_updates.extend(state.pack_role_update(id, -1));
+
+                let role_updates =
+                    state.resolve_builtin_table_updates(state.pack_role_update(id, -1));
+                builtin_table_updates.extend(role_updates);
 
                 let existing_role = state.get_role_mut(&id);
                 existing_role.attributes = attributes;
                 existing_role.vars = vars;
                 tx.update_role(id, existing_role.clone().into())?;
-                builtin_table_updates.extend(state.pack_role_update(id, 1));
+                let role_updates =
+                    state.resolve_builtin_table_updates(state.pack_role_update(id, 1));
+                builtin_table_updates.extend(role_updates);
 
                 state.add_to_audit_log(
                     oracle_write_ts,
@@ -680,7 +687,9 @@ impl Catalog {
                 state
                     .database_by_name
                     .insert(name.clone(), database_id.clone());
-                builtin_table_updates.push(state.pack_database_update(&database_id, 1));
+                builtin_table_updates.push(
+                    state.resolve_builtin_table_update(state.pack_database_update(&database_id, 1)),
+                );
 
                 state.add_to_audit_log(
                     oracle_write_ts,
@@ -808,7 +817,9 @@ impl Catalog {
                         vars,
                     },
                 );
-                builtin_table_updates.extend(state.pack_role_update(id, 1));
+                let role_updates =
+                    state.resolve_builtin_table_updates(state.pack_role_update(id, 1));
+                builtin_table_updates.extend(role_updates);
             }
             Op::CreateCluster {
                 id,
@@ -871,9 +882,13 @@ impl Catalog {
                     PrivilegeMap::from_mz_acl_items(privileges),
                     config,
                 );
-                builtin_table_updates.extend(state.pack_cluster_update(&name, 1));
+                let cluster_updates =
+                    state.resolve_builtin_table_updates(state.pack_cluster_update(&name, 1));
+                builtin_table_updates.extend(cluster_updates);
                 for id in introspection_source_ids {
-                    builtin_table_updates.extend(state.pack_item_update(id, 1));
+                    let item_updates =
+                        state.resolve_builtin_table_updates(state.pack_item_update(id, 1));
+                    builtin_table_updates.extend(item_updates);
                 }
             }
             Op::CreateClusterReplica {
@@ -926,8 +941,10 @@ impl Catalog {
                     )?;
                 }
                 state.insert_cluster_replica(cluster_id, name.clone(), id, config, owner_id);
-                builtin_table_updates
-                    .extend(state.pack_cluster_replica_update(cluster_id, &name, 1));
+                let cluster_replica_updates = state.resolve_builtin_table_updates(
+                    state.pack_cluster_replica_update(cluster_id, &name, 1),
+                );
+                builtin_table_updates.extend(cluster_replica_updates);
             }
             Op::CreateItem {
                 id,
@@ -1067,7 +1084,9 @@ impl Catalog {
                     owner_id,
                     PrivilegeMap::from_mz_acl_items(privileges),
                 );
-                builtin_table_updates.extend(state.pack_item_update(id, 1));
+                let item_updates =
+                    state.resolve_builtin_table_updates(state.pack_item_update(id, 1));
+                builtin_table_updates.extend(item_updates);
             }
             Op::Comment {
                 object_id,
@@ -1083,20 +1102,14 @@ impl Catalog {
                 // If we're replacing or deleting a comment, we need to issue a retraction for
                 // the previous value.
                 if let Some(prev) = prev_comment {
-                    builtin_table_updates.push(state.pack_comment_update(
-                        object_id,
-                        sub_component,
-                        &prev,
-                        -1,
+                    builtin_table_updates.push(state.resolve_builtin_table_update(
+                        state.pack_comment_update(object_id, sub_component, &prev, -1),
                     ));
                 }
 
                 if let Some(new) = comment {
-                    builtin_table_updates.push(state.pack_comment_update(
-                        object_id,
-                        sub_component,
-                        &new,
-                        1,
+                    builtin_table_updates.push(state.resolve_builtin_table_update(
+                        state.pack_comment_update(object_id, sub_component, &new, 1),
                     ));
                 }
             }
@@ -1114,7 +1127,9 @@ impl Catalog {
                 );
 
                 let updates = dropped.into_iter().map(|(id, col_pos, comment)| {
-                    state.pack_comment_update(id, col_pos, &comment, -1)
+                    state.resolve_builtin_table_update(
+                        state.pack_comment_update(id, col_pos, &comment, -1),
+                    )
                 });
                 builtin_table_updates.extend(updates);
 
@@ -1134,7 +1149,9 @@ impl Catalog {
                         storage_collections_to_drop.insert(item_id);
                     }
 
-                    builtin_table_updates.extend(state.pack_item_update(item_id, -1));
+                    let item_updates =
+                        state.resolve_builtin_table_updates(state.pack_item_update(item_id, -1));
+                    builtin_table_updates.extend(item_updates);
                     if Self::should_audit_log_item(entry.item()) {
                         state.add_to_audit_log(
                             oracle_write_ts,
@@ -1181,10 +1198,8 @@ impl Catalog {
                         ResolvedDatabaseSpecifier::Id(database_id) => Some(database_id),
                     };
 
-                    builtin_table_updates.push(state.pack_schema_update(
-                        &database_spec,
-                        &schema_id,
-                        -1,
+                    builtin_table_updates.push(state.resolve_builtin_table_update(
+                        state.pack_schema_update(&database_spec, &schema_id, -1),
                     ));
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -1219,7 +1234,9 @@ impl Catalog {
                 for database_id in delta.databases {
                     let database = state.get_database(&database_id).clone();
 
-                    builtin_table_updates.push(state.pack_database_update(&database_id, -1));
+                    builtin_table_updates.push(state.resolve_builtin_table_update(
+                        state.pack_database_update(&database_id, -1),
+                    ));
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -1242,7 +1259,9 @@ impl Catalog {
                 tx.remove_roles(&delta.roles)?;
 
                 for role_id in delta.roles {
-                    builtin_table_updates.extend(state.pack_role_update(role_id, -1));
+                    builtin_table_updates.extend(
+                        state.resolve_builtin_table_updates(state.pack_role_update(role_id, -1)),
+                    );
 
                     let role = state
                         .roles_by_id
@@ -1274,10 +1293,8 @@ impl Catalog {
                     let cluster = state.get_cluster(cluster_id);
                     let replica = cluster.replica(replica_id).expect("Must exist");
 
-                    builtin_table_updates.extend(state.pack_cluster_replica_update(
-                        cluster_id,
-                        &replica.name,
-                        -1,
+                    builtin_table_updates.extend(state.resolve_builtin_table_updates(
+                        state.pack_cluster_replica_update(cluster_id, &replica.name, -1),
                     ));
 
                     let (reason, scheduling_policies) = reason.into_audit_log();
@@ -1314,9 +1331,13 @@ impl Catalog {
                 for cluster_id in delta.clusters {
                     let cluster = state.get_cluster(cluster_id);
 
-                    builtin_table_updates.extend(state.pack_cluster_update(&cluster.name, -1));
+                    builtin_table_updates.extend(state.resolve_builtin_table_updates(
+                        state.pack_cluster_update(&cluster.name, -1),
+                    ));
                     for id in cluster.log_indexes.values() {
-                        builtin_table_updates.extend(state.pack_item_update(*id, -1));
+                        builtin_table_updates.extend(
+                            state.resolve_builtin_table_updates(state.pack_item_update(*id, -1)),
+                        );
                     }
 
                     state.add_to_audit_log(
@@ -1368,7 +1389,9 @@ impl Catalog {
                 let member_role = state.get_role_mut(&member_id);
                 member_role.membership.map.insert(role_id, grantor_id);
                 tx.update_role(member_id, member_role.clone().into())?;
-                builtin_table_updates.push(state.pack_role_members_update(role_id, member_id, 1));
+                builtin_table_updates.push(state.resolve_builtin_table_update(
+                    state.pack_role_members_update(role_id, member_id, 1),
+                ));
 
                 state.add_to_audit_log(
                     oracle_write_ts,
@@ -1396,7 +1419,9 @@ impl Catalog {
             } => {
                 state.ensure_not_reserved_role(&member_id)?;
                 state.ensure_grantable_role(&role_id)?;
-                builtin_table_updates.push(state.pack_role_members_update(role_id, member_id, -1));
+                builtin_table_updates.push(state.resolve_builtin_table_update(
+                    state.pack_role_members_update(role_id, member_id, -1),
+                ));
                 let member_role = state.get_role_mut(&member_id);
                 member_role.membership.map.remove(&role_id);
                 tx.update_role(member_id, member_role.clone().into())?;
@@ -1434,73 +1459,83 @@ impl Catalog {
                     }
                 };
                 match &target_id {
-                    SystemObjectId::Object(object_id) => match object_id {
-                        ObjectId::Cluster(id) => {
-                            let cluster_name = state.get_cluster(*id).name().to_string();
-                            builtin_table_updates
-                                .extend(state.pack_cluster_update(&cluster_name, -1));
-                            let cluster = state.get_cluster_mut(*id);
-                            update_privilege_fn(&mut cluster.privileges);
-                            tx.update_cluster(*id, cluster.clone().into())?;
-                            builtin_table_updates
-                                .extend(state.pack_cluster_update(&cluster_name, 1));
-                        }
-                        ObjectId::Database(id) => {
-                            builtin_table_updates.push(state.pack_database_update(id, -1));
-                            let database = state.get_database_mut(id);
-                            update_privilege_fn(&mut database.privileges);
-                            let database = state.get_database(id);
-                            tx.update_database(*id, database.clone().into())?;
-                            builtin_table_updates.push(state.pack_database_update(id, 1));
-                        }
-                        ObjectId::Schema((database_spec, schema_spec)) => {
-                            let schema_id = schema_spec.clone().into();
-                            builtin_table_updates.push(state.pack_schema_update(
-                                database_spec,
-                                &schema_id,
-                                -1,
-                            ));
-                            let schema = state.get_schema_mut(
-                                database_spec,
-                                schema_spec,
-                                session
-                                    .map(|session| session.conn_id())
-                                    .unwrap_or(&SYSTEM_CONN_ID),
-                            );
-                            update_privilege_fn(&mut schema.privileges);
-                            let database_id = match &database_spec {
-                                ResolvedDatabaseSpecifier::Ambient => None,
-                                ResolvedDatabaseSpecifier::Id(id) => Some(*id),
-                            };
-                            tx.update_schema(
-                                schema_id,
-                                schema.clone().into_durable_schema(database_id),
-                            )?;
-                            builtin_table_updates.push(state.pack_schema_update(
-                                database_spec,
-                                &schema_id,
-                                1,
-                            ));
-                        }
-                        ObjectId::Item(id) => {
-                            builtin_table_updates.extend(state.pack_item_update(*id, -1));
-                            let entry = state.get_entry_mut(id);
-                            update_privilege_fn(&mut entry.privileges);
-                            if !entry.item().is_temporary() {
-                                tx.update_item(*id, entry.clone().into())?;
+                    SystemObjectId::Object(object_id) => {
+                        match object_id {
+                            ObjectId::Cluster(id) => {
+                                let cluster_name = state.get_cluster(*id).name().to_string();
+                                builtin_table_updates.extend(state.resolve_builtin_table_updates(
+                                    state.pack_cluster_update(&cluster_name, -1),
+                                ));
+                                let cluster = state.get_cluster_mut(*id);
+                                update_privilege_fn(&mut cluster.privileges);
+                                tx.update_cluster(*id, cluster.clone().into())?;
+                                builtin_table_updates.extend(state.resolve_builtin_table_updates(
+                                    state.pack_cluster_update(&cluster_name, 1),
+                                ));
                             }
-                            builtin_table_updates.extend(state.pack_item_update(*id, 1));
+                            ObjectId::Database(id) => {
+                                builtin_table_updates.push(state.resolve_builtin_table_update(
+                                    state.pack_database_update(id, -1),
+                                ));
+                                let database = state.get_database_mut(id);
+                                update_privilege_fn(&mut database.privileges);
+                                let database = state.get_database(id);
+                                tx.update_database(*id, database.clone().into())?;
+                                builtin_table_updates.push(state.resolve_builtin_table_update(
+                                    state.pack_database_update(id, 1),
+                                ));
+                            }
+                            ObjectId::Schema((database_spec, schema_spec)) => {
+                                let schema_id = schema_spec.clone().into();
+                                builtin_table_updates.push(state.resolve_builtin_table_update(
+                                    state.pack_schema_update(database_spec, &schema_id, -1),
+                                ));
+                                let schema = state.get_schema_mut(
+                                    database_spec,
+                                    schema_spec,
+                                    session
+                                        .map(|session| session.conn_id())
+                                        .unwrap_or(&SYSTEM_CONN_ID),
+                                );
+                                update_privilege_fn(&mut schema.privileges);
+                                let database_id = match &database_spec {
+                                    ResolvedDatabaseSpecifier::Ambient => None,
+                                    ResolvedDatabaseSpecifier::Id(id) => Some(*id),
+                                };
+                                tx.update_schema(
+                                    schema_id,
+                                    schema.clone().into_durable_schema(database_id),
+                                )?;
+                                builtin_table_updates.push(state.resolve_builtin_table_update(
+                                    state.pack_schema_update(database_spec, &schema_id, 1),
+                                ));
+                            }
+                            ObjectId::Item(id) => {
+                                builtin_table_updates.extend(state.resolve_builtin_table_updates(
+                                    state.pack_item_update(*id, -1),
+                                ));
+                                let entry = state.get_entry_mut(id);
+                                update_privilege_fn(&mut entry.privileges);
+                                if !entry.item().is_temporary() {
+                                    tx.update_item(*id, entry.clone().into())?;
+                                }
+                                builtin_table_updates.extend(
+                                    state.resolve_builtin_table_updates(
+                                        state.pack_item_update(*id, 1),
+                                    ),
+                                );
+                            }
+                            ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
                         }
-                        ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
-                    },
+                    }
                     SystemObjectId::System => {
                         if let Some(existing_privilege) = state
                             .system_privileges
                             .get_acl_item(&privilege.grantee, &privilege.grantor)
                         {
-                            builtin_table_updates.push(
+                            builtin_table_updates.push(state.resolve_builtin_table_update(
                                 state.pack_system_privileges_update(existing_privilege.clone(), -1),
-                            );
+                            ));
                         }
                         update_privilege_fn(&mut state.system_privileges);
                         let new_privilege = state
@@ -1512,9 +1547,9 @@ impl Catalog {
                             new_privilege.map(|new_privilege| new_privilege.acl_mode),
                         )?;
                         if let Some(new_privilege) = new_privilege {
-                            builtin_table_updates.push(
+                            builtin_table_updates.push(state.resolve_builtin_table_update(
                                 state.pack_system_privileges_update(new_privilege.clone(), 1),
-                            );
+                            ));
                         }
                     }
                 }
@@ -1548,11 +1583,13 @@ impl Catalog {
                     .default_privileges
                     .get_privileges_for_grantee(&privilege_object, &privilege_acl_item.grantee)
                 {
-                    builtin_table_updates.push(state.pack_default_privileges_update(
-                        &privilege_object,
-                        &privilege_acl_item.grantee,
-                        acl_mode,
-                        -1,
+                    builtin_table_updates.push(state.resolve_builtin_table_update(
+                        state.pack_default_privileges_update(
+                            &privilege_object,
+                            &privilege_acl_item.grantee,
+                            acl_mode,
+                            -1,
+                        ),
                     ));
                 }
                 match variant {
@@ -1575,11 +1612,13 @@ impl Catalog {
                     new_acl_mode.cloned(),
                 )?;
                 if let Some(new_acl_mode) = new_acl_mode {
-                    builtin_table_updates.push(state.pack_default_privileges_update(
-                        &privilege_object,
-                        &privilege_acl_item.grantee,
-                        new_acl_mode,
-                        1,
+                    builtin_table_updates.push(state.resolve_builtin_table_update(
+                        state.pack_default_privileges_update(
+                            &privilege_object,
+                            &privilege_acl_item.grantee,
+                            new_acl_mode,
+                            1,
+                        ),
                     ));
                 }
                 state.add_to_audit_log(
@@ -1616,9 +1655,13 @@ impl Catalog {
                     )));
                 }
                 tx.rename_cluster(id, &name, &to_name)?;
-                builtin_table_updates.extend(state.pack_cluster_update(&name, -1));
+                builtin_table_updates.extend(
+                    state.resolve_builtin_table_updates(state.pack_cluster_update(&name, -1)),
+                );
                 state.rename_cluster(id, to_name.clone());
-                builtin_table_updates.extend(state.pack_cluster_update(&to_name, 1));
+                builtin_table_updates.extend(
+                    state.resolve_builtin_table_updates(state.pack_cluster_update(&to_name, 1)),
+                );
                 state.add_to_audit_log(
                     oracle_write_ts,
                     session,
@@ -1647,14 +1690,13 @@ impl Catalog {
                     )));
                 }
                 tx.rename_cluster_replica(replica_id, &name, &to_name)?;
-                builtin_table_updates.extend(state.pack_cluster_replica_update(
-                    cluster_id,
-                    name.replica.as_str(),
-                    -1,
+                builtin_table_updates.extend(state.resolve_builtin_table_updates(
+                    state.pack_cluster_replica_update(cluster_id, name.replica.as_str(), -1),
                 ));
                 state.rename_cluster_replica(cluster_id, replica_id, to_name.clone());
-                builtin_table_updates
-                    .extend(state.pack_cluster_replica_update(cluster_id, &to_name, 1));
+                builtin_table_updates.extend(state.resolve_builtin_table_updates(
+                    state.pack_cluster_replica_update(cluster_id, &to_name, 1),
+                ));
                 state.add_to_audit_log(
                     oracle_write_ts,
                     session,
@@ -1764,14 +1806,17 @@ impl Catalog {
                     if !new_entry.item().is_temporary() {
                         tx.update_item(*id, to_entry.clone().into())?;
                     }
-                    builtin_table_updates.extend(state.pack_item_update(*id, -1));
+                    builtin_table_updates.extend(
+                        state.resolve_builtin_table_updates(state.pack_item_update(*id, -1)),
+                    );
 
                     updates.push((id.clone(), dependent_item.name().clone(), to_entry.item));
                 }
                 if !new_entry.item().is_temporary() {
                     tx.update_item(id, new_entry.clone().into())?;
                 }
-                builtin_table_updates.extend(state.pack_item_update(id, -1));
+                builtin_table_updates
+                    .extend(state.resolve_builtin_table_updates(state.pack_item_update(id, -1)));
                 updates.push((id, to_qualified_name, new_entry.item));
                 for (id, to_name, to_item) in updates {
                     Self::update_item(state, builtin_table_updates, id, to_name, to_item);
@@ -1833,7 +1878,9 @@ impl Catalog {
                     if !new_entry.item().is_temporary() {
                         items_to_update.insert(*id, new_entry.clone().into());
                     }
-                    builtin_table_updates.extend(state.pack_item_update(*id, -1));
+                    builtin_table_updates.extend(
+                        state.resolve_builtin_table_updates(state.pack_item_update(*id, -1)),
+                    );
                     updates.push((id.clone(), entry.name().clone(), new_entry.item));
 
                     Ok::<_, AdapterError>(())
@@ -1861,10 +1908,8 @@ impl Catalog {
                     )));
                 };
                 // Delete the old schema from the builtin table.
-                builtin_table_updates.push(state.pack_schema_update(
-                    &database_spec,
-                    &schema_id,
-                    -1,
+                builtin_table_updates.push(state.resolve_builtin_table_update(
+                    state.pack_schema_update(&database_spec, &schema_id, -1),
                 ));
 
                 // Add an entry to the audit log.
@@ -1921,7 +1966,9 @@ impl Catalog {
                 }
 
                 // Update the new schema in the builtin table.
-                builtin_table_updates.push(state.pack_schema_update(&database_spec, &schema_id, 1));
+                builtin_table_updates.push(state.resolve_builtin_table_update(
+                    state.pack_schema_update(&database_spec, &schema_id, 1),
+                ));
 
                 for (id, new_name, new_item) in updates {
                     Self::update_item(state, builtin_table_updates, id, new_name, new_item);
@@ -1942,7 +1989,9 @@ impl Catalog {
                                 ErrorKind::ReadOnlyCluster(cluster_name),
                             )));
                         }
-                        builtin_table_updates.extend(state.pack_cluster_update(&cluster_name, -1));
+                        builtin_table_updates.extend(state.resolve_builtin_table_updates(
+                            state.pack_cluster_update(&cluster_name, -1),
+                        ));
                         let cluster = state.get_cluster_mut(*id);
                         Self::update_privilege_owners(
                             &mut cluster.privileges,
@@ -1951,7 +2000,9 @@ impl Catalog {
                         );
                         cluster.owner_id = new_owner;
                         tx.update_cluster(*id, cluster.clone().into())?;
-                        builtin_table_updates.extend(state.pack_cluster_update(&cluster_name, 1));
+                        builtin_table_updates.extend(state.resolve_builtin_table_updates(
+                            state.pack_cluster_update(&cluster_name, 1),
+                        ));
                     }
                     ObjectId::ClusterReplica((cluster_id, replica_id)) => {
                         let cluster = state.get_cluster(*cluster_id);
@@ -1965,10 +2016,8 @@ impl Catalog {
                                 ErrorKind::ReadOnlyClusterReplica(replica_name),
                             )));
                         }
-                        builtin_table_updates.extend(state.pack_cluster_replica_update(
-                            *cluster_id,
-                            &replica_name,
-                            -1,
+                        builtin_table_updates.extend(state.resolve_builtin_table_updates(
+                            state.pack_cluster_replica_update(*cluster_id, &replica_name, -1),
                         ));
                         let cluster = state.get_cluster_mut(*cluster_id);
                         let replica = cluster
@@ -1976,10 +2025,8 @@ impl Catalog {
                             .expect("catalog out of sync");
                         replica.owner_id = new_owner;
                         tx.update_cluster_replica(*replica_id, replica.clone().into())?;
-                        builtin_table_updates.extend(state.pack_cluster_replica_update(
-                            *cluster_id,
-                            &replica_name,
-                            1,
+                        builtin_table_updates.extend(state.resolve_builtin_table_updates(
+                            state.pack_cluster_replica_update(*cluster_id, &replica_name, 1),
                         ));
                     }
                     ObjectId::Database(id) => {
@@ -1989,7 +2036,9 @@ impl Catalog {
                                 ErrorKind::ReadOnlyDatabase(database.name().to_string()),
                             )));
                         }
-                        builtin_table_updates.push(state.pack_database_update(id, -1));
+                        builtin_table_updates.push(
+                            state.resolve_builtin_table_update(state.pack_database_update(id, -1)),
+                        );
                         let database = state.get_database_mut(id);
                         Self::update_privilege_owners(
                             &mut database.privileges,
@@ -1999,7 +2048,9 @@ impl Catalog {
                         database.owner_id = new_owner;
                         let database = state.get_database(id);
                         tx.update_database(*id, database.clone().into())?;
-                        builtin_table_updates.push(state.pack_database_update(id, 1));
+                        builtin_table_updates.push(
+                            state.resolve_builtin_table_update(state.pack_database_update(id, 1)),
+                        );
                     }
                     ObjectId::Schema((database_spec, schema_spec)) => {
                         let schema_id: SchemaId = schema_spec.clone().into();
@@ -2011,10 +2062,8 @@ impl Catalog {
                                 ErrorKind::ReadOnlySystemSchema(full_name.to_string()),
                             )));
                         }
-                        builtin_table_updates.push(state.pack_schema_update(
-                            database_spec,
-                            &schema_id,
-                            -1,
+                        builtin_table_updates.push(state.resolve_builtin_table_update(
+                            state.pack_schema_update(database_spec, &schema_id, -1),
                         ));
                         let schema = state.get_schema_mut(database_spec, schema_spec, conn_id);
                         Self::update_privilege_owners(
@@ -2031,10 +2080,8 @@ impl Catalog {
                             schema_id,
                             schema.clone().into_durable_schema(database_id.copied()),
                         )?;
-                        builtin_table_updates.push(state.pack_schema_update(
-                            database_spec,
-                            &schema_id,
-                            1,
+                        builtin_table_updates.push(state.resolve_builtin_table_update(
+                            state.pack_schema_update(database_spec, &schema_id, 1),
                         ));
                     }
                     ObjectId::Item(id) => {
@@ -2048,7 +2095,9 @@ impl Catalog {
                                 ErrorKind::ReadOnlyItem(full_name.to_string()),
                             )));
                         }
-                        builtin_table_updates.extend(state.pack_item_update(*id, -1));
+                        builtin_table_updates.extend(
+                            state.resolve_builtin_table_updates(state.pack_item_update(*id, -1)),
+                        );
                         let entry = state.get_entry_mut(id);
                         Self::update_privilege_owners(
                             &mut entry.privileges,
@@ -2059,7 +2108,9 @@ impl Catalog {
                         if !entry.item().is_temporary() {
                             tx.update_item(*id, entry.clone().into())?;
                         }
-                        builtin_table_updates.extend(state.pack_item_update(*id, 1));
+                        builtin_table_updates.extend(
+                            state.resolve_builtin_table_updates(state.pack_item_update(*id, 1)),
+                        );
                     }
                     ObjectId::Role(_) => unreachable!("roles have no owner"),
                 }
@@ -2080,15 +2131,20 @@ impl Catalog {
                 )?;
             }
             Op::UpdateClusterConfig { id, name, config } => {
-                builtin_table_updates.extend(state.pack_cluster_update(&name, -1));
+                builtin_table_updates.extend(
+                    state.resolve_builtin_table_updates(state.pack_cluster_update(&name, -1)),
+                );
                 let cluster = state.get_cluster_mut(id);
                 cluster.config = config;
                 tx.update_cluster(id, cluster.clone().into())?;
-                builtin_table_updates.extend(state.pack_cluster_update(&name, 1));
+                builtin_table_updates.extend(
+                    state.resolve_builtin_table_updates(state.pack_cluster_update(&name, 1)),
+                );
                 info!("update cluster {}", name);
             }
             Op::UpdateItem { id, name, to_item } => {
-                builtin_table_updates.extend(state.pack_item_update(id, -1));
+                builtin_table_updates
+                    .extend(state.resolve_builtin_table_updates(state.pack_item_update(id, -1)));
                 Self::update_item(
                     state,
                     builtin_table_updates,
@@ -2255,7 +2311,8 @@ impl Catalog {
         }
 
         state.entry_by_id.insert(id, new_entry);
-        builtin_table_updates.extend(state.pack_item_update(id, 1));
+        let item_updates = state.resolve_builtin_table_updates(state.pack_item_update(id, 1));
+        builtin_table_updates.extend(item_updates);
     }
 
     pub(crate) fn update_system_configuration(
@@ -2312,11 +2369,11 @@ impl Catalog {
             },
         );
         db.schemas_by_name.insert(schema_name, id.clone());
-        builtin_table_updates.push(state.pack_schema_update(
+        builtin_table_updates.push(state.resolve_builtin_table_update(state.pack_schema_update(
             &ResolvedDatabaseSpecifier::Id(database_id.clone()),
             &id,
             1,
-        ));
+        )));
         Ok(())
     }
 
