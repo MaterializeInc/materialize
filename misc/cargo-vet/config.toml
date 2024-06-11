@@ -1071,7 +1071,7 @@ version = "0.11.9"
 criteria = "safe-to-deploy"
 
 [[exemptions.protobuf-native]]
-version = "0.3.0+26.1"
+version = "0.3.1+26.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.psm]]
