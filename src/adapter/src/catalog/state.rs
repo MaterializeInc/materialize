@@ -1156,7 +1156,7 @@ impl CatalogState {
     }
 
     #[mz_ore::instrument(level = "trace")]
-    pub(super) fn drop_item(&mut self, id: GlobalId) {
+    pub(super) fn drop_item(&mut self, id: GlobalId) -> CatalogEntry {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
         info!(
             "drop {} {} ({})",
@@ -1209,6 +1209,8 @@ impl CatalogState {
                 );
             }
         }
+
+        metadata
     }
 
     pub(super) fn get_database(&self, database_id: &DatabaseId) -> &Database {

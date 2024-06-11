@@ -62,6 +62,11 @@ use tracing::debug;
 use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
 
+/// Used to update `self` from the input value while consuming the input value.
+pub trait UpdateFrom<T>: From<T> {
+    fn update_from(&mut self, from: T);
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Database {
     pub name: String,
@@ -83,6 +88,47 @@ impl From<Database> for durable::Database {
             owner_id: database.owner_id,
             privileges: database.privileges.into_all_values().collect(),
         }
+    }
+}
+
+impl From<durable::Database> for Database {
+    fn from(
+        durable::Database {
+            id,
+            oid,
+            name,
+            owner_id,
+            privileges,
+        }: durable::Database,
+    ) -> Database {
+        Database {
+            id,
+            oid,
+            schemas_by_id: BTreeMap::new(),
+            schemas_by_name: BTreeMap::new(),
+            name,
+            owner_id,
+            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+        }
+    }
+}
+
+impl UpdateFrom<durable::Database> for Database {
+    fn update_from(
+        &mut self,
+        durable::Database {
+            id,
+            oid,
+            name,
+            owner_id,
+            privileges,
+        }: durable::Database,
+    ) {
+        self.id = id;
+        self.oid = oid;
+        self.name = name;
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
     }
 }
 
@@ -108,6 +154,56 @@ impl From<Schema> for durable::Schema {
             owner_id: schema.owner_id,
             privileges: schema.privileges.into_all_values().collect(),
         }
+    }
+}
+
+impl From<durable::Schema> for Schema {
+    fn from(
+        durable::Schema {
+            id,
+            oid,
+            name,
+            database_id,
+            owner_id,
+            privileges,
+        }: durable::Schema,
+    ) -> Schema {
+        Schema {
+            name: QualifiedSchemaName {
+                database: database_id.into(),
+                schema: name,
+            },
+            id: id.into(),
+            oid,
+            items: BTreeMap::new(),
+            functions: BTreeMap::new(),
+            types: BTreeMap::new(),
+            owner_id,
+            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+        }
+    }
+}
+
+impl UpdateFrom<durable::Schema> for Schema {
+    fn update_from(
+        &mut self,
+        durable::Schema {
+            id,
+            oid,
+            name,
+            database_id,
+            owner_id,
+            privileges,
+        }: durable::Schema,
+    ) {
+        self.name = QualifiedSchemaName {
+            database: database_id.into(),
+            schema: name,
+        };
+        self.id = id.into();
+        self.oid = oid.into();
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
     }
 }
 
@@ -141,6 +237,49 @@ impl From<Role> for durable::Role {
             membership: role.membership,
             vars: role.vars,
         }
+    }
+}
+
+impl From<durable::Role> for Role {
+    fn from(
+        durable::Role {
+            id,
+            oid,
+            name,
+            attributes,
+            membership,
+            vars,
+        }: durable::Role,
+    ) -> Self {
+        Role {
+            name,
+            id,
+            oid,
+            attributes,
+            membership,
+            vars,
+        }
+    }
+}
+
+impl UpdateFrom<durable::Role> for Role {
+    fn update_from(
+        &mut self,
+        durable::Role {
+            id,
+            oid,
+            name,
+            attributes,
+            membership,
+            vars,
+        }: durable::Role,
+    ) {
+        self.id = id;
+        self.oid = oid;
+        self.name = name;
+        self.attributes = attributes;
+        self.membership = membership;
+        self.vars = vars;
     }
 }
 
@@ -267,6 +406,49 @@ impl From<Cluster> for durable::Cluster {
             privileges: cluster.privileges.into_all_values().collect(),
             config: cluster.config.into(),
         }
+    }
+}
+
+impl From<durable::Cluster> for Cluster {
+    fn from(
+        durable::Cluster {
+            id,
+            name,
+            owner_id,
+            privileges,
+            config,
+        }: durable::Cluster,
+    ) -> Self {
+        Cluster {
+            name: name.clone(),
+            id,
+            bound_objects: BTreeSet::new(),
+            log_indexes: BTreeMap::new(),
+            replica_id_by_name_: BTreeMap::new(),
+            replicas_by_id_: BTreeMap::new(),
+            owner_id,
+            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+            config: config.into(),
+        }
+    }
+}
+
+impl UpdateFrom<durable::Cluster> for Cluster {
+    fn update_from(
+        &mut self,
+        durable::Cluster {
+            id,
+            name,
+            owner_id,
+            privileges,
+            config,
+        }: durable::Cluster,
+    ) {
+        self.id = id;
+        self.name = name;
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+        self.config = config.into();
     }
 }
 
