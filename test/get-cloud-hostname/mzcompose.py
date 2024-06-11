@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 
 from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -20,11 +21,13 @@ SERVICES = [
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("materialized")
 
-    parser.add_argument("--app-password", type=str)
+    parser.add_argument("--app-password-env-var", type=str)
     args = parser.parse_args()
+
+    app_password = os.environ[args.app_password_env_var]
 
     c.up("materialized")
 
-    hostname = get_cloud_hostname(c, app_password=args.app_password, quiet=True)
+    hostname = get_cloud_hostname(c, app_password=app_password, quiet=True)
 
     print(hostname)
