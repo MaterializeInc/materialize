@@ -19,7 +19,6 @@ use mz_ore::metrics::{
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
-use mz_rocksdb::RocksDBInstanceMetrics;
 use mz_storage_operators::metrics::BackpressureMetrics;
 use prometheus::core::{AtomicF64, AtomicU64};
 
@@ -69,14 +68,11 @@ pub(crate) struct UpsertMetricDefs {
     // We don't parameterize these by `worker_id` like the `rehydration_*` ones
     // to save on time-series cardinality.
     pub(crate) shared: Arc<Mutex<BTreeMap<GlobalId, Weak<UpsertSharedMetrics>>>>,
-    pub(crate) rocksdb_shared:
-        Arc<Mutex<BTreeMap<GlobalId, Weak<mz_rocksdb::RocksDBSharedMetrics>>>>,
 }
 
 impl UpsertMetricDefs {
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         let shared = Arc::new(Mutex::new(BTreeMap::new()));
-        let rocksdb_shared = Arc::new(Mutex::new(BTreeMap::new()));
         Self {
             rehydration_latency: registry.register(metric!(
                 name: "mz_storage_upsert_state_rehydration_latency",
@@ -246,7 +242,6 @@ impl UpsertMetricDefs {
                     of putting batches of values into RocksDB for this source.",
                 var_labels: ["source_id", "worker_id"],
             )),
-            rocksdb_shared,
             legacy_value_errors: registry.register(metric!(
                 name: "mz_storage_upsert_legacy_value_errors",
                 help: "The total number of legacy errors encountered during \
@@ -271,39 +266,6 @@ impl UpsertMetricDefs {
             .insert(source_id.clone(), Arc::downgrade(&shared_metrics))
             .is_none());
         shared_metrics
-    }
-
-    /// Get a shared-across-workers instance of an `RocksDBSharedMetrics`
-    pub(crate) fn rocksdb_shared(
-        &self,
-        source_id: &GlobalId,
-    ) -> Arc<mz_rocksdb::RocksDBSharedMetrics> {
-        let mut rocksdb = self.rocksdb_shared.lock().expect("mutex poisoned");
-        if let Some(shared_metrics) = rocksdb.get(source_id) {
-            if let Some(shared_metrics) = shared_metrics.upgrade() {
-                return Arc::clone(&shared_metrics);
-            } else {
-                assert!(rocksdb.remove(source_id).is_some());
-            }
-        }
-
-        let rocksdb_metrics = {
-            let source_id = source_id.to_string();
-            mz_rocksdb::RocksDBSharedMetrics {
-                multi_get_latency: self
-                    .rocksdb_multi_get_latency
-                    .get_delete_on_drop_histogram(vec![source_id.clone()]),
-                multi_put_latency: self
-                    .rocksdb_multi_put_latency
-                    .get_delete_on_drop_histogram(vec![source_id.clone()]),
-            }
-        };
-
-        let rocksdb_metrics = Arc::new(rocksdb_metrics);
-        assert!(rocksdb
-            .insert(source_id.clone(), Arc::downgrade(&rocksdb_metrics))
-            .is_none());
-        rocksdb_metrics
     }
 }
 
@@ -390,8 +352,6 @@ pub struct UpsertMetrics {
     pub(crate) legacy_value_errors: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 
     pub(crate) shared: Arc<UpsertSharedMetrics>,
-    pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
-    pub(crate) rocksdb_instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
     // `UpsertMetrics` keeps a reference (through `Arc`'s) to backpressure metrics, so that
     // they are not dropped when the `persist_source` operator is dropped.
     _backpressure_metrics: Option<BackpressureMetrics>,
@@ -457,27 +417,6 @@ impl UpsertMetrics {
                 .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
 
             shared: defs.shared(&source_id),
-            rocksdb_shared: defs.rocksdb_shared(&source_id),
-            rocksdb_instance_metrics: Arc::new(RocksDBInstanceMetrics {
-                multi_get_size: defs
-                    .rocksdb_multi_get_size
-                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
-                multi_get_result_count: defs
-                    .rocksdb_multi_get_result_count
-                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
-                multi_get_result_bytes: defs
-                    .rocksdb_multi_get_result_bytes
-                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
-                multi_get_count: defs
-                    .rocksdb_multi_get_count
-                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
-                multi_put_count: defs
-                    .rocksdb_multi_put_count
-                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
-                multi_put_size: defs
-                    .rocksdb_multi_put_size
-                    .get_delete_on_drop_counter(vec![source_id_s, worker_id]),
-            }),
             _backpressure_metrics: backpressure_metrics,
         }
     }

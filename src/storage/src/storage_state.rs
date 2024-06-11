@@ -87,7 +87,6 @@ use mz_ore::tracing::TracingHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
-use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
     RunIngestionCommand, StatusUpdate, StorageCommand, StorageResponse,
 };
@@ -156,7 +155,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,
-        shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
     ) -> Self {
         // It is very important that we only create the internal control
         // flow/command sequencer once because a) the worker state is re-used
@@ -226,10 +224,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 connection_context,
                 mz_dyncfgs::all_dyncfgs(),
             ),
-            dataflow_parameters: DataflowParameters::new(
-                shared_rocksdb_write_buffer_manager,
-                cluster_memory_limit,
-            ),
+            dataflow_parameters: DataflowParameters::new(),
             tracing_handle,
         };
 
@@ -328,10 +323,6 @@ pub struct StorageState {
 pub struct StorageInstanceContext {
     /// A directory that can be used for scratch work.
     pub scratch_directory: Option<PathBuf>,
-    /// A global `rocksdb::Env`, shared across ALL instances of `RocksDB` (even
-    /// across sources!). This `Env` lets us control some resources (like background threads)
-    /// process-wide.
-    pub rocksdb_env: rocksdb::Env,
     /// The memory limit of the materialize cluster replica. This will
     /// be used to calculate and configure the maximum inflight bytes for backpressure
     pub cluster_memory_limit: Option<usize>,
@@ -345,16 +336,14 @@ impl StorageInstanceContext {
     ) -> Result<Self, anyhow::Error> {
         Ok(Self {
             scratch_directory,
-            rocksdb_env: rocksdb::Env::new()?,
             cluster_memory_limit,
         })
     }
 
     /// Constructs a new connection context for usage in tests.
-    pub fn for_tests(rocksdb_env: rocksdb::Env) -> Self {
+    pub fn for_tests() -> Self {
         Self {
             scratch_directory: None,
-            rocksdb_env,
             cluster_memory_limit: None,
         }
     }

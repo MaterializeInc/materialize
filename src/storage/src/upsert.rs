@@ -23,7 +23,6 @@ use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_rocksdb::ValueIterator;
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::dyncfgs;
@@ -46,16 +45,10 @@ use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::render::sources::OutputIndex;
 use crate::storage_state::StorageInstanceContext;
-use autospill::AutoSpillBackend;
 use memory::InMemoryHashMap;
-use types::{
-    snapshot_merge_function, upsert_bincode_opts, BincodeOpts, StateValue, UpsertState,
-    UpsertStateBackend, Value,
-};
+use types::{StateValue, UpsertState, UpsertStateBackend, Value};
 
-mod autospill;
 mod memory;
-mod rocksdb;
 mod types;
 
 pub type UpsertValue = Result<Row, UpsertError>;
@@ -253,101 +246,8 @@ where
 
     let thin_input = upsert_thinning(input);
 
-    if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
-        let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
-
-        let allow_auto_spill = storage_configuration
-            .parameters
-            .upsert_auto_spill_config
-            .allow_spilling_to_disk;
-        let spill_threshold = storage_configuration
-            .parameters
-            .upsert_auto_spill_config
-            .spill_to_disk_threshold_bytes;
-
-        tracing::info!(
-            ?tuning,
-            ?storage_configuration.parameters.upsert_auto_spill_config,
-            ?rocksdb_use_native_merge_operator,
-            "timely-{} rendering {} with rocksdb-backed upsert state",
-            source_config.worker_id,
-            source_config.id
-        );
-        let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
-        let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
-        let rocksdb_dir = scratch_directory
-            .join("storage")
-            .join("upsert")
-            .join(source_config.id.to_string())
-            .join(source_config.worker_id.to_string());
-
-        let env = instance_context.rocksdb_env.clone();
-
-        let rocksdb_in_use_metric = Arc::clone(&upsert_metrics.rocksdb_autospill_in_use);
-
-        // A closure that will initialize and return a configured RocksDB instance
-        let rocksdb_init_fn = move || async move {
-            let merge_operator = if rocksdb_use_native_merge_operator {
-                Some((
-                    "upsert_state_snapshot_merge_v1".to_string(),
-                    |a: &[u8], b: ValueIterator<BincodeOpts, StateValue<Option<FromTime>>>| {
-                        snapshot_merge_function::<Option<FromTime>>(a.into(), b)
-                    },
-                ))
-            } else {
-                None
-            };
-            rocksdb::RocksDB::new(
-                mz_rocksdb::RocksDBInstance::new(
-                    &rocksdb_dir,
-                    mz_rocksdb::InstanceOptions::new(
-                        env,
-                        rocksdb_cleanup_tries,
-                        merge_operator,
-                        // For now, just use the same config as the one used for
-                        // merging snapshots.
-                        upsert_bincode_opts(),
-                    ),
-                    tuning,
-                    rocksdb_shared_metrics,
-                    rocksdb_instance_metrics,
-                )
-                .await
-                .unwrap(),
-            )
-        };
-
-        if allow_auto_spill {
-            upsert_inner(
-                &thin_input,
-                upsert_envelope.key_indices,
-                resume_upper,
-                previous,
-                previous_token,
-                upsert_metrics,
-                source_config,
-                move || async move {
-                    AutoSpillBackend::new(rocksdb_init_fn, spill_threshold, rocksdb_in_use_metric)
-                },
-                upsert_config,
-                prevent_snapshot_buffering,
-                snapshot_buffering_max,
-            )
-        } else {
-            upsert_inner(
-                &thin_input,
-                upsert_envelope.key_indices,
-                resume_upper,
-                previous,
-                previous_token,
-                upsert_metrics,
-                source_config,
-                rocksdb_init_fn,
-                upsert_config,
-                prevent_snapshot_buffering,
-                snapshot_buffering_max,
-            )
-        }
+    if false {
+        unreachable!()
     } else {
         tracing::info!(
             "timely-{} rendering {} with memory-backed upsert state",

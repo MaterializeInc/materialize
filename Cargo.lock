@@ -1134,17 +1134,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c58ec36aac5066d5ca17df51b3e70279f5670a72102f5752cb7e7c856adfc70"
 
 [[package]]
-name = "bzip2-sys"
-version = "0.1.11+1.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "736a955f3fa7875102d57c82b8cac37ec45224a07fd32d58f9f7a186b6cd4cdc"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
-]
-
-[[package]]
 name = "camino"
 version = "1.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3518,22 +3507,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 
 [[package]]
-name = "librocksdb-sys"
-version = "0.11.0+8.3.2"
-source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#ab3684f999a5586d7a5e94bd65defd78af15d40f"
-dependencies = [
- "bindgen",
- "bzip2-sys",
- "cc",
- "glob",
- "libc",
- "libz-sys",
- "lz4-sys",
- "rustflags",
- "zstd-sys",
-]
-
-[[package]]
 name = "libz-sys"
 version = "1.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3632,16 +3605,6 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "url",
-]
-
-[[package]]
-name = "lz4-sys"
-version = "1.9.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d27b317e207b10f69f5e75494119e391a96f48861ae870d1da6edac98ca900"
-dependencies = [
- "cc",
- "libc",
 ]
 
 [[package]]
@@ -4348,7 +4311,6 @@ dependencies = [
  "once_cell",
  "prometheus",
  "regex",
- "rocksdb",
  "scopeguard",
  "serde",
  "smallvec",
@@ -5806,37 +5768,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-rocksdb"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "bincode",
- "derivative",
- "itertools 0.10.5",
- "mz-build-tools",
- "mz-ore",
- "mz-proto",
- "mz-rocksdb-types",
- "num_cpus",
- "once_cell",
- "prometheus",
- "proptest",
- "proptest-derive",
- "prost",
- "prost-build",
- "rocksdb",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tonic-build",
- "tracing",
- "uncased",
- "workspace-hack",
-]
-
-[[package]]
 name = "mz-rocksdb-types"
 version = "0.0.0"
 dependencies = [
@@ -6214,7 +6145,6 @@ dependencies = [
  "mz-pid-file",
  "mz-postgres-util",
  "mz-repr",
- "mz-rocksdb",
  "mz-secrets",
  "mz-service",
  "mz-sql-parser",
@@ -6232,7 +6162,6 @@ dependencies = [
  "rand",
  "rdkafka",
  "regex",
- "rocksdb",
  "seahash",
  "serde",
  "serde_bytes",
@@ -8187,15 +8116,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rocksdb"
-version = "0.21.0"
-source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#ab3684f999a5586d7a5e94bd65defd78af15d40f"
-dependencies = [
- "libc",
- "librocksdb-sys",
-]
-
-[[package]]
 name = "ropey"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8246,12 +8166,6 @@ checksum = "bfa0f585226d2e68097d4f95d113b15b83a82e819ab25717ec0590d9584ef366"
 dependencies = [
  "semver",
 ]
-
-[[package]]
-name = "rustflags"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e74f1ec0cda1aea3a3a6c0df066cd67acac62e24064532b871e8eafb0ec6c126"
 
 [[package]]
 name = "rustix"
