@@ -5806,37 +5806,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-rocksdb"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "bincode",
- "derivative",
- "itertools 0.10.5",
- "mz-build-tools",
- "mz-ore",
- "mz-proto",
- "mz-rocksdb-types",
- "num_cpus",
- "once_cell",
- "prometheus",
- "proptest",
- "proptest-derive",
- "prost",
- "prost-build",
- "rocksdb",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tonic-build",
- "tracing",
- "uncased",
- "workspace-hack",
-]
-
-[[package]]
 name = "mz-rocksdb-types"
 version = "0.0.0"
 dependencies = [
@@ -6214,7 +6183,6 @@ dependencies = [
  "mz-pid-file",
  "mz-postgres-util",
  "mz-repr",
- "mz-rocksdb",
  "mz-secrets",
  "mz-service",
  "mz-sql-parser",

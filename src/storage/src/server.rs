@@ -16,7 +16,6 @@ use mz_cluster::server::TimelyContainerRef;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
-use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
@@ -38,8 +37,6 @@ pub struct Config {
 
     /// Metrics for storage
     pub metrics: StorageMetrics,
-    /// Shared rocksdb write buffer manager
-    pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
 
 /// A handle to a running dataflow server.
@@ -65,16 +62,11 @@ pub fn serve(
     // Various metrics related things.
     let metrics = StorageMetrics::register_with(&generic_config.metrics_registry);
 
-    let shared_rocksdb_write_buffer_manager = Default::default();
-
     let config = Config {
         now,
         connection_context,
         instance_context,
         metrics,
-        // The shared RocksDB `WriteBufferManager` is shared between the workers.
-        // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the first worker attempts to initialize it.
-        shared_rocksdb_write_buffer_manager,
     };
 
     let (timely_container, client_builder) = mz_cluster::server::serve::<
@@ -116,7 +108,6 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             persist_clients,
             txns_ctx,
             tracing_handle,
-            config.shared_rocksdb_write_buffer_manager,
         )
         .run();
     }
