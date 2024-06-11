@@ -745,11 +745,11 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
     type Error = DurableCatalogError;
 
     fn try_from(kind: StateUpdateKind) -> Result<Self, Self::Error> {
-        fn into_durable<PK, PV, K, V, T>(key: PK, value: PV) -> Result<T, DurableCatalogError>
+        fn into_durable<PK, PV, T>(key: PK, value: PV) -> Result<T, DurableCatalogError>
         where
-            PK: ProtoType<K>,
-            PV: ProtoType<V>,
-            T: DurableType<K, V>,
+            PK: ProtoType<T::Key>,
+            PV: ProtoType<T::Value>,
+            T: DurableType,
         {
             let key = key.into_rust()?;
             let value = value.into_rust()?;

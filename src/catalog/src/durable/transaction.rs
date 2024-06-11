@@ -1695,14 +1695,14 @@ impl<'a> Transaction<'a> {
     // collecting updates from the durable catalog.
     /// Returns the current value of all objects in the form of a positive [`StateUpdate`].
     pub fn get_bootstrap_updates(&self) -> impl Iterator<Item = StateUpdate> {
-        fn get_collection_updates<K, V, T>(
-            table_txn: &TableTransaction<K, V>,
+        fn get_collection_updates<T>(
+            table_txn: &TableTransaction<T::Key, T::Value>,
             kind_fn: impl FnMut(T) -> StateUpdateKind,
         ) -> impl Iterator<Item = StateUpdateKind>
         where
-            K: Ord + Eq + Clone + Debug,
-            V: Ord + Clone + Debug,
-            T: DurableType<K, V>,
+            T::Key: Ord + Eq + Clone + Debug,
+            T::Value: Ord + Clone + Debug,
+            T: DurableType,
         {
             table_txn
                 .items()
@@ -1782,15 +1782,15 @@ impl<'a> Transaction<'a> {
 
     /// Returns the updates of the current op.
     pub fn get_op_updates(&self) -> impl Iterator<Item = StateUpdate> + '_ {
-        fn get_collection_op_updates<'a, K, V, T>(
-            table_txn: &'a TableTransaction<K, V>,
+        fn get_collection_op_updates<'a, T>(
+            table_txn: &'a TableTransaction<T::Key, T::Value>,
             kind_fn: impl Fn(T) -> StateUpdateKind + 'a,
             op: Timestamp,
         ) -> impl Iterator<Item = (StateUpdateKind, Diff)> + 'a
         where
-            K: Ord + Eq + Clone + Debug,
-            V: Ord + Clone + Debug,
-            T: DurableType<K, V>,
+            T::Key: Ord + Eq + Clone + Debug,
+            T::Value: Ord + Clone + Debug,
+            T: DurableType,
         {
             table_txn
                 .pending
@@ -1810,14 +1810,14 @@ impl<'a> Transaction<'a> {
                 })
         }
 
-        fn get_large_collection_op_updates<'a, K, T>(
-            collection: &'a Vec<(K, Diff, Timestamp)>,
+        fn get_large_collection_op_updates<'a, T>(
+            collection: &'a Vec<(T::Key, Diff, Timestamp)>,
             kind_fn: impl Fn(T) -> StateUpdateKind + 'a,
             op: Timestamp,
         ) -> impl Iterator<Item = (StateUpdateKind, Diff)> + 'a
         where
-            K: Ord + Eq + Clone + Debug,
-            T: DurableType<K, ()>,
+            T::Key: Ord + Eq + Clone + Debug,
+            T: DurableType<Value = ()>,
         {
             collection.iter().filter_map(move |(k, diff, ts)| {
                 if *ts == op {
