@@ -303,12 +303,16 @@ impl CatalogState {
         for StateUpdate { kind, diff } in updates {
             match diff {
                 StateDiff::Retraction => {
+                    // We want the builtin table retraction to match the state of the catalog
+                    // before applying the update.
                     builtin_table_updates
                         .extend(self.generate_builtin_table_update(kind.clone(), diff));
                     self.apply_update(kind, diff);
                 }
                 StateDiff::Addition => {
                     self.apply_update(kind.clone(), diff);
+                    // We want the builtin table addition to match the state of the catalog
+                    // after applying the update.
                     builtin_table_updates
                         .extend(self.generate_builtin_table_update(kind.clone(), diff));
                 }
