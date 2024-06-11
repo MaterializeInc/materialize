@@ -95,5 +95,45 @@ contains:found identifier "no_such_format"
   FORMAT JSON
 contains:ENVELOPE clause is required
 
+#
+# Topic Options
+#
+
+! CREATE SINK invalid_topic_options
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
+  INTO KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}',
+    TOPIC REPLICATION FACTOR -5
+  )
+  KEY(f1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+contains:TOPIC REPLICATION FACTOR must be a positive integer
+
+! CREATE SINK invalid_topic_options
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
+  INTO KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}',
+    TOPIC PARTITION COUNT 'two'
+  )
+  KEY(f1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+contains:invalid TOPIC PARTITION COUNT: cannot use value as number
+
+! CREATE SINK invalid_topic_options
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
+  INTO KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}',
+    TOPIC CONFIG 123
+  )
+  KEY(f1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+contains:invalid TOPIC CONFIG: cannot use value as map
+
 # Expect empty output
 > SHOW SINKS
