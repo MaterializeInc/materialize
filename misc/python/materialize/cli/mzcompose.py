@@ -637,8 +637,12 @@ To see the available workflows, run:
                 raise UIError("at least one test case failed")
 
     def shall_generate_junit_report(self, composition: str | None) -> bool:
-        # sqllogictest already generates a proper junit.xml file
-        return composition != "sqllogictest"
+        return composition not in {
+            # sqllogictest already generates a proper junit.xml file
+            "sqllogictest",
+            # not a test, run as post-command, and should not overwrite an existing junit.xml from a previous test
+            "get-cloud-hostname",
+        }
 
     def generate_junit_suite(self, composition: Composition) -> junit_xml.TestSuite:
         buildkite_step_name = os.getenv("BUILDKITE_LABEL")
