@@ -98,15 +98,15 @@ pub struct Schema {
     pub privileges: PrivilegeMap,
 }
 
-impl Schema {
-    pub fn into_durable_schema(self, database_id: Option<DatabaseId>) -> durable::Schema {
+impl From<Schema> for durable::Schema {
+    fn from(schema: Schema) -> durable::Schema {
         durable::Schema {
-            id: self.id.into(),
-            oid: self.oid,
-            name: self.name.schema,
-            database_id,
-            owner_id: self.owner_id,
-            privileges: self.privileges.into_all_values().collect(),
+            id: schema.id.into(),
+            oid: schema.oid,
+            name: schema.name.schema,
+            database_id: schema.name.database.id(),
+            owner_id: schema.owner_id,
+            privileges: schema.privileges.into_all_values().collect(),
         }
     }
 }
