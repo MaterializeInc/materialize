@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use mz_repr::{GlobalId, Row};
-use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
@@ -27,31 +26,16 @@ use crate::statistics::{SinkStatisticsRecord, SourceStatisticsRecord};
 /// Changes to these parameters are applied to `StorageWorker`s in a consistent order
 /// with source and sink creation.
 #[derive(Debug)]
-pub struct DataflowParameters {
-    /// Configuration/tuning for RocksDB. This also contains
-    /// some shared objects, which is why its separate.
-    pub upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBConfig,
-}
+pub struct DataflowParameters {}
 
 impl DataflowParameters {
     /// Creates a new instance of `DataflowParameters` with given shared rocksdb write buffer manager
     /// and the cluster memory limit
-    pub fn new(
-        shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
-        cluster_memory_limit: Option<usize>,
-    ) -> Self {
-        Self {
-            upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBConfig::new(
-                shared_rocksdb_write_buffer_manager,
-                cluster_memory_limit,
-            ),
-        }
+    pub fn new() -> Self {
+        Self {}
     }
     /// Update the `DataflowParameters` with new configuration.
-    pub fn update(&mut self, storage_parameters: StorageParameters) {
-        self.upsert_rocksdb_tuning_config
-            .apply(storage_parameters.upsert_rocksdb_tuning_config.clone());
-    }
+    pub fn update(&mut self, storage_parameters: StorageParameters) {}
 }
 
 /// Internal commands that can be sent by individual operators/workers that will

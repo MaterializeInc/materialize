@@ -87,7 +87,6 @@ use mz_ore::tracing::TracingHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
-use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
     RunIngestionCommand, StatusUpdate, StorageCommand, StorageResponse,
 };
@@ -156,7 +155,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,
-        shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
     ) -> Self {
         // It is very important that we only create the internal control
         // flow/command sequencer once because a) the worker state is re-used
@@ -226,10 +224,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 connection_context,
                 mz_dyncfgs::all_dyncfgs(),
             ),
-            dataflow_parameters: DataflowParameters::new(
-                shared_rocksdb_write_buffer_manager,
-                cluster_memory_limit,
-            ),
+            dataflow_parameters: DataflowParameters::new(),
             tracing_handle,
         };
 
