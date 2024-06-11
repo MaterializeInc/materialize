@@ -12,18 +12,18 @@
 from materialize.scalability.scalability_versioning import (
     SCALABILITY_FRAMEWORK_DIR,
     SCALABILITY_WORKLOADS_DIR,
-    SHA256_BY_FRAMEWORK_DIR,
     SHA256_BY_WORKLOAD_FILE,
+    SHA256_OF_FRAMEWORK,
 )
 from materialize.test_analytics.versioning.versioning_config import (
-    PerDirectoryVersioningConfig,
+    DirectoryVersioningConfig,
     PerFileVersioningConfig,
 )
 
-SCALABILITY_FRAMEWORK_VERSION_SKEW_CHECK_CONFIG = PerDirectoryVersioningConfig(
+SCALABILITY_FRAMEWORK_VERSION_SKEW_CHECK_CONFIG = DirectoryVersioningConfig(
     root_directory=SCALABILITY_FRAMEWORK_DIR,
-    sha256_per_entry=SHA256_BY_FRAMEWORK_DIR,
-    sha256_per_entry_dict_name="SHA256_BY_FRAMEWORK_DIR",
+    sha256_per_entry=SHA256_OF_FRAMEWORK,
+    sha256_per_entry_dict_name="SHA256_OF_FRAMEWORK",
     excluded_file_names={"scalability_versioning.py"},
     excluded_paths={"workloads"},
     task_on_hash_mismatch="Please update the version of the framework if the changes are expected to impact results!",

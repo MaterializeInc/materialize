@@ -21,7 +21,7 @@ class VersioningConfig:
     excluded_paths: set[str] = field(default_factory=lambda: set())
     included_file_extensions: set[str] = field(default_factory=lambda: {"py"})
 
-    def group_hash_by_directory(self) -> bool:
+    def group_hash_to_single_value(self) -> bool:
         raise NotImplementedError
 
 
@@ -29,13 +29,13 @@ class VersioningConfig:
 class PerFileVersioningConfig(VersioningConfig):
     recursive: bool = False
 
-    def group_hash_by_directory(self) -> bool:
+    def group_hash_to_single_value(self) -> bool:
         return False
 
 
 @dataclass
-class PerDirectoryVersioningConfig(VersioningConfig):
+class DirectoryVersioningConfig(VersioningConfig):
     recursive: bool = True
 
-    def group_hash_by_directory(self) -> bool:
+    def group_hash_to_single_value(self) -> bool:
         return True
