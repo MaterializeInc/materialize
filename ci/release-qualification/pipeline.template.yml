@@ -90,7 +90,6 @@ steps:
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
-      skip: "Reenable when #21751 is fixed"
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
