@@ -70,6 +70,9 @@ pub trait DurableType: Sized {
     /// Consume and convert a `(Key, Value)` key-value pair back into a
     /// `Self` value.
     fn from_key_value(key: Self::Key, value: Self::Value) -> Self;
+
+    /// TODO(jkosh44) docs and this ends up cloning a lot.
+    fn key(&self) -> Self::Key;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +108,10 @@ impl DurableType for Database {
             owner_id: value.owner_id,
             privileges: value.privileges,
         }
+    }
+
+    fn key(&self) -> Self::Key {
+        DatabaseKey { id: self.id }
     }
 }
 
@@ -145,6 +152,10 @@ impl DurableType for Schema {
             privileges: value.privileges,
         }
     }
+
+    fn key(&self) -> Self::Key {
+        SchemaKey { id: self.id }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,6 +195,10 @@ impl DurableType for Role {
             vars: value.vars,
         }
     }
+
+    fn key(&self) -> Self::Key {
+        RoleKey { id: self.id }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -219,6 +234,10 @@ impl DurableType for Cluster {
             privileges: value.privileges,
             config: value.config,
         }
+    }
+
+    fn key(&self) -> Self::Key {
+        ClusterKey { id: self.id }
     }
 }
 
@@ -289,6 +308,13 @@ impl DurableType for IntrospectionSourceIndex {
             oid: value.oid,
         }
     }
+
+    fn key(&self) -> Self::Key {
+        ClusterIntrospectionSourceIndexKey {
+            cluster_id: self.cluster_id,
+            name: self.name.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,6 +351,12 @@ impl DurableType for ClusterReplica {
             name: value.name,
             config: value.config,
             owner_id: value.owner_id,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        ClusterReplicaKey {
+            id: self.replica_id,
         }
     }
 }
@@ -452,6 +484,10 @@ impl DurableType for Item {
             privileges: value.privileges,
         }
     }
+
+    fn key(&self) -> Self::Key {
+        ItemKey { gid: self.id }
+    }
 }
 
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
@@ -516,6 +552,14 @@ impl DurableType for SystemObjectMapping {
             },
         }
     }
+
+    fn key(&self) -> Self::Key {
+        GidMappingKey {
+            schema_name: self.description.schema_name.clone(),
+            object_type: self.description.object_type.clone(),
+            object_name: self.description.object_name.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -557,6 +601,16 @@ impl DurableType for DefaultPrivilege {
             },
         }
     }
+
+    fn key(&self) -> Self::Key {
+        DefaultPrivilegesKey {
+            role_id: self.object.role_id,
+            database_id: self.object.database_id,
+            schema_id: self.object.schema_id,
+            object_type: self.object.object_type,
+            grantee: self.acl_item.grantee,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -589,6 +643,13 @@ impl DurableType for Comment {
             comment: value.comment,
         }
     }
+
+    fn key(&self) -> Self::Key {
+        CommentKey {
+            object_id: self.object_id,
+            sub_component: self.sub_component,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -616,6 +677,12 @@ impl DurableType for IdAlloc {
             next_id: value.next_id,
         }
     }
+
+    fn key(&self) -> Self::Key {
+        IdAllocKey {
+            name: self.name.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -639,6 +706,12 @@ impl DurableType for Config {
         Self {
             key: key.key,
             value: value.value,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        ConfigKey {
+            key: self.key.clone(),
         }
     }
 }
@@ -666,6 +739,12 @@ impl DurableType for Setting {
             value: value.value,
         }
     }
+
+    fn key(&self) -> Self::Key {
+        SettingKey {
+            name: self.name.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -689,6 +768,12 @@ impl DurableType for SystemConfiguration {
         Self {
             name: key.name,
             value: value.value,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        ServerConfigurationKey {
+            name: self.name.clone(),
         }
     }
 }
@@ -716,6 +801,13 @@ impl DurableType for MzAclItem {
             acl_mode: value.acl_mode,
         }
     }
+
+    fn key(&self) -> Self::Key {
+        SystemPrivilegesKey {
+            grantee: self.grantee,
+            grantor: self.grantor,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -733,6 +825,12 @@ impl DurableType for AuditLog {
 
     fn from_key_value(key: Self::Key, _value: Self::Value) -> Self {
         Self { event: key.event }
+    }
+
+    fn key(&self) -> Self::Key {
+        AuditLogKey {
+            event: self.event.clone(),
+        }
     }
 }
 
@@ -756,6 +854,12 @@ impl DurableType for StorageUsage {
 
     fn from_key_value(key: Self::Key, _value: Self::Value) -> Self {
         Self { metric: key.metric }
+    }
+
+    fn key(&self) -> Self::Key {
+        StorageUsageKey {
+            metric: self.metric.clone(),
+        }
     }
 }
 
@@ -782,6 +886,10 @@ impl DurableType for StorageCollectionMetadata {
             shard: value.shard,
         }
     }
+
+    fn key(&self) -> Self::Key {
+        StorageCollectionMetadataKey { id: self.id }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -799,6 +907,12 @@ impl DurableType for UnfinalizedShard {
 
     fn from_key_value(key: Self::Key, _value: Self::Value) -> Self {
         Self { shard: key.shard }
+    }
+
+    fn key(&self) -> Self::Key {
+        UnfinalizedShardKey {
+            shard: self.shard.clone(),
+        }
     }
 }
 
