@@ -592,7 +592,7 @@ impl Catalog {
             let (state, builtin_migration_metadata, mut builtin_table_updates, last_seen_version) =
                 Self::initialize_state(config.state, &mut storage).await?;
 
-            let mut catalog = Catalog {
+            let catalog = Catalog {
                 state,
                 plans: CatalogPlans::default(),
                 transient_revision: 1,

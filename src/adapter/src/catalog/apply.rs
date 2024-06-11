@@ -932,7 +932,7 @@ impl CatalogState {
     /// durable catalog.
     #[instrument]
     pub(crate) fn generate_builtin_table_updates(
-        &mut self,
+        &self,
         updates: Vec<StateUpdate>,
     ) -> Vec<BuiltinTableUpdate> {
         let mut builtin_table_updates = Vec::new();
@@ -948,7 +948,7 @@ impl CatalogState {
     /// durable catalog.
     #[instrument(level = "debug")]
     fn generate_builtin_table_update(
-        &mut self,
+        &self,
         kind: StateUpdateKind,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
