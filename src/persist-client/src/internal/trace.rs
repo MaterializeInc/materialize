@@ -1544,7 +1544,9 @@ impl<T: Timestamp + Lattice> MergeState<T> {
         }
         assert!(
             self.merge.is_none(),
-            "Attempted to insert batch into incomplete merge!"
+            "Attempted to insert batch into incomplete merge! (batch={:?}, batch_count={})",
+            batch.id,
+            self.batches.len(),
         );
         self.batches
             .try_push(batch)
