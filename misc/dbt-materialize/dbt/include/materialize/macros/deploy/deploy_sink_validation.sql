@@ -36,7 +36,7 @@
 {% set current_database_query = "SELECT current_database()" %}
 {% set results = run_query(current_database_query) %}
 {% if execute %}
-    {% set current_database = results.rows[0][0] %}
+    {% set current_database = adapter.quote(results.rows[0][0]) %}
 {% endif %}
 
 -- Loop through each schema and print sink details
@@ -66,23 +66,25 @@
     {% endset %}
 
     {% set sinks_and_upstream_relations = run_query(sinks_and_upstream_relations_query) %}
-    {% if execute %}
+    {% if sinks_and_upstream_relations is not none and sinks_and_upstream_relations.rows %}
         -- Print debug information
         {{ log("Sinks and their upstream relations in schema: " ~ schema, info=True) }}
         {% for sink in sinks_and_upstream_relations.rows %}
-            {% set sink_name = sink[2] %}
-            {% set sink_schema_name = sink[3] %}
-            {% set sink_database_name = sink[4] %}
-            {% set upstream_relation_name = sink[5] %}
-            {% set upstream_relation_schema = sink[6] %}
-            {% set deploy_schema = upstream_relation_schema ~ "_dbt_deploy" %}
+            {% set sink_name = adapter.quote(sink[2]) %}
+            {% set sink_schema_name = adapter.quote(sink[3]) %}
+            {% set sink_database_name = adapter.quote(sink[4]) %}
+            {% set upstream_relation_name = adapter.quote(sink[5]) %}
+            {% set upstream_relation_schema = adapter.quote(sink[6]) %}
+            {% set deploy_schema = adapter.quote(sink[6] ~ "_dbt_deploy") %}
             {% set new_upstream_relation = current_database ~ '.' ~ deploy_schema ~ '.' ~ upstream_relation_name %}
             {{ log("  Sink: " ~ sink_name ~ " (Schema: " ~ schema ~ ")", info=True) }}
-            {{ log("    Current upstream relation: " ~ upstream_relation_schema ~ '.' ~ upstream_relation_name, info=True) }}
+            {{ log("    Current upstream relation: " ~ current_database ~ '.' ~ upstream_relation_schema ~ '.' ~ upstream_relation_name, info=True) }}
             {{ log("    New upstream relation: " ~ new_upstream_relation, info=True) }}
             {{ log("    The sink will be altered to use the new upstream relation:", info=True) }}
             {{ log("    ALTER SINK " ~ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name ~ " SET FROM " ~ new_upstream_relation, info=True) }}
         {% endfor %}
+    {% else %}
+        {{ log("No sinks found in schema: " ~ schema, info=True) }}
     {% endif %}
 {% endfor %}
 {% endmacro %}
