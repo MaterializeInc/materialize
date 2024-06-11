@@ -49,7 +49,7 @@ use crate::durable::objects::serialization::proto;
 // Structs used to pass information to outside modules.
 
 /// A trait for representing `Self` as a key-value pair of type
-/// `(K, V)` for the purpose of storing this value durably.
+/// `(Key, Value)` for the purpose of storing this value durably.
 ///
 /// To encode a key-value pair, use [`DurableType::into_key_value`].
 ///
@@ -60,13 +60,16 @@ use crate::durable::objects::serialization::proto;
 /// condensed type.
 ///
 /// [`RustType`]: mz_proto::RustType
-pub trait DurableType<K, V>: Sized {
-    /// Consume and convert `Self` into a `(K, V)` key-value pair.
-    fn into_key_value(self) -> (K, V);
+pub trait DurableType: Sized {
+    type Key;
+    type Value;
 
-    /// Consume and convert a `(K, V)` key-value pair back into a
+    /// Consume and convert `Self` into a `(Key, Value)` key-value pair.
+    fn into_key_value(self) -> (Self::Key, Self::Value);
+
+    /// Consume and convert a `(Key, Value)` key-value pair back into a
     /// `Self` value.
-    fn from_key_value(key: K, value: V) -> Self;
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,8 +81,11 @@ pub struct Database {
     pub privileges: Vec<MzAclItem>,
 }
 
-impl DurableType<DatabaseKey, DatabaseValue> for Database {
-    fn into_key_value(self) -> (DatabaseKey, DatabaseValue) {
+impl DurableType for Database {
+    type Key = DatabaseKey;
+    type Value = DatabaseValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             DatabaseKey { id: self.id },
             DatabaseValue {
@@ -91,7 +97,7 @@ impl DurableType<DatabaseKey, DatabaseValue> for Database {
         )
     }
 
-    fn from_key_value(key: DatabaseKey, value: DatabaseValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             id: key.id,
             oid: value.oid,
@@ -112,8 +118,11 @@ pub struct Schema {
     pub privileges: Vec<MzAclItem>,
 }
 
-impl DurableType<SchemaKey, SchemaValue> for Schema {
-    fn into_key_value(self) -> (SchemaKey, SchemaValue) {
+impl DurableType for Schema {
+    type Key = SchemaKey;
+    type Value = SchemaValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             SchemaKey { id: self.id },
             SchemaValue {
@@ -126,7 +135,7 @@ impl DurableType<SchemaKey, SchemaValue> for Schema {
         )
     }
 
-    fn from_key_value(key: SchemaKey, value: SchemaValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             id: key.id,
             oid: value.oid,
@@ -148,8 +157,11 @@ pub struct Role {
     pub vars: RoleVars,
 }
 
-impl DurableType<RoleKey, RoleValue> for Role {
-    fn into_key_value(self) -> (RoleKey, RoleValue) {
+impl DurableType for Role {
+    type Key = RoleKey;
+    type Value = RoleValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             RoleKey { id: self.id },
             RoleValue {
@@ -162,7 +174,7 @@ impl DurableType<RoleKey, RoleValue> for Role {
         )
     }
 
-    fn from_key_value(key: RoleKey, value: RoleValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             id: key.id,
             oid: value.oid,
@@ -183,8 +195,11 @@ pub struct Cluster {
     pub config: ClusterConfig,
 }
 
-impl DurableType<ClusterKey, ClusterValue> for Cluster {
-    fn into_key_value(self) -> (ClusterKey, ClusterValue) {
+impl DurableType for Cluster {
+    type Key = ClusterKey;
+    type Value = ClusterValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             ClusterKey { id: self.id },
             ClusterValue {
@@ -196,7 +211,7 @@ impl DurableType<ClusterKey, ClusterValue> for Cluster {
         )
     }
 
-    fn from_key_value(key: ClusterKey, value: ClusterValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             id: key.id,
             name: value.name,
@@ -237,15 +252,11 @@ pub struct IntrospectionSourceIndex {
     pub oid: u32,
 }
 
-impl DurableType<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>
-    for IntrospectionSourceIndex
-{
-    fn into_key_value(
-        self,
-    ) -> (
-        ClusterIntrospectionSourceIndexKey,
-        ClusterIntrospectionSourceIndexValue,
-    ) {
+impl DurableType for IntrospectionSourceIndex {
+    type Key = ClusterIntrospectionSourceIndexKey;
+    type Value = ClusterIntrospectionSourceIndexValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         let index_id = match self.index_id {
             GlobalId::System(id) => id,
             GlobalId::User(_) => {
@@ -270,10 +281,7 @@ impl DurableType<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceI
         )
     }
 
-    fn from_key_value(
-        key: ClusterIntrospectionSourceIndexKey,
-        value: ClusterIntrospectionSourceIndexValue,
-    ) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             cluster_id: key.cluster_id,
             name: key.name,
@@ -292,8 +300,11 @@ pub struct ClusterReplica {
     pub owner_id: RoleId,
 }
 
-impl DurableType<ClusterReplicaKey, ClusterReplicaValue> for ClusterReplica {
-    fn into_key_value(self) -> (ClusterReplicaKey, ClusterReplicaValue) {
+impl DurableType for ClusterReplica {
+    type Key = ClusterReplicaKey;
+    type Value = ClusterReplicaValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             ClusterReplicaKey {
                 id: self.replica_id,
@@ -307,7 +318,7 @@ impl DurableType<ClusterReplicaKey, ClusterReplicaValue> for ClusterReplica {
         )
     }
 
-    fn from_key_value(key: ClusterReplicaKey, value: ClusterReplicaValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             cluster_id: value.cluster_id,
             replica_id: key.id,
@@ -412,8 +423,11 @@ pub struct Item {
     pub privileges: Vec<MzAclItem>,
 }
 
-impl DurableType<ItemKey, ItemValue> for Item {
-    fn into_key_value(self) -> (ItemKey, ItemValue) {
+impl DurableType for Item {
+    type Key = ItemKey;
+    type Value = ItemValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             ItemKey { gid: self.id },
             ItemValue {
@@ -427,7 +441,7 @@ impl DurableType<ItemKey, ItemValue> for Item {
         )
     }
 
-    fn from_key_value(key: ItemKey, value: ItemValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             id: key.gid,
             oid: value.oid,
@@ -466,8 +480,11 @@ pub struct SystemObjectMapping {
     pub unique_identifier: SystemObjectUniqueIdentifier,
 }
 
-impl DurableType<GidMappingKey, GidMappingValue> for SystemObjectMapping {
-    fn into_key_value(self) -> (GidMappingKey, GidMappingValue) {
+impl DurableType for SystemObjectMapping {
+    type Key = GidMappingKey;
+    type Value = GidMappingValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             GidMappingKey {
                 schema_name: self.description.schema_name,
@@ -486,7 +503,7 @@ impl DurableType<GidMappingKey, GidMappingValue> for SystemObjectMapping {
         )
     }
 
-    fn from_key_value(key: GidMappingKey, value: GidMappingValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             description: SystemObjectDescription {
                 schema_name: key.schema_name,
@@ -507,8 +524,11 @@ pub struct DefaultPrivilege {
     pub acl_item: DefaultPrivilegeAclItem,
 }
 
-impl DurableType<DefaultPrivilegesKey, DefaultPrivilegesValue> for DefaultPrivilege {
-    fn into_key_value(self) -> (DefaultPrivilegesKey, DefaultPrivilegesValue) {
+impl DurableType for DefaultPrivilege {
+    type Key = DefaultPrivilegesKey;
+    type Value = DefaultPrivilegesValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             DefaultPrivilegesKey {
                 role_id: self.object.role_id,
@@ -523,7 +543,7 @@ impl DurableType<DefaultPrivilegesKey, DefaultPrivilegesValue> for DefaultPrivil
         )
     }
 
-    fn from_key_value(key: DefaultPrivilegesKey, value: DefaultPrivilegesValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             object: DefaultPrivilegeObject {
                 role_id: key.role_id,
@@ -546,8 +566,11 @@ pub struct Comment {
     pub comment: String,
 }
 
-impl DurableType<CommentKey, CommentValue> for Comment {
-    fn into_key_value(self) -> (CommentKey, CommentValue) {
+impl DurableType for Comment {
+    type Key = CommentKey;
+    type Value = CommentValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             CommentKey {
                 object_id: self.object_id,
@@ -559,7 +582,7 @@ impl DurableType<CommentKey, CommentValue> for Comment {
         )
     }
 
-    fn from_key_value(key: CommentKey, value: CommentValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             object_id: key.object_id,
             sub_component: key.sub_component,
@@ -574,8 +597,11 @@ pub struct IdAlloc {
     pub next_id: u64,
 }
 
-impl DurableType<IdAllocKey, IdAllocValue> for IdAlloc {
-    fn into_key_value(self) -> (IdAllocKey, IdAllocValue) {
+impl DurableType for IdAlloc {
+    type Key = IdAllocKey;
+    type Value = IdAllocValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             IdAllocKey { name: self.name },
             IdAllocValue {
@@ -584,7 +610,7 @@ impl DurableType<IdAllocKey, IdAllocValue> for IdAlloc {
         )
     }
 
-    fn from_key_value(key: IdAllocKey, value: IdAllocValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             name: key.name,
             next_id: value.next_id,
@@ -598,15 +624,18 @@ pub struct Config {
     pub value: u64,
 }
 
-impl DurableType<ConfigKey, ConfigValue> for Config {
-    fn into_key_value(self) -> (ConfigKey, ConfigValue) {
+impl DurableType for Config {
+    type Key = ConfigKey;
+    type Value = ConfigValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             ConfigKey { key: self.key },
             ConfigValue { value: self.value },
         )
     }
 
-    fn from_key_value(key: ConfigKey, value: ConfigValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             key: key.key,
             value: value.value,
@@ -620,15 +649,18 @@ pub struct Setting {
     pub value: String,
 }
 
-impl DurableType<SettingKey, SettingValue> for Setting {
-    fn into_key_value(self) -> (SettingKey, SettingValue) {
+impl DurableType for Setting {
+    type Key = SettingKey;
+    type Value = SettingValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             SettingKey { name: self.name },
             SettingValue { value: self.value },
         )
     }
 
-    fn from_key_value(key: SettingKey, value: SettingValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             name: key.name,
             value: value.value,
@@ -642,15 +674,18 @@ pub struct SystemConfiguration {
     pub value: String,
 }
 
-impl DurableType<ServerConfigurationKey, ServerConfigurationValue> for SystemConfiguration {
-    fn into_key_value(self) -> (ServerConfigurationKey, ServerConfigurationValue) {
+impl DurableType for SystemConfiguration {
+    type Key = ServerConfigurationKey;
+    type Value = ServerConfigurationValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             ServerConfigurationKey { name: self.name },
             ServerConfigurationValue { value: self.value },
         )
     }
 
-    fn from_key_value(key: ServerConfigurationKey, value: ServerConfigurationValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             name: key.name,
             value: value.value,
@@ -658,8 +693,11 @@ impl DurableType<ServerConfigurationKey, ServerConfigurationValue> for SystemCon
     }
 }
 
-impl DurableType<SystemPrivilegesKey, SystemPrivilegesValue> for MzAclItem {
-    fn into_key_value(self) -> (SystemPrivilegesKey, SystemPrivilegesValue) {
+impl DurableType for MzAclItem {
+    type Key = SystemPrivilegesKey;
+    type Value = SystemPrivilegesValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             SystemPrivilegesKey {
                 grantee: self.grantee,
@@ -671,7 +709,7 @@ impl DurableType<SystemPrivilegesKey, SystemPrivilegesValue> for MzAclItem {
         )
     }
 
-    fn from_key_value(key: SystemPrivilegesKey, value: SystemPrivilegesValue) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             grantee: key.grantee,
             grantor: key.grantor,
@@ -685,12 +723,15 @@ pub struct AuditLog {
     pub event: VersionedEvent,
 }
 
-impl DurableType<AuditLogKey, ()> for AuditLog {
-    fn into_key_value(self) -> (AuditLogKey, ()) {
+impl DurableType for AuditLog {
+    type Key = AuditLogKey;
+    type Value = ();
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (AuditLogKey { event: self.event }, ())
     }
 
-    fn from_key_value(key: AuditLogKey, _value: ()) -> Self {
+    fn from_key_value(key: Self::Key, _value: Self::Value) -> Self {
         Self { event: key.event }
     }
 }
@@ -700,8 +741,11 @@ pub struct StorageUsage {
     pub metric: VersionedStorageUsage,
 }
 
-impl DurableType<StorageUsageKey, ()> for StorageUsage {
-    fn into_key_value(self) -> (StorageUsageKey, ()) {
+impl DurableType for StorageUsage {
+    type Key = StorageUsageKey;
+    type Value = ();
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             StorageUsageKey {
                 metric: self.metric,
@@ -710,7 +754,7 @@ impl DurableType<StorageUsageKey, ()> for StorageUsage {
         )
     }
 
-    fn from_key_value(key: StorageUsageKey, _value: ()) -> Self {
+    fn from_key_value(key: Self::Key, _value: Self::Value) -> Self {
         Self { metric: key.metric }
     }
 }
@@ -721,20 +765,18 @@ pub struct StorageCollectionMetadata {
     pub shard: String,
 }
 
-impl DurableType<StorageCollectionMetadataKey, StorageCollectionMetadataValue>
-    for StorageCollectionMetadata
-{
-    fn into_key_value(self) -> (StorageCollectionMetadataKey, StorageCollectionMetadataValue) {
+impl DurableType for StorageCollectionMetadata {
+    type Key = StorageCollectionMetadataKey;
+    type Value = StorageCollectionMetadataValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
             StorageCollectionMetadataKey { id: self.id },
             StorageCollectionMetadataValue { shard: self.shard },
         )
     }
 
-    fn from_key_value(
-        key: StorageCollectionMetadataKey,
-        value: StorageCollectionMetadataValue,
-    ) -> Self {
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             id: key.id,
             shard: value.shard,
@@ -747,12 +789,15 @@ pub struct UnfinalizedShard {
     pub shard: String,
 }
 
-impl DurableType<UnfinalizedShardKey, ()> for UnfinalizedShard {
-    fn into_key_value(self) -> (UnfinalizedShardKey, ()) {
+impl DurableType for UnfinalizedShard {
+    type Key = UnfinalizedShardKey;
+    type Value = ();
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
         (UnfinalizedShardKey { shard: self.shard }, ())
     }
 
-    fn from_key_value(key: UnfinalizedShardKey, _value: ()) -> Self {
+    fn from_key_value(key: Self::Key, _value: Self::Value) -> Self {
         Self { shard: key.shard }
     }
 }
