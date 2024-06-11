@@ -20,14 +20,14 @@ use mz_catalog::durable::Item;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Log, Role, Schema,
-    Source, StateUpdate, StateUpdateKind, Table, Type,
+    Source, StateDiff, StateUpdate, StateUpdateKind, Table, Type,
 };
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_ore::instrument;
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::{Diff, GlobalId};
+use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogItemType, CatalogSchema, CatalogType, NameReference};
 use mz_sql::names::{
     ItemQualifiers, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds,
@@ -44,13 +44,15 @@ use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
 
 /// Sort [`StateUpdate`]s in dependency order.
 fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
-    fn push_update<T>(update: T, diff: Diff, retractions: &mut Vec<T>, additions: &mut Vec<T>) {
-        if diff == -1 {
-            retractions.push(update);
-        } else if diff == 1 {
-            additions.push(update);
-        } else {
-            unreachable!("invalid diff: {diff}");
+    fn push_update<T>(
+        update: T,
+        diff: StateDiff,
+        retractions: &mut Vec<T>,
+        additions: &mut Vec<T>,
+    ) {
+        match diff {
+            StateDiff::Retraction => retractions.push(update),
+            StateDiff::Addition => additions.push(update),
         }
     }
 
@@ -158,7 +160,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     }
 
     // Sort item updates by GlobalId.
-    fn sort_item_updates(item_updates: Vec<(Item, Diff)>) -> Vec<StateUpdate> {
+    fn sort_item_updates(item_updates: Vec<(Item, StateDiff)>) -> Vec<StateUpdate> {
         item_updates
             .into_iter()
             .sorted_by_key(|(item, _diff)| item.id)
@@ -231,7 +233,7 @@ impl CatalogState {
                     ApplyState::Updates(updates),
                     StateUpdate {
                         kind: StateUpdateKind::SystemObjectMapping(system_object_mapping),
-                        diff: 1,
+                        diff: StateDiff::Addition,
                     },
                 ) if matches!(
                     system_object_mapping.description.object_type,
@@ -252,7 +254,7 @@ impl CatalogState {
                     ApplyState::BuiltinViewAdditions(builtin_view_additions),
                     StateUpdate {
                         kind: StateUpdateKind::SystemObjectMapping(system_object_mapping),
-                        diff: 1,
+                        diff: StateDiff::Addition,
                     },
                 ) if matches!(
                     system_object_mapping.description.object_type,
@@ -299,28 +301,24 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         for StateUpdate { kind, diff } in updates {
-            if diff == -1 {
-                builtin_table_updates
-                    .extend(self.generate_builtin_table_update(kind.clone(), diff));
-                self.apply_update(kind, diff);
-            } else if diff == 1 {
-                self.apply_update(kind.clone(), diff);
-                builtin_table_updates
-                    .extend(self.generate_builtin_table_update(kind.clone(), diff));
-            } else {
-                unreachable!("invalid update in catalog updates: ({kind:?}, {diff:?})")
+            match diff {
+                StateDiff::Retraction => {
+                    builtin_table_updates
+                        .extend(self.generate_builtin_table_update(kind.clone(), diff));
+                    self.apply_update(kind, diff);
+                }
+                StateDiff::Addition => {
+                    self.apply_update(kind.clone(), diff);
+                    builtin_table_updates
+                        .extend(self.generate_builtin_table_update(kind.clone(), diff));
+                }
             }
         }
         builtin_table_updates
     }
 
     #[instrument(level = "debug")]
-    fn apply_update(&mut self, kind: StateUpdateKind, diff: Diff) {
-        assert!(
-            diff == 1 || diff == -1,
-            "invalid update in catalog updates: ({kind:?}, {diff:?})"
-        );
-
+    fn apply_update(&mut self, kind: StateUpdateKind, diff: StateDiff) {
         match kind {
             StateUpdateKind::Role(role) => {
                 self.apply_role_update(role, diff);
@@ -374,7 +372,7 @@ impl CatalogState {
     }
 
     #[instrument(level = "debug")]
-    fn apply_role_update(&mut self, role: mz_catalog::durable::Role, diff: Diff) {
+    fn apply_role_update(&mut self, role: mz_catalog::durable::Role, diff: StateDiff) {
         apply(
             &mut self.roles_by_id,
             role.id,
@@ -392,7 +390,7 @@ impl CatalogState {
     }
 
     #[instrument(level = "debug")]
-    fn apply_database_update(&mut self, database: mz_catalog::durable::Database, diff: Diff) {
+    fn apply_database_update(&mut self, database: mz_catalog::durable::Database, diff: StateDiff) {
         apply(
             &mut self.database_by_id,
             database.id.clone(),
@@ -416,7 +414,7 @@ impl CatalogState {
     }
 
     #[instrument(level = "debug")]
-    fn apply_schema_update(&mut self, schema: mz_catalog::durable::Schema, diff: Diff) {
+    fn apply_schema_update(&mut self, schema: mz_catalog::durable::Schema, diff: StateDiff) {
         let (schemas_by_id, schemas_by_name, database_spec) = match &schema.database_id {
             Some(database_id) => {
                 let db = self
@@ -460,25 +458,23 @@ impl CatalogState {
     fn apply_default_privilege_update(
         &mut self,
         default_privilege: mz_catalog::durable::DefaultPrivilege,
-        diff: Diff,
+        diff: StateDiff,
     ) {
         match diff {
-            1 => self
+            StateDiff::Addition => self
                 .default_privileges
                 .grant(default_privilege.object, default_privilege.acl_item),
-            -1 => self
+            StateDiff::Retraction => self
                 .default_privileges
                 .revoke(&default_privilege.object, &default_privilege.acl_item),
-            _ => unreachable!("invalid diff: {diff}"),
         }
     }
 
     #[instrument(level = "debug")]
-    fn apply_system_privilege_update(&mut self, system_privilege: MzAclItem, diff: Diff) {
+    fn apply_system_privilege_update(&mut self, system_privilege: MzAclItem, diff: StateDiff) {
         match diff {
-            1 => self.system_privileges.grant(system_privilege),
-            -1 => self.system_privileges.revoke(&system_privilege),
-            _ => unreachable!("invalid diff: {diff}"),
+            StateDiff::Addition => self.system_privileges.grant(system_privilege),
+            StateDiff::Retraction => self.system_privileges.revoke(&system_privilege),
         }
     }
 
@@ -486,15 +482,14 @@ impl CatalogState {
     fn apply_system_configuration_update(
         &mut self,
         system_configuration: mz_catalog::durable::SystemConfiguration,
-        diff: Diff,
+        diff: StateDiff,
     ) {
         let res = match diff {
-            1 => self.insert_system_configuration(
+            StateDiff::Addition => self.insert_system_configuration(
                 &system_configuration.name,
                 VarInput::Flat(&system_configuration.value),
             ),
-            -1 => self.remove_system_configuration(&system_configuration.name),
-            _ => unreachable!("invalid diff: {diff}"),
+            StateDiff::Retraction => self.remove_system_configuration(&system_configuration.name),
         };
         match res {
             Ok(_) => (),
@@ -511,7 +506,7 @@ impl CatalogState {
     }
 
     #[instrument(level = "debug")]
-    fn apply_cluster_update(&mut self, cluster: mz_catalog::durable::Cluster, diff: Diff) {
+    fn apply_cluster_update(&mut self, cluster: mz_catalog::durable::Cluster, diff: StateDiff) {
         apply(
             &mut self.clusters_by_id,
             cluster.id,
@@ -540,13 +535,13 @@ impl CatalogState {
     fn apply_introspection_source_index_update(
         &mut self,
         introspection_source_index: mz_catalog::durable::IntrospectionSourceIndex,
-        diff: Diff,
+        diff: StateDiff,
     ) {
         let log = BUILTIN_LOG_LOOKUP
             .get(introspection_source_index.name.as_str())
             .expect("missing log");
         match diff {
-            1 => {
+            StateDiff::Addition => {
                 self.insert_introspection_source_index(
                     introspection_source_index.cluster_id,
                     log,
@@ -554,10 +549,9 @@ impl CatalogState {
                     introspection_source_index.oid,
                 );
             }
-            -1 => {
+            StateDiff::Retraction => {
                 self.drop_item(introspection_source_index.index_id);
             }
-            _ => unreachable!("invalid diff: {diff}"),
         }
         let cluster = self
             .clusters_by_id
@@ -575,7 +569,7 @@ impl CatalogState {
     fn apply_cluster_replica_update(
         &mut self,
         cluster_replica: mz_catalog::durable::ClusterReplica,
-        diff: Diff,
+        diff: StateDiff,
     ) {
         let cluster = self
             .clusters_by_id
@@ -623,11 +617,11 @@ impl CatalogState {
     fn apply_system_object_mapping_update(
         &mut self,
         system_object_mapping: mz_catalog::durable::SystemObjectMapping,
-        diff: Diff,
+        diff: StateDiff,
     ) {
         let id = system_object_mapping.unique_identifier.id;
 
-        if diff == -1 {
+        if let StateDiff::Retraction = diff {
             self.drop_item(id);
             return;
         }
@@ -823,9 +817,9 @@ impl CatalogState {
     }
 
     #[instrument(level = "debug")]
-    fn apply_item_update(&mut self, item: mz_catalog::durable::Item, diff: Diff) {
+    fn apply_item_update(&mut self, item: mz_catalog::durable::Item, diff: StateDiff) {
         match diff {
-            1 => {
+            StateDiff::Addition => {
                 let catalog_item = self
                     .deserialize_item(&item.create_sql)
                     .expect("invalid persisted SQL");
@@ -846,17 +840,16 @@ impl CatalogState {
                     PrivilegeMap::from_mz_acl_items(item.privileges),
                 );
             }
-            -1 => {
+            StateDiff::Retraction => {
                 self.drop_item(item.id);
             }
-            _ => unreachable!("invalid diff: {diff}"),
         }
     }
 
     #[instrument(level = "debug")]
-    fn apply_comment_update(&mut self, comment: mz_catalog::durable::Comment, diff: Diff) {
+    fn apply_comment_update(&mut self, comment: mz_catalog::durable::Comment, diff: StateDiff) {
         match diff {
-            1 => {
+            StateDiff::Addition => {
                 let prev = self.comments.update_comment(
                     comment.object_id,
                     comment.sub_component,
@@ -867,7 +860,7 @@ impl CatalogState {
                     "values must be explicitly retracted before inserting a new value"
                 );
             }
-            -1 => {
+            StateDiff::Retraction => {
                 let prev =
                     self.comments
                         .update_comment(comment.object_id, comment.sub_component, None);
@@ -879,7 +872,6 @@ impl CatalogState {
                     comment.sub_component,
                 );
             }
-            _ => unreachable!("invalid diff: {diff}"),
         }
     }
 
@@ -887,7 +879,7 @@ impl CatalogState {
     fn apply_storage_collection_metadata_update(
         &mut self,
         storage_collection_metadata: mz_catalog::durable::StorageCollectionMetadata,
-        diff: Diff,
+        diff: StateDiff,
     ) {
         apply(
             &mut self.storage_metadata.collection_metadata,
@@ -901,10 +893,10 @@ impl CatalogState {
     fn apply_unfinalized_shard_update(
         &mut self,
         unfinalized_shard: mz_catalog::durable::UnfinalizedShard,
-        diff: Diff,
+        diff: StateDiff,
     ) {
         match diff {
-            1 => {
+            StateDiff::Addition => {
                 let newly_inserted = self
                     .storage_metadata
                     .unfinalized_shards
@@ -914,7 +906,7 @@ impl CatalogState {
                     "values must be explicitly retracted before inserting a new value: {unfinalized_shard:?}",
                 );
             }
-            -1 => {
+            StateDiff::Retraction => {
                 let removed = self
                     .storage_metadata
                     .unfinalized_shards
@@ -924,7 +916,6 @@ impl CatalogState {
                     "retraction does not match existing value: {unfinalized_shard:?}"
                 );
             }
-            _ => unreachable!("invalid diff: {diff}"),
         }
     }
 
@@ -950,12 +941,9 @@ impl CatalogState {
     fn generate_builtin_table_update(
         &self,
         kind: StateUpdateKind,
-        diff: Diff,
+        diff: StateDiff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        assert!(
-            diff == 1 || diff == -1,
-            "invalid update in catalog updates: ({kind:?}, {diff:?})"
-        );
+        let diff = diff.into();
         match kind {
             StateUpdateKind::Role(role) => {
                 let mut builtin_table_updates = self.pack_role_update(role.id, diff);
@@ -1017,26 +1005,29 @@ impl CatalogState {
     }
 }
 
-/// Inserts `key` and `value` into `map` if `diff` is 1, otherwise remove them from `map` if `diff`
-/// is -1.
-fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: impl FnOnce() -> V, diff: Diff)
+/// Inserts `key` and `value` into `map` if `diff` is an addition, otherwise remove them from `map`
+/// if `diff` is a retraction.
+fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: impl FnOnce() -> V, diff: StateDiff)
 where
     K: Ord + Debug,
     V: PartialEq + Debug,
 {
-    if diff == 1 {
-        let prev = map.insert(key, value());
-        assert_eq!(
-            prev, None,
-            "values must be explicitly retracted before inserting a new value"
-        );
-    } else if diff == -1 {
-        let prev = map.remove(&key);
-        // We can't assert the exact contents of the previous value, since we don't know
-        // what it should look like.
-        assert!(
-            prev.is_some(),
-            "retraction does not match existing value: {key:?}"
-        );
+    match diff {
+        StateDiff::Retraction => {
+            let prev = map.remove(&key);
+            // We can't assert the exact contents of the previous value, since we don't know
+            // what it should look like.
+            assert!(
+                prev.is_some(),
+                "retraction does not match existing value: {key:?}"
+            );
+        }
+        StateDiff::Addition => {
+            let prev = map.insert(key, value());
+            assert_eq!(
+                prev, None,
+                "values must be explicitly retracted before inserting a new value"
+            );
+        }
     }
 }

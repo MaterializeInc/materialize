@@ -30,7 +30,8 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges, StateUpdate, StateUpdateKind,
+    CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges, StateDiff, StateUpdate,
+    StateUpdateKind,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
@@ -346,7 +347,7 @@ impl Catalog {
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
                 // Throw the existing item updates away because they may have been re-written in
                 // the migration.
-                let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), diff: 1}).collect();
+                let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), diff: StateDiff::Addition}).collect();
                 let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
                 builtin_table_updates.extend(builtin_table_update);
             } else {
@@ -646,7 +647,7 @@ impl Catalog {
                     kind: StateUpdateKind::AuditLog(mz_catalog::durable::objects::AuditLog {
                         event,
                     }),
-                    diff: 1,
+                    diff: StateDiff::Addition,
                 })
                 .collect();
             builtin_table_updates.extend(catalog.state.generate_builtin_table_updates(audit_logs));
@@ -671,7 +672,7 @@ impl Catalog {
                     kind: StateUpdateKind::StorageUsage(
                         mz_catalog::durable::objects::StorageUsage { metric },
                     ),
-                    diff: 1,
+                    diff: StateDiff::Addition,
                 })
                 .collect();
             builtin_table_updates.extend(

@@ -223,6 +223,7 @@ impl TryFrom<StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpda
         StateUpdate { kind, ts: _, diff }: StateUpdate<StateUpdateKind>,
     ) -> Result<Self, Self::Error> {
         let kind: Option<memory::objects::StateUpdateKind> = TryInto::try_into(kind)?;
+        let diff = diff.try_into().expect("invalid diff");
         let update = kind.map(|kind| memory::objects::StateUpdate { kind, diff });
         Ok(update)
     }
