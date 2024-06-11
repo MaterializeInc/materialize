@@ -16,6 +16,8 @@ from typing import Any
 
 import requests
 
+from materialize.observed_error import ObservedBaseError
+
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
 
@@ -25,6 +27,17 @@ class KnownGitHubIssue:
     regex: re.Pattern[Any]
     apply_to: str | None
     info: dict[str, Any]
+
+
+@dataclass
+class GitHubIssueWithInvalidRegexp(ObservedBaseError):
+    html_url: str
+    title: str
+    issue_number: int
+    regex_pattern: str
+
+    def to_markdown(self) -> str:
+        return f'<a href="{self.html_url}">{self.title} (#{self.issue_number})</a>: Invalid regex in ci-regexp: {self.regex_pattern}, ignoring'
 
 
 def get_known_issues_from_github_page(page: int = 1) -> Any:
@@ -48,7 +61,9 @@ def get_known_issues_from_github_page(page: int = 1) -> Any:
     return issues_json
 
 
-def get_known_issues_from_github() -> tuple[list[KnownGitHubIssue], list[str]]:
+def get_known_issues_from_github() -> (
+    tuple[list[KnownGitHubIssue], list[GitHubIssueWithInvalidRegexp]]
+):
     page = 1
     issues_json = get_known_issues_from_github_page(page)
     while issues_json["total_count"] > len(issues_json["items"]):
@@ -58,8 +73,8 @@ def get_known_issues_from_github() -> tuple[list[KnownGitHubIssue], list[str]]:
             break
         issues_json["items"].extend(next_page_json["items"])
 
-    unknown_errors = []
     known_issues = []
+    issues_with_invalid_regex = []
 
     for issue in issues_json["items"]:
         matches = CI_RE.findall(issue["body"])
@@ -68,8 +83,13 @@ def get_known_issues_from_github() -> tuple[list[KnownGitHubIssue], list[str]]:
             try:
                 regex_pattern = re.compile(match.strip().encode("utf-8"))
             except:
-                unknown_errors.append(
-                    f"<a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']})</a>: Invalid regex in ci-regexp: {match.strip()}, ignoring"
+                issues_with_invalid_regex.append(
+                    GitHubIssueWithInvalidRegexp(
+                        html_url=issue.info["html_url"],
+                        title=issue.info["title"],
+                        issue_number=issue.info["number"],
+                        regex_pattern=match.strip(),
+                    )
                 )
                 continue
 
@@ -83,7 +103,7 @@ def get_known_issues_from_github() -> tuple[list[KnownGitHubIssue], list[str]]:
             else:
                 known_issues.append(KnownGitHubIssue(regex_pattern, None, issue))
 
-    return (known_issues, unknown_errors)
+    return (known_issues, issues_with_invalid_regex)
 
 
 def for_github_re(text: bytes) -> bytes:

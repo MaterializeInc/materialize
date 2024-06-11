@@ -15,6 +15,7 @@ import mmap
 import os
 import re
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -31,7 +32,11 @@ from materialize.buildkite_insights.steps.build_step import (
     BuildStepOutcome,
     extract_build_step_outcomes,
 )
-from materialize.github import for_github_re, get_known_issues_from_github
+from materialize.github import (
+    for_github_re,
+    get_known_issues_from_github,
+)
+from materialize.observed_error import ObservedBaseError
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_hostname,
@@ -142,6 +147,54 @@ class JunitError:
 
 
 @dataclass
+class ObservedError(ObservedBaseError):
+    error_message: str | None
+    error_type: str
+    location: str
+
+
+@dataclass
+class ObservedErrorWithIssue(ObservedError):
+    html_url: str
+    title: str
+    issue_number: int
+    location_url: str | None = None
+
+    def to_markdown(self) -> str:
+        if self.location_url is None:
+            location_markdown = self.location
+        else:
+            location_markdown = f'<a href="{self.location_url}">{self.location}</a>'
+
+        return f'{self.error_type} <a href="{self.html_url}">{self.title} (#{self.issue_number}, closed)</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
+
+
+@dataclass
+class ObservedErrorWithLocation(ObservedError):
+    error_details: str | None = None
+    max_error_length: int = 10000
+    max_details_length: int = 10000
+
+    def to_markdown(self) -> str:
+        if self.error_details:
+            formatted_error_details = (
+                f"\n{format_error_message(self.error_details, self.max_details_length)}"
+            )
+        else:
+            formatted_error_details = ""
+
+        return f"{self.error_type} in {self.location}:\n{format_error_message(self.error_message, self.max_error_length)}{formatted_error_details}"
+
+
+@dataclass
+class FailureInCoverageRun(ObservedError):
+    occurrences: int = 1
+
+    def to_markdown(self) -> str:
+        return f"{self.location}:\n{format_error_message(self.error_message)}"
+
+
+@dataclass
 class BuildHistoryOnMain:
     pipeline_slug: str
     last_build_step_outcomes: list[BuildStepOutcome]
@@ -164,8 +217,8 @@ class Annotation:
     buildkite_job_id: str
     is_failure: bool
     build_history_on_main: BuildHistoryOnMain | None
-    unknown_errors: list[str] = field(default_factory=list)
-    known_errors: list[str] = field(default_factory=list)
+    unknown_errors: Sequence[ObservedBaseError] = field(default_factory=list)
+    known_errors: Sequence[ObservedBaseError] = field(default_factory=list)
 
     def to_markdown(self) -> str:
         only_known_errors = len(self.unknown_errors) == 0 and len(self.known_errors) > 0
@@ -191,9 +244,15 @@ class Annotation:
             markdown = f"<summary>{markdown}</summary>\n"
 
         if len(self.unknown_errors) > 0:
-            markdown += "\n" + "\n".join(f"* {error}" for error in self.unknown_errors)
+            markdown += "\n" + "\n".join(
+                f"* {error.to_markdown()}{error.occurrences_to_markdown()}"
+                for error in self.unknown_errors
+            )
         if len(self.known_errors) > 0:
-            markdown += "\n" + "\n".join(f"* {error}" for error in self.known_errors)
+            markdown += "\n" + "\n".join(
+                f"* {error.to_markdown()}{error.occurrences_to_markdown()}"
+                for error in self.known_errors
+            )
 
         if wrap_in_details:
             markdown = f"<details>{markdown}\n</details>"
@@ -218,8 +277,8 @@ and finds associated open GitHub issues in Materialize repository.""",
 
 
 def annotate_errors(
-    unknown_errors: list[str],
-    known_errors: list[str],
+    unknown_errors: Sequence[ObservedBaseError],
+    known_errors: Sequence[ObservedBaseError],
     build_history_on_main: BuildHistoryOnMain | None,
     test_analytics_db_config: MzDbConfig,
 ) -> None:
@@ -253,8 +312,10 @@ def annotate_errors(
     )
 
 
-def group_identical_errors(errors: list[str]) -> list[str]:
-    errors_with_counts: dict[str, int] = {}
+def group_identical_errors(
+    errors: Sequence[ObservedBaseError],
+) -> Sequence[ObservedBaseError]:
+    errors_with_counts: dict[ObservedBaseError, int] = {}
 
     for error in errors:
         errors_with_counts[error] = 1 + errors_with_counts.get(error, 0)
@@ -262,9 +323,8 @@ def group_identical_errors(errors: list[str]) -> list[str]:
     consolidated_errors = []
 
     for error, count in errors_with_counts.items():
-        consolidated_errors.append(
-            error if count == 1 else f"{error}\n({count} occurrences)"
-        )
+        error.occurrences = count
+        consolidated_errors.append(error)
 
     return consolidated_errors
 
@@ -284,24 +344,24 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
     buildkite_label: str = os.getenv("BUILDKITE_LABEL", "")
 
-    (known_issues, unknown_errors) = get_known_issues_from_github()
+    (known_issues, issues_with_invalid_regex) = get_known_issues_from_github()
+    unknown_errors: list[ObservedBaseError] = []
+    unknown_errors.extend(issues_with_invalid_regex)
 
     artifacts = ci_util.get_artifacts()
     job = os.getenv("BUILDKITE_JOB_ID")
 
-    known_errors: list[str] = []
+    known_errors: list[ObservedBaseError] = []
 
     # Keep track of known errors so we log each only once
     already_reported_issue_numbers: set[int] = set()
 
-    def handle_log_error(error_message: bytes, location: str):
-        # Don't have too huge output, so truncate
-        formatted_error_message = (
-            f"```\n{sanitize_text(error_message.decode('utf-8'), 10_000)}\n```"
-        )
-
+    def handle_log_error(
+        error_message_as_bytes: bytes, location: str, location_url: str | None
+    ):
+        error_message = error_message_as_bytes.decode("utf-8")
         for issue in known_issues:
-            match = issue.regex.search(for_github_re(error_message))
+            match = issue.regex.search(for_github_re(error_message_as_bytes))
             if match and issue.info["state"] == "open":
                 if issue.apply_to and issue.apply_to not in (
                     step_key.lower(),
@@ -311,13 +371,21 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
 
                 if issue.info["number"] not in already_reported_issue_numbers:
                     known_errors.append(
-                        f"Known issue <a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']})</a> in {location}:\n{formatted_error_message}"
+                        ObservedErrorWithIssue(
+                            error_message=error_message,
+                            error_type="Known issue",
+                            html_url=issue.info["html_url"],
+                            title=issue.info["title"],
+                            issue_number=issue.info["number"],
+                            location=location,
+                            location_url=location_url,
+                        )
                     )
                     already_reported_issue_numbers.add(issue.info["number"])
                 break
         else:
             for issue in known_issues:
-                match = issue.regex.search(for_github_re(error_message))
+                match = issue.regex.search(for_github_re(error_message_as_bytes))
                 if match and issue.info["state"] == "closed":
                     if issue.apply_to and issue.apply_to not in (
                         step_key.lower(),
@@ -327,50 +395,61 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
 
                     if issue.info["number"] not in already_reported_issue_numbers:
                         unknown_errors.append(
-                            f"Potential regression <a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']}, closed)</a> in {location}:\n{formatted_error_message}"
+                            ObservedErrorWithIssue(
+                                error_message=error_message,
+                                error_type="Potential regression",
+                                html_url=issue.info["html_url"],
+                                title=issue.info["title"],
+                                issue_number=issue.info["number"],
+                                location=location,
+                            )
                         )
                         already_reported_issue_numbers.add(issue.info["number"])
                     break
             else:
                 unknown_errors.append(
-                    f"Unknown error in {location}:\n{formatted_error_message}"
+                    ObservedErrorWithLocation(
+                        error_message=error_message,
+                        location=location,
+                        error_type="Unknown error",
+                    )
                 )
 
     def handle_junit_error(
         error_message: str | None, details: str | None, location: str
     ):
-        # Don't have too huge output, so truncate
-        formatted_error_message = (
-            f" `{sanitize_text(error_message, 1_000)}`"
-            if error_message is not None and len(error_message) > 0
-            else ""
-        )
-        formatted_error_details = (
-            f"```\n{sanitize_text(details, 9_000)}\n```"
-            if details is not None and len(details) > 0
-            else ""
-        )
         unknown_errors.append(
-            f"Failure in {location}:{formatted_error_message}\n{formatted_error_details}"
+            ObservedErrorWithLocation(
+                error_message=error_message,
+                error_type="Failure",
+                location=location,
+                error_details=details,
+                max_error_length=1_000,
+                max_details_length=9_000,
+            )
         )
 
     for error in errors:
         if isinstance(error, ErrorLog):
             for artifact in artifacts:
                 if artifact["job_id"] == job and artifact["path"] == error.file:
-                    linked_file: str = (
-                        f'<a href="{get_artifact_url(artifact)}">{error.file}</a>'
-                    )
+                    location: str = error.file
+                    location_url = get_artifact_url(artifact)
                     break
             else:
-                linked_file: str = error.file
+                location: str = error.file
+                location_url = None
 
-            handle_log_error(error.match, linked_file)
+            handle_log_error(error.match, location, location_url)
         elif isinstance(error, JunitError):
             if "in Code Coverage" in error.text or "covered" in error.message:
                 msg = "\n".join(filter(None, [error.message, error.text]))
                 # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
-                known_errors.append(f"{error.testcase}:\n```\n{msg}\n```")
+                known_errors.append(
+                    FailureInCoverageRun(
+                        error_type=msg, error_message="Failure", location=error.testcase
+                    )
+                )
             else:
                 handle_junit_error(error.message, error.text, error.testcase)
         else:
@@ -613,6 +692,14 @@ def get_suite_name() -> str:
         suite_name += f" (#{retry_count + 1})"
 
     return suite_name
+
+
+def format_error_message(error_message: str | None, max_length: int = 10_000) -> str:
+    if not error_message:
+        return ""
+
+    # Don't have too huge output, so truncate
+    return f"```\n{sanitize_text(error_message, max_length)}\n```"
 
 
 if __name__ == "__main__":
