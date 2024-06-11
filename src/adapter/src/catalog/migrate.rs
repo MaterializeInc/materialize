@@ -125,7 +125,8 @@ pub(crate) async fn migrate(
             diff: 1,
         })
         .collect();
-    state.apply_updates_for_bootstrap(item_updates).await;
+    // The catalog is temporary, so we can throw out the builtin updates.
+    let _ = state.apply_updates_for_bootstrap(item_updates).await;
 
     info!("migrating from catalog version {:?}", catalog_version);
 

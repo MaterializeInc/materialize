@@ -678,6 +678,10 @@ impl Coordinator {
                 &public_key_set,
                 1,
             );
+            let builtin_table_update = self
+                .catalog()
+                .state()
+                .resolve_builtin_table_update(builtin_table_update);
             ops.push(catalog::Op::WeirdBuiltinTableUpdates {
                 builtin_table_update,
             });
@@ -1579,6 +1583,10 @@ impl Coordinator {
                 .catalog()
                 .state()
                 .pack_ssh_tunnel_connection_update(ssh_conn, &key_set, -1);
+            let ssh_tunnel_update = self
+                .catalog()
+                .state()
+                .resolve_builtin_table_update(ssh_tunnel_update);
             ssh_tunnel_updates.push(ssh_tunnel_update);
         }
 
@@ -3457,11 +3465,19 @@ impl Coordinator {
             &previous_key_set.public_keys(),
             -1,
         );
+        let builtin_table_retraction = self
+            .catalog()
+            .state()
+            .resolve_builtin_table_update(builtin_table_retraction);
         let builtin_table_addition = self.catalog().state().pack_ssh_tunnel_connection_update(
             id,
             &new_key_set.public_keys(),
             1,
         );
+        let builtin_table_addition = self
+            .catalog()
+            .state()
+            .resolve_builtin_table_update(builtin_table_addition);
         let ops = vec![
             catalog::Op::WeirdBuiltinTableUpdates {
                 builtin_table_update: builtin_table_retraction,

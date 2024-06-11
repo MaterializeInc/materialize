@@ -235,6 +235,7 @@ impl Coordinator {
                     .catalog()
                     .state()
                     .pack_subscribe_update(id, active_subscribe, 1);
+                let update = self.catalog().state().resolve_builtin_table_update(update);
 
                 self.metrics
                     .active_subscribes
@@ -281,6 +282,7 @@ impl Coordinator {
                         self.catalog()
                             .state()
                             .pack_subscribe_update(id, active_subscribe, -1);
+                    let update = self.catalog().state().resolve_builtin_table_update(update);
                     self.builtin_table_update().blocking(vec![update]).await;
 
                     self.metrics

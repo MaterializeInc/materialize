@@ -1672,6 +1672,10 @@ impl Coordinator {
                         .catalog()
                         .state()
                         .pack_cluster_replica_status_update(*replica_id, *process_id, status, 1);
+                    let builtin_table_update = self
+                        .catalog()
+                        .state()
+                        .resolve_builtin_table_update(builtin_table_update);
                     builtin_table_updates.push(builtin_table_update);
                 }
             }
@@ -2005,7 +2009,11 @@ impl Coordinator {
         }
 
         // Expose mapping from T-shirt sizes to actual sizes
-        builtin_table_updates.extend(self.catalog().state().pack_all_replica_size_updates());
+        builtin_table_updates.extend(
+            self.catalog().state().resolve_builtin_table_updates(
+                self.catalog().state().pack_all_replica_size_updates(),
+            ),
+        );
 
         // Advance all tables to the current timestamp
         debug!("coordinator init: advancing all tables to current timestamp");
