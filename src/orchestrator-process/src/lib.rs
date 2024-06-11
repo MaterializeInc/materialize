@@ -621,7 +621,7 @@ impl NamespacedProcessOrchestrator {
                 match spawn_process(&state_updater, cmd, !command_wrapper.is_empty()).await {
                     Ok(status) => {
                         if propagate_crashes && did_process_crash(status) {
-                            panic!("{full_id}-{i} crashed; aborting because propagate_crashes is enabled");
+                            panic!("{full_id}-{i} crashed: {status:?}; aborting because propagate_crashes is enabled");
                         }
                         error!("{full_id}-{i} exited: {:?}; relaunching in 5s", status);
                     }

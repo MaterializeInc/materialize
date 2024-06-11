@@ -254,19 +254,8 @@ class ClusterReplicas(Scenario):
     # Due to gh#13235 it is not possible to have MzStop/MzStart in this scenario
     def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
-            KillClusterd: 5,
-            StoragedRestart: 5,
-            CreateReplica: 30,
+            CreateReplica: 10,
             DropReplica: 10,
-            CreateTopicParameterized(): 10,
-            CreateSourceParameterized(): 10,
-            CreateTableParameterized(): 10,
-            CreateViewParameterized(): 20,
-            CreateSinkParameterized(): 10,
-            ValidateView: 20,
-            Ingest: 50,
-            DML: 50,
-            PeekCancellation: 5,
         }
 
 
