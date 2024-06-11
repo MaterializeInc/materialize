@@ -31,6 +31,12 @@ from materialize.buildkite_insights.steps.build_step import (
     BuildStepMatcher,
     extract_build_step_outcomes,
 )
+from materialize.test_analytics.config.mz_db_config import MzDbConfig
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_test_analytics_config_with_hostname,
+)
+from materialize.test_analytics.connection import test_analytics_connection
+from materialize.test_analytics.data.build_annotation import build_annotation_storage
 
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
@@ -153,16 +159,18 @@ ci-annotate-errors detects errors in junit xml as well as log files during CI
 and finds associated open GitHub issues in Materialize repository.""",
     )
 
+    parser.add_argument("--cloud-hostname", type=str)
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    return annotate_logged_errors(args.log_files)
+    return annotate_logged_errors(args.log_files, cloud_hostname=args.cloud_hostname)
 
 
 def annotate_errors(
     unknown_errors: list[str],
     known_errors: list[str],
     failures_on_main: str | None,
+    test_analytics_db_config: MzDbConfig,
 ) -> None:
     assert unknown_errors or known_errors
     style = "info" if not unknown_errors else "error"
@@ -191,6 +199,16 @@ def annotate_errors(
         text += "\n</details>"
     add_annotation_raw(style=style, markdown=text)
 
+    cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
+    build_annotation_storage.insert_annotation(
+        cursor,
+        [
+            build_annotation_storage.AnnotationEntry(
+                type="error", header=get_suite_name(), markdown=text
+            )
+        ],
+    )
+
 
 def group_identical_errors(errors: list[str]) -> list[str]:
     errors_with_counts: dict[str, int] = {}
@@ -208,7 +226,7 @@ def group_identical_errors(errors: list[str]) -> list[str]:
     return consolidated_errors
 
 
-def annotate_logged_errors(log_files: list[str]) -> int:
+def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
     were no errors logged. This will be used to fail a test even if the test
@@ -315,8 +333,13 @@ def annotate_logged_errors(log_files: list[str]) -> int:
         else:
             raise RuntimeError(f"Unexpected error type: {type(error)}")
 
+    test_analytics_db_config = create_test_analytics_config_with_hostname(
+        cloud_hostname
+    )
     failures_on_main = get_failures_on_main()
-    annotate_errors(unknown_errors, known_errors, failures_on_main)
+    annotate_errors(
+        unknown_errors, known_errors, failures_on_main, test_analytics_db_config
+    )
 
     if unknown_errors:
         print(f"+++ Failing test because of {len(unknown_errors)} unknown error(s)")
@@ -338,6 +361,16 @@ def annotate_logged_errors(log_files: list[str]) -> int:
         if failures_on_main:
             text += ", " + failures_on_main
         add_annotation_raw(style="error", markdown=text)
+
+        cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
+        build_annotation_storage.insert_annotation(
+            cursor,
+            [
+                build_annotation_storage.AnnotationEntry(
+                    type="error", header=get_suite_name(), markdown=text
+                )
+            ],
+        )
 
     return len(unknown_errors)
 
