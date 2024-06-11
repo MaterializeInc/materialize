@@ -18,7 +18,6 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
-import requests
 from junitparser.junitparser import Error, Failure, JUnitXml
 
 from materialize import ci_util, ui
@@ -31,15 +30,13 @@ from materialize.buildkite_insights.steps.build_step import (
     BuildStepMatcher,
     extract_build_step_outcomes,
 )
+from materialize.github import for_github_re, get_known_issues_from_github
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_hostname,
 )
 from materialize.test_analytics.connection import test_analytics_connection
 from materialize.test_analytics.data.build_annotation import build_annotation_storage
-
-CI_RE = re.compile("ci-regexp: (.*)")
-CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
 
 # Unexpected failures, report them
 ERROR_RE = re.compile(
@@ -127,13 +124,6 @@ IGNORE_RE = re.compile(
     """,
     re.VERBOSE | re.MULTILINE,
 )
-
-
-@dataclass
-class KnownIssue:
-    regex: re.Pattern[Any]
-    apply_to: str | None
-    info: dict[str, Any]
 
 
 @dataclass
@@ -480,63 +470,6 @@ def sanitize_text(text: str, max_length: int = 4000) -> str:
     return text
 
 
-def get_known_issues_from_github_page(page: int = 1) -> Any:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    if token := os.getenv("GITHUB_TOKEN"):
-        headers["Authorization"] = f"Bearer {token}"
-
-    response = requests.get(
-        f'https://api.github.com/search/issues?q=repo:MaterializeInc/materialize%20type:issue%20in:body%20"ci-regexp%3A"&per_page=100&page={page}',
-        headers=headers,
-    )
-
-    if response.status_code != 200:
-        raise ValueError(f"Bad return code from GitHub: {response.status_code}")
-
-    issues_json = response.json()
-    assert issues_json["incomplete_results"] == False
-    return issues_json
-
-
-def get_known_issues_from_github() -> tuple[list[KnownIssue], list[str]]:
-    page = 1
-    issues_json = get_known_issues_from_github_page(page)
-    while issues_json["total_count"] > len(issues_json["items"]):
-        page += 1
-        next_page_json = get_known_issues_from_github_page(page)
-        if not next_page_json["items"]:
-            break
-        issues_json["items"].extend(next_page_json["items"])
-
-    unknown_errors = []
-    known_issues = []
-
-    for issue in issues_json["items"]:
-        matches = CI_RE.findall(issue["body"])
-        matches_apply_to = CI_APPLY_TO.findall(issue["body"])
-        for match in matches:
-            try:
-                regex_pattern = re.compile(match.strip().encode("utf-8"))
-            except:
-                unknown_errors.append(
-                    f"<a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']})</a>: Invalid regex in ci-regexp: {match.strip()}, ignoring"
-                )
-                continue
-
-            if matches_apply_to:
-                for match_apply_to in matches_apply_to:
-                    known_issues.append(
-                        KnownIssue(regex_pattern, match_apply_to.strip().lower(), issue)
-                    )
-            else:
-                known_issues.append(KnownIssue(regex_pattern, None, issue))
-
-    return (known_issues, unknown_errors)
-
-
 def get_failures_on_main() -> str | None:
     pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
     step_key = os.getenv("BUILDKITE_STEP_KEY")
@@ -622,24 +555,6 @@ def get_suite_name() -> str:
         suite_name += f" (#{retry_count + 1})"
 
     return suite_name
-
-
-def for_github_re(text: bytes) -> bytes:
-    """
-    Matching newlines in regular expressions is kind of annoying, don't expect
-    ci-regexp to do that correctly, but instead replace all newlines with a
-    space. For examples this makes matching this panic easier:
-
-      thread 'test_auth_deduplication' panicked at src/environmentd/tests/auth.rs:1878:5:
-      assertion `left == right` failed
-
-    Previously the regex should have been:
-      thread 'test_auth_deduplication' panicked at src/environmentd/tests/auth.rs.*\n.*left == right
-
-    With this function it can be:
-      thread 'test_auth_deduplication' panicked at src/environmentd/tests/auth.rs.*left == right
-    """
-    return text.replace(b"\n", b" ")
 
 
 if __name__ == "__main__":
