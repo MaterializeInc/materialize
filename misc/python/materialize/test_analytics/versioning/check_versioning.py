@@ -102,16 +102,19 @@ def compute_hashes(
 def _check_hash_entry(
     path: str, sha_value: str, config: VersioningConfig
 ) -> str | None:
+    hash_definition_location = (
+        f"'{config.sha256_per_entry_dict_name}' in '{config.sha256_definition_file}'"
+    )
     if path not in config.sha256_per_entry.keys():
         return (
-            f"Path {path} has no hash record in '{config.sha256_per_entry_dict_name}'.\n"
+            f"Path '{path}' has no hash record in {hash_definition_location}.\n"
             f"Hint: Add an entry '{path}' with value '{sha_value}'."
         )
     elif config.sha256_per_entry[path] != sha_value:
         return (
-            f"Path {path} has a divergent hash record in '{config.sha256_per_entry_dict_name}'.\n"
-            f"{config.task_on_hash_mismatch}\n"
-            f"Hint: Update the entry '{path}' with value '{sha_value}'."
+            f"Path '{path}' has a divergent hash record in {hash_definition_location}!\n"
+            f"Important: {config.task_on_hash_mismatch}\n"
+            f"Afterwards: Update the entry '{path}' with value '{sha_value}'."
         )
 
     return None

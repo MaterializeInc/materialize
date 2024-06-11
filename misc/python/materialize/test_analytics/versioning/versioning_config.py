@@ -13,6 +13,7 @@ from pathlib import Path
 @dataclass
 class VersioningConfig:
     root_directory: Path
+    sha256_definition_file: Path
     sha256_per_entry: dict[str, str]
     sha256_per_entry_dict_name: str
     task_on_hash_mismatch: str
