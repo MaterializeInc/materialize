@@ -29,6 +29,10 @@ def insert_annotation(
     annotations: list[AnnotationEntry],
     verbose: bool = False,
 ) -> None:
+    if True:
+        # disable uploading annotations for now because of planned schema changes
+        return
+
     build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
 
     sql_statements = []
