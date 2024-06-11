@@ -1498,14 +1498,7 @@ impl Catalog {
                                         .unwrap_or(&SYSTEM_CONN_ID),
                                 );
                                 update_privilege_fn(&mut schema.privileges);
-                                let database_id = match &database_spec {
-                                    ResolvedDatabaseSpecifier::Ambient => None,
-                                    ResolvedDatabaseSpecifier::Id(id) => Some(*id),
-                                };
-                                tx.update_schema(
-                                    schema_id,
-                                    schema.clone().into_durable_schema(database_id),
-                                )?;
+                                tx.update_schema(schema_id, schema.clone().into())?;
                                 builtin_table_updates.push(state.resolve_builtin_table_update(
                                     state.pack_schema_update(database_spec, &schema_id, 1),
                                 ));
@@ -1937,7 +1930,7 @@ impl Catalog {
                 let schema = state.get_schema_mut(&database_spec, &schema_spec, conn_id);
                 let old_name = schema.name().schema.clone();
                 schema.name.schema.clone_from(&new_name);
-                let new_schema = schema.clone().into_durable_schema(database_spec.id());
+                let new_schema = schema.clone().into();
                 tx.update_schema(schema_id, new_schema)?;
 
                 // Update the references to this schema.
@@ -2072,14 +2065,7 @@ impl Catalog {
                             new_owner,
                         );
                         schema.owner_id = new_owner;
-                        let database_id = match database_spec {
-                            ResolvedDatabaseSpecifier::Ambient => None,
-                            ResolvedDatabaseSpecifier::Id(id) => Some(id),
-                        };
-                        tx.update_schema(
-                            schema_id,
-                            schema.clone().into_durable_schema(database_id.copied()),
-                        )?;
+                        tx.update_schema(schema_id, schema.clone().into())?;
                         builtin_table_updates.push(state.resolve_builtin_table_update(
                             state.pack_schema_update(database_spec, &schema_id, 1),
                         ));
