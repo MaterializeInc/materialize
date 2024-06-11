@@ -16,11 +16,13 @@ SCALABILITY_FRAMEWORK_HASH_FILE = Path(__file__).relative_to(MZ_ROOT)
 SCALABILITY_FRAMEWORK_DIR = Path(__file__).resolve().parent
 SCALABILITY_WORKLOADS_DIR = SCALABILITY_FRAMEWORK_DIR / "workloads"
 
+# Consider increasing the #SCALABILITY_FRAMEWORK_VERSION if changes are expected to impact results!
 SHA256_OF_FRAMEWORK: dict[str, str] = {}
 SHA256_OF_FRAMEWORK["*"] = (
     "2af533ec9ee10ef5a1d3c16373d89c51a63e5183603f2af849109868554ad3b7"
 )
 
+# Consider increasing the workload's class #version() if changes are expected to impact results!
 SHA256_BY_WORKLOAD_FILE: dict[str, str] = {}
 SHA256_BY_WORKLOAD_FILE["connection_workloads.py"] = (
     "6fb4acfc1f56456c47398bb633fab96338672f442386791ca43b1474d6a225b0"

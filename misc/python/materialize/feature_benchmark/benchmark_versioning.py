@@ -16,11 +16,13 @@ FEATURE_BENCHMARK_FRAMEWORK_HASH_FILE = Path(__file__).relative_to(MZ_ROOT)
 FEATURE_BENCHMARK_FRAMEWORK_DIR = Path(__file__).resolve().parent
 FEATURE_BENCHMARK_SCENARIOS_DIR = FEATURE_BENCHMARK_FRAMEWORK_DIR / "scenarios"
 
+# Consider increasing the #FEATURE_BENCHMARK_FRAMEWORK_VERSION if changes are expected to impact results!
 SHA256_OF_FRAMEWORK: dict[str, str] = {}
 SHA256_OF_FRAMEWORK["*"] = (
     "779dc43503707679b2ca56dee37d20650a5511562b9f72033ad17153e911c4b8"
 )
 
+# Consider increasing the scenario's class #version() if changes are expected to impact results!
 SHA256_BY_SCENARIO_FILE: dict[str, str] = {}
 SHA256_BY_SCENARIO_FILE["benchmark_main.py"] = (
     "157215738cdde40abe92ae6409f6b0c568eeb8136e6a6e29e0e57846a37941f7"
