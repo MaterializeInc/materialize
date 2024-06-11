@@ -370,9 +370,9 @@ FROM WEBHOOK
       WITH (
         HEADERS,
         BODY AS request_body,
-        SECRET basic_hook_auth
+        SECRET basic_hook_auth AS validation_secret
       )
-      constant_time_eq(headers->'authorization', basic_hook_auth)
+      constant_time_eq(headers->'authorization', validation_secret)
     );
 ```
 
