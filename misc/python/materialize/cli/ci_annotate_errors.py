@@ -15,7 +15,7 @@ import mmap
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from junitparser.junitparser import Error, Failure, JUnitXml
@@ -140,6 +140,49 @@ class JunitError:
     text: str
 
 
+@dataclass
+class Annotation:
+    suite_name: str
+    buildkite_job_id: str
+    is_failure: bool
+    failures_on_main: str | None
+    unknown_errors: list[str] = field(default_factory=list)
+    known_errors: list[str] = field(default_factory=list)
+
+    def to_markdown(self) -> str:
+        only_known_errors = len(self.unknown_errors) == 0 and len(self.known_errors) > 0
+        no_errors = len(self.unknown_errors) == 0 and len(self.known_errors) == 0
+        wrap_in_details = only_known_errors
+        wrap_in_summary = only_known_errors
+
+        build_link = f'<a href="#{self.buildkite_job_id}">{self.suite_name}</a>'
+        outcome = "failed" if self.is_failure else "succeeded"
+
+        title = f"{build_link} {outcome}"
+
+        if only_known_errors:
+            title = f"{title} with known error logs"
+        elif no_errors:
+            title = f"{title}, but no error in logs found"
+
+        markdown = title
+        if self.failures_on_main is not None:
+            markdown += ", " + self.failures_on_main
+
+        if wrap_in_summary:
+            markdown = f"<summary>{markdown}</summary>\n"
+
+        if len(self.unknown_errors) > 0:
+            markdown += "\n" + "\n".join(f"* {error}" for error in self.unknown_errors)
+        if len(self.known_errors) > 0:
+            markdown += "\n" + "\n".join(f"* {error}" for error in self.known_errors)
+
+        if wrap_in_details:
+            markdown = f"<details>{markdown}\n</details>"
+
+        return markdown
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="ci-annotate-errors",
@@ -162,39 +205,31 @@ def annotate_errors(
     failures_on_main: str | None,
     test_analytics_db_config: MzDbConfig,
 ) -> None:
-    assert unknown_errors or known_errors
-    style = "info" if not unknown_errors else "error"
+    assert len(unknown_errors) > 0 or len(known_errors) > 0
+    annotation_style = "info" if not unknown_errors else "error"
     unknown_errors = group_identical_errors(unknown_errors)
     known_errors = group_identical_errors(known_errors)
+    is_failure = (
+        len(unknown_errors) > 0 or os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
+    )
 
-    if unknown_errors:
-        text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{get_suite_name()}</a> failed"
-        if failures_on_main:
-            text += ", " + failures_on_main
-    else:
-        action = (
-            "failed"
-            if os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
-            else "succeeded"
-        )
-        text = f"<details><summary><a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{get_suite_name()}</a> {action} with known error logs"
-        if failures_on_main:
-            text += ", " + failures_on_main
-        text += "</summary>\n"
-    if unknown_errors:
-        text += "\n" + "\n".join(f"* {error}" for error in unknown_errors)
-    if known_errors:
-        text += "\n" + "\n".join(f"* {error}" for error in known_errors)
-    if not unknown_errors:
-        text += "\n</details>"
-    add_annotation_raw(style=style, markdown=text)
+    annotation = Annotation(
+        suite_name=get_suite_name(),
+        buildkite_job_id=os.getenv("BUILDKITE_JOB_ID", ""),
+        is_failure=is_failure,
+        failures_on_main=failures_on_main,
+        unknown_errors=unknown_errors,
+        known_errors=known_errors,
+    )
+
+    add_annotation_raw(style=annotation_style, markdown=annotation.to_markdown())
 
     cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
     build_annotation_storage.insert_annotation(
         cursor,
         [
             build_annotation_storage.AnnotationEntry(
-                type="error", header=get_suite_name(), markdown=text
+                type="error", header=get_suite_name(), markdown=annotation.to_markdown()
             )
         ],
     )
@@ -347,17 +382,24 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
         and os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
         and get_job_state() not in ("canceling", "canceled")
     ):
-        text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{get_suite_name()}</a> failed, but no error in logs found"
-        if failures_on_main:
-            text += ", " + failures_on_main
-        add_annotation_raw(style="error", markdown=text)
+        annotation = Annotation(
+            suite_name=get_suite_name(),
+            buildkite_job_id=os.getenv("BUILDKITE_JOB_ID", ""),
+            is_failure=True,
+            failures_on_main=failures_on_main,
+            unknown_errors=[],
+            known_errors=[],
+        )
+        add_annotation_raw(style="error", markdown=annotation.to_markdown())
 
         cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
         build_annotation_storage.insert_annotation(
             cursor,
             [
                 build_annotation_storage.AnnotationEntry(
-                    type="error", header=get_suite_name(), markdown=text
+                    type="error",
+                    header=get_suite_name(),
+                    markdown=annotation.to_markdown(),
                 )
             ],
         )
