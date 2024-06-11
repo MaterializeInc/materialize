@@ -54,7 +54,7 @@ use crate::durable::{
     SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
     USER_ROLE_ID_ALLOC_KEY,
 };
-use crate::memory::objects::{StateUpdate, StateUpdateKind};
+use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
 type Timestamp = u64;
 
@@ -1777,7 +1777,10 @@ impl<'a> Transaction<'a> {
                 unfinalized_shards,
                 StateUpdateKind::UnfinalizedShard,
             ))
-            .map(|kind| StateUpdate { kind, diff: 1 })
+            .map(|kind| StateUpdate {
+                kind,
+                diff: StateDiff::Addition,
+            })
     }
 
     /// Returns the updates of the current op.
@@ -1786,7 +1789,7 @@ impl<'a> Transaction<'a> {
             table_txn: &'a TableTransaction<T::Key, T::Value>,
             kind_fn: impl Fn(T) -> StateUpdateKind + 'a,
             op: Timestamp,
-        ) -> impl Iterator<Item = (StateUpdateKind, Diff)> + 'a
+        ) -> impl Iterator<Item = (StateUpdateKind, StateDiff)> + 'a
         where
             T::Key: Ord + Eq + Clone + Debug,
             T::Value: Ord + Clone + Debug,
@@ -1800,7 +1803,7 @@ impl<'a> Transaction<'a> {
                     if v.ts == op {
                         let key = k.clone();
                         let value = v.value.clone();
-                        let diff = v.diff.clone();
+                        let diff = v.diff.clone().try_into().expect("invalid diff");
                         let update = DurableType::from_key_value(key, value);
                         let kind = kind_fn(update);
                         Some((kind, diff))
@@ -1814,7 +1817,7 @@ impl<'a> Transaction<'a> {
             collection: &'a Vec<(T::Key, Diff, Timestamp)>,
             kind_fn: impl Fn(T) -> StateUpdateKind + 'a,
             op: Timestamp,
-        ) -> impl Iterator<Item = (StateUpdateKind, Diff)> + 'a
+        ) -> impl Iterator<Item = (StateUpdateKind, StateDiff)> + 'a
         where
             T::Key: Ord + Eq + Clone + Debug,
             T: DurableType<Value = ()>,
@@ -1822,7 +1825,7 @@ impl<'a> Transaction<'a> {
             collection.iter().filter_map(move |(k, diff, ts)| {
                 if *ts == op {
                     let key = k.clone();
-                    let diff = diff.clone();
+                    let diff = diff.clone().try_into().expect("invalid diff");
                     let update = DurableType::from_key_value(key, ());
                     let kind = kind_fn(update);
                     Some((kind, diff))

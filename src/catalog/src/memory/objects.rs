@@ -2232,7 +2232,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 pub struct StateUpdate {
     pub kind: StateUpdateKind,
     // TODO(jkosh44) Add timestamps.
-    pub diff: Diff,
+    pub diff: StateDiff,
 }
 
 /// The contents of a single state update.
@@ -2257,4 +2257,31 @@ pub enum StateUpdateKind {
     // Storage updates.
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),
+}
+
+/// Valid diffs for catalog state updates.
+#[derive(Debug, Clone, Copy)]
+pub enum StateDiff {
+    Retraction,
+    Addition,
+}
+
+impl From<StateDiff> for Diff {
+    fn from(diff: StateDiff) -> Self {
+        match diff {
+            StateDiff::Retraction => -1,
+            StateDiff::Addition => 1,
+        }
+    }
+}
+impl TryFrom<Diff> for StateDiff {
+    type Error = String;
+
+    fn try_from(diff: Diff) -> Result<Self, Self::Error> {
+        match diff {
+            -1 => Ok(Self::Retraction),
+            1 => Ok(Self::Addition),
+            diff => Err(format!("invalid diff {diff}")),
+        }
+    }
 }

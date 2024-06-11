@@ -13,7 +13,7 @@ use std::str::FromStr;
 use futures::future::BoxFuture;
 use maplit::btreeset;
 use mz_catalog::durable::{Item, Transaction};
-use mz_catalog::memory::objects::{StateUpdate, StateUpdateKind};
+use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp};
@@ -122,7 +122,7 @@ pub(crate) async fn migrate(
         .get_items()
         .map(|item| StateUpdate {
             kind: StateUpdateKind::Item(item),
-            diff: 1,
+            diff: StateDiff::Addition,
         })
         .collect();
     // The catalog is temporary, so we can throw out the builtin updates.
