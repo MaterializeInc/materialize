@@ -144,9 +144,6 @@ pub struct LibraryConfig {
     /// Extra proc macro dependencies to include.
     #[serde(default)]
     extra_proc_macro_deps: Vec<String>,
-    /// Should we skip generating the `rust_doc_test` target.
-    #[serde(default)]
-    skip_doc_test: bool,
 }
 
 impl LibraryConfig {
@@ -164,10 +161,6 @@ impl LibraryConfig {
 
     pub fn extra_proc_macro_deps(&self) -> &[String] {
         &self.extra_proc_macro_deps
-    }
-
-    pub fn skip_doc_test(&self) -> bool {
-        self.skip_doc_test
     }
 }
 
@@ -250,6 +243,9 @@ impl BinaryConfig {
 /// Extra config that is common among all target types.
 #[derive(Default, Debug, serde::Deserialize)]
 pub struct CommonConfig {
+    /// Skip generating this target.
+    #[serde(default)]
+    skip: bool,
     /// Paths that will be added to the `compile_data` field of the generated Bazel target.
     #[serde(default)]
     compile_data: Vec<String>,
@@ -265,6 +261,10 @@ pub struct CommonConfig {
 }
 
 impl CommonConfig {
+    pub fn skip(&self) -> bool {
+        self.skip
+    }
+
     /// Returns a tuple of `(<non-glob paths>, <glob paths, if any>)`.
     pub fn compile_data(&self) -> (Vec<&String>, Option<Vec<&String>>) {
         let paths: Vec<_> = self

@@ -21,3 +21,20 @@ bazel = []
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[package.metadata.cargo-gazelle.lib]
+features_override = ["default", "bazel"]
+extra_deps = ["@rules_rust//tools/runfiles"]
+data = [
+    "@protobuf//:protoc",
+    "@protobuf//:well_known_type_protos",
+]
+rustc_flags = ["--cfg=bazel"]
+
+# Skip generating doc tests because there isn't a way to set the rustc flags
+# used for the test, so we can't set the `--cfg=bazel` flag.
+[package.metadata.cargo-gazelle.test.doc]
+skip = true
+
+[package.metadata.cargo-gazelle.test.lib]
+rustc_flags = ["--cfg=bazel"]

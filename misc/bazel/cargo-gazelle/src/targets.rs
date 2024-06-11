@@ -35,6 +35,15 @@ pub trait RustTarget: ToBazelDefinition {
     fn rules(&self) -> Vec<Rule>;
 }
 
+impl<T: RustTarget> RustTarget for Option<T> {
+    fn rules(&self) -> Vec<Rule> {
+        match self {
+            Some(t) => t.rules(),
+            None => vec![],
+        }
+    }
+}
+
 /// [`rust_library`](https://bazelbuild.github.io/rules_rust/defs.html#rust_library)
 #[derive(Debug)]
 pub struct RustLibrary {
@@ -48,7 +57,7 @@ pub struct RustLibrary {
     compile_data: Field<List<QuotedString>>,
     rustc_flags: Field<List<QuotedString>>,
     rustc_env: Field<Dict<QuotedString, QuotedString>>,
-    unit_test: RustTest,
+    unit_test: Option<RustTest>,
     doc_tests: Option<RustDocTest>,
 }
 
@@ -70,7 +79,11 @@ impl RustLibrary {
         metadata: &PackageMetadata,
         crate_config: &CrateConfig,
         build_script: Option<&CargoBuildScript>,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Option<Self>, anyhow::Error> {
+        if crate_config.lib().common().skip() {
+            return Ok(None);
+        }
+
         let name = metadata.name().to_case(Case::Snake);
         let name = QuotedString::new(name);
 
@@ -107,12 +120,7 @@ impl RustLibrary {
 
         // For every library we also generate the tests targets.
         let unit_test = RustTest::library(config, metadata, crate_config)?;
-        let doc_tests = if crate_config.lib().skip_doc_test() {
-            None
-        } else {
-            let doc_test = RustDocTest::generate(config, metadata)?;
-            Some(doc_test)
-        };
+        let doc_tests = RustDocTest::generate(config, metadata, crate_config)?;
 
         // Extend with any extra config specified in the Cargo.toml.
         let lib_common = crate_config.lib().common();
@@ -129,7 +137,7 @@ impl RustLibrary {
         let rustc_flags = List::new(lib_common.rustc_flags());
         let rustc_env = Dict::new(lib_common.rustc_env());
 
-        Ok(RustLibrary {
+        Ok(Some(RustLibrary {
             name: Field::new("name", name),
             is_proc_macro: metadata.is_proc_macro(),
             features: Field::new("crate_features", features),
@@ -142,7 +150,7 @@ impl RustLibrary {
             rustc_env: Field::new("rustc_env", rustc_env),
             unit_test,
             doc_tests,
-        })
+        }))
     }
 }
 
@@ -211,7 +219,7 @@ impl RustBinary {
         metadata: &PackageMetadata,
         crate_config: &CrateConfig,
         target: &BuildTarget,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Option<Self>, anyhow::Error> {
         let crate_root_path = metadata
             .manifest_path()
             .parent()
@@ -223,6 +231,10 @@ impl RustBinary {
             ),
         };
         let target_name = QuotedString::new(name.to_case(Case::Snake));
+
+        if crate_config.binary(name).common().skip() {
+            return Ok(None);
+        }
 
         let binary_path = target.path();
         let binary_path = binary_path
@@ -276,7 +288,7 @@ impl RustBinary {
         let rustc_flags = List::new(bin_config.common().rustc_flags());
         let rustc_env = Dict::new(bin_config.common().rustc_env());
 
-        Ok(RustBinary {
+        Ok(Some(RustBinary {
             name: Field::new("name", target_name),
             crate_root: Field::new("crate_root", binary_path),
             features: Field::new("features", List::empty()),
@@ -288,7 +300,7 @@ impl RustBinary {
             env: Field::new("env", env),
             rustc_flags: Field::new("rustc_flags", rustc_flags),
             rustc_env: Field::new("rustc_env", rustc_env),
-        })
+        }))
     }
 }
 
@@ -351,8 +363,12 @@ impl RustTest {
         name: &str,
         kind: RustTestKind,
         size: RustTestSize,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Option<Self>, anyhow::Error> {
         let test_config = crate_config.test(name);
+
+        if test_config.common().skip() {
+            return Ok(None);
+        }
 
         let crate_name = metadata.name().to_case(Case::Snake);
         let name = QuotedString::new(format!("{crate_name}_{}_tests", name));
@@ -400,7 +416,7 @@ impl RustTest {
         // Use the size provided from the config, if one was provided.
         let size = test_config.size().copied().unwrap_or(size);
 
-        Ok(RustTest {
+        Ok(Some(RustTest {
             name: Field::new("name", name),
             kind,
             aliases: Field::new("aliases", aliases),
@@ -412,14 +428,14 @@ impl RustTest {
             env: Field::new("env", env),
             rustc_flags: Field::new("rustc_flags", rustc_flags),
             rustc_env: Field::new("rustc_env", rustc_env),
-        })
+        }))
     }
 
     pub fn library(
         config: &GlobalConfig,
         metadata: &PackageMetadata,
         crate_config: &CrateConfig,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Option<Self>, anyhow::Error> {
         let crate_name = metadata.name().to_case(Case::Snake);
         Self::common(
             config,
@@ -427,7 +443,7 @@ impl RustTest {
             crate_config,
             "lib",
             RustTestKind::library(crate_name),
-            RustTestSize::Small,
+            RustTestSize::Medium,
         )
     }
 
@@ -436,7 +452,7 @@ impl RustTest {
         metadata: &PackageMetadata,
         crate_config: &CrateConfig,
         target: &BuildTarget,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Option<Self>, anyhow::Error> {
         let crate_root_path = metadata
             .manifest_path()
             .parent()
@@ -458,7 +474,7 @@ impl RustTest {
             crate_config,
             target.name(),
             RustTestKind::integration([test_target.to_string()]),
-            RustTestSize::Medium,
+            RustTestSize::Large,
         )
     }
 }
@@ -524,8 +540,8 @@ impl ToBazelDefinition for RustTestKind {
 #[derive(Debug, Clone, Copy, Default)]
 pub enum RustTestSize {
     Small,
-    #[default]
     Medium,
+    #[default]
     Large,
     Enormous,
 }
@@ -580,7 +596,12 @@ impl RustDocTest {
     pub fn generate(
         config: &GlobalConfig,
         metadata: &PackageMetadata,
-    ) -> Result<Self, anyhow::Error> {
+        crate_config: &CrateConfig,
+    ) -> Result<Option<Self>, anyhow::Error> {
+        if crate_config.doc_test().common().skip() {
+            return Ok(None);
+        }
+
         let crate_name = metadata.name().to_case(Case::Snake);
         let name = QuotedString::new(format!("{crate_name}_doc_test"));
         let crate_ = QuotedString::new(format!(":{crate_name}"));
@@ -592,11 +613,11 @@ impl RustDocTest {
             .collect::<List<_>>()
             .concat_other(AllCrateDeps::default().normal().normal_dev());
 
-        Ok(RustDocTest {
+        Ok(Some(RustDocTest {
             name: Field::new("name", name),
             crate_: Field::new("crate", crate_),
             deps: Field::new("deps", deps),
-        })
+        }))
     }
 }
 

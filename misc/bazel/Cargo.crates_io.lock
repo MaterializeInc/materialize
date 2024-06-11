@@ -1,5 +1,5 @@
 {
-  "checksum": "035762ef5e471af800765d7fd8cf7f7188d7a005435bb34fa171c7a7de4ff2df",
+  "checksum": "f7007632491f93fe771c46bb8d676a064651be80e3497ef45572ae4df6161523",
   "crates": {
     "abomonation 0.7.3": {
       "name": "abomonation",
@@ -6537,15 +6537,6 @@
             {
               "id": "tracing-subscriber 0.3.18",
               "target": "tracing_subscriber"
-            }
-          ],
-          "selects": {}
-        },
-        "deps_dev": {
-          "common": [
-            {
-              "id": "insta 1.33.0",
-              "target": "insta"
             }
           ],
           "selects": {}
@@ -24109,9 +24100,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-balancerd 0.103.0-dev": {
+    "mz-balancerd 0.104.0-dev": {
       "name": "mz-balancerd",
-      "version": "0.103.0-dev",
+      "version": "0.104.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -24245,7 +24236,7 @@
           ],
           "selects": {}
         },
-        "version": "0.103.0-dev"
+        "version": "0.104.0-dev"
       },
       "license": null,
       "license_ids": [],
@@ -24615,9 +24606,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-catalog-debug 0.103.0-dev": {
+    "mz-catalog-debug 0.104.0-dev": {
       "name": "mz-catalog-debug",
-      "version": "0.103.0-dev",
+      "version": "0.104.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [],
@@ -24672,7 +24663,7 @@
           "selects": {}
         },
         "edition": "2021",
-        "version": "0.103.0-dev"
+        "version": "0.104.0-dev"
       },
       "license": null,
       "license_ids": [],
@@ -25196,9 +25187,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-clusterd 0.103.0-dev": {
+    "mz-clusterd 0.104.0-dev": {
       "name": "mz-clusterd",
-      "version": "0.103.0-dev",
+      "version": "0.104.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [],
@@ -25257,7 +25248,7 @@
           "selects": {}
         },
         "edition": "2021",
-        "version": "0.103.0-dev"
+        "version": "0.104.0-dev"
       },
       "license": null,
       "license_ids": [],
@@ -25292,6 +25283,10 @@
             {
               "id": "anyhow 1.0.66",
               "target": "anyhow"
+            },
+            {
+              "id": "async-stream 0.3.3",
+              "target": "async_stream"
             },
             {
               "id": "bytesize 1.1.0",
@@ -25959,9 +25954,9 @@
       ],
       "license_file": null
     },
-    "mz-environmentd 0.103.0-dev": {
+    "mz-environmentd 0.104.0-dev": {
       "name": "mz-environmentd",
-      "version": "0.103.0-dev",
+      "version": "0.104.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -26101,7 +26096,7 @@
               "target": "mime"
             },
             {
-              "id": "mz-environmentd 0.103.0-dev",
+              "id": "mz-environmentd 0.104.0-dev",
               "target": "build_script_build"
             },
             {
@@ -26326,7 +26321,7 @@
           ],
           "selects": {}
         },
-        "version": "0.103.0-dev"
+        "version": "0.104.0-dev"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -29050,9 +29045,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-persist-client 0.103.0-dev": {
+    "mz-persist-client 0.104.0-dev": {
       "name": "mz-persist-client",
-      "version": "0.103.0-dev",
+      "version": "0.104.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -29139,7 +29134,7 @@
               "target": "itertools"
             },
             {
-              "id": "mz-persist-client 0.103.0-dev",
+              "id": "mz-persist-client 0.104.0-dev",
               "target": "build_script_build"
             },
             {
@@ -29248,7 +29243,7 @@
           ],
           "selects": {}
         },
-        "version": "0.103.0-dev"
+        "version": "0.104.0-dev"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -32294,7 +32289,7 @@
               "target": "prost"
             },
             {
-              "id": "protobuf-native 0.3.0+26.1",
+              "id": "protobuf-native 0.3.1+26.1",
               "target": "protobuf_native"
             },
             {
@@ -33077,6 +33072,10 @@
               "target": "serde"
             },
             {
+              "id": "serde_bytes 0.11.14",
+              "target": "serde_bytes"
+            },
+            {
               "id": "serde_json 1.0.117",
               "target": "serde_json"
             },
@@ -33852,9 +33851,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-testdrive 0.103.0-dev": {
+    "mz-testdrive 0.104.0-dev": {
       "name": "mz-testdrive",
-      "version": "0.103.0-dev",
+      "version": "0.104.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -33989,7 +33988,7 @@
               "target": "mysql_async"
             },
             {
-              "id": "mz-testdrive 0.103.0-dev",
+              "id": "mz-testdrive 0.104.0-dev",
               "target": "build_script_build"
             },
             {
@@ -34117,7 +34116,7 @@
           ],
           "selects": {}
         },
-        "version": "0.103.0-dev"
+        "version": "0.104.0-dev"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -41383,14 +41382,14 @@
       ],
       "license_file": "LICENSE.txt"
     },
-    "protobuf-native 0.3.0+26.1": {
+    "protobuf-native 0.3.1+26.1": {
       "name": "protobuf-native",
-      "version": "0.3.0+26.1",
+      "version": "0.3.1+26.1",
       "package_url": "https://github.com/MaterializeInc/rust-protobuf-native",
       "repository": {
         "Http": {
-          "url": "https://static.crates.io/crates/protobuf-native/0.3.0+26.1/download",
-          "sha256": "cf69c1af460fb26c23df5eb1e4f6a73d3cc32442e08089e15f65f8df874ec328"
+          "url": "https://static.crates.io/crates/protobuf-native/0.3.1+26.1/download",
+          "sha256": "28d044214db6b29e30fa2d8f9dfb5234e13383a2577330eb06e3763495e4a466"
         }
       },
       "targets": [
@@ -41447,7 +41446,7 @@
           ],
           "selects": {}
         },
-        "version": "0.3.0+26.1"
+        "version": "0.3.1+26.1"
       },
       "license": "Apache-2.0",
       "license_ids": [
@@ -46625,6 +46624,61 @@
         "MIT"
       ],
       "license_file": null
+    },
+    "serde_bytes 0.11.14": {
+      "name": "serde_bytes",
+      "version": "0.11.14",
+      "package_url": "https://github.com/serde-rs/bytes",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/serde_bytes/0.11.14/download",
+          "sha256": "8b8497c313fd43ab992087548117643f6fcd935cbf36f176ffda0aacf9591734"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "serde_bytes",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": false,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "serde_bytes",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "default",
+            "std"
+          ],
+          "selects": {}
+        },
+        "deps": {
+          "common": [
+            {
+              "id": "serde 1.0.203",
+              "target": "serde"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2018",
+        "version": "0.11.14"
+      },
+      "license": "MIT OR Apache-2.0",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "license_file": "LICENSE-APACHE"
     },
     "serde_derive 1.0.203": {
       "name": "serde_derive",
@@ -60864,17 +60918,17 @@
     "mz-avro 0.7.0": "src/avro",
     "mz-aws-secrets-controller 0.1.0": "src/aws-secrets-controller",
     "mz-aws-util 0.0.0": "src/aws-util",
-    "mz-balancerd 0.103.0-dev": "src/balancerd",
+    "mz-balancerd 0.104.0-dev": "src/balancerd",
     "mz-build-info 0.0.0": "src/build-info",
     "mz-build-tools 0.0.0": "src/build-tools",
     "mz-catalog 0.0.0": "src/catalog",
-    "mz-catalog-debug 0.103.0-dev": "src/catalog-debug",
+    "mz-catalog-debug 0.104.0-dev": "src/catalog-debug",
     "mz-ccsr 0.0.0": "src/ccsr",
     "mz-cloud-api 0.0.0": "src/cloud-api",
     "mz-cloud-resources 0.0.0": "src/cloud-resources",
     "mz-cluster 0.0.0": "src/cluster",
     "mz-cluster-client 0.0.0": "src/cluster-client",
-    "mz-clusterd 0.103.0-dev": "src/clusterd",
+    "mz-clusterd 0.104.0-dev": "src/clusterd",
     "mz-compute 0.0.0": "src/compute",
     "mz-compute-client 0.0.0": "src/compute-client",
     "mz-compute-types 0.0.0": "src/compute-types",
@@ -60882,7 +60936,7 @@
     "mz-controller-types 0.0.0": "src/controller-types",
     "mz-dyncfg 0.0.0": "src/dyncfg",
     "mz-dyncfgs 0.0.0": "src/dyncfgs",
-    "mz-environmentd 0.103.0-dev": "src/environmentd",
+    "mz-environmentd 0.104.0-dev": "src/environmentd",
     "mz-expr 0.0.0": "src/expr",
     "mz-expr-parser 0.0.0": "src/expr-parser",
     "mz-expr-test-util 0.0.0": "src/expr-test-util",
@@ -60908,7 +60962,7 @@
     "mz-ore 0.1.0": "src/ore",
     "mz-ore-proc 0.1.0": "src/ore-proc",
     "mz-persist 0.0.0": "src/persist",
-    "mz-persist-client 0.103.0-dev": "src/persist-client",
+    "mz-persist-client 0.104.0-dev": "src/persist-client",
     "mz-persist-proc 0.1.0": "src/persist-proc",
     "mz-persist-types 0.0.0": "src/persist-types",
     "mz-pgcopy 0.0.0": "src/pgcopy",
@@ -60947,7 +61001,7 @@
     "mz-storage-operators 0.0.0": "src/storage-operators",
     "mz-storage-types 0.0.0": "src/storage-types",
     "mz-test-util 0.0.0": "test/test-util",
-    "mz-testdrive 0.103.0-dev": "src/testdrive",
+    "mz-testdrive 0.104.0-dev": "src/testdrive",
     "mz-timely-util 0.0.0": "src/timely-util",
     "mz-timestamp-oracle 0.0.0": "src/timestamp-oracle",
     "mz-tls-util 0.0.0": "src/tls-util",
@@ -61893,7 +61947,7 @@
     "prost-build 0.11.9",
     "prost-reflect 0.11.4",
     "prost-types 0.11.9",
-    "protobuf-native 0.3.0+26.1",
+    "protobuf-native 0.3.1+26.1",
     "protobuf-parse 3.4.0",
     "protobuf-src 2.0.1+26.1",
     "qcell 0.5.4",
@@ -61924,6 +61978,7 @@
     "sentry-tracing 0.29.1",
     "serde 1.0.203",
     "serde-aux 4.2.0",
+    "serde_bytes 0.11.14",
     "serde_json 1.0.117",
     "serde_plain 1.0.1",
     "sha1 0.10.5",

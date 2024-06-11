@@ -26,7 +26,8 @@ rustc_flags = ["--cfg=bazel"]
 
 # Skip generating doc tests because there isn't a way to set the rustc flags
 # used for the test, so we can't set the `--cfg=bazel` flag.
-skip_doc_test = true
+[package.metadata.cargo-gazelle.test.doc]
+skip = true
 
 [package.metadata.cargo-gazelle.lib.rustc_env]
 BAZEL_GEN_BUILD_INFO = "$(execpath @//misc/bazel/build-info:gen_build_info)"
