@@ -49,6 +49,7 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
+use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
@@ -62,7 +63,7 @@ use crate::controller::error::{
     InstanceExists, InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError,
     ReplicaDropError, SubscribeTargetError,
 };
-use crate::controller::instance::{ActiveInstance, Instance};
+use crate::controller::instance::Instance;
 use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
@@ -143,6 +144,8 @@ impl ComputeReplicaLogging {
 pub struct ComputeController<T> {
     instances: BTreeMap<ComputeInstanceId, Instance<T>>,
     build_info: &'static BuildInfo,
+    /// A handle providing access to storage collections.
+    storage_collections: Arc<dyn StorageCollections<Timestamp = T>>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// Whether or not this controller is in read-only mode.
@@ -156,7 +159,7 @@ pub struct ComputeController<T> {
     /// `arrangement_exert_proportionality` value passed to new replicas.
     arrangement_exert_proportionality: u32,
     /// A replica response to be handled by the corresponding `Instance` on a subsequent call to
-    /// `ActiveComputeController::process`.
+    /// [`ComputeController::process`].
     stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
@@ -169,7 +172,7 @@ pub struct ComputeController<T> {
     dyncfg: Arc<ConfigSet>,
 
     /// Receiver for responses produced by `Instance`s, to be delivered on subsequent calls to
-    /// `ActiveComputeController::process`.
+    /// [`ComputeController::process`].
     response_rx: crossbeam_channel::Receiver<ComputeControllerResponse<T>>,
     /// Response sender that's passed to new `Instance`s.
     response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
@@ -188,6 +191,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// Construct a new [`ComputeController`].
     pub fn new(
         build_info: &'static BuildInfo,
+        storage_collections: Arc<dyn StorageCollections<Timestamp = T>>,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
     ) -> Self {
@@ -200,6 +204,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         Self {
             instances: BTreeMap::new(),
             build_info,
+            storage_collections,
             initialized: false,
             read_only: true,
             config: Default::default(),
@@ -265,17 +270,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             .ok_or(CollectionLookupError::CollectionMissing(collection_id))
     }
 
-    /// Acquire an [`ActiveComputeController`] by supplying a storage connection.
-    pub fn activate<'a>(
-        &'a mut self,
-        storage: &'a mut dyn StorageController<Timestamp = T>,
-    ) -> ActiveComputeController<'a, T> {
-        ActiveComputeController {
-            compute: self,
-            storage,
-        }
-    }
-
     /// List compute collections that depend on the given collection.
     pub fn collection_reverse_dependencies(
         &self,
@@ -329,6 +323,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         let Self {
             instances,
             build_info: _,
+            storage_collections: _,
             initialized,
             read_only,
             config: _,
@@ -396,6 +391,7 @@ where
             id,
             Instance::new(
                 self.build_info,
+                Arc::clone(&self.storage_collections),
                 arranged_logs,
                 self.envd_epoch,
                 self.metrics.for_instance(id),
@@ -470,7 +466,7 @@ where
     ///
     /// This method may block for an arbitrarily long time.
     ///
-    /// When the method returns, the caller should call [`ActiveComputeController::process`].
+    /// When the method returns, the caller should call [`ComputeController::process`].
     ///
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
@@ -508,7 +504,7 @@ where
                     Err(_) => {
                         // There is nothing to do here. `recv` has already added the failed replica to
                         // `instance.failed_replicas`, so it will be rehydrated in the next call to
-                        // `ActiveComputeController::process`.
+                        // [`ComputeController::process`].
                     }
                 }
             },
@@ -532,42 +528,7 @@ where
             .set_subscribe_target_replica(subscribe_id, target_replica)?;
         Ok(())
     }
-}
 
-/// A wrapper around a [`ComputeController`] with a live connection to a storage controller.
-pub struct ActiveComputeController<'a, T> {
-    compute: &'a mut ComputeController<T>,
-    storage: &'a mut dyn StorageController<Timestamp = T>,
-}
-
-impl<T: ComputeControllerTimestamp> ActiveComputeController<'_, T> {
-    /// TODO(#25239): Add documentation.
-    pub fn instance_exists(&self, id: ComputeInstanceId) -> bool {
-        self.compute.instance_exists(id)
-    }
-
-    /// Return a read-only handle to the indicated collection.
-    pub fn collection(
-        &self,
-        instance_id: ComputeInstanceId,
-        collection_id: GlobalId,
-    ) -> Result<&CollectionState<T>, CollectionLookupError> {
-        self.compute.collection(instance_id, collection_id)
-    }
-
-    /// Return a handle to the indicated compute instance.
-    fn instance(&mut self, id: ComputeInstanceId) -> Result<ActiveInstance<T>, InstanceMissing> {
-        self.compute
-            .instance_mut(id)
-            .map(|c| c.activate(self.storage))
-    }
-}
-
-impl<T> ActiveComputeController<'_, T>
-where
-    T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
-{
     /// Adds replicas of an instance.
     pub fn add_replica_to_instance(
         &mut self,
@@ -589,11 +550,11 @@ where
                 log_logging: config.logging.log_logging,
                 index_logs: Default::default(),
             },
-            arrangement_exert_proportionality: self.compute.arrangement_exert_proportionality,
-            grpc_client: self.compute.config.grpc_client.clone(),
+            arrangement_exert_proportionality: self.arrangement_exert_proportionality,
+            grpc_client: self.config.grpc_client.clone(),
         };
 
-        self.instance(instance_id)?
+        self.instance_mut(instance_id)?
             .add_replica(replica_id, replica_config)?;
         Ok(())
     }
@@ -604,7 +565,7 @@ where
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
     ) -> Result<(), ReplicaDropError> {
-        self.instance(instance_id)?.remove_replica(replica_id)?;
+        self.instance_mut(instance_id)?.remove_replica(replica_id)?;
         Ok(())
     }
 
@@ -620,7 +581,7 @@ where
         instance_id: ComputeInstanceId,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
     ) -> Result<(), DataflowCreationError> {
-        self.instance(instance_id)?.create_dataflow(dataflow)?;
+        self.instance_mut(instance_id)?.create_dataflow(dataflow)?;
         Ok(())
     }
 
@@ -631,7 +592,7 @@ where
         instance_id: ComputeInstanceId,
         collection_ids: Vec<GlobalId>,
     ) -> Result<(), CollectionUpdateError> {
-        self.instance(instance_id)?
+        self.instance_mut(instance_id)?
             .drop_collections(collection_ids)?;
         Ok(())
     }
@@ -649,7 +610,7 @@ where
         target_replica: Option<ReplicaId>,
         peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
-        self.instance(instance_id)?.peek(
+        self.instance_mut(instance_id)?.peek(
             collection_id,
             literal_constraints,
             uuid,
@@ -676,7 +637,7 @@ where
         instance_id: ComputeInstanceId,
         uuid: Uuid,
     ) -> Result<(), InstanceMissing> {
-        self.instance(instance_id)?.cancel_peek(uuid);
+        self.instance_mut(instance_id)?.cancel_peek(uuid);
         Ok(())
     }
 
@@ -696,17 +657,20 @@ where
         instance_id: ComputeInstanceId,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
     ) -> Result<(), ReadPolicyError> {
-        self.instance(instance_id)?.set_read_policy(policies)?;
+        self.instance_mut(instance_id)?.set_read_policy(policies)?;
         Ok(())
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn record_introspection_updates(&mut self) {
+    async fn record_introspection_updates(
+        &mut self,
+        storage: &mut dyn StorageController<Timestamp = T>,
+    ) {
         // We could record the contents of `introspection_rx` directly here, but to reduce the
         // pressure on persist we spend some effort consolidating first.
         let mut updates_by_type = BTreeMap::new();
 
-        for (type_, updates) in self.compute.introspection_rx.try_iter() {
+        for (type_, updates) in self.introspection_rx.try_iter() {
             updates_by_type
                 .entry(type_)
                 .or_insert_with(Vec::new)
@@ -718,25 +682,26 @@ where
 
         for (type_, updates) in updates_by_type {
             if !updates.is_empty() {
-                self.storage
-                    .record_introspection_updates(type_, updates)
-                    .await;
+                storage.record_introspection_updates(type_, updates).await;
             }
         }
     }
 
     /// Processes the work queued by [`ComputeController::ready`].
     #[mz_ore::instrument(level = "debug")]
-    pub async fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
+    pub async fn process(
+        &mut self,
+        storage: &mut dyn StorageController<Timestamp = T>,
+    ) -> Option<ComputeControllerResponse<T>> {
         // Perform periodic maintenance work.
-        if self.compute.maintenance_scheduled {
-            self.maintain().await;
-            self.compute.maintenance_ticker.reset();
-            self.compute.maintenance_scheduled = false;
+        if self.maintenance_scheduled {
+            self.maintain(storage).await;
+            self.maintenance_ticker.reset();
+            self.maintenance_scheduled = false;
         }
 
         // Process pending ready responses.
-        match self.compute.response_rx.try_recv() {
+        match self.response_rx.try_recv() {
             Ok(response) => return Some(response),
             Err(crossbeam_channel::TryRecvError::Empty) => (),
             Err(crossbeam_channel::TryRecvError::Disconnected) => {
@@ -747,10 +712,8 @@ where
         }
 
         // Process pending responses from replicas.
-        if let Some((instance_id, replica_id, response)) =
-            self.compute.stashed_replica_response.take()
-        {
-            if let Ok(mut instance) = self.instance(instance_id) {
+        if let Some((instance_id, replica_id, response)) = self.stashed_replica_response.take() {
+            if let Some(instance) = self.instances.get_mut(&instance_id) {
                 return instance.handle_response(response, replica_id);
             } else {
                 warn!(
@@ -765,10 +728,10 @@ where
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn maintain(&mut self) {
+    async fn maintain(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
         // Perform instance maintenance work.
-        for instance in self.compute.instances.values_mut() {
-            instance.activate(self.storage).maintain();
+        for instance in self.instances.values_mut() {
+            instance.maintain();
         }
 
         // Record pending introspection updates.
@@ -776,7 +739,7 @@ where
         // It's beneficial to do this as the last maintenance step because previous steps can cause
         // dropping of state, which can can cause introspection retractions, which lower the volume
         // of data we have to record.
-        self.record_introspection_updates().await;
+        self.record_introspection_updates(storage).await;
     }
 }
 
