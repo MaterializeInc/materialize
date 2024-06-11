@@ -54,10 +54,10 @@ def main():
     with open(args.rust_file, "w") as f:
         for k, v in volatile_variables.items():
             key_name = k.upper()
-            f.write(f'pub static {key_name}: &str = "{v}";\n')
+            f.write(f'pub const {key_name}: &str = "{v}";\n')
         for k, v in stable_variables.items():
             key_name = k.upper()
-            f.write(f'pub static {key_name}: &str = "{v}";\n')
+            f.write(f'pub const {key_name}: &str = "{v}";\n')
 
 
 def parse_variable_file(path) -> dict[str, str]:

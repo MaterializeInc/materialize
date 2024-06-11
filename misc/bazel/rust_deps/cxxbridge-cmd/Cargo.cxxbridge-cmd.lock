@@ -1,5 +1,5 @@
 {
-  "checksum": "20708b0f7b26de718676d5f438d0cda450ad2aa1ed0da468b7b8026d0ae13866",
+  "checksum": "885ca203cab3aa22f784a9e9be93d3b3e14a157c80924700448eccc7360f2591",
   "crates": {
     "anstyle 1.0.4": {
       "name": "anstyle",
@@ -47,14 +47,14 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
-    "cc 1.0.98": {
+    "cc 1.0.99": {
       "name": "cc",
-      "version": "1.0.98",
+      "version": "1.0.99",
       "package_url": "https://github.com/rust-lang/cc-rs",
       "repository": {
         "Http": {
-          "url": "https://static.crates.io/crates/cc/1.0.98/download",
-          "sha256": "41c270e7540d725e65ac7f1b212ac8ce349719624d7bcff99f8e2e488e8cf03f"
+          "url": "https://static.crates.io/crates/cc/1.0.99/download",
+          "sha256": "96c51067fd44124faa7f870b4b1c969379ad32b2ba805aa959430ceaa384f695"
         }
       },
       "targets": [
@@ -77,7 +77,7 @@
           "**"
         ],
         "edition": "2018",
-        "version": "1.0.98"
+        "version": "1.0.99"
       },
       "license": "MIT OR Apache-2.0",
       "license_ids": [
@@ -592,7 +592,7 @@
         "deps": {
           "common": [
             {
-              "id": "cc 1.0.98",
+              "id": "cc 1.0.99",
               "target": "cc"
             }
           ],
