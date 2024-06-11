@@ -28,6 +28,7 @@ from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
 )
 from materialize.buildkite_insights.steps.build_step import (
     BuildStepMatcher,
+    BuildStepOutcome,
     extract_build_step_outcomes,
 )
 from materialize.github import for_github_re, get_known_issues_from_github
@@ -141,11 +142,28 @@ class JunitError:
 
 
 @dataclass
+class BuildHistoryOnMain:
+    pipeline_slug: str
+    last_build_step_outcomes: list[BuildStepOutcome]
+
+    def to_markdown(self) -> str:
+        return (
+            f'<a href="/materialize/{self.pipeline_slug}/builds?branch=main">main</a> history: '
+            + "".join(
+                [
+                    f"<a href=\"{outcome.web_url_to_job}\">{':bk-status-passed:' if outcome.passed else ':bk-status-failed:'}</a>"
+                    for outcome in self.last_build_step_outcomes
+                ]
+            )
+        )
+
+
+@dataclass
 class Annotation:
     suite_name: str
     buildkite_job_id: str
     is_failure: bool
-    failures_on_main: str | None
+    build_history_on_main: BuildHistoryOnMain | None
     unknown_errors: list[str] = field(default_factory=list)
     known_errors: list[str] = field(default_factory=list)
 
@@ -166,8 +184,8 @@ class Annotation:
             title = f"{title}, but no error in logs found"
 
         markdown = title
-        if self.failures_on_main is not None:
-            markdown += ", " + self.failures_on_main
+        if self.build_history_on_main is not None:
+            markdown += ", " + self.build_history_on_main.to_markdown()
 
         if wrap_in_summary:
             markdown = f"<summary>{markdown}</summary>\n"
@@ -202,7 +220,7 @@ and finds associated open GitHub issues in Materialize repository.""",
 def annotate_errors(
     unknown_errors: list[str],
     known_errors: list[str],
-    failures_on_main: str | None,
+    build_history_on_main: BuildHistoryOnMain | None,
     test_analytics_db_config: MzDbConfig,
 ) -> None:
     assert len(unknown_errors) > 0 or len(known_errors) > 0
@@ -217,7 +235,7 @@ def annotate_errors(
         suite_name=get_suite_name(),
         buildkite_job_id=os.getenv("BUILDKITE_JOB_ID", ""),
         is_failure=is_failure,
-        failures_on_main=failures_on_main,
+        build_history_on_main=build_history_on_main,
         unknown_errors=unknown_errors,
         known_errors=known_errors,
     )
@@ -361,9 +379,9 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
     test_analytics_db_config = create_test_analytics_config_with_hostname(
         cloud_hostname
     )
-    failures_on_main = get_failures_on_main()
+    build_history_on_main = get_failures_on_main()
     annotate_errors(
-        unknown_errors, known_errors, failures_on_main, test_analytics_db_config
+        unknown_errors, known_errors, build_history_on_main, test_analytics_db_config
     )
 
     if unknown_errors:
@@ -386,7 +404,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
             suite_name=get_suite_name(),
             buildkite_job_id=os.getenv("BUILDKITE_JOB_ID", ""),
             is_failure=True,
-            failures_on_main=failures_on_main,
+            build_history_on_main=build_history_on_main,
             unknown_errors=[],
             known_errors=[],
         )
@@ -512,7 +530,7 @@ def sanitize_text(text: str, max_length: int = 4000) -> str:
     return text
 
 
-def get_failures_on_main() -> str | None:
+def get_failures_on_main() -> BuildHistoryOnMain | None:
     pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
     step_key = os.getenv("BUILDKITE_STEP_KEY")
     step_name = os.getenv("BUILDKITE_LABEL") or step_key
@@ -566,14 +584,12 @@ def get_failures_on_main() -> str | None:
         )
         return None
 
-    return (
-        f"<a href=\"/materialize/{os.getenv('BUILDKITE_PIPELINE_SLUG')}/builds?branch=main\">main</a> history: "
-        + "".join(
-            [
-                f"<a href=\"{outcome.web_url_to_job}\">{':bk-status-passed:' if outcome.passed else ':bk-status-failed:'}</a>"
-                for outcome in last_build_step_outcomes
-            ]
-        )
+    pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
+    assert pipeline_slug is not None
+
+    return BuildHistoryOnMain(
+        pipeline_slug,
+        last_build_step_outcomes,
     )
 
 
