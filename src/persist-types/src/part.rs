@@ -17,7 +17,7 @@ use arrow::datatypes::{Field, Int64Type};
 use mz_ore::iter::IteratorExt;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
-use crate::columnar::{PartEncoder, Schema};
+use crate::columnar::{ColumnEncoder, PartEncoder, Schema, Schema2};
 use crate::dyn_col::DynColumnRef;
 use crate::dyn_struct::{ColumnsRef, DynStructCfg, DynStructCol, DynStructMut, ValidityRef};
 use crate::stats::StructStats;
@@ -328,6 +328,73 @@ impl<K, KS: Schema<K>, V, VS: Schema<V>> PartBuilder<K, KS, V, VS> {
             val,
             ts: ScalarBuffer::from(ts.0),
             diff: ScalarBuffer::from(diff.0),
+        }
+    }
+}
+
+/// A structured columnar representation of one blob's worth of data.
+pub struct Part2 {
+    /// The 'k' values from a Part, generally `SourceData`.
+    pub key: Arc<dyn Array>,
+    /// The 'v' values from a Part, generally `()`.
+    pub val: Arc<dyn Array>,
+    /// The `ts` values from a Part.
+    pub time: ScalarBuffer<i64>,
+    /// The `diff` values from a Part.
+    pub diff: ScalarBuffer<i64>,
+}
+
+/// A builder for [`Part2`].
+pub struct PartBuilder2<K, KS: Schema2<K>, V, VS: Schema2<V>> {
+    key: KS::Encoder,
+    val: VS::Encoder,
+    time: Vec<i64>,
+    diff: Vec<i64>,
+}
+
+impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
+    /// Returns a new [`PartBuilder2`].
+    pub fn new(key_schema: &KS, val_schema: &VS) -> Self {
+        let key = key_schema.encoder().unwrap();
+        let val = val_schema.encoder().unwrap();
+        let time = Vec::new();
+        let diff = Vec::new();
+
+        PartBuilder2 {
+            key,
+            val,
+            time,
+            diff,
+        }
+    }
+
+    /// Pushes a new value onto [`PartBuilder2`].
+    pub fn push(&mut self, key: &K, val: &V, time: i64, diff: i64) {
+        self.key.append(key);
+        self.val.append(val);
+        self.time.push(time);
+        self.diff.push(diff);
+    }
+
+    /// Finishes the builder returning a [`Part2`].
+    pub fn finish(self) -> Part2 {
+        let PartBuilder2 {
+            key,
+            val,
+            time,
+            diff,
+        } = self;
+
+        let key: Arc<dyn Array> = Arc::new(key.finish());
+        let val: Arc<dyn Array> = Arc::new(val.finish());
+        let time = ScalarBuffer::from(time);
+        let diff = ScalarBuffer::from(diff);
+
+        Part2 {
+            key,
+            val,
+            time,
+            diff,
         }
     }
 }

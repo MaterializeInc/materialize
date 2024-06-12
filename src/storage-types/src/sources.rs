@@ -17,9 +17,12 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use arrow::array::{Array, BinaryArray, BinaryBuilder, StructArray};
+use arrow::datatypes::{Field, Fields};
 use bytes::BufMut;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
+use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
@@ -32,7 +35,7 @@ use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
     ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow, RelationDesc, Row,
-    RowDecoder, RowEncoder,
+    RowColumnarDecoder, RowColumnarEncoder, RowDecoder, RowEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
 use proptest::collection::vec;
@@ -1532,6 +1535,158 @@ impl<'a> SubsourceResolver {
         // TODO: this same function could also be used to generate canonical
         // references for subsources.
         Ok(*reference_idx)
+    }
+}
+
+#[derive(Debug)]
+pub struct SourceDataColumnarDecoder {
+    row_decoder: RowColumnarDecoder,
+    err_decoder: BinaryArray,
+}
+
+impl SourceDataColumnarDecoder {
+    pub fn new(col: StructArray, desc: &RelationDesc) -> Result<Self, anyhow::Error> {
+        // TODO(parkmcar): We should validate the fields here.
+        let (_fields, arrays, nullability) = col.into_parts();
+
+        if nullability.is_some() {
+            anyhow::bail!("SourceData is not nullable, but found {nullability:?}");
+        }
+        if arrays.len() != 2 {
+            anyhow::bail!("SourceData should only have two fields, found {arrays:?}");
+        }
+
+        let rows = arrays[0]
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| anyhow::anyhow!("expected StructArray, found {:?}", arrays[0]))?;
+        let errs = arrays[1]
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| anyhow::anyhow!("expected BinaryArray, found {:?}", arrays[1]))?;
+
+        let row_decoder = RowColumnarDecoder::new(rows.clone(), desc)?;
+
+        Ok(SourceDataColumnarDecoder {
+            row_decoder,
+            err_decoder: errs.clone(),
+        })
+    }
+}
+
+impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
+    fn decode(&self, idx: usize, val: &mut SourceData) {
+        let row_null = self.row_decoder.is_null(idx);
+        let err_null = self.err_decoder.is_null(idx);
+
+        match (row_null, err_null) {
+            (true, false) => {
+                let err = self.err_decoder.value(idx);
+                let err = ProtoDataflowError::decode(err)
+                    .expect("proto should be valid")
+                    .into_rust()
+                    .expect("error should be valid");
+                val.0 = Err(err);
+            }
+            (false, true) => {
+                let row = match val.0.as_mut() {
+                    Ok(row) => row,
+                    Err(_) => {
+                        val.0 = Ok(Row::default());
+                        val.0.as_mut().unwrap()
+                    }
+                };
+                self.row_decoder.decode(idx, row);
+            }
+            (true, true) => panic!("should have one of 'ok' or 'err'"),
+            (false, false) => panic!("cannot have both 'ok' and 'err'"),
+        }
+    }
+
+    fn is_null(&self, idx: usize) -> bool {
+        let row_null = self.row_decoder.is_null(idx);
+        let err_null = self.err_decoder.is_null(idx);
+
+        let is_null = row_null && err_null;
+        debug_assert!(!is_null);
+
+        is_null
+    }
+}
+
+#[derive(Debug)]
+pub struct SourceDataColumnarEncoder {
+    row_encoder: RowColumnarEncoder,
+    err_encoder: BinaryBuilder,
+}
+
+impl SourceDataColumnarEncoder {
+    pub fn new(desc: &RelationDesc) -> Self {
+        let row_encoder = RowColumnarEncoder::new(desc);
+        let err_encoder = BinaryBuilder::new();
+
+        SourceDataColumnarEncoder {
+            row_encoder,
+            err_encoder,
+        }
+    }
+}
+
+impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
+    type FinishedColumn = StructArray;
+
+    #[inline]
+    fn append(&mut self, val: &SourceData) {
+        match val.0.as_ref() {
+            Ok(row) => {
+                self.row_encoder.append(row);
+                self.err_encoder.append_null();
+            }
+            Err(err) => {
+                self.row_encoder.append_null();
+                self.err_encoder
+                    .append_value(err.into_proto().encode_to_vec());
+            }
+        }
+    }
+
+    #[inline]
+    fn append_null(&mut self) {
+        self.row_encoder.append_null();
+        self.err_encoder.append_null();
+    }
+
+    fn finish(self) -> Self::FinishedColumn {
+        let SourceDataColumnarEncoder {
+            row_encoder,
+            mut err_encoder,
+        } = self;
+
+        let row_column = row_encoder.finish();
+        let err_column = BinaryBuilder::finish(&mut err_encoder);
+
+        let fields = vec![
+            Field::new("ok", row_column.data_type().clone(), true),
+            Field::new("err", err_column.data_type().clone(), true),
+        ];
+        let arrays: Vec<Arc<dyn Array>> = vec![Arc::new(row_column), Arc::new(err_column)];
+
+        StructArray::new(Fields::from(fields), arrays, None)
+    }
+}
+
+impl Schema2<SourceData> for RelationDesc {
+    type ArrowColumn = StructArray;
+
+    type Decoder = SourceDataColumnarDecoder;
+    type Encoder = SourceDataColumnarEncoder;
+
+    fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+        SourceDataColumnarDecoder::new(col, self)
+    }
+
+    fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+        Ok(SourceDataColumnarEncoder::new(self))
     }
 }
 

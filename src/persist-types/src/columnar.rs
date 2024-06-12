@@ -76,6 +76,8 @@ use crate::Codec;
 /// while DataType is object-safe and has exhaustiveness checking. A Data impl
 /// can be mapped to its corresponding DataType via [ColumnCfg::as_type] and
 /// back via DataType::data_fn.
+///
+/// TODO(parkmycar): Remove once [`Schema2`] is fully flushed out.
 pub trait Data: Debug + Send + Sync + Sized + 'static {
     /// If necessary, whatever information beyond the type of `Self` needed to
     /// produce a columnar schema for this type.
@@ -279,6 +281,55 @@ pub trait FixedSizeCodec<T>: Debug + PartialEq + Eq + PartialOrd + Ord {
     fn from_value(value: T) -> Self;
     /// Decode an instance of `T` from this format.
     fn into_value(self) -> T;
+}
+
+/// A decoder for values of a fixed schema.
+///
+/// This allows us to amortize the cost of downcasting columns into concrete
+/// types.
+pub trait ColumnDecoder<T> {
+    /// Decode the value at `idx` into the buffer `val`.
+    ///
+    /// Behavior for when the value at `idx` is null is implementation-defined.
+    /// Panics if decoding an `idx` that is out-of-bounds.
+    fn decode(&self, idx: usize, val: &mut T);
+
+    /// Returns if the value at `idx` is null.
+    fn is_null(&self, idx: usize) -> bool;
+}
+
+/// An encoder for values of a fixed schema
+///
+/// This allows us to amortize the cost of downcasting columns into concrete
+/// types.
+pub trait ColumnEncoder<T> {
+    /// Type of column that this encoder returns when finalized.
+    type FinishedColumn: arrow::array::Array + Debug + 'static;
+
+    /// Appends `val` onto this encoder.
+    fn append(&mut self, val: &T);
+
+    /// Appends a null value onto this encoder.
+    fn append_null(&mut self);
+
+    /// Finish this encoder, returning an immutable column.
+    fn finish(self) -> Self::FinishedColumn;
+}
+
+/// Description of a type that we encode into Persist.
+pub trait Schema2<T>: Debug + Send + Sync {
+    /// The type of column we decode from, and encoder will finish into.
+    type ArrowColumn: arrow::array::Array + Debug + 'static;
+
+    /// Type that is able to decode values of `T` from [`Self::ArrowColumn`].
+    type Decoder: ColumnDecoder<T> + Debug;
+    /// Type that is able to encoder values of `T`.
+    type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn> + Debug;
+
+    /// Returns a type that is able to decode instances of `T` from the provider column.
+    fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error>;
+    /// Returns a type that can encode values of `T`.
+    fn encoder(&self) -> Result<Self::Encoder, anyhow::Error>;
 }
 
 /// A helper for writing tests that validate that a piece of data roundtrips
