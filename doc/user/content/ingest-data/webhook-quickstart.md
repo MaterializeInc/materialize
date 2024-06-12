@@ -46,9 +46,12 @@ CREATE SOURCE webhook_demo FROM WEBHOOK
     WITH (
       HEADERS,
       BODY AS request_body,
-      SECRET demo_webhook
+      SECRET demo_webhook AS validation_secret
     )
-    constant_time_eq(headers->'x-api-key', demo_webhook)
+    -- The constant_time_eq validation function **does not support** fully
+    -- qualified secret names. We recommend always aliasing the secret name
+    -- for ease of use.
+    constant_time_eq(headers->'x-api-key', validation_secret)
   );
 ```
 

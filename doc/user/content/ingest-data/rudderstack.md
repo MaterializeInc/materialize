@@ -59,9 +59,12 @@ CREATE SOURCE rudderstack_source
       WITH (
         HEADERS,
         BODY AS request_body,
-        SECRET rudderstack_webhook_secret
+        SECRET rudderstack_webhook_secret AS validation_secret
       )
-      constant_time_eq(headers->'authorization', rudderstack_webhook_secret)
+      -- The constant_time_eq validation function **does not support** fully
+      -- qualified secret names. We recommend always aliasing the secret name
+      -- for ease of use.
+      constant_time_eq(headers->'authorization', validation_secret)
 );
 ```
 

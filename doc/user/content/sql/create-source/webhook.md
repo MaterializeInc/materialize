@@ -24,7 +24,7 @@ Webhook sources expose a [public URL](#webhook-url) that allows your application
 
 Field                            | Use
 ---------------------------------|--------------------------
-  _src_name_                     | The name for the source
+  _src_name_                     | The name for the source.
  **IN CLUSTER** _cluster_name_   | The [cluster](/sql/create-cluster) to maintain this source.
  **INCLUDE HEADER**              | Map a header value from a request into a column.
  **INCLUDE HEADERS**             | Include a column named `'headers'` of type `map[text => text]` containing the headers of the request.
@@ -34,9 +34,9 @@ Field                            | Use
 
 Field                  | Type                | Description
 -----------------------|---------------------|--------------
-`BODY`                 | `text` or `bytea`   | Provide a `body` column to the check expression. The column can be renamed with the optional **AS** _alias_ statement, and the type can be changed to `bytea` with the optional **BYTES** keyword.
-`HEADERS`              | `map[text=>text]` or `map[text=>bytea]` | Provide a column `'headers'` to the check expression. The column can be renamed with the optional **AS** _alias_ statement, and the type can be changed to `map[text => bytea]` with the optional **BYTES** keyword.
-`SECRET` _secret_name_ | `text` or `bytea`    | Provide a _secret_name_ column to the check expression, with the value of the [`SECRET`](/sql/create-secret). The column can be renamed with the optional **AS** _alias_ statement, and the type can be changed to `bytea` with the optional **BYTES** keyword.
+`BODY`                 | `text` or `bytea`   | Provide a `body` column to the check expression. The column can be renamed with the optional **AS** _alias_ statement, and the data type can be changed to `bytea` with the optional **BYTES** keyword.
+`HEADERS`              | `map[text=>text]` or `map[text=>bytea]` | Provide a column `'headers'` to the check expression. The column can be renamed with the optional **AS** _alias_ statement, and the data type can be changed to `map[text => bytea]` with the optional **BYTES** keyword.
+`SECRET` _secret_name_ | `text` or `bytea`    | Securely provide a [`SECRET`](/sql/create-secret) to the check expression. The `constant_time_eq` validation function **does not support** fully qualified secret names: if the secret is in a different namespace to the source, the column can be renamed with the optional **AS** _alias_ statement. The data type can also be changed to `bytea` using the optional **BYTES** keyword.
 
 ## Supported formats
 
@@ -152,11 +152,14 @@ CREATE SOURCE my_webhook_source FROM WEBHOOK
   CHECK (
     WITH (
       HEADERS, BODY AS request_body,
-      SECRET my_webhook_shared_secret
+      SECRET my_webhook_shared_secret AS validation_secret
     )
+    -- The constant_time_eq validation function **does not support** fully
+    -- qualified secret names. We recommend always aliasing the secret name
+    -- for ease of use.
     constant_time_eq(
         decode(headers->'x-signature', 'base64'),
-        hmac(request_body, my_webhook_shared_secret, 'sha256')
+        hmac(request_body, validation_secret, 'sha256')
     )
   );
 ```
@@ -370,9 +373,12 @@ FROM WEBHOOK
       WITH (
         HEADERS,
         BODY AS request_body,
-        SECRET basic_hook_auth
+        SECRET basic_hook_auth AS validation_secret
       )
-      constant_time_eq(headers->'authorization', basic_hook_auth)
+      -- The constant_time_eq validation function **does not support** fully
+      -- qualified secret names. We recommend always aliasing the secret name
+      -- for ease of use.
+      constant_time_eq(headers->'authorization', validation_secret)
     );
 ```
 
