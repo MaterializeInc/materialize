@@ -54,13 +54,13 @@ ERROR_RE = re.compile(
     | [Oo]ut\ [Oo]f\ [Mm]emory
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
-    | fatal runtime error: # stack overflow
+    | fatal\ runtime\ error: # stack overflow
     | \[SQLsmith\] # Unknown errors are logged
     | \[SQLancer\] # Unknown errors are logged
     | environmentd:\ fatal: # startup failure
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
-    | environmentd .* unrecognized\ configuration\ parameter
+    | environmentd\ .*\ unrecognized\ configuration\ parameter
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     | SUMMARY:\ .*Sanitizer
     # for miri test summary
