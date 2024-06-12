@@ -29,10 +29,10 @@ use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_environmentd::test_util::{self, make_header, make_pg_tls, Ca};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
-    Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, Claims,
-    DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+    Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, ClaimMetadata,
+    ClaimTokenType, Claims, DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
-use mz_frontegg_mock::{FronteggMockServer, UserApiToken, UserConfig};
+use mz_frontegg_mock::{ApiToken, FronteggMockServer, TenantApiTokenConfig, UserConfig};
 use mz_ore::assert_contains;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -424,7 +424,7 @@ async fn test_auth_expiry() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
-    let initial_api_tokens = vec![UserApiToken {
+    let initial_api_tokens = vec![ApiToken {
         client_id: client_id.clone(),
         secret: secret.clone(),
     }];
@@ -432,7 +432,7 @@ async fn test_auth_expiry() {
     let users = BTreeMap::from([(
         email.clone(),
         UserConfig {
-            id: None,
+            id: Uuid::new_v4(),
             email,
             password,
             tenant_id,
@@ -455,6 +455,7 @@ async fn test_auth_expiry() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
@@ -543,22 +544,26 @@ async fn test_auth_base_require_tls_frontegg() {
     let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
-    let initial_api_tokens = vec![UserApiToken {
+    let initial_api_tokens = vec![ApiToken {
         client_id: client_id.clone(),
         secret: secret.clone(),
     }];
     let system_password = Uuid::new_v4().to_string();
     let system_client_id = Uuid::new_v4();
     let system_secret = Uuid::new_v4();
-    let system_initial_api_tokens = vec![UserApiToken {
+    let system_initial_api_tokens = vec![ApiToken {
         client_id: system_client_id.clone(),
         secret: system_secret.clone(),
     }];
+    let service_user_client_id = Uuid::new_v4();
+    let service_user_secret = Uuid::new_v4();
+    let service_system_user_client_id = Uuid::new_v4();
+    let service_system_user_secret = Uuid::new_v4();
     let users = BTreeMap::from([
         (
             "uSeR@_.com".to_string(),
             UserConfig {
-                id: None,
+                id: Uuid::new_v4(),
                 email: "uSeR@_.com".to_string(),
                 password,
                 tenant_id,
@@ -572,7 +577,7 @@ async fn test_auth_base_require_tls_frontegg() {
         (
             SYSTEM_USER.name.to_string(),
             UserConfig {
-                id: None,
+                id: Uuid::new_v4(),
                 email: SYSTEM_USER.name.to_string(),
                 password: system_password,
                 tenant_id,
@@ -581,6 +586,34 @@ async fn test_auth_base_require_tls_frontegg() {
                 auth_provider: None,
                 verified: None,
                 metadata: None,
+            },
+        ),
+    ]);
+    let tenant_api_tokens = BTreeMap::from([
+        (
+            ApiToken {
+                client_id: service_user_client_id.clone(),
+                secret: service_user_secret.clone(),
+            },
+            TenantApiTokenConfig {
+                tenant_id,
+                roles: vec![],
+                metadata: Some(ClaimMetadata {
+                    user: Some("svc".into()),
+                }),
+            },
+        ),
+        (
+            ApiToken {
+                client_id: service_system_user_client_id.clone(),
+                secret: service_system_user_secret.clone(),
+            },
+            TenantApiTokenConfig {
+                tenant_id,
+                roles: vec![],
+                metadata: Some(ClaimMetadata {
+                    user: Some("mz_system".into()),
+                }),
             },
         ),
     ]);
@@ -595,13 +628,15 @@ async fn test_auth_base_require_tls_frontegg() {
     };
     let claims = Claims {
         exp: 1000,
-        email: "uSeR@_.com".to_string(),
+        email: Some("uSeR@_.com".to_string()),
         iss: "frontegg-mock".to_string(),
         sub: Uuid::new_v4(),
         user_id: None,
         tenant_id,
         roles: Vec::new(),
         permissions: Vec::new(),
+        token_type: ClaimTokenType::UserToken,
+        metadata: None,
     };
     let frontegg_jwt = jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
@@ -609,10 +644,21 @@ async fn test_auth_base_require_tls_frontegg() {
         &encoding_key,
     )
     .unwrap();
-    let bad_tenant_claims = {
-        let mut claims = claims.clone();
-        claims.tenant_id = Uuid::new_v4();
-        claims
+    let user_set_metadata_claims = Claims {
+        metadata: Some(ClaimMetadata {
+            user: Some("svc".into()),
+        }),
+        ..claims.clone()
+    };
+    let user_set_metadata_jwt = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &user_set_metadata_claims,
+        &encoding_key,
+    )
+    .unwrap();
+    let bad_tenant_claims = Claims {
+        tenant_id: Uuid::new_v4(),
+        ..claims.clone()
     };
     let bad_tenant_jwt = jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
@@ -620,14 +666,55 @@ async fn test_auth_base_require_tls_frontegg() {
         &encoding_key,
     )
     .unwrap();
-    let expired_claims = {
-        let mut claims = claims;
-        claims.exp = 0;
-        claims
+    let expired_claims = Claims {
+        exp: 0,
+        ..claims.clone()
     };
     let expired_jwt = jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
         &expired_claims,
+        &encoding_key,
+    )
+    .unwrap();
+    let service_system_user_claims = Claims {
+        token_type: ClaimTokenType::TenantApiToken,
+        email: None,
+        metadata: Some(ClaimMetadata {
+            user: Some("mz_system".into()),
+        }),
+        ..claims.clone()
+    };
+    let service_system_user_jwt = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &service_system_user_claims,
+        &encoding_key,
+    )
+    .unwrap();
+    let service_user_claims = Claims {
+        token_type: ClaimTokenType::TenantApiToken,
+        email: None,
+        metadata: Some(ClaimMetadata {
+            user: Some("svc".into()),
+        }),
+        ..claims.clone()
+    };
+    let service_user_jwt = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &service_user_claims,
+        &encoding_key,
+    )
+    .unwrap();
+    let bad_service_user_claims = Claims {
+        token_type: ClaimTokenType::TenantApiToken,
+        email: None,
+        metadata: Some(ClaimMetadata {
+            user: Some("svc@corp".into()),
+        }),
+        ..claims.clone()
+    };
+    let bad_service_user_jwt = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &bad_service_user_claims,
         &encoding_key,
     )
     .unwrap();
@@ -637,6 +724,7 @@ async fn test_auth_base_require_tls_frontegg() {
         encoding_key,
         decoding_key,
         users,
+        tenant_api_tokens,
         None,
         now.clone(),
         1_000,
@@ -671,6 +759,12 @@ async fn test_auth_base_require_tls_frontegg() {
     let frontegg_system_password = &format!("mzp_{system_client_id}{system_secret}");
     let frontegg_system_basic = Authorization::basic(&SYSTEM_USER.name, frontegg_system_password);
     let frontegg_system_header_basic = make_header(frontegg_system_basic);
+
+    let frontegg_service_user_password =
+        &format!("mzp_{service_user_client_id}{service_user_secret}");
+
+    let frontegg_service_system_user_password =
+        &format!("mzp_{service_system_user_client_id}{service_system_user_secret}");
 
     let no_headers = HeaderMap::new();
 
@@ -973,6 +1067,56 @@ async fn test_auth_base_require_tls_frontegg() {
                     assert_eq!(message, "unauthorized");
                 })),
             },
+            // Valid service users.
+            TestCase::Http {
+                user_to_auth_as: "svc",
+                user_reported_by_system: "svc",
+                scheme: Scheme::HTTPS,
+                headers: &make_header(Authorization::bearer(&service_user_jwt).unwrap()),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            TestCase::Pgwire {
+                user_to_auth_as: "svc",
+                user_reported_by_system: "svc",
+                password: Some(frontegg_service_user_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Service users are ignored in user tokens.
+            TestCase::Http {
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &make_header(Authorization::bearer(&user_set_metadata_jwt).unwrap()),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Service user using email address is rejected.
+            TestCase::Http {
+                user_to_auth_as: "svc@corp",
+                user_reported_by_system: "svc@corp",
+                scheme: Scheme::HTTPS,
+                headers: &make_header(Authorization::bearer(&bad_service_user_jwt).unwrap()),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
+            // Service user using invalid case is rejected.
+            TestCase::Pgwire {
+                user_to_auth_as: "sVc",
+                user_reported_by_system: "svc",
+                password: Some(frontegg_service_user_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
             // System user cannot login via external ports.
             TestCase::Pgwire {
                 user_to_auth_as: &*SYSTEM_USER.name,
@@ -999,6 +1143,39 @@ async fn test_auth_base_require_tls_frontegg() {
                 auth: &WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
                     password: frontegg_system_password.to_string(),
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, CloseCode::Protocol);
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
+            TestCase::Pgwire {
+                user_to_auth_as: &*SYSTEM_USER.name,
+                user_reported_by_system: &*SYSTEM_USER.name,
+                password: Some(frontegg_service_system_user_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|err| {
+                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                })),
+            },
+            TestCase::Http {
+                user_to_auth_as: &*SYSTEM_USER.name,
+                user_reported_by_system: &*SYSTEM_USER.name,
+                scheme: Scheme::HTTPS,
+                headers: &make_header(Authorization::bearer(&service_system_user_jwt).unwrap()),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_contains!(message, "unauthorized");
+                })),
+            },
+            TestCase::Ws {
+                auth: &WebSocketAuth::Basic {
+                    user: (&*SYSTEM_USER.name).into(),
+                    password: frontegg_service_system_user_password.to_string(),
                     options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1375,11 +1552,11 @@ async fn test_auth_admin_non_superuser() {
         (
             frontegg_user.to_string(),
             UserConfig {
-                id: None,
+                id: Uuid::new_v4(),
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
-                initial_api_tokens: vec![UserApiToken { client_id, secret }],
+                initial_api_tokens: vec![ApiToken { client_id, secret }],
                 roles: Vec::new(),
                 auth_provider: None,
                 verified: None,
@@ -1389,11 +1566,11 @@ async fn test_auth_admin_non_superuser() {
         (
             admin_frontegg_user.to_string(),
             UserConfig {
-                id: None,
+                id: Uuid::new_v4(),
                 email: admin_frontegg_user.to_string(),
                 password: admin_password,
                 tenant_id,
-                initial_api_tokens: vec![UserApiToken {
+                initial_api_tokens: vec![ApiToken {
                     client_id: admin_client_id,
                     secret: admin_secret,
                 }],
@@ -1416,6 +1593,7 @@ async fn test_auth_admin_non_superuser() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
@@ -1510,11 +1688,11 @@ async fn test_auth_admin_superuser() {
         (
             frontegg_user.to_string(),
             UserConfig {
-                id: None,
+                id: Uuid::new_v4(),
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
-                initial_api_tokens: vec![UserApiToken { client_id, secret }],
+                initial_api_tokens: vec![ApiToken { client_id, secret }],
                 roles: Vec::new(),
                 auth_provider: None,
                 verified: None,
@@ -1524,11 +1702,11 @@ async fn test_auth_admin_superuser() {
         (
             admin_frontegg_user.to_string(),
             UserConfig {
-                id: None,
+                id: Uuid::new_v4(),
                 email: admin_frontegg_user.to_string(),
                 password: admin_password,
                 tenant_id,
-                initial_api_tokens: vec![UserApiToken {
+                initial_api_tokens: vec![ApiToken {
                     client_id: admin_client_id,
                     secret: admin_secret,
                 }],
@@ -1551,6 +1729,7 @@ async fn test_auth_admin_superuser() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
@@ -1645,11 +1824,11 @@ async fn test_auth_admin_superuser_revoked() {
         (
             frontegg_user.to_string(),
             UserConfig {
-                id: None,
+                id: Uuid::new_v4(),
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
-                initial_api_tokens: vec![UserApiToken { client_id, secret }],
+                initial_api_tokens: vec![ApiToken { client_id, secret }],
                 roles: Vec::new(),
                 auth_provider: None,
                 verified: None,
@@ -1659,11 +1838,11 @@ async fn test_auth_admin_superuser_revoked() {
         (
             admin_frontegg_user.to_string(),
             UserConfig {
-                id: None,
+                id: Uuid::new_v4(),
                 email: admin_frontegg_user.to_string(),
                 password: admin_password,
                 tenant_id,
-                initial_api_tokens: vec![UserApiToken {
+                initial_api_tokens: vec![ApiToken {
                     client_id: admin_client_id,
                     secret: admin_secret,
                 }],
@@ -1686,6 +1865,7 @@ async fn test_auth_admin_superuser_revoked() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
@@ -1788,11 +1968,11 @@ async fn test_auth_deduplication() {
     let users = BTreeMap::from([(
         frontegg_user.to_string(),
         UserConfig {
-            id: None,
+            id: Uuid::new_v4(),
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![UserApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken { client_id, secret }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -1811,6 +1991,7 @@ async fn test_auth_deduplication() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
@@ -1952,11 +2133,11 @@ async fn test_refresh_task_metrics() {
     let users = BTreeMap::from([(
         frontegg_user.to_string(),
         UserConfig {
-            id: None,
+            id: Uuid::new_v4(),
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![UserApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken { client_id, secret }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -1975,6 +2156,7 @@ async fn test_refresh_task_metrics() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
@@ -2087,11 +2269,11 @@ async fn test_superuser_can_alter_cluster() {
         (
             frontegg_user.to_string(),
             UserConfig {
-                id: None,
+                id: Uuid::new_v4(),
                 email: frontegg_user.to_string(),
                 password,
                 tenant_id,
-                initial_api_tokens: vec![UserApiToken { client_id, secret }],
+                initial_api_tokens: vec![ApiToken { client_id, secret }],
                 roles: Vec::new(),
                 auth_provider: None,
                 verified: None,
@@ -2101,11 +2283,11 @@ async fn test_superuser_can_alter_cluster() {
         (
             admin_frontegg_user.to_string(),
             UserConfig {
-                id: None,
+                id: Uuid::new_v4(),
                 email: admin_frontegg_user.to_string(),
                 password: admin_password.clone(),
                 tenant_id,
-                initial_api_tokens: vec![UserApiToken {
+                initial_api_tokens: vec![ApiToken {
                     client_id: admin_client_id,
                     secret: admin_secret,
                 }],
@@ -2128,6 +2310,7 @@ async fn test_superuser_can_alter_cluster() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
@@ -2221,11 +2404,11 @@ async fn test_refresh_dropped_session() {
     let users = BTreeMap::from([(
         frontegg_user.to_string(),
         UserConfig {
-            id: None,
+            id: Uuid::new_v4(),
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![UserApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken { client_id, secret }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2244,6 +2427,7 @@ async fn test_refresh_dropped_session() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
@@ -2379,11 +2563,11 @@ async fn test_refresh_dropped_session_lru() {
         let secret = Uuid::new_v4();
 
         let user = UserConfig {
-            id: None,
+            id: Uuid::new_v4(),
             email: email.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![UserApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken { client_id, secret }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2414,6 +2598,7 @@ async fn test_refresh_dropped_session_lru() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
@@ -2573,11 +2758,11 @@ async fn test_transient_auth_failures() {
     let users = BTreeMap::from([(
         frontegg_user.to_string(),
         UserConfig {
-            id: None,
+            id: Uuid::new_v4(),
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![UserApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken { client_id, secret }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2596,6 +2781,7 @@ async fn test_transient_auth_failures() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
@@ -2689,11 +2875,11 @@ async fn test_transient_auth_failure_on_refresh() {
     let users = BTreeMap::from([(
         frontegg_user.to_string(),
         UserConfig {
-            id: None,
+            id: Uuid::new_v4(),
             email: frontegg_user.to_string(),
             password,
             tenant_id,
-            initial_api_tokens: vec![UserApiToken { client_id, secret }],
+            initial_api_tokens: vec![ApiToken { client_id, secret }],
             roles: Vec::new(),
             auth_provider: None,
             verified: None,
@@ -2712,6 +2898,7 @@ async fn test_transient_auth_failure_on_refresh() {
         encoding_key,
         decoding_key,
         users,
+        BTreeMap::new(),
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),

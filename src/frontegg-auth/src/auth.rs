@@ -42,6 +42,9 @@ pub const DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE: NonZeroUsize =
 /// assumption that a new instance of this session will be started soon.
 pub const DEFAULT_REFRESH_DROP_FACTOR: f64 = 0.05;
 
+/// The maximum length of a user name.
+pub const MAX_USER_NAME_LENGTH: usize = 255;
+
 /// Configures an [`Authenticator`].
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
@@ -169,11 +172,11 @@ impl Authenticator {
     /// Otherwise, returns the authentication error.
     pub async fn authenticate(
         &self,
-        expected_email: &str,
+        expected_user: &str,
         password: &str,
     ) -> Result<AuthSessionHandle, Error> {
         let password: AppPassword = password.parse()?;
-        match self.authenticate_inner(expected_email, password).await {
+        match self.authenticate_inner(expected_user, password).await {
             Ok(handle) => {
                 tracing::debug!("authentication successful");
                 Ok(handle)
@@ -188,7 +191,7 @@ impl Authenticator {
     #[instrument(level = "debug", fields(client_id = %password.client_id))]
     async fn authenticate_inner(
         &self,
-        expected_email: &str,
+        expected_user: &str,
         password: AppPassword,
     ) -> Result<AuthSessionHandle, Error> {
         let request = {
@@ -202,7 +205,7 @@ impl Authenticator {
                 }) => {
                     tracing::debug!(?password.client_id, "joining active session");
 
-                    validate_email(&ident.user, expected_email)?;
+                    validate_user(&ident.user, expected_user)?;
                     self.inner
                         .metrics
                         .session_request_count
@@ -237,9 +240,9 @@ impl Authenticator {
                     // Prepare the request to create a new session.
                     let request: Pin<Box<AuthFuture>> = Box::pin({
                         let inner = Arc::clone(&self.inner);
-                        let expected_email = String::from(expected_email);
+                        let expected_user = String::from(expected_user);
                         async move {
-                            let result = inner.authenticate(expected_email, password).await;
+                            let result = inner.authenticate(expected_user, password).await;
 
                             // Make sure our AuthSession state is correct.
                             //
@@ -304,14 +307,14 @@ impl Authenticator {
     ///
     ///   * The tenant ID in the token matches the `Authentication`'s tenant ID.
     ///
-    /// If `expected_email` is provided, the token's email is additionally
-    /// validated to match `expected_email`.
+    /// If `expected_user` is provided, the token's user name is additionally
+    /// validated to match `expected_user`.
     pub fn validate_access_token(
         &self,
         token: &str,
-        expected_email: Option<&str>,
+        expected_user: Option<&str>,
     ) -> Result<ValidatedClaims, Error> {
-        self.inner.validate_access_token(token, expected_email)
+        self.inner.validate_access_token(token, expected_user)
     }
 }
 
@@ -404,17 +407,15 @@ struct AuthenticatorInner {
 impl AuthenticatorInner {
     async fn authenticate(
         self: &Arc<Self>,
-        expected_email: String,
+        expected_user: String,
         password: AppPassword,
     ) -> Result<AuthSessionHandle, Error> {
         // Attempt initial app password exchange.
-        let mut claims = self
-            .exchange_app_password(&expected_email, password)
-            .await?;
+        let mut claims = self.exchange_app_password(&expected_user, password).await?;
 
         // Prep session information.
         let ident = Arc::new(AuthSessionIdent {
-            user: claims.email.clone(),
+            user: claims.user.clone(),
             tenant_id: claims.tenant_id,
         });
         let external_metadata = claims.to_external_user_metadata();
@@ -502,7 +503,7 @@ impl AuthenticatorInner {
                     );
 
                     // We still have interest, attempt to refresh the session.
-                    let res = inner.exchange_app_password(&expected_email, password).await;
+                    let res = inner.exchange_app_password(&expected_user, password).await;
                     claims = match res {
                         Ok(claims) => {
                             tracing::debug!("refresh successful");
@@ -546,7 +547,7 @@ impl AuthenticatorInner {
     #[instrument]
     async fn exchange_app_password(
         &self,
-        expected_email: &str,
+        expected_user: &str,
         password: AppPassword,
     ) -> Result<ValidatedClaims, Error> {
         let req = ApiTokenArgs {
@@ -557,13 +558,13 @@ impl AuthenticatorInner {
             .client
             .exchange_client_secret_for_token(req, &self.admin_api_token_url, &self.metrics)
             .await?;
-        self.validate_access_token(&res.access_token, Some(expected_email))
+        self.validate_access_token(&res.access_token, Some(expected_user))
     }
 
     fn validate_access_token(
         &self,
         token: &str,
-        expected_email: Option<&str>,
+        expected_user: Option<&str>,
     ) -> Result<ValidatedClaims, Error> {
         let msg = jsonwebtoken::decode::<Claims>(token, &self.decoding_key, &self.validation)?;
         if msg.claims.exp < self.now.as_secs() {
@@ -574,21 +575,18 @@ impl AuthenticatorInner {
                 return Err(Error::UnauthorizedTenant);
             }
         }
-        if let Some(expected_email) = expected_email {
-            validate_email(&msg.claims.email, expected_email)?;
+
+        let user = msg.claims.user()?;
+
+        if let Some(expected_user) = expected_user {
+            validate_user(user, expected_user)?;
         }
+
         Ok(ValidatedClaims {
             exp: msg.claims.exp,
-            email: msg.claims.email,
+            user: user.to_string(),
+            user_id: msg.claims.user_id()?,
             tenant_id: msg.claims.tenant_id,
-            // If the claims come from the exchange of an API token, the `sub`
-            // will be the ID of the API token and the user ID will be in the
-            // `user_id` field. If the claims come from the exchange of a
-            // username and password, the `sub` is the user ID and the `user_id`
-            // field will not be present. This makes sense once you think about
-            // it, but is confusing enough that we massage into a single
-            // `user_id` field that always contains the user ID.
-            user_id: msg.claims.user_id.unwrap_or(msg.claims.sub),
             // The user is an administrator if they have the admin role that the
             // `Authenticator` has been configured with.
             is_admin: msg.claims.roles.iter().any(|r| *r == self.admin_role),
@@ -633,8 +631,31 @@ struct AuthSessionIdent {
     tenant_id: Uuid,
 }
 
-// TODO: Do we care about the sub? Do we need to validate the sub or other
-// things, even if unused?
+/// The type of a JWT issued by Frontegg.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClaimTokenType {
+    /// A user token.
+    ///
+    /// This type of token is issued when logging in via username and password
+    /// This does *not* include app passwords--those are API tokens under the
+    /// hood. This type of token is typically only used by the Materialize
+    /// console, as it requires SSO.
+    UserToken,
+    /// A user API token.
+    UserApiToken,
+    /// A tenant API token.
+    TenantApiToken,
+}
+
+/// Metadata embedded in a Frontegg JWT.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaimMetadata {
+    /// The user name to use, for tokens of type `TenantApiToken`.
+    pub user: Option<String>,
+}
+
 /// The raw claims encoded in a Frontegg access token.
 ///
 /// Consult the JSON Web Token specification and the Frontegg documentation to
@@ -642,14 +663,76 @@ struct AuthSessionIdent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Claims {
-    pub exp: i64,
-    pub email: String,
-    pub iss: String,
+    /// The "subject" of the token.
+    ///
+    /// For tokens of type `UserToken`, this is the ID of the Frontegg user
+    /// itself. For tokens of type `UserApiToken` and `TenantApiToken`, this
+    /// is the client ID of the API token.
     pub sub: Uuid,
+    /// The time at which the claims expire, represented in seconds since the
+    /// Unix epoch.
+    pub exp: i64,
+    /// The "issuer" of the token.
+    ///
+    /// This is always the domain associated with the Frontegg workspace.
+    pub iss: String,
+    /// The type of API token.
+    #[serde(rename = "type")]
+    pub token_type: ClaimTokenType,
+    /// For tokens of type `UserToken` and `UserApiToken`, the email address
+    /// of the authenticated user.
+    pub email: Option<String>,
+    /// For tokens of type `UserApiToken`, the ID of the authenticated user.
     pub user_id: Option<Uuid>,
+    /// The ID of the authenticated tenant.
     pub tenant_id: Uuid,
+    /// The IDs of the roles granted by the token.
     pub roles: Vec<String>,
+    /// The IDs of the permissions granted by the token.
     pub permissions: Vec<String>,
+    /// Metadata embedded in the JWT.
+    pub metadata: Option<ClaimMetadata>,
+}
+
+impl Claims {
+    /// Returns the name of the user associated with the token.
+    pub fn user(&self) -> Result<&str, Error> {
+        match self.token_type {
+            // Use the email as the username for user tokens.
+            ClaimTokenType::UserToken | ClaimTokenType::UserApiToken => {
+                self.email.as_deref().ok_or(Error::MissingClaims)
+            }
+            // The user associated with a tenant API token is configured when
+            // the token is created and passed in the `metadata.user` claim.
+            ClaimTokenType::TenantApiToken => {
+                let user = self
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.user.as_deref())
+                    .ok_or(Error::MissingClaims)?;
+                if is_email(user) {
+                    return Err(Error::InvalidTenantApiTokenUser);
+                }
+                Ok(user)
+            }
+        }
+    }
+
+    /// Returns the ID of the user associated with the token.
+    pub fn user_id(&self) -> Result<Uuid, Error> {
+        match self.token_type {
+            // The `sub` claim stores the ID of the user.
+            ClaimTokenType::UserToken => Ok(self.sub),
+            // Unlike user tokens, the `sub` claim stores the client ID of the
+            // API token. The user ID is passed in the dedicated `user_id`
+            // claim.
+            ClaimTokenType::UserApiToken => self.user_id.ok_or(Error::MissingClaims),
+            // The best user ID for a tenant API token is the client ID of the
+            // tenant API token, as the tokens are not associated with a
+            // Frontegg user.
+            ClaimTokenType::TenantApiToken => Ok(self.sub),
+        }
+    }
 }
 
 /// [`Claims`] that have been validated by
@@ -661,9 +744,13 @@ pub struct ValidatedClaims {
     pub exp: i64,
     /// The ID of the authenticated user.
     pub user_id: Uuid,
-    /// The email address of the authenticated user.
-    pub email: String,
-    /// The tenant id of the authenticated user.
+    /// The name of the authenticated user.
+    ///
+    /// For tokens of type `UserToken` or `UserApiToken`, this is the email
+    /// address of the authenticated user. For tokens of type `TenantApiToken`,
+    /// this is the `serviceUser` field in the token's metadata.
+    pub user: String,
+    /// The ID of the tenant the user is authenticated for.
     pub tenant_id: Uuid,
     /// Whether the authenticated user is an administrator.
     pub is_admin: bool,
@@ -681,18 +768,40 @@ impl ValidatedClaims {
     }
 }
 
-fn validate_email(email: &str, expected_email: &str) -> Result<(), Error> {
-    // To match Frontegg, email addresses are compared case insensitively.
+/// Reports whether a username is an email address.
+fn is_email(user: &str) -> bool {
+    // We don't need a sophisticated test here. We need a test that will return
+    // `true` for anything that can possibly be an email address, while also
+    // returning `false` for a large class of strings that can be used as names
+    // for service users.
     //
-    // NOTE(benesch): we could save some allocations by using `unicase::eq`
-    // here, but the `unicase` crate has had some critical correctness bugs that
-    // make it scary to use in such security-sensitive code.
-    //
-    // See: https://github.com/seanmonstar/unicase/pull/39
-    if email.to_lowercase() != expected_email.to_lowercase() {
-        return Err(Error::WrongEmail);
+    // Checking for `@` balances the concerns. Every email address MUST have an
+    // `@` character. Disallowing `@` characters in service user names is an
+    // acceptable restriction.
+    user.contains('@')
+}
+
+fn validate_user(user: &str, expected_user: &str) -> Result<(), Error> {
+    // Impose a maximum length on user names for sanity.
+    if user.len() > MAX_USER_NAME_LENGTH {
+        return Err(Error::UserNameTooLong);
     }
-    Ok(())
+
+    let valid = match is_email(expected_user) {
+        false => user == expected_user,
+        // To match Frontegg, email addresses are compared case insensitively.
+        //
+        // NOTE(benesch): we could save some allocations by using `unicase::eq`
+        // here, but the `unicase` crate has had some critical correctness bugs that
+        // make it scary to use in such security-sensitive code.
+        //
+        // See: https://github.com/seanmonstar/unicase/pull/39
+        true => user.to_lowercase() == expected_user.to_lowercase(),
+    };
+    match valid {
+        false => Err(Error::WrongUser),
+        true => Ok(()),
+    }
 }
 
 const fn bool_as_str(x: bool) -> &'static str {

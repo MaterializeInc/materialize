@@ -882,7 +882,7 @@ async fn auth(
                     user_id: claims.user_id,
                     admin: claims.is_admin,
                 });
-                (claims.email, Some(external_metadata_rx))
+                (claims.user, Some(external_metadata_rx))
             }
             Credentials::DefaultUser | Credentials::User(_) => {
                 return Err(AuthError::MissingHttpAuthentication)
