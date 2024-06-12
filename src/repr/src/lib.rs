@@ -59,8 +59,8 @@ pub use crate::row::encoding::{
 pub use crate::row::encoding2::{RowColumnarDecoder, RowColumnarEncoder};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};
 pub use crate::row::{
-    datum_list_size, datum_size, datums_size, read_datum, row_size, DatumList, DatumMap, ProtoRow,
-    Row, RowArena, RowPacker, RowRef, SharedRow,
+    datum_list_size, datum_size, datums_size, read_datum, row_size, DatumList, DatumMap,
+    ProtoNumeric, ProtoRow, Row, RowArena, RowPacker, RowRef, SharedRow,
 };
 pub use crate::scalar::{
     arb_datum, arb_datum_for_column, arb_datum_for_scalar, arb_range_type, ArrayRustType,

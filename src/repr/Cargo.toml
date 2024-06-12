@@ -21,6 +21,10 @@ harness = false
 name = "packed"
 harness = false
 
+[[bench]]
+name = "data_types"
+harness = false
+
 [dependencies]
 anyhow = "1.0.66"
 arrow = { version = "51.0.0", default-features = false }
