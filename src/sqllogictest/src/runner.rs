@@ -2118,7 +2118,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
 /// Provides a means to rewrite the `.slt` file while iterating over it.
 ///
 /// This struct takes the slt file as its `input`, tracks a cursor into it
-/// (`input_offset`), and provides a buffe (`output`) to store the rewritten
+/// (`input_offset`), and provides a buffer (`output`) to store the rewritten
 /// results.
 ///
 /// Functions that modify the file will lazily move `input` into `output` using

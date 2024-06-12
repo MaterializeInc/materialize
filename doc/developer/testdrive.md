@@ -227,6 +227,10 @@ Max number of tests to run before terminating. This is useful in conjunction wit
 
 Shuffle the list of tests before running them (using the value from --seed, if any). This is useful when attempting to use `testdrive` in randomized scenarios or when applying background workload to the database.
 
+#### `--rewrite-results`
+
+Automatically rewrite the testdrive file with the correct results when they are not as expected. Consider setting a lower `--default-max-tries` value too to get a result faster.
+
 ## Other options
 
 #### `--consistency-checks=<file, statement, disable>`

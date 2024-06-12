@@ -27,11 +27,14 @@ use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
 use tokio_postgres::types::{FromSql, Type};
 
-use crate::action::{ControlFlow, State};
+use crate::action::{ControlFlow, Rewrite, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
 
-pub async fn run_sql(mut cmd: SqlCommand, state: &State) -> Result<ControlFlow, anyhow::Error> {
+pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
     use Statement::*;
+
+    state.rewrite_pos_start = cmd.expected_start;
+    state.rewrite_pos_end = cmd.expected_end;
 
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .with_context(|| format!("unable to parse SQL: {}", cmd.query))?;
@@ -76,10 +79,8 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &State) -> Result<ControlFlow, 
 
     let query = &cmd.query;
     print_query(query, Some(&stmt));
-
-    let state = &state;
     let expected_output = &cmd.expected_output;
-    let res = match should_retry {
+    let (state, res) = match should_retry {
         true => Retry::default()
             .initial_backoff(state.initial_backoff)
             .factor(state.backoff_factor)
@@ -87,8 +88,9 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &State) -> Result<ControlFlow, 
             .max_tries(state.max_tries),
         false => Retry::default().max_duration(state.timeout).max_tries(1),
     }
-    .retry_async_canceling(|retry_state| async move {
-        match try_run_sql(state, query, expected_output).await {
+    .retry_async_with_state(state, |retry_state, state| async move {
+        let should_continue = retry_state.i + 1 < state.max_tries && should_retry;
+        match try_run_sql(state, query, expected_output, should_continue).await {
             Ok(()) => {
                 if retry_state.i != 0 {
                     println!();
@@ -100,7 +102,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &State) -> Result<ControlFlow, 
                         .unwrap()
                         .as_secs_f64()
                 );
-                Ok(())
+                (state, Ok(()))
             }
             Err(e) => {
                 if retry_state.i == 0 && should_retry {
@@ -112,7 +114,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &State) -> Result<ControlFlow, 
                         io::stdout().flush().unwrap();
                     }
                 }
-                Err(e)
+                (state, Err(e))
             }
         }
     })
@@ -128,10 +130,31 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &State) -> Result<ControlFlow, 
     Ok(ControlFlow::Continue)
 }
 
+fn rewrite_result(
+    state: &mut State,
+    columns: Vec<&str>,
+    content: Vec<Vec<String>>,
+) -> Result<(), anyhow::Error> {
+    let mut buf = String::new();
+    writeln!(buf, "{}", columns.join(" "))?;
+    writeln!(buf, "----")?;
+    for row in content {
+        writeln!(buf, "{}", row.join(" "))?;
+    }
+    state.rewrites.push(Rewrite {
+        content: buf,
+        start: state.rewrite_pos_start,
+        end: state.rewrite_pos_end,
+    });
+
+    Ok(())
+}
+
 async fn try_run_sql(
-    state: &State,
+    state: &mut State,
     query: &str,
     expected_output: &SqlOutput,
+    should_retry: bool,
 ) -> Result<(), anyhow::Error> {
     let stmt = state
         .materialize
@@ -177,6 +200,7 @@ async fn try_run_sql(
     };
 
     actual.sort();
+    let actual_columns: Vec<_> = stmt.columns().iter().map(|c| c.name()).collect();
 
     match expected_output {
         SqlOutput::Full {
@@ -184,16 +208,23 @@ async fn try_run_sql(
             column_names,
         } => {
             if let Some(column_names) = column_names {
-                let actual_columns: Vec<_> = stmt.columns().iter().map(|c| c.name()).collect();
                 if actual_columns.iter().ne(column_names) {
-                    bail!(
-                        "column name mismatch\nexpected: {:?}\nactual:   {:?}",
-                        column_names,
-                        actual_columns
-                    );
+                    if state.rewrite_results && !should_retry {
+                        rewrite_result(state, actual_columns, actual)?;
+                        return Ok(());
+                    } else {
+                        bail!(
+                            "column name mismatch\nexpected: {:?}\nactual:   {:?}",
+                            column_names,
+                            actual_columns
+                        );
+                    }
                 }
             }
             if &actual == expected_rows {
+                Ok(())
+            } else if state.rewrite_results && !should_retry {
+                rewrite_result(state, actual_columns, actual)?;
                 Ok(())
             } else {
                 let (mut left, mut right) = (0, 0);
@@ -222,7 +253,10 @@ async fn try_run_sql(
                     writeln!(buf, "+ {}", TestdriveRow(a)).unwrap();
                     right += 1;
                 }
-                if let Some(raw_actual) = raw_actual {
+                if state.rewrite_results && !should_retry {
+                    rewrite_result(state, actual_columns, actual)?;
+                    Ok(())
+                } else if let Some(raw_actual) = raw_actual {
                     bail!(
                         "non-matching rows: expected:\n{:?}\ngot:\n{:?}\ngot raw rows:\n{:?}\nPoor diff:\n{}",
                         expected_rows,
