@@ -287,6 +287,9 @@ pub trait FixedSizeCodec<T>: Debug + PartialEq + Eq + PartialOrd + Ord {
 /// types.
 pub trait ColumnDecoder<T> {
     /// Decode the value at `idx` into the buffer `val`.
+    ///
+    /// Behavior for when the value at `idx` is null is implementation-defined.
+    /// Panics if decoding an `idx` that is out-of-bounds.
     fn decode(&self, idx: usize, val: &mut T);
 
     /// Returns if the value at `idx` is null.

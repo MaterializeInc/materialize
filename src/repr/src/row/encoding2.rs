@@ -64,9 +64,10 @@ struct DatumEncoder {
 
 impl DatumEncoder {
     fn push<'e, 'd>(&'e mut self, datum: Datum<'d>) -> Result<(), anyhow::Error> {
-        if !self.nullable && datum.is_null() {
-            anyhow::bail!("tried pushing Null into non-nullable column");
-        }
+        assert!(
+            !datum.is_null() || self.nullable,
+            "tried pushing Null into non-nullable column"
+        );
         self.encoder.push(datum);
 
         Ok(())
@@ -107,6 +108,12 @@ enum DatumColumnEncoder {
     AclItem(FixedSizeBinaryBuilder),
     MzAclItem(BinaryBuilder),
     Range(BinaryBuilder),
+    /// Hand rolled "StringBuilder" that reduces the number of copies required
+    /// to serialize JSON.
+    ///
+    /// An alternative would be to use [`StringBuilder`] but that requires
+    /// serializing to an intermediary string, and then copying that
+    /// intermediary string into an underlying buffer.
     Jsonb {
         /// Monotonically increasing offsets of each encoded segment.
         offsets: Vec<i32>,
@@ -144,7 +151,9 @@ enum DatumColumnEncoder {
         nulls: Option<BooleanBufferBuilder>,
     },
     Record {
+        /// Columns in the record.
         fields: Vec<Box<DatumColumnEncoder>>,
+        /// Null entries, if any.
         nulls: Option<BooleanBufferBuilder>,
         /// Number of values we've pushed into this builder thus far.
         length: usize,

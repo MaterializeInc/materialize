@@ -334,13 +334,13 @@ impl<K, KS: Schema<K>, V, VS: Schema<V>> PartBuilder<K, KS, V, VS> {
 
 /// A structured columnar representation of one blob's worth of data.
 pub struct Part2 {
-    /// TODO
+    /// The 'k' values from a Part, generally `SourceData`.
     pub key: Arc<dyn Array>,
-    /// TODO
+    /// The 'v' values from a Part, generally `()`.
     pub val: Arc<dyn Array>,
-    /// TODO
+    /// The `ts` values from a Part.
     pub time: ScalarBuffer<i64>,
-    /// TODO
+    /// The `diff` values from a Part.
     pub diff: ScalarBuffer<i64>,
 }
 
