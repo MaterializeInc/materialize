@@ -828,3 +828,89 @@ class SinkComments(Check):
             """
             )
         )
+
+
+@externally_idempotent(False)
+class SinkAutoCreatedTopicConfig(Check):
+    """Check on a sink with auto-created topic configuration"""
+
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.104.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            schemas_null()
+            + dedent(
+                """
+                > CREATE TABLE sink_config_table (f1 int)
+                > INSERT INTO sink_config_table VALUES (1);
+
+                > CREATE SINK sink_config1 FROM sink_config_table
+                  INTO KAFKA CONNECTION kafka_conn (
+                    TOPIC 'sink-config1',
+                    TOPIC CONFIG MAP['cleanup.policy' => 'compact']
+                  )
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(schemas_null() + dedent(s))
+            for s in [
+                """
+                > INSERT INTO sink_config_table VALUES (2);
+
+                > CREATE SINK sink_config2 FROM sink_config_table
+                  INTO KAFKA CONNECTION kafka_conn (
+                    TOPIC 'sink-config2',
+                    TOPIC CONFIG MAP['cleanup.policy' => 'compact']
+                  )
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                """,
+                """
+                > INSERT INTO sink_config_table VALUES (3);
+
+                > CREATE SINK sink_config3 FROM sink_config_table
+                  INTO KAFKA CONNECTION kafka_conn (
+                    TOPIC 'sink-config3',
+                    TOPIC CONFIG MAP['cleanup.policy' => 'compact']
+                  )
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                $ kafka-verify-topic sink=materialize.public.sink_config1 partition-count=1 topic-config={"cleanup.policy": "compact"}
+
+                $ kafka-verify-topic sink=materialize.public.sink_config2 partition-count=1 topic-config={"cleanup.policy": "compact"}
+
+                $ kafka-verify-topic sink=materialize.public.sink_config3 partition-count=1 topic-config={"cleanup.policy": "compact"}
+
+
+                # TODO: Reenable this check when kafka-verify-data can deal with validate being run twice
+                # $ kafka-verify-data format=avro sink=materialize.public.sink_config1 sort-messages=true
+                # {{"before": null, "after": {{"row":{{"f1": 1}}}}}}
+                # {{"before": null, "after": {{"row":{{"f1": 2}}}}}}
+                # {{"before": null, "after": {{"row":{{"f1": 3}}}}}}
+
+                # $ kafka-verify-data format=avro sink=materialize.public.sink_config2 sort-messages=true
+                # {{"before": null, "after": {{"row":{{"f1": 1}}}}}}
+                # {{"before": null, "after": {{"row":{{"f1": 2}}}}}}
+                # {{"before": null, "after": {{"row":{{"f1": 3}}}}}}
+
+                # $ kafka-verify-data format=avro sink=materialize.public.sink_config3 sort-messages=true
+                # {{"before": null, "after": {{"row":{{"f1": 1}}}}}}
+                # {{"before": null, "after": {{"row":{{"f1": 2}}}}}}
+                # {{"before": null, "after": {{"row":{{"f1": 3}}}}}}
+            """
+            )
+        )
