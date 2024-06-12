@@ -15,10 +15,10 @@ import mmap
 import os
 import re
 import sys
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
-import requests
 from junitparser.junitparser import Error, Failure, JUnitXml
 
 from materialize import ci_util, ui
@@ -29,17 +29,20 @@ from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
 )
 from materialize.buildkite_insights.steps.build_step import (
     BuildStepMatcher,
+    BuildStepOutcome,
     extract_build_step_outcomes,
 )
+from materialize.github import (
+    for_github_re,
+    get_known_issues_from_github,
+)
+from materialize.observed_error import ObservedBaseError
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_hostname,
 )
 from materialize.test_analytics.connection import test_analytics_connection
 from materialize.test_analytics.data.build_annotation import build_annotation_storage
-
-CI_RE = re.compile("ci-regexp: (.*)")
-CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
 
 # Unexpected failures, report them
 ERROR_RE = re.compile(
@@ -130,13 +133,6 @@ IGNORE_RE = re.compile(
 
 
 @dataclass
-class KnownIssue:
-    regex: re.Pattern[Any]
-    apply_to: str | None
-    info: dict[str, Any]
-
-
-@dataclass
 class ErrorLog:
     match: bytes
     file: str
@@ -148,6 +144,120 @@ class JunitError:
     testcase: str
     message: str
     text: str
+
+
+@dataclass(kw_only=True, unsafe_hash=True)
+class ObservedError(ObservedBaseError):
+    error_message: str | None
+    error_type: str
+    location: str
+
+
+@dataclass(kw_only=True, unsafe_hash=True)
+class ObservedErrorWithIssue(ObservedError):
+    html_url: str
+    title: str
+    issue_number: int
+    location_url: str | None = None
+
+    def to_markdown(self) -> str:
+        if self.location_url is None:
+            location_markdown = self.location
+        else:
+            location_markdown = f'<a href="{self.location_url}">{self.location}</a>'
+
+        return f'{self.error_type} <a href="{self.html_url}">{self.title} (#{self.issue_number}, closed)</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
+
+
+@dataclass(kw_only=True, unsafe_hash=True)
+class ObservedErrorWithLocation(ObservedError):
+    error_details: str | None = None
+    max_error_length: int = 10000
+    max_details_length: int = 10000
+
+    def to_markdown(self) -> str:
+        if self.error_details:
+            formatted_error_details = (
+                f"\n{format_error_message(self.error_details, self.max_details_length)}"
+            )
+        else:
+            formatted_error_details = ""
+
+        return f"{self.error_type} in {self.location}:\n{format_error_message(self.error_message, self.max_error_length)}{formatted_error_details}"
+
+
+@dataclass(kw_only=True, unsafe_hash=True)
+class FailureInCoverageRun(ObservedError):
+    occurrences: int = 1
+
+    def to_markdown(self) -> str:
+        return f"{self.location}:\n{format_error_message(self.error_message)}"
+
+
+@dataclass
+class BuildHistoryOnMain:
+    pipeline_slug: str
+    last_build_step_outcomes: list[BuildStepOutcome]
+
+    def to_markdown(self) -> str:
+        return (
+            f'<a href="/materialize/{self.pipeline_slug}/builds?branch=main">main</a> history: '
+            + "".join(
+                [
+                    f"<a href=\"{outcome.web_url_to_job}\">{':bk-status-passed:' if outcome.passed else ':bk-status-failed:'}</a>"
+                    for outcome in self.last_build_step_outcomes
+                ]
+            )
+        )
+
+
+@dataclass
+class Annotation:
+    suite_name: str
+    buildkite_job_id: str
+    is_failure: bool
+    build_history_on_main: BuildHistoryOnMain | None
+    unknown_errors: Sequence[ObservedBaseError] = field(default_factory=list)
+    known_errors: Sequence[ObservedBaseError] = field(default_factory=list)
+
+    def to_markdown(self) -> str:
+        only_known_errors = len(self.unknown_errors) == 0 and len(self.known_errors) > 0
+        no_errors = len(self.unknown_errors) == 0 and len(self.known_errors) == 0
+        wrap_in_details = only_known_errors
+        wrap_in_summary = only_known_errors
+
+        build_link = f'<a href="#{self.buildkite_job_id}">{self.suite_name}</a>'
+        outcome = "failed" if self.is_failure else "succeeded"
+
+        title = f"{build_link} {outcome}"
+
+        if only_known_errors:
+            title = f"{title} with known error logs"
+        elif no_errors:
+            title = f"{title}, but no error in logs found"
+
+        markdown = title
+        if self.build_history_on_main is not None:
+            markdown += ", " + self.build_history_on_main.to_markdown()
+
+        if wrap_in_summary:
+            markdown = f"<summary>{markdown}</summary>\n"
+
+        if len(self.unknown_errors) > 0:
+            markdown += "\n" + "\n".join(
+                f"* {error.to_markdown()}{error.occurrences_to_markdown()}"
+                for error in self.unknown_errors
+            )
+        if len(self.known_errors) > 0:
+            markdown += "\n" + "\n".join(
+                f"* {error.to_markdown()}{error.occurrences_to_markdown()}"
+                for error in self.known_errors
+            )
+
+        if wrap_in_details:
+            markdown = f"<details>{markdown}\n</details>"
+
+        return markdown
 
 
 def main() -> int:
@@ -167,51 +277,45 @@ and finds associated open GitHub issues in Materialize repository.""",
 
 
 def annotate_errors(
-    unknown_errors: list[str],
-    known_errors: list[str],
-    failures_on_main: str | None,
+    unknown_errors: Sequence[ObservedBaseError],
+    known_errors: Sequence[ObservedBaseError],
+    build_history_on_main: BuildHistoryOnMain | None,
     test_analytics_db_config: MzDbConfig,
 ) -> None:
-    assert unknown_errors or known_errors
-    style = "info" if not unknown_errors else "error"
+    assert len(unknown_errors) > 0 or len(known_errors) > 0
+    annotation_style = "info" if not unknown_errors else "error"
     unknown_errors = group_identical_errors(unknown_errors)
     known_errors = group_identical_errors(known_errors)
+    is_failure = (
+        len(unknown_errors) > 0 or os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
+    )
 
-    if unknown_errors:
-        text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{get_suite_name()}</a> failed"
-        if failures_on_main:
-            text += ", " + failures_on_main
-    else:
-        action = (
-            "failed"
-            if os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
-            else "succeeded"
-        )
-        text = f"<details><summary><a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{get_suite_name()}</a> {action} with known error logs"
-        if failures_on_main:
-            text += ", " + failures_on_main
-        text += "</summary>\n"
-    if unknown_errors:
-        text += "\n" + "\n".join(f"* {error}" for error in unknown_errors)
-    if known_errors:
-        text += "\n" + "\n".join(f"* {error}" for error in known_errors)
-    if not unknown_errors:
-        text += "\n</details>"
-    add_annotation_raw(style=style, markdown=text)
+    annotation = Annotation(
+        suite_name=get_suite_name(),
+        buildkite_job_id=os.getenv("BUILDKITE_JOB_ID", ""),
+        is_failure=is_failure,
+        build_history_on_main=build_history_on_main,
+        unknown_errors=unknown_errors,
+        known_errors=known_errors,
+    )
+
+    add_annotation_raw(style=annotation_style, markdown=annotation.to_markdown())
 
     cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
     build_annotation_storage.insert_annotation(
         cursor,
         [
             build_annotation_storage.AnnotationEntry(
-                type="error", header=get_suite_name(), markdown=text
+                type="error", header=get_suite_name(), markdown=annotation.to_markdown()
             )
         ],
     )
 
 
-def group_identical_errors(errors: list[str]) -> list[str]:
-    errors_with_counts: dict[str, int] = {}
+def group_identical_errors(
+    errors: Sequence[ObservedBaseError],
+) -> Sequence[ObservedBaseError]:
+    errors_with_counts: dict[ObservedBaseError, int] = {}
 
     for error in errors:
         errors_with_counts[error] = 1 + errors_with_counts.get(error, 0)
@@ -219,9 +323,8 @@ def group_identical_errors(errors: list[str]) -> list[str]:
     consolidated_errors = []
 
     for error, count in errors_with_counts.items():
-        consolidated_errors.append(
-            error if count == 1 else f"{error}\n({count} occurrences)"
-        )
+        error.occurrences = count
+        consolidated_errors.append(error)
 
     return consolidated_errors
 
@@ -241,24 +344,24 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
     buildkite_label: str = os.getenv("BUILDKITE_LABEL", "")
 
-    (known_issues, unknown_errors) = get_known_issues_from_github()
+    (known_issues, issues_with_invalid_regex) = get_known_issues_from_github()
+    unknown_errors: list[ObservedBaseError] = []
+    unknown_errors.extend(issues_with_invalid_regex)
 
     artifacts = ci_util.get_artifacts()
     job = os.getenv("BUILDKITE_JOB_ID")
 
-    known_errors: list[str] = []
+    known_errors: list[ObservedBaseError] = []
 
     # Keep track of known errors so we log each only once
     already_reported_issue_numbers: set[int] = set()
 
-    def handle_log_error(error_message: bytes, location: str):
-        # Don't have too huge output, so truncate
-        formatted_error_message = (
-            f"```\n{sanitize_text(error_message.decode('utf-8'), 10_000)}\n```"
-        )
-
+    def handle_log_error(
+        error_message_as_bytes: bytes, location: str, location_url: str | None
+    ):
+        error_message = error_message_as_bytes.decode("utf-8")
         for issue in known_issues:
-            match = issue.regex.search(for_github_re(error_message))
+            match = issue.regex.search(for_github_re(error_message_as_bytes))
             if match and issue.info["state"] == "open":
                 if issue.apply_to and issue.apply_to not in (
                     step_key.lower(),
@@ -268,13 +371,21 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
 
                 if issue.info["number"] not in already_reported_issue_numbers:
                     known_errors.append(
-                        f"Known issue <a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']})</a> in {location}:\n{formatted_error_message}"
+                        ObservedErrorWithIssue(
+                            error_message=error_message,
+                            error_type="Known issue",
+                            html_url=issue.info["html_url"],
+                            title=issue.info["title"],
+                            issue_number=issue.info["number"],
+                            location=location,
+                            location_url=location_url,
+                        )
                     )
                     already_reported_issue_numbers.add(issue.info["number"])
                 break
         else:
             for issue in known_issues:
-                match = issue.regex.search(for_github_re(error_message))
+                match = issue.regex.search(for_github_re(error_message_as_bytes))
                 if match and issue.info["state"] == "closed":
                     if issue.apply_to and issue.apply_to not in (
                         step_key.lower(),
@@ -284,50 +395,61 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
 
                     if issue.info["number"] not in already_reported_issue_numbers:
                         unknown_errors.append(
-                            f"Potential regression <a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']}, closed)</a> in {location}:\n{formatted_error_message}"
+                            ObservedErrorWithIssue(
+                                error_message=error_message,
+                                error_type="Potential regression",
+                                html_url=issue.info["html_url"],
+                                title=issue.info["title"],
+                                issue_number=issue.info["number"],
+                                location=location,
+                            )
                         )
                         already_reported_issue_numbers.add(issue.info["number"])
                     break
             else:
                 unknown_errors.append(
-                    f"Unknown error in {location}:\n{formatted_error_message}"
+                    ObservedErrorWithLocation(
+                        error_message=error_message,
+                        location=location,
+                        error_type="Unknown error",
+                    )
                 )
 
     def handle_junit_error(
         error_message: str | None, details: str | None, location: str
     ):
-        # Don't have too huge output, so truncate
-        formatted_error_message = (
-            f" `{sanitize_text(error_message, 1_000)}`"
-            if error_message is not None and len(error_message) > 0
-            else ""
-        )
-        formatted_error_details = (
-            f"```\n{sanitize_text(details, 9_000)}\n```"
-            if details is not None and len(details) > 0
-            else ""
-        )
         unknown_errors.append(
-            f"Failure in {location}:{formatted_error_message}\n{formatted_error_details}"
+            ObservedErrorWithLocation(
+                error_message=error_message,
+                error_type="Failure",
+                location=location,
+                error_details=details,
+                max_error_length=1_000,
+                max_details_length=9_000,
+            )
         )
 
     for error in errors:
         if isinstance(error, ErrorLog):
             for artifact in artifacts:
                 if artifact["job_id"] == job and artifact["path"] == error.file:
-                    linked_file: str = (
-                        f'<a href="{get_artifact_url(artifact)}">{error.file}</a>'
-                    )
+                    location: str = error.file
+                    location_url = get_artifact_url(artifact)
                     break
             else:
-                linked_file: str = error.file
+                location: str = error.file
+                location_url = None
 
-            handle_log_error(error.match, linked_file)
+            handle_log_error(error.match, location, location_url)
         elif isinstance(error, JunitError):
             if "in Code Coverage" in error.text or "covered" in error.message:
                 msg = "\n".join(filter(None, [error.message, error.text]))
                 # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
-                known_errors.append(f"{error.testcase}:\n```\n{msg}\n```")
+                known_errors.append(
+                    FailureInCoverageRun(
+                        error_type=msg, error_message="Failure", location=error.testcase
+                    )
+                )
             else:
                 handle_junit_error(error.message, error.text, error.testcase)
         else:
@@ -336,9 +458,9 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
     test_analytics_db_config = create_test_analytics_config_with_hostname(
         cloud_hostname
     )
-    failures_on_main = get_failures_on_main()
+    build_history_on_main = get_failures_on_main()
     annotate_errors(
-        unknown_errors, known_errors, failures_on_main, test_analytics_db_config
+        unknown_errors, known_errors, build_history_on_main, test_analytics_db_config
     )
 
     if unknown_errors:
@@ -357,17 +479,24 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
         and os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
         and get_job_state() not in ("canceling", "canceled")
     ):
-        text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{get_suite_name()}</a> failed, but no error in logs found"
-        if failures_on_main:
-            text += ", " + failures_on_main
-        add_annotation_raw(style="error", markdown=text)
+        annotation = Annotation(
+            suite_name=get_suite_name(),
+            buildkite_job_id=os.getenv("BUILDKITE_JOB_ID", ""),
+            is_failure=True,
+            build_history_on_main=build_history_on_main,
+            unknown_errors=[],
+            known_errors=[],
+        )
+        add_annotation_raw(style="error", markdown=annotation.to_markdown())
 
         cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
         build_annotation_storage.insert_annotation(
             cursor,
             [
                 build_annotation_storage.AnnotationEntry(
-                    type="error", header=get_suite_name(), markdown=text
+                    type="error",
+                    header=get_suite_name(),
+                    markdown=annotation.to_markdown(),
                 )
             ],
         )
@@ -480,64 +609,7 @@ def sanitize_text(text: str, max_length: int = 4000) -> str:
     return text
 
 
-def get_known_issues_from_github_page(page: int = 1) -> Any:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    if token := os.getenv("GITHUB_TOKEN"):
-        headers["Authorization"] = f"Bearer {token}"
-
-    response = requests.get(
-        f'https://api.github.com/search/issues?q=repo:MaterializeInc/materialize%20type:issue%20in:body%20"ci-regexp%3A"&per_page=100&page={page}',
-        headers=headers,
-    )
-
-    if response.status_code != 200:
-        raise ValueError(f"Bad return code from GitHub: {response.status_code}")
-
-    issues_json = response.json()
-    assert issues_json["incomplete_results"] == False
-    return issues_json
-
-
-def get_known_issues_from_github() -> tuple[list[KnownIssue], list[str]]:
-    page = 1
-    issues_json = get_known_issues_from_github_page(page)
-    while issues_json["total_count"] > len(issues_json["items"]):
-        page += 1
-        next_page_json = get_known_issues_from_github_page(page)
-        if not next_page_json["items"]:
-            break
-        issues_json["items"].extend(next_page_json["items"])
-
-    unknown_errors = []
-    known_issues = []
-
-    for issue in issues_json["items"]:
-        matches = CI_RE.findall(issue["body"])
-        matches_apply_to = CI_APPLY_TO.findall(issue["body"])
-        for match in matches:
-            try:
-                regex_pattern = re.compile(match.strip().encode("utf-8"))
-            except:
-                unknown_errors.append(
-                    f"<a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']})</a>: Invalid regex in ci-regexp: {match.strip()}, ignoring"
-                )
-                continue
-
-            if matches_apply_to:
-                for match_apply_to in matches_apply_to:
-                    known_issues.append(
-                        KnownIssue(regex_pattern, match_apply_to.strip().lower(), issue)
-                    )
-            else:
-                known_issues.append(KnownIssue(regex_pattern, None, issue))
-
-    return (known_issues, unknown_errors)
-
-
-def get_failures_on_main() -> str | None:
+def get_failures_on_main() -> BuildHistoryOnMain | None:
     pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
     step_key = os.getenv("BUILDKITE_STEP_KEY")
     step_name = os.getenv("BUILDKITE_LABEL") or step_key
@@ -591,14 +663,12 @@ def get_failures_on_main() -> str | None:
         )
         return None
 
-    return (
-        f"<a href=\"/materialize/{os.getenv('BUILDKITE_PIPELINE_SLUG')}/builds?branch=main\">main</a> history: "
-        + "".join(
-            [
-                f"<a href=\"{outcome.web_url_to_job}\">{':bk-status-passed:' if outcome.passed else ':bk-status-failed:'}</a>"
-                for outcome in last_build_step_outcomes
-            ]
-        )
+    pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
+    assert pipeline_slug is not None
+
+    return BuildHistoryOnMain(
+        pipeline_slug,
+        last_build_step_outcomes,
     )
 
 
@@ -624,22 +694,12 @@ def get_suite_name() -> str:
     return suite_name
 
 
-def for_github_re(text: bytes) -> bytes:
-    """
-    Matching newlines in regular expressions is kind of annoying, don't expect
-    ci-regexp to do that correctly, but instead replace all newlines with a
-    space. For examples this makes matching this panic easier:
+def format_error_message(error_message: str | None, max_length: int = 10_000) -> str:
+    if not error_message:
+        return ""
 
-      thread 'test_auth_deduplication' panicked at src/environmentd/tests/auth.rs:1878:5:
-      assertion `left == right` failed
-
-    Previously the regex should have been:
-      thread 'test_auth_deduplication' panicked at src/environmentd/tests/auth.rs.*\n.*left == right
-
-    With this function it can be:
-      thread 'test_auth_deduplication' panicked at src/environmentd/tests/auth.rs.*left == right
-    """
-    return text.replace(b"\n", b" ")
+    # Don't have too huge output, so truncate
+    return f"```\n{sanitize_text(error_message, max_length)}\n```"
 
 
 if __name__ == "__main__":
