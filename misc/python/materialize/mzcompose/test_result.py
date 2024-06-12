@@ -21,6 +21,8 @@ PEM_CONTENT_REPLACEMENT = r"<\1>"
 
 @dataclass
 class TestResult:
+    __test__ = False
+
     duration: float
     errors: list[TestFailureDetails]
 

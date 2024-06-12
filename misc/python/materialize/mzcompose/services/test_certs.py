@@ -14,6 +14,8 @@ from materialize.mzcompose.service import (
 
 
 class TestCerts(Service):
+    __test__ = False
+
     def __init__(
         self,
         name: str = "test-certs",
