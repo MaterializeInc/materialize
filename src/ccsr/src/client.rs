@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
+use proptest_derive::Arbitrary;
 use reqwest::{Method, Url};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Auth;
 
 /// An API client for a Confluent-compatible schema registry.
+#[derive(Clone)]
 pub struct Client {
     inner: reqwest::Client,
     url: Arc<dyn Fn() -> Url + Send + Sync + 'static>,
@@ -177,6 +179,20 @@ impl Client {
         });
         let res: PublishResponse = send_request(req).await?;
         Ok(res.id)
+    }
+
+    /// Sets the compatibility level for the specified subject.
+    pub async fn set_subject_compatibility_level(
+        &self,
+        subject: &str,
+        compatibility_level: &CompatibilityLevel,
+    ) -> Result<(), SetCompatibilityLevelError> {
+        let req = self.make_request(Method::PUT, &["config", subject]);
+        let req = req.json(&CompatibilityLevelRequest {
+            compatibility: *compatibility_level,
+        });
+        send_request(req).await?;
+        Ok(())
     }
 
     /// Lists the names of all subjects that the schema registry is aware of.
@@ -446,6 +462,41 @@ struct PublishResponse {
     id: i32,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatibilityLevelRequest {
+    compatibility: CompatibilityLevel,
+}
+
+#[derive(Arbitrary, Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CompatibilityLevel {
+    Backward,
+    BackwardTransitive,
+    Forward,
+    ForwardTransitive,
+    Full,
+    FullTransitive,
+    None,
+}
+
+impl TryFrom<&str> for CompatibilityLevel {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "BACKWARD" => Ok(CompatibilityLevel::Backward),
+            "BACKWARD_TRANSITIVE" => Ok(CompatibilityLevel::BackwardTransitive),
+            "FORWARD" => Ok(CompatibilityLevel::Forward),
+            "FORWARD_TRANSITIVE" => Ok(CompatibilityLevel::ForwardTransitive),
+            "FULL" => Ok(CompatibilityLevel::Full),
+            "FULL_TRANSITIVE" => Ok(CompatibilityLevel::FullTransitive),
+            "NONE" => Ok(CompatibilityLevel::None),
+            _ => Err(format!("invalid compatibility level: {}", value)),
+        }
+    }
+}
+
 /// Errors for publish operations.
 #[derive(Debug)]
 pub enum PublishError {
@@ -577,6 +628,53 @@ impl fmt::Display for DeleteError {
             DeleteError::SubjectNotFound => write!(f, "subject not found"),
             DeleteError::Transport(err) => write!(f, "transport: {}", err),
             DeleteError::Server { code, message } => {
+                write!(f, "server error {}: {}", code, message)
+            }
+        }
+    }
+}
+
+/// Errors for setting compatibility level operations.
+#[derive(Debug)]
+pub enum SetCompatibilityLevelError {
+    /// The compatibility level is invalid.
+    InvalidCompatibilityLevel,
+    /// The underlying HTTP transport failed.
+    Transport(reqwest::Error),
+    /// An internal server error occurred.
+    Server { code: i32, message: String },
+}
+
+impl From<UnhandledError> for SetCompatibilityLevelError {
+    fn from(err: UnhandledError) -> SetCompatibilityLevelError {
+        match err {
+            UnhandledError::Transport(err) => SetCompatibilityLevelError::Transport(err),
+            UnhandledError::Api { code, message } => match code {
+                42203 => SetCompatibilityLevelError::InvalidCompatibilityLevel,
+                _ => SetCompatibilityLevelError::Server { code, message },
+            },
+        }
+    }
+}
+
+impl Error for SetCompatibilityLevelError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            SetCompatibilityLevelError::InvalidCompatibilityLevel
+            | SetCompatibilityLevelError::Server { .. } => None,
+            SetCompatibilityLevelError::Transport(err) => Some(err),
+        }
+    }
+}
+
+impl fmt::Display for SetCompatibilityLevelError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SetCompatibilityLevelError::InvalidCompatibilityLevel => {
+                write!(f, "invalid compatibility level")
+            }
+            SetCompatibilityLevelError::Transport(err) => write!(f, "transport: {}", err),
+            SetCompatibilityLevelError::Server { code, message } => {
                 write!(f, "server error {}: {}", code, message)
             }
         }

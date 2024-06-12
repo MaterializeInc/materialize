@@ -19,6 +19,8 @@ reqwest = { version = "0.11.13", features = [
     "native-tls-vendored",
 ] }
 mz-tls-util = { path = "../tls-util" }
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.3.0" }
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.89"
 url = { version = "2.3.1", features = ["serde"] }
