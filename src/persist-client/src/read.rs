@@ -807,15 +807,7 @@ where
     /// This is communicating actual progress information, so is given
     /// preferential treatment compared to Self::maybe_heartbeat_reader.
     pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
-        // NB: min_elapsed is intentionally smaller than the one in
-        // maybe_heartbeat_reader (this is the preferential treatment mentioned
-        // above).
-        let min_elapsed = READER_LEASE_DURATION.get(&self.cfg) / 4;
-        let elapsed_since_last_heartbeat =
-            Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
-        if elapsed_since_last_heartbeat >= min_elapsed {
-            self.downgrade_since(new_since).await;
-        }
+        self.downgrade_since(new_since).await;
     }
 
     /// Heartbeats the read lease if necessary.
