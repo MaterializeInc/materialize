@@ -62,7 +62,7 @@ def insert_annotation(
         SELECT
             '{build_id}',
             '{step_id}',
-            '{mz_sql_util.sanitize_literal_value(annotation.test_suite)}',
+            {mz_sql_util.as_sanitized_literal(annotation.test_suite)},
             {annotation.test_retry_count},
             {annotation.is_failure},
             now()
@@ -84,8 +84,8 @@ def insert_annotation(
             SELECT
                 '{step_id}',
                 '{error.error_type}',
-                '{mz_sql_util.sanitize_literal_value(error.message)}',
-                {mz_sql_util.as_literal_or_null(error.issue)},
+                {mz_sql_util.as_sanitized_literal(error.message)},
+                {mz_sql_util.as_sanitized_literal(error.issue)},
                 {error.occurrence_count}
         ;
         """

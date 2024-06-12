@@ -8,15 +8,15 @@
 # by the Apache License, Version 2.0.
 
 
-def sanitize_literal_value(value: str) -> str:
+def sanitize_text_value(value: str) -> str:
     return value.replace("'", "\\'")
 
 
-def as_literal_or_null(value: str | None, sanitize_value: bool = True) -> str:
+def as_sanitized_literal(value: str | None, sanitize_value: bool = True) -> str:
     if value is None:
         return "NULL"
 
     if sanitize_value:
-        value = sanitize_literal_value(value)
+        value = sanitize_text_value(value)
 
-    return f"'{value}'"
+    return f"E'{value}'"
