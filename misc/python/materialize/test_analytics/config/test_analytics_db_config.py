@@ -35,7 +35,7 @@ def create_test_analytics_config_with_hostname(hostname: str) -> MzDbConfig:
     )
 
 
-def create_local_dev_config() -> MzDbConfig:
+def create_local_dev_config_for_analytics() -> MzDbConfig:
     hostname = os.environ["MATERIALIZE_PROD_SANDBOX_HOSTNAME"]
     username = os.getenv("PRODUCTION_ANALYTICS_USERNAME", "infra+bot@materialize.com")
     app_password = os.environ["PRODUCTION_ANALYTICS_APP_PASSWORD"]
