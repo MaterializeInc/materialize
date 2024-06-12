@@ -295,8 +295,8 @@ $(function() {
                 .attr('title', 'Subscribed')
                 .text('✅');
             removeForms();
-            window.analytics && window.analytics.identify(email);
             window.analytics && window.analytics.track("Integration Status Subscribed", {
+                email: email,
                 subject: $(this).parents("tr").find('td').first().text()
             });
             e.preventDefault();
