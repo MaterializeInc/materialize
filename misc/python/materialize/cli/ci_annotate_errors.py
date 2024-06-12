@@ -43,6 +43,7 @@ from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_hostname,
 )
 from materialize.test_analytics.connection import test_analytics_connection
+from materialize.test_analytics.data import build_data_storage
 from materialize.test_analytics.data.build_annotation import build_annotation_storage
 from materialize.test_analytics.data.build_annotation.build_annotation_storage import (
     AnnotationErrorEntry,
@@ -730,6 +731,13 @@ def format_error_message(error_message: str | None, max_length: int = 10_000) ->
 def store_annotation_in_test_analytics(
     test_analytics_db_config: MzDbConfig, annotation: Annotation
 ) -> None:
+    cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
+
+    # make sure that a build entry exists
+    build_data_storage.insert_build_step(
+        cursor, was_successful=not annotation.is_failure
+    )
+
     error_entries = [
         AnnotationErrorEntry(
             error_type=error.internal_error_type,
@@ -744,7 +752,6 @@ def store_annotation_in_test_analytics(
         for error in chain(annotation.known_errors, annotation.unknown_errors)
     ]
 
-    cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
     build_annotation_storage.insert_annotation(
         cursor,
         build_annotation_storage.AnnotationEntry(
