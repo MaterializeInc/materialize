@@ -301,7 +301,7 @@ where
         self.compute.initialization_complete();
     }
 
-    /// Allow this controller and instances controller by it to write to
+    /// Allow this controller and instances controlled by it to write to
     /// external systems.
     pub fn allow_writes(&mut self) {
         if !self.compute.read_only() {
@@ -609,6 +609,7 @@ where
         + Into<mz_repr::Timestamp>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
+    ComputeGrpcClient: ComputeClient<T>,
     // Bounds needed by `ComputeController`:
     T: ComputeControllerTimestamp,
 {
@@ -623,12 +624,17 @@ where
     pub async fn new(
         config: ControllerConfig,
         envd_epoch: NonZeroI64,
+        read_only: bool,
         transient_id_gen: Arc<TransientIdGen>,
         // Whether to use the new txn-wal tables implementation or the
         // legacy one.
         txn_wal_tables: TxnWalTablesImpl,
         storage_txn: &dyn StorageTxn<T>,
     ) -> Self {
+        if read_only {
+            tracing::info!("starting controllers in read-only mode!");
+        }
+
         let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
             config.persist_location.clone(),
@@ -665,6 +671,7 @@ where
             config.build_info,
             storage_collections,
             envd_epoch,
+            read_only,
             transient_id_gen,
             config.metrics_registry.clone(),
         );
@@ -673,7 +680,7 @@ where
         let mut frontiers_ticker = time::interval(Duration::from_secs(1));
         frontiers_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        Self {
+        let this = Self {
             storage: Box::new(storage_controller),
             storage_collections: collections_ctl,
             compute: compute_controller,
@@ -693,6 +700,12 @@ where
             unfulfilled_watch_sets: BTreeMap::new(),
             watch_set_id_gen: Gen::default(),
             immediate_watch_sets: Vec::new(),
+        };
+
+        if !this.compute.read_only() {
+            this.remove_past_generation_replicas_in_background();
         }
+
+        this
     }
 }

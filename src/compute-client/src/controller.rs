@@ -196,6 +196,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         build_info: &'static BuildInfo,
         storage_collections: Arc<dyn StorageCollections<Timestamp = T>>,
         envd_epoch: NonZeroI64,
+        read_only: bool,
         transient_id_gen: Arc<TransientIdGen>,
         metrics_registry: MetricsRegistry,
     ) -> Self {
@@ -210,7 +211,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             build_info,
             storage_collections,
             initialized: false,
-            read_only: true,
+            read_only,
             config: Default::default(),
             arrangement_exert_proportionality: 16,
             stashed_replica_response: None,

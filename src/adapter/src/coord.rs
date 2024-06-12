@@ -2037,13 +2037,6 @@ impl Coordinator {
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
-        if !self.read_only_controllers {
-            // Allow controller to go out of read-only mode right away.
-            self.controller.allow_writes();
-        } else {
-            tracing::info!("starting controllers in read-only mode!");
-        }
-
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(
             self.catalog().state().resolve_builtin_table_updates(
@@ -3381,6 +3374,7 @@ pub fn serve(
                         catalog.initialize_controller(
                             controller_config,
                             controller_envd_epoch,
+                            read_only_controllers,
                             Arc::clone(&transient_id_gen),
                             builtin_migration_metadata,
                             controller_txn_wal_tables,

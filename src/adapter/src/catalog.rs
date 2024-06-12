@@ -199,6 +199,7 @@ impl Catalog {
         &mut self,
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
+        read_only: bool,
         transient_id_gen: Arc<TransientIdGen>,
         builtin_migration_metadata: BuiltinMigrationMetadata,
         // Whether to use the new txn-wal tables implementation or the
@@ -218,6 +219,7 @@ impl Catalog {
             mz_controller::Controller::new(
                 config,
                 envd_epoch,
+                read_only,
                 transient_id_gen,
                 txn_wal_tables,
                 &read_only_tx,
