@@ -580,7 +580,7 @@ pub static ALLOWED_CLUSTER_REPLICA_SIZES: VarDefinition = VarDefinition::new(
 
 pub static PERSIST_FAST_PATH_LIMIT: VarDefinition = VarDefinition::new(
     "persist_fast_path_limit",
-    value!(usize; 0),
+    value!(usize; 25),
     "An exclusive upper bound on the number of results we may return from a Persist fast-path peek; \
     queries that may return more results will follow the normal / slow path. \
     Setting this to 0 disables the feature.",
