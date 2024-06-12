@@ -159,11 +159,6 @@ initially created, and is validated against the upstream schema upon restart.
 If you create new tables upstream after creating a MySQL source and want to
 replicate them to Materialize, the source must be dropped and recreated.
 
-{{< note >}}
-Support for dropping and recreating individual subsources is planned for a future
-release {{% gh 24975 %}}.
-{{< /note >}}
-
 ##### MySQL schemas
 
 `CREATE SOURCE` will attempt to create each upstream table in the same schema as
@@ -215,7 +210,7 @@ debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ##### Schema changes
 
-{{% mysql-direct/mysql-schema-changes %}}
+{{% schema-changes %}}
 
 ##### Supported types
 
@@ -391,15 +386,23 @@ CREATE SOURCE mz_source
   FOR ALL TABLES;
 ```
 
-### Handling schema changes
+### Handling errors and schema changes
 
-To handle upstream [schema changes](#schema-changes), drop and recreate the
-source.
+To handle upstream [schema changes](#schema-changes) or errored subsources, use
+the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
+subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
+the subsource back to the source.
 
-{{< note >}}
-Support for dropping and recreating individual subsources is planned for a future
-release {{% gh 24975 %}}.
-{{< /note >}}
+```sql
+-- List all subsources in mz_source
+SHOW SUBSOURCES ON mz_source;
+
+-- Get rid of an outdated or errored subsource
+DROP SOURCE table_1;
+
+-- Start ingesting the table with the updated schema or fix
+ALTER SOURCE mz_source ADD SUBSOURCE table_1;
+```
 
 ## Related pages
 
