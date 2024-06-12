@@ -205,7 +205,6 @@ class ObservedErrorWithLocation(ObservedError):
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class FailureInCoverageRun(ObservedError):
-    occurrences: int = 1
 
     def to_text(self) -> str:
         return f"{self.location}: {crop_text(self.error_message)}"
