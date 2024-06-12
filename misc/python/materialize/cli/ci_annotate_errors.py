@@ -36,7 +36,7 @@ from materialize.github import (
     for_github_re,
     get_known_issues_from_github,
 )
-from materialize.observed_error import ObservedBaseError
+from materialize.observed_error import ObservedBaseError, WithIssue
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_hostname,
@@ -154,10 +154,7 @@ class ObservedError(ObservedBaseError):
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
-class ObservedErrorWithIssue(ObservedError):
-    html_url: str
-    title: str
-    issue_number: int
+class ObservedErrorWithIssue(ObservedError, WithIssue):
     issue_is_closed: bool
     location_url: str | None = None
 
@@ -171,7 +168,7 @@ class ObservedErrorWithIssue(ObservedError):
         if self.issue_is_closed:
             issue_presentation = f"{issue_presentation}, closed"
 
-        return f'{self.error_type} <a href="{self.html_url}">{self.title} ({issue_presentation})</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
+        return f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({issue_presentation})</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -372,8 +369,8 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                             error_message=error_message,
                             error_type="Known issue",
                             internal_error_type="KNOWN_ISSUE",
-                            html_url=issue.info["html_url"],
-                            title=issue.info["title"],
+                            issue_url=issue.info["html_url"],
+                            issue_title=issue.info["title"],
                             issue_number=issue.info["number"],
                             issue_is_closed=False,
                             location=location,
@@ -398,8 +395,8 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                                 error_message=error_message,
                                 error_type="Potential regression",
                                 internal_error_type="POTENTIAL_REGRESSION",
-                                html_url=issue.info["html_url"],
-                                title=issue.info["title"],
+                                issue_url=issue.info["html_url"],
+                                issue_title=issue.info["title"],
                                 issue_number=issue.info["number"],
                                 issue_is_closed=True,
                                 location=location,

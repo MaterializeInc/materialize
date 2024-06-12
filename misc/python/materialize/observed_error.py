@@ -23,3 +23,10 @@ class ObservedBaseError:
             return ""
 
         return f"\n({self.occurrences} occurrences)"
+
+
+@dataclass(unsafe_hash=True)
+class WithIssue:
+    issue_number: int
+    issue_url: str
+    issue_title: str
