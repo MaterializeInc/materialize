@@ -128,13 +128,12 @@ toCSS | fingerprint }}
     }
     analytics._writeKey=SEGMENT_ID;
     analytics._cdn="https://cdn.segment.materialize.com";
-    analytics.load(SEGMENT_ID);
     {{/* Use cookies for storage by default, since they cross subdomains */}}
-    analytics.load(SEGMENT_ID, storage: { stores: ["cookie", "localStorage", "memory"] });
+    analytics.load(SEGMENT_ID, { storage: { stores: ["cookie", "localStorage", "memory"] } });
   {{ else }}
     {{/* Dev */}}
     analytics._writeKey="dGeQYRjmGVsqDI0KIARrAhTvk1BdJJhk";
-    analytics.load("dGeQYRjmGVsqDI0KIARrAhTvk1BdJJhk", storage: { stores: ["cookie", "localStorage", "memory"] });
+    analytics.load("dGeQYRjmGVsqDI0KIARrAhTvk1BdJJhk", { storage: { stores: ["cookie", "localStorage", "memory"] } });
   {{ end }}
   analytics.page();
   }}();
