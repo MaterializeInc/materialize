@@ -29,7 +29,7 @@ class AnnotationEntry:
 
 def insert_annotation(
     cursor: Cursor,
-    annotations: list[AnnotationEntry],
+    annotation: AnnotationEntry,
     verbose: bool = False,
 ) -> None:
     if True:
@@ -41,31 +41,30 @@ def insert_annotation(
 
     sql_statements = []
 
-    for annotation in annotations:
-        sql_statements.append(
-            f"""
-            INSERT INTO build_annotation
-            (
-                build_id,
-                build_step_id,
-                test_suite,
-                test_retry_count,
-                is_failure,
-                markdown,
-                count_known_errors,
-                count_unknown_errors
-            )
-            SELECT
-                '{build_id}',
-                '{step_id}',
-                '{annotation.test_suite}',
-                {annotation.test_retry_count},
-                {annotation.is_failure},
-                '{annotation.markdown}',
-                {annotation.count_known_errors},
-                {annotation.count_unknown_errors}
-            ;
-            """
+    sql_statements.append(
+        f"""
+        INSERT INTO build_annotation
+        (
+            build_id,
+            build_step_id,
+            test_suite,
+            test_retry_count,
+            is_failure,
+            markdown,
+            count_known_errors,
+            count_unknown_errors
         )
+        SELECT
+            '{build_id}',
+            '{step_id}',
+            '{annotation.test_suite}',
+            {annotation.test_retry_count},
+            {annotation.is_failure},
+            '{annotation.markdown}',
+            {annotation.count_known_errors},
+            {annotation.count_unknown_errors}
+        ;
+        """
+    )
 
     execute_updates(sql_statements, cursor, verbose)

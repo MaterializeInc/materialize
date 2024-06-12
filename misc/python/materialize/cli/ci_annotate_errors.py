@@ -729,16 +729,14 @@ def store_annotation_in_test_analytics(
     cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
     build_annotation_storage.insert_annotation(
         cursor,
-        [
-            build_annotation_storage.AnnotationEntry(
-                test_suite=get_suite_name(include_retry_info=False),
-                test_retry_count=get_retry_count(),
-                is_failure=annotation.is_failure,
-                count_known_errors=len(annotation.known_errors),
-                count_unknown_errors=len(annotation.unknown_errors),
-                markdown=annotation.to_markdown(),
-            )
-        ],
+        build_annotation_storage.AnnotationEntry(
+            test_suite=get_suite_name(include_retry_info=False),
+            test_retry_count=get_retry_count(),
+            is_failure=annotation.is_failure,
+            count_known_errors=len(annotation.known_errors),
+            count_unknown_errors=len(annotation.unknown_errors),
+            markdown=annotation.to_markdown(),
+        ),
     )
 
 
