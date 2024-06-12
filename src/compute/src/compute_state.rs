@@ -15,7 +15,6 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
-use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Hashable;
@@ -536,7 +535,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             .expect("dropped untracked collection");
 
         // If this collection is an index, remove its trace.
-        self.compute_state.traces.del_trace(&id);
+        self.compute_state.traces.remove(&id);
         // If this collection is a sink, drop its sink token.
         collection.sink_token.take();
 
@@ -1155,13 +1154,7 @@ impl IndexPeek {
         let oks = self.trace_bundle.oks_mut();
         match oks {
             SpecializedTraceHandle::RowRow(oks_handle) => {
-                // Explicit types required due to Rust type inference limitations.
-                use crate::typedefs::RowRowSpine;
-                Self::collect_ok_finished_data::<RowRowSpine<_, _>>(
-                    peek,
-                    oks_handle,
-                    max_result_size,
-                )
+                Self::collect_ok_finished_data(peek, oks_handle, max_result_size)
             }
         }
     }
@@ -1169,7 +1162,7 @@ impl IndexPeek {
     /// Collects data for a known-complete peek from the ok stream.
     fn collect_ok_finished_data<Tr>(
         peek: &mut Peek<Timestamp>,
-        oks_handle: &mut TraceAgent<Tr>,
+        oks_handle: &mut Tr,
         max_result_size: u64,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
