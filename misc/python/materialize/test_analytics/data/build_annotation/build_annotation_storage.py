@@ -19,8 +19,11 @@ from materialize.test_analytics.connection.test_analytics_connection import (
 
 @dataclass
 class AnnotationEntry:
-    type: str
-    header: str | None
+    test_suite: str
+    test_retry_count: int
+    is_failure: bool
+    count_known_errors: int
+    count_unknown_errors: int
     markdown: str
 
 
@@ -38,24 +41,26 @@ def insert_annotation(
     sql_statements = []
 
     for annotation in annotations:
-        annotation_header_value = (
-            "NULL" if annotation.header is None else f"'{annotation.header}'"
-        )
-
         sql_statements.append(
             f"""
             INSERT INTO build_annotation
             (
                 build_id,
-                type,
-                header,
-                markdown
+                test_suite,
+                test_retry_count,
+                is_failure,
+                markdown,
+                count_known_errors,
+                count_unknown_errors
             )
             SELECT
                 '{build_id}',
-                '{annotation.type}',
-                {annotation_header_value},
-                '{annotation.markdown}'
+                '{annotation.test_suite}',
+                {annotation.test_retry_count},
+                {annotation.is_failure},
+                '{annotation.markdown}',
+                {annotation.count_known_errors},
+                {annotation.count_unknown_errors}
             ;
             """
         )

@@ -15,9 +15,12 @@
 
 CREATE TABLE build_annotation (
    build_id TEXT NOT NULL,
-   type TEXT NOT NULL,
-   header TEXT,
-   markdown TEXT NOT NULL
+   test_suite TEXT NOT NULL,
+   test_retry_count UINT4 NOT NULL,
+   is_failure BOOL NOT NULL,
+   markdown TEXT NOT NULL,
+   count_known_errors UINT4 NOT NULL,
+   count_unknown_errors UINT4 NOT NULL
 );
 
 CREATE VIEW v_build_annotation AS
@@ -28,9 +31,12 @@ CREATE VIEW v_build_annotation AS
       b.branch,
       b.mz_version,
       b.date,
-      ann.type,
-      ann.header,
-      ann.markdown
+      ann.test_suite,
+      ann.test_retry_count,
+      ann.is_failure,
+      ann.markdown,
+      ann.count_known_errors,
+      ann.count_unknown_errors
     FROM build_annotation ann
     INNER JOIN build b
     ON ann.build_id = b.build_id

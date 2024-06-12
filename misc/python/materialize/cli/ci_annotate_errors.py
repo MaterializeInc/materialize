@@ -700,14 +700,19 @@ def get_job_state() -> str:
     raise ValueError("Job not found")
 
 
-def get_suite_name() -> str:
+def get_suite_name(include_retry_info: bool = True) -> str:
     suite_name = os.getenv("BUILDKITE_LABEL", "Unknown Test")
 
-    retry_count = int(os.getenv("BUILDKITE_RETRY_COUNT", "0"))
-    if retry_count > 0:
-        suite_name += f" (#{retry_count + 1})"
+    if include_retry_info:
+        retry_count = get_retry_count()
+        if retry_count > 0:
+            suite_name += f" (#{retry_count + 1})"
 
     return suite_name
+
+
+def get_retry_count() -> int:
+    return int(os.getenv("BUILDKITE_RETRY_COUNT", "0"))
 
 
 def format_error_message(error_message: str | None, max_length: int = 10_000) -> str:
@@ -726,8 +731,11 @@ def store_annotation_in_test_analytics(
         cursor,
         [
             build_annotation_storage.AnnotationEntry(
-                type="error",
-                header=get_suite_name(),
+                test_suite=get_suite_name(include_retry_info=False),
+                test_retry_count=get_retry_count(),
+                is_failure=annotation.is_failure,
+                count_known_errors=len(annotation.known_errors),
+                count_unknown_errors=len(annotation.unknown_errors),
                 markdown=annotation.to_markdown(),
             )
         ],
