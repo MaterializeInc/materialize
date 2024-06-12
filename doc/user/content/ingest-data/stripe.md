@@ -55,8 +55,11 @@ CREATE SOURCE stripe_source IN CLUSTER webhooks_cluster
 FROM WEBHOOK
     BODY FORMAT JSON;
     CHECK (
-        WITH (BODY, HEADERS, SECRET stripe_webhook_secret)
+        WITH (BODY, HEADERS, SECRET stripe_webhook_secret AS validation_secret)
         (
+            -- The constant_time_eq validation function **does not support** fully
+            -- qualified secret names. We recommend always aliasing the secret name
+            -- for ease of use.
             constant_time_eq(
                 -- Sign the timestamp and body.
                 encode(hmac(
@@ -69,7 +72,7 @@ FROM WEBHOOK
                         || '.' ||
                         body
                     ),
-                    stripe_webhook_secret,
+                    validation_secret,
                     'sha256'
                 ), 'hex'),
                 -- Extract the `v1` component from the `Stripe-Signature` header.

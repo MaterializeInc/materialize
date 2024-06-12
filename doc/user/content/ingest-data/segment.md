@@ -58,8 +58,11 @@ CREATE SOURCE segment_source IN CLUSTER webhooks_cluster FROM WEBHOOK
   INCLUDE HEADER 'event-type' AS event_type
   INCLUDE HEADERS
   CHECK (
-    WITH ( BODY BYTES, HEADERS, SECRET segment_webhook_secret BYTES)
-    constant_time_eq(decode(headers->'x-signature', 'hex'), hmac(body, segment_webhook_secret, 'sha1'))
+    WITH ( BODY BYTES, HEADERS, SECRET segment_webhook_secret BYTES AS validation_secret)
+    -- The constant_time_eq validation function **does not support** fully
+    -- qualified secret names. We recommend always aliasing the secret name
+    -- for ease of use.
+    constant_time_eq(decode(headers->'x-signature', 'hex'), hmac(body, validation_secret, 'sha1'))
   );
 ```
 

@@ -59,9 +59,12 @@ CREATE SOURCE hubspot_source
       WITH (
         HEADERS,
         BODY AS body,
-        SECRET hubspot_webhook_secret
+        SECRET hubspot_webhook_secret AS validation_secret
       )
-      constant_time_eq(headers->'authorization', hubspot_webhook_secret)
+      -- The constant_time_eq validation function **does not support** fully
+      -- qualified secret names. We recommend always aliasing the secret name
+      -- for ease of use.
+      constant_time_eq(headers->'authorization', validation_secret)
 );
 ```
 

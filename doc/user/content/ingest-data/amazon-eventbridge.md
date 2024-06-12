@@ -61,8 +61,11 @@ FROM WEBHOOK
   -- Include all headers, but filter out the secret.
   INCLUDE HEADERS ( NOT 'x-mz-api-key' )
   CHECK (
-    WITH ( HEADERS, SECRET eventbridge_webhook_secret)
-    constant_time_eq(headers->'x-mz-api-key', secret)
+    WITH ( HEADERS, SECRET eventbridge_webhook_secret AS validation_secret)
+    -- The constant_time_eq validation function **does not support** fully
+    -- qualified secret names. We recommend always aliasing the secret name
+    -- for ease of use.
+    constant_time_eq(headers->'x-mz-api-key', validation_secret)
   );
 ```
 
