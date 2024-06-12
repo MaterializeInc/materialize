@@ -9,6 +9,16 @@
 
 # Regression test for #25769.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cardinality_estimates = true
+----
+COMPLETE 0
+
+simple
+SET ENABLE_SESSION_CARDINALITY_ESTIMATES TO TRUE
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE tab0_raw(pk INTEGER, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT);
 
