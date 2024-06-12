@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 @dataclass(unsafe_hash=True)
 class ObservedBaseError:
+    internal_error_type: str
     occurrences: int = field(init=False, compare=False, hash=False)
 
     def to_markdown(self) -> str:

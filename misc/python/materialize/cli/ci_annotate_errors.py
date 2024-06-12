@@ -379,6 +379,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                         ObservedErrorWithIssue(
                             error_message=error_message,
                             error_type="Known issue",
+                            internal_error_type="KNOWN_ISSUE",
                             html_url=issue.info["html_url"],
                             title=issue.info["title"],
                             issue_number=issue.info["number"],
@@ -404,6 +405,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                             ObservedErrorWithIssue(
                                 error_message=error_message,
                                 error_type="Potential regression",
+                                internal_error_type="POTENTIAL_REGRESSION",
                                 html_url=issue.info["html_url"],
                                 title=issue.info["title"],
                                 issue_number=issue.info["number"],
@@ -419,6 +421,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                         error_message=error_message,
                         location=location,
                         error_type="Unknown error",
+                        internal_error_type="UNKNOWN ERROR",
                     )
                 )
 
@@ -429,6 +432,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
             ObservedErrorWithLocation(
                 error_message=error_message,
                 error_type="Failure",
+                internal_error_type="JUNIT_FAILURE",
                 location=location,
                 error_details=details,
                 max_error_length=1_000,
@@ -454,7 +458,10 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                 # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
                 known_errors.append(
                     FailureInCoverageRun(
-                        error_type="Failure", error_message=msg, location=error.testcase
+                        error_type="Failure",
+                        internal_error_type="FAILURE_IN_COVERAGE_MODE",
+                        error_message=msg,
+                        location=error.testcase,
                     )
                 )
             else:
