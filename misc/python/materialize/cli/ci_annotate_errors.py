@@ -447,7 +447,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                 # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
                 known_errors.append(
                     FailureInCoverageRun(
-                        error_type=msg, error_message="Failure", location=error.testcase
+                        error_type="Failure", error_message=msg, location=error.testcase
                     )
                 )
             else:
