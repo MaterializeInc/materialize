@@ -29,7 +29,7 @@ class KnownGitHubIssue:
     info: dict[str, Any]
 
 
-@dataclass
+@dataclass(kw_only=True, unsafe_hash=True)
 class GitHubIssueWithInvalidRegexp(ObservedBaseError):
     html_url: str
     title: str

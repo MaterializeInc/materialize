@@ -10,9 +10,9 @@
 from dataclasses import dataclass, field
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class ObservedBaseError:
-    occurrences: int = field(init=False, compare=False)
+    occurrences: int = field(init=False, compare=False, hash=False)
 
     def to_markdown(self) -> str:
         raise NotImplementedError

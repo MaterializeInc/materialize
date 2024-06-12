@@ -146,14 +146,14 @@ class JunitError:
     text: str
 
 
-@dataclass
+@dataclass(kw_only=True, unsafe_hash=True)
 class ObservedError(ObservedBaseError):
     error_message: str | None
     error_type: str
     location: str
 
 
-@dataclass
+@dataclass(kw_only=True, unsafe_hash=True)
 class ObservedErrorWithIssue(ObservedError):
     html_url: str
     title: str
@@ -169,7 +169,7 @@ class ObservedErrorWithIssue(ObservedError):
         return f'{self.error_type} <a href="{self.html_url}">{self.title} (#{self.issue_number}, closed)</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
 
 
-@dataclass
+@dataclass(kw_only=True, unsafe_hash=True)
 class ObservedErrorWithLocation(ObservedError):
     error_details: str | None = None
     max_error_length: int = 10000
@@ -186,7 +186,7 @@ class ObservedErrorWithLocation(ObservedError):
         return f"{self.error_type} in {self.location}:\n{format_error_message(self.error_message, self.max_error_length)}{formatted_error_details}"
 
 
-@dataclass
+@dataclass(kw_only=True, unsafe_hash=True)
 class FailureInCoverageRun(ObservedError):
     occurrences: int = 1
 
