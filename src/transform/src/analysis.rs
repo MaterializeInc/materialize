@@ -1386,7 +1386,7 @@ mod cardinality {
 
     /// The default selectivity for predicates we know nothing about.
     ///
-    /// It is safe to use this instead of `FactorizerVariable::Index(col)`.
+    /// But see also expr/src/scalar.rs for `FilterCharacteristics::worst_case_scaling_factor()` for a more nuanced take.
     pub const WORST_CASE_SELECTIVITY: OrderedFloat<f64> = OrderedFloat(0.1);
 
     // This section defines how we estimate cardinality for each syntactic construct.
@@ -1472,7 +1472,7 @@ mod cardinality {
                         .map(|expr| self.predicate(expr, unique_columns))
                         .product(),
                     VariadicFunc::Or => {
-                        // TODO(mgree): BETWEEN will get compiled down to an OR of appropriate bounds---we could try to detect it and be clever
+                        // TODO(mgree): BETWEEN will get compiled down to an AND of appropriate bounds---we could try to detect it and be clever
 
                         // F(expr1 OR expr2) = F(expr1) + F(expr2) - F(expr1) * F(expr2), but generalized
                         let mut exprs = exprs.into_iter();
