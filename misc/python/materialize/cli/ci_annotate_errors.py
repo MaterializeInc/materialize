@@ -17,6 +17,7 @@ import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from itertools import chain
 from typing import Any
 
 from junitparser.junitparser import Error, Failure, JUnitXml
@@ -43,6 +44,9 @@ from materialize.test_analytics.config.test_analytics_db_config import (
 )
 from materialize.test_analytics.connection import test_analytics_connection
 from materialize.test_analytics.data.build_annotation import build_annotation_storage
+from materialize.test_analytics.data.build_annotation.build_annotation_storage import (
+    AnnotationErrorEntry,
+)
 
 # Unexpected failures, report them
 ERROR_RE = re.compile(
@@ -726,6 +730,15 @@ def format_error_message(error_message: str | None, max_length: int = 10_000) ->
 def store_annotation_in_test_analytics(
     test_analytics_db_config: MzDbConfig, annotation: Annotation
 ) -> None:
+    error_entries = [
+        AnnotationErrorEntry(
+            error_type=error.internal_error_type,
+            message=error.to_text(),
+            occurrence_count=error.occurrences,
+        )
+        for error in chain(annotation.known_errors, annotation.unknown_errors)
+    ]
+
     cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
     build_annotation_storage.insert_annotation(
         cursor,
@@ -733,9 +746,7 @@ def store_annotation_in_test_analytics(
             test_suite=get_suite_name(include_retry_info=False),
             test_retry_count=get_retry_count(),
             is_failure=annotation.is_failure,
-            count_known_errors=len(annotation.known_errors),
-            count_unknown_errors=len(annotation.unknown_errors),
-            markdown=annotation.to_markdown(),
+            errors=error_entries,
         ),
     )
 

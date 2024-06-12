@@ -18,13 +18,18 @@ from materialize.test_analytics.connection.test_analytics_connection import (
 
 
 @dataclass
+class AnnotationErrorEntry:
+    error_type: str
+    message: str
+    occurrence_count: int
+
+
+@dataclass
 class AnnotationEntry:
     test_suite: str
     test_retry_count: int
     is_failure: bool
-    count_known_errors: int
-    count_unknown_errors: int
-    markdown: str
+    errors: list[AnnotationErrorEntry]
 
 
 def insert_annotation(
@@ -49,22 +54,34 @@ def insert_annotation(
             build_step_id,
             test_suite,
             test_retry_count,
-            is_failure,
-            markdown,
-            count_known_errors,
-            count_unknown_errors
+            is_failure
         )
         SELECT
             '{build_id}',
             '{step_id}',
             '{annotation.test_suite}',
             {annotation.test_retry_count},
-            {annotation.is_failure},
-            '{annotation.markdown}',
-            {annotation.count_known_errors},
-            {annotation.count_unknown_errors}
+            {annotation.is_failure};
+            """
+    )
+
+    for error in annotation.errors:
+        sql_statements.append(
+            f"""
+            INSERT INTO build_annotation_error
+            (
+                build_step_id,
+                error_type,
+                content,
+                occurrence_count
+            )
+            SELECT
+                '{step_id}',
+                '{error.error_type}',
+                '{error.message}',
+                {error.occurrence_count}
         ;
         """
-    )
+        )
 
     execute_updates(sql_statements, cursor, verbose)
