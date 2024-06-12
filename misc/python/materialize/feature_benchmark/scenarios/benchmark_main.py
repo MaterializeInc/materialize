@@ -25,6 +25,7 @@ from materialize.feature_benchmark.scenario import (
     ScenarioBig,
     ScenarioDisabled,
 )
+from materialize.feature_benchmark.scenario_version import ScenarioVersion
 from materialize.mz_version import MzVersion
 
 # for pdoc ignores
@@ -230,6 +231,8 @@ class Insert(DML):
 class ManySmallInserts(DML):
     """Measure the time it takes for several small INSERT statements to return."""
 
+    SCALE = 4
+
     def init(self) -> Action:
         return self.table_ten()
 
@@ -237,7 +240,7 @@ class ManySmallInserts(DML):
         random.seed(self.seed())
 
         statements = []
-        for _ in range(0, 10000):
+        for _ in range(0, self.n()):
             statements.append(f"> INSERT INTO t1 VALUES ({random.randint(0, 100000)})")
 
         insert_statements_str = "\n".join(statements)
@@ -338,6 +341,11 @@ class Update(DML):
 class ManySmallUpdates(DML):
     """Measure the time it takes for several small UPDATE statements to return to client"""
 
+    SCALE = 3  # runs > 4 hours with SCALE = 4
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
+
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
@@ -356,7 +364,7 @@ class ManySmallUpdates(DML):
         random.seed(self.seed())
 
         statements = []
-        for _ in range(0, 10000):
+        for _ in range(0, self.n()):
             statements.append(
                 f"> UPDATE t1 SET f1 = {random.randint(0, 100000)}, f2 = {random.randint(0, 100000)} WHERE f1 % 10 = {random.randint(0, 10)}"
             )
