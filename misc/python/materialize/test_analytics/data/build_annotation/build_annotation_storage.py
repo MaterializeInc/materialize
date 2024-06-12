@@ -22,6 +22,7 @@ from materialize.test_analytics.util import mz_sql_util
 class AnnotationErrorEntry:
     error_type: str
     message: str
+    issue: str | None
     occurrence_count: int
 
 
@@ -74,12 +75,14 @@ def insert_annotation(
                 build_step_id,
                 error_type,
                 content,
+                issue,
                 occurrence_count
             )
             SELECT
                 '{step_id}',
                 '{error.error_type}',
                 '{mz_sql_util.sanitize_literal_value(error.message)}',
+                {mz_sql_util.as_literal_or_null(error.issue)},
                 {error.occurrence_count}
         ;
         """

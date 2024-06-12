@@ -734,6 +734,11 @@ def store_annotation_in_test_analytics(
         AnnotationErrorEntry(
             error_type=error.internal_error_type,
             message=error.to_text(),
+            issue=(
+                f"materialize/{error.issue_number}"
+                if isinstance(error, WithIssue)
+                else None
+            ),
             occurrence_count=error.occurrences,
         )
         for error in chain(annotation.known_errors, annotation.unknown_errors)

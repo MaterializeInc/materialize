@@ -25,6 +25,7 @@ CREATE TABLE build_annotation_error (
    build_step_id TEXT NOT NULL,
    error_type TEXT NOT NULL,
    content TEXT NOT NULL,
+   issue TEXT,
    occurrence_count UINT4 NOT NULL
 );
 
@@ -41,6 +42,7 @@ CREATE VIEW v_build_annotation_error AS
       ann.test_retry_count,
       err.error_type,
       err.content,
+      err.issue,
       err.occurrence_count
     FROM build_annotation ann
     LEFT OUTER JOIN build_annotation_error err
