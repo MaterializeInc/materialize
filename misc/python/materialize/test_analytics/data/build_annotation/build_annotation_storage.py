@@ -55,7 +55,7 @@ def insert_annotation(
                 '{build_id}',
                 '{annotation.type}',
                 {annotation_header_value},
-                '{annotation.markdown}
+                '{annotation.markdown}'
             ;
             """
         )
