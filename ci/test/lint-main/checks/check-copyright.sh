@@ -65,6 +65,7 @@ copyright_files=$(grep -vE \
     -e '^src/catalog/src/durable/upgrade/snapshots/.*' \
     -e '^src/catalog/src/durable/upgrade/persist/snapshots/.*\.snap' \
     -e '^src/storage-types/src/snapshots/.*' \
+    -e '^src/repr/src/adt/snapshots/.*' \
     -e '^src/environmentd/tests/testdata/timezones/.*\.csv' \
     -e '^test/fivetran-destination/.*\/00-README$' \
     <<< "$files"
