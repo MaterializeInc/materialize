@@ -15,6 +15,7 @@ from materialize.buildkite import BuildkiteEnvVar
 from materialize.test_analytics.connection.test_analytics_connection import (
     execute_updates,
 )
+from materialize.test_analytics.util import mz_sql_util
 
 
 @dataclass
@@ -59,7 +60,7 @@ def insert_annotation(
         SELECT
             '{build_id}',
             '{step_id}',
-            '{annotation.test_suite}',
+            '{mz_sql_util.sanitize_literal_value(annotation.test_suite)}',
             {annotation.test_retry_count},
             {annotation.is_failure};
             """
@@ -78,7 +79,7 @@ def insert_annotation(
             SELECT
                 '{step_id}',
                 '{error.error_type}',
-                '{error.message}',
+                '{mz_sql_util.sanitize_literal_value(error.message)}',
                 {error.occurrence_count}
         ;
         """
