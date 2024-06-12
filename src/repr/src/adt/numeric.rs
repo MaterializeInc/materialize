@@ -19,6 +19,7 @@ use anyhow::bail;
 use dec::{Context, Decimal};
 use mz_lowertest::MzReflect;
 use mz_ore::cast;
+use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -762,10 +763,75 @@ impl DecimalLike for Numeric {
     }
 }
 
+/// An encoded packed variant of [`Numeric`].
+///
+/// Unlike other "Packed" types we _DO NOT_ uphold the invariant that
+/// [`PackedNumeric`] sorts the same as [`Numeric`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PackedNumeric(pub [u8; 40]);
+
+impl FixedSizeCodec<Numeric> for PackedNumeric {
+    const SIZE: usize = 40;
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn from_bytes(slice: &[u8]) -> Result<Self, String> {
+        let buf: [u8; Self::SIZE] = slice.try_into().map_err(|_| {
+            format!(
+                "size for PackedNumeric is {} bytes, got {}",
+                Self::SIZE,
+                slice.len()
+            )
+        })?;
+        Ok(PackedNumeric(buf))
+    }
+
+    fn from_value(val: Numeric) -> PackedNumeric {
+        let (digits, exponent, bits, lsu) = val.to_raw_parts();
+
+        let mut buf = [0u8; 40];
+
+        buf[0..4].copy_from_slice(&digits.to_le_bytes());
+        buf[4..8].copy_from_slice(&exponent.to_le_bytes());
+
+        for i in 0..13 {
+            buf[(i * 2) + 8..(i * 2) + 10].copy_from_slice(&lsu[i].to_le_bytes());
+        }
+
+        buf[34..35].copy_from_slice(&bits.to_le_bytes());
+
+        PackedNumeric(buf)
+    }
+
+    fn into_value(self) -> Numeric {
+        let digits: [u8; 4] = self.0[0..4].try_into().unwrap();
+        let digits = u32::from_le_bytes(digits);
+
+        let exponent: [u8; 4] = self.0[4..8].try_into().unwrap();
+        let exponent = i32::from_le_bytes(exponent);
+
+        let mut lsu = [0u16; 13];
+        for i in 0..13 {
+            let x: [u8; 2] = self.0[(i * 2) + 8..(i * 2) + 10].try_into().unwrap();
+            let x = u16::from_le_bytes(x);
+            lsu[i] = x;
+        }
+
+        let bits: [u8; 1] = self.0[34..35].try_into().unwrap();
+        let bits = u8::from_le_bytes(bits);
+
+        Numeric::from_raw_parts(digits, exponent, bits, lsu)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use crate::scalar::arb_numeric;
 
     use super::*;
 
@@ -783,5 +849,64 @@ mod tests {
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
+    }
+
+    #[mz_ore::test]
+    fn proptest_packed_numeric_roundtrip() {
+        fn test(og: Numeric) {
+            let packed = PackedNumeric::from_value(og);
+            let rnd = packed.into_value();
+
+            if og.is_nan() && rnd.is_nan() {
+                return;
+            }
+            assert_eq!(og, rnd);
+        }
+
+        proptest!(|(num in arb_numeric())| {
+            test(num);
+        });
+    }
+
+    // Note: It's expected that this test will fail if you update the strategy
+    // for generating an arbitrary Numeric. In that case feel free to
+    // regenerate the snapshot.
+    #[mz_ore::test]
+    fn packed_numeric_stability() {
+        /// This is the seed [`proptest`] uses for their deterministic RNG. We
+        /// copy it here to prevent breaking this test if [`proptest`] changes.
+        const RNG_SEED: [u8; 32] = [
+            0xf4, 0x16, 0x16, 0x48, 0xc3, 0xac, 0x77, 0xac, 0x72, 0x20, 0x0b, 0xea, 0x99, 0x67,
+            0x2d, 0x6d, 0xca, 0x9f, 0x76, 0xaf, 0x1b, 0x09, 0x73, 0xa0, 0x59, 0x22, 0x6d, 0xc5,
+            0x46, 0x39, 0x1c, 0x4a,
+        ];
+
+        let rng = proptest::test_runner::TestRng::from_seed(
+            proptest::test_runner::RngAlgorithm::ChaCha,
+            &RNG_SEED,
+        );
+        // Generate a collection of Rows.
+        let config = proptest::test_runner::Config {
+            // We let the loop below drive how much data we generate.
+            cases: u32::MAX,
+            rng_algorithm: proptest::test_runner::RngAlgorithm::ChaCha,
+            ..Default::default()
+        };
+        let mut runner = proptest::test_runner::TestRunner::new_with_rng(config, rng);
+
+        let test_cases = 2_000;
+        let strat = arb_numeric();
+
+        let mut all_numerics = Vec::new();
+        for _ in 0..test_cases {
+            let value_tree = strat.new_tree(&mut runner).unwrap();
+            let numeric = value_tree.current();
+            let packed = PackedNumeric::from_value(numeric);
+            let hex_bytes = format!("{:x?}", packed.as_bytes());
+
+            all_numerics.push((numeric, hex_bytes));
+        }
+
+        insta::assert_debug_snapshot!(all_numerics);
     }
 }
