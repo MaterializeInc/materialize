@@ -24,7 +24,7 @@ use mz_expr::{
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
-use mz_repr::explain::{IndexUsageType, UsedIndexes};
+use mz_repr::explain::{DeltaJoinIndexUsageType, IndexUsageType, UsedIndexes};
 use mz_repr::GlobalId;
 
 use crate::monotonic::MonotonicFlag;
@@ -835,6 +835,18 @@ impl<'a> CollectIndexRequests<'a> {
             &IndexUsageContext::from_usage_type(IndexUsageType::PlanRootNoArrangement),
         )?;
         assert!(self.context_across_lets.is_empty());
+        // Sanity check that we don't have any `DeltaJoinIndexUsageType::Unknown` remaining.
+        for (_id, index_reqs) in self.index_reqs_by_id.iter() {
+            for (_, _, index_usage_type) in index_reqs {
+                soft_assert_or_log!(
+                    !matches!(
+                        index_usage_type,
+                        IndexUsageType::DeltaJoin(DeltaJoinIndexUsageType::Unknown)
+                    ),
+                    "Delta join Unknown index usage remained"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -881,13 +893,13 @@ impl<'a> CollectIndexRequests<'a> {
                             // https://github.com/MaterializeInc/materialize/issues/6789
                             this.collect_index_reqs_inner(
                                 &mut inputs[0],
-                                &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(true)),
+                                &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(DeltaJoinIndexUsageType::Unknown)),
                             )?;
                             for input in &mut inputs[1..] {
                                 this.collect_index_reqs_inner(
                                     input,
                                     &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(
-                                        false,
+                                        DeltaJoinIndexUsageType::Lookup,
                                     )),
                                 )?;
                             }
@@ -1132,25 +1144,74 @@ impl IndexUsageContext {
         old_contexts: &Vec<IndexUsageContext>,
         keys_to_add: &Vec<Vec<MirScalarExpr>>,
     ) -> Vec<IndexUsageContext> {
-        let mut contexts = old_contexts.clone();
-        if contexts.is_empty() {
+        let old_contexts = if old_contexts.is_empty() {
             // No join above us, and we are not at the root. Why does this ArrangeBy even exist?
             soft_panic_or_log!("CollectIndexRequests encountered a dangling ArrangeBy");
             // Anyhow, let's create a context with a `DanglingArrangeBy` index usage, so that we
             // have a place to note down the requested keys below.
-            contexts = IndexUsageContext::from_usage_type(IndexUsageType::DanglingArrangeBy);
-        }
-        for context in contexts.iter_mut() {
-            if context.requested_keys.is_none() {
-                context.requested_keys = Some(BTreeSet::new());
-            }
-            context
-                .requested_keys
-                .as_mut()
-                .unwrap()
-                .extend(keys_to_add.iter().cloned());
-        }
-        contexts
+            IndexUsageContext::from_usage_type(IndexUsageType::DanglingArrangeBy)
+        } else {
+            old_contexts.clone()
+        };
+        old_contexts
+            .into_iter()
+            .flat_map(|old_context| {
+                if !matches!(
+                    old_context.usage_type,
+                    IndexUsageType::DeltaJoin(DeltaJoinIndexUsageType::Unknown)
+                ) {
+                    // If it's not an unknown delta join usage, then we simply note down the new
+                    // keys into `requested_keys`.
+                    let mut context = old_context.clone();
+                    if context.requested_keys.is_none() {
+                        context.requested_keys = Some(BTreeSet::new());
+                    }
+                    context
+                        .requested_keys
+                        .as_mut()
+                        .unwrap()
+                        .extend(keys_to_add.iter().cloned());
+                    Some(context).into_iter().chain(None)
+                } else {
+                    // If it's an unknown delta join usage, then we need to figure out whether this
+                    // is a full scan or a lookup.
+                    //
+                    // `source_key` in `DeltaPathPlan` determines which arrangement we are going to
+                    // scan when starting the rendering of a delta path. This is the one for which
+                    // we want a `DeltaJoinIndexUsageType::FirstInputFullScan`.
+                    //
+                    // However, `DeltaPathPlan` is an LIR concept, and here we need to figure out
+                    // the `source_key` based on the MIR plan. We do this by doing the same as
+                    // `DeltaJoinPlan::create_from`: choose the smallest key (by `Ord`).
+                    let source_key = keys_to_add
+                        .iter()
+                        .min()
+                        .expect("ArrangeBy below a delta join has at least one key");
+                    let full_scan_context = IndexUsageContext {
+                        requested_keys: Some(BTreeSet::from([source_key.clone()])),
+                        usage_type: IndexUsageType::DeltaJoin(
+                            DeltaJoinIndexUsageType::FirstInputFullScan,
+                        ),
+                    };
+                    let lookup_keys = keys_to_add
+                        .into_iter()
+                        .filter(|key| *key != source_key)
+                        .cloned()
+                        .collect_vec();
+                    if lookup_keys.is_empty() {
+                        Some(full_scan_context).into_iter().chain(None)
+                    } else {
+                        let lookup_context = IndexUsageContext {
+                            requested_keys: Some(lookup_keys.into_iter().collect()),
+                            usage_type: IndexUsageType::DeltaJoin(DeltaJoinIndexUsageType::Lookup),
+                        };
+                        Some(full_scan_context)
+                            .into_iter()
+                            .chain(Some(lookup_context))
+                    }
+                }
+            })
+            .collect()
     }
 }
 

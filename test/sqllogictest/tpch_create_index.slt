@@ -519,7 +519,7 @@ materialize.public.q05:
             %4:nation » %5:region[#0]KAef » %0:customer[#3]KA » %1:orders[#1]KAiif » %2:lineitem[#0]KA » %3:supplier[#0, #1]KK
             %5:region » %4:nation[#2]KA » %0:customer[#3]KA » %1:orders[#1]KAiif » %2:lineitem[#0]KA » %3:supplier[#0, #1]KK
           ArrangeBy keys=[[#0{c_custkey}], [#3{c_nationkey}]] // { arity: 8 }
-            ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] fk_customer_nationkey=[delta join 1st input (full scan)] // { arity: 8 }
+            ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] fk_customer_nationkey=[delta join lookup] // { arity: 8 }
           ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
             ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
           ArrangeBy keys=[[#0{l_orderkey}], [#0{l_orderkey}, #1{l_suppkey}]] // { arity: 4 }
@@ -540,7 +540,7 @@ Used Indexes:
   - materialize.public.pk_region_regionkey (delta join lookup)
   - materialize.public.pk_supplier_suppkey (*** full scan ***)
   - materialize.public.pk_customer_custkey (delta join 1st input (full scan))
-  - materialize.public.fk_customer_nationkey (delta join 1st input (full scan))
+  - materialize.public.fk_customer_nationkey (delta join lookup)
   - materialize.public.pk_orders_orderkey (delta join lookup)
   - materialize.public.fk_orders_custkey (delta join lookup)
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
@@ -667,7 +667,7 @@ materialize.public.q07:
                 %4:l0 » %0:supplier[#3]KA » %1:lineitem[#2]KAiif » %2:orders[#0]KA » %3:customer[#0]KA » %5:l0[#0]KAef
                 %5:l0 » %3:customer[#3]KA » %2:orders[#1]KA » %1:lineitem[#0]KAiif » %0:supplier[#0]KA » %4:l0[#0]KAef
               ArrangeBy keys=[[#0{s_suppkey}], [#3{s_nationkey}]] // { arity: 7 }
-                ReadIndex on=supplier pk_supplier_suppkey=[delta join 1st input (full scan)] fk_supplier_nationkey=[delta join 1st input (full scan)] // { arity: 7 }
+                ReadIndex on=supplier pk_supplier_suppkey=[delta join 1st input (full scan)] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
               ArrangeBy keys=[[#0{l_orderkey}], [#2{l_suppkey}]] // { arity: 16 }
                 ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] fk_lineitem_suppkey=[delta join lookup] // { arity: 16 }
               ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
@@ -684,7 +684,7 @@ materialize.public.q07:
 Used Indexes:
   - materialize.public.pk_nation_nationkey (delta join lookup)
   - materialize.public.pk_supplier_suppkey (delta join 1st input (full scan))
-  - materialize.public.fk_supplier_nationkey (delta join 1st input (full scan))
+  - materialize.public.fk_supplier_nationkey (delta join lookup)
   - materialize.public.pk_customer_custkey (delta join lookup)
   - materialize.public.fk_customer_nationkey (delta join lookup)
   - materialize.public.pk_orders_orderkey (delta join lookup)
@@ -947,7 +947,7 @@ materialize.public.q10:
               %2:lineitem » %1:orders[#0]KAiiif » %0:customer[#0]KA » %3:nation[#0]KA
               %3:nation » %0:customer[#3]KA » %1:orders[#1]KAiiif » %2:lineitem[#0]KAef
             ArrangeBy keys=[[#0{c_custkey}], [#3{c_nationkey}]] // { arity: 8 }
-              ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] fk_customer_nationkey=[delta join 1st input (full scan)] // { arity: 8 }
+              ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] fk_customer_nationkey=[delta join lookup] // { arity: 8 }
             ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
               ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
             ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
@@ -958,7 +958,7 @@ materialize.public.q10:
 Used Indexes:
   - materialize.public.pk_nation_nationkey (delta join lookup)
   - materialize.public.pk_customer_custkey (delta join 1st input (full scan))
-  - materialize.public.fk_customer_nationkey (delta join 1st input (full scan))
+  - materialize.public.fk_customer_nationkey (delta join lookup)
   - materialize.public.pk_orders_orderkey (delta join lookup)
   - materialize.public.fk_orders_custkey (delta join lookup)
   - materialize.public.fk_lineitem_orderkey (delta join lookup)
@@ -1933,7 +1933,7 @@ materialize.public.q21:
               %2:orders » %1:lineitem[#0]KAf » %0:supplier[#0]KA » %3:nation[#0]KAef
               %3:nation » %0:supplier[#3]KA » %1:lineitem[#2]KAf » %2:orders[#0]KAef
             ArrangeBy keys=[[#0{s_suppkey}], [#3{s_nationkey}]] // { arity: 7 }
-              ReadIndex on=supplier pk_supplier_suppkey=[delta join 1st input (full scan)] fk_supplier_nationkey=[delta join 1st input (full scan)] // { arity: 7 }
+              ReadIndex on=supplier pk_supplier_suppkey=[delta join 1st input (full scan)] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
             ArrangeBy keys=[[#0{l_orderkey}], [#2{l_suppkey}]] // { arity: 16 }
               ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] fk_lineitem_suppkey=[delta join lookup] // { arity: 16 }
             ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 9 }
@@ -1944,7 +1944,7 @@ materialize.public.q21:
 Used Indexes:
   - materialize.public.pk_nation_nationkey (delta join lookup)
   - materialize.public.pk_supplier_suppkey (delta join 1st input (full scan))
-  - materialize.public.fk_supplier_nationkey (delta join 1st input (full scan))
+  - materialize.public.fk_supplier_nationkey (delta join lookup)
   - materialize.public.pk_orders_orderkey (delta join lookup)
   - materialize.public.fk_lineitem_orderkey (differential join, delta join lookup)
   - materialize.public.fk_lineitem_suppkey (delta join lookup)

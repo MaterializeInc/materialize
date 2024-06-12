@@ -224,6 +224,7 @@ impl DeltaJoinPlan {
 
         // Pick the "first" (by `Ord`) key for the source relation of each path.
         // (This matches the probably arbitrary historical practice from `mod render`.)
+        // This needs to be kept in sync with `IndexUsageContext::add_keys`!
         let mut source_keys = vec![None; number_of_inputs];
         for source_relation in 0..number_of_inputs {
             for (lookup_relation, lookup_key, _characteristics) in &join_orders[source_relation] {

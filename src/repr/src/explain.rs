@@ -724,7 +724,7 @@ impl<'a> fmt::Display for HumanizedAttributes<'a> {
 /// 2. A vector of [IndexUsageType] denoting how the index is used in the plan.
 ///
 /// Using a `BTreeSet` here ensures a deterministic iteration order, which in turn ensures that
-/// the corresponding EXPLAIN output is determistic as well.
+/// the corresponding EXPLAIN output is deterministic as well.
 #[derive(Clone, Debug, Default)]
 pub struct UsedIndexes(BTreeSet<(GlobalId, Vec<IndexUsageType>)>);
 
@@ -744,10 +744,8 @@ pub enum IndexUsageType {
     FullScan,
     /// Differential join. The work is proportional to the number of matches.
     DifferentialJoin,
-    /// Delta join; the bool indicates whether it's the first input of the join.
-    /// In a snapshot, the first input is scanned, the others only get lookups.
-    /// When later input batches are arriving, all inputs are fully read.
-    DeltaJoin(bool),
+    /// Delta join
+    DeltaJoin(DeltaJoinIndexUsageType),
     /// `IndexedFilter`, e.g., something like `WHERE x = 42` with an index on `x`.
     /// This also stores the id of the index that we want to do the lookup from. (This id is already
     /// chosen by `LiteralConstraints`, and then `IndexUsageType::Lookup` communicates this inside
@@ -776,9 +774,19 @@ pub enum IndexUsageType {
     /// an `ArrangeBy` marking for some operator other than a `Join`. (Which is fine, but please
     /// update `CollectIndexRequests`.)
     DanglingArrangeBy,
-    /// Internal error in `CollectIndexRequests` or a failed attempt to lookup
+    /// Internal error in `CollectIndexRequests` or a failed attempt to look up
     /// an index in `DataflowMetainfo::used_indexes`.
     Unknown,
+}
+
+/// In a snapshot, one arrangement of the first input is scanned, all the other arrangements (of the
+/// first input, and of all other inputs) only get lookups.
+/// When later input batches are arriving, all inputs are fully read.
+#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum DeltaJoinIndexUsageType {
+    Unknown,
+    Lookup,
+    FirstInputFullScan,
 }
 
 impl std::fmt::Display for IndexUsageType {
@@ -790,14 +798,17 @@ impl std::fmt::Display for IndexUsageType {
                 IndexUsageType::FullScan => "*** full scan ***",
                 IndexUsageType::Lookup(_idx_id) => "lookup",
                 IndexUsageType::DifferentialJoin => "differential join",
-                IndexUsageType::DeltaJoin(true) => "delta join 1st input (full scan)",
+                IndexUsageType::DeltaJoin(DeltaJoinIndexUsageType::FirstInputFullScan) =>
+                    "delta join 1st input (full scan)",
                 // Technically, this is a lookup only for a snapshot. For later update batches, all
                 // records are read. However, I wrote lookup here, because in most cases the
                 // lookup/scan distinction matters only for a snapshot. This is because for arriving
                 // update records, something in the system will always do work proportional to the
                 // number of records anyway. In other words, something is always scanning new
                 // updates, but we can avoid scanning records again and again in snapshots.
-                IndexUsageType::DeltaJoin(false) => "delta join lookup",
+                IndexUsageType::DeltaJoin(DeltaJoinIndexUsageType::Lookup) => "delta join lookup",
+                IndexUsageType::DeltaJoin(DeltaJoinIndexUsageType::Unknown) =>
+                    "*** INTERNAL ERROR (unknown delta join usage) ***",
                 IndexUsageType::PlanRootNoArrangement => "plan root (no new arrangement)",
                 IndexUsageType::SinkExport => "sink export",
                 IndexUsageType::IndexExport => "index export",
