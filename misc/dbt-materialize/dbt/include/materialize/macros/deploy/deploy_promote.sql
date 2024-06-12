@@ -88,6 +88,26 @@
     {{ deploy_await(poll_interval) }}
 {% endif %}
 
+{% call statement('alter_sinks', fetch_result=True, auto_begin=True) -%}
+-- 'ALTER SINK ... SET FROM ...' cannot be run inside a transaction block
+{% for schema in schemas %}
+    {% set sinks_and_upstream_relations = get_sinks_and_upstream_relations(schema) %}
+    {% if sinks_and_upstream_relations is not none and sinks_and_upstream_relations.rows %}
+        {% for sink in sinks_and_upstream_relations.rows %}
+            {% set sink_name = adapter.quote(sink[2]) %}
+            {% set sink_schema_name = adapter.quote(sink[3]) %}
+            {% set sink_database_name = adapter.quote(sink[4]) %}
+            {% set upstream_relation_name = adapter.quote(sink[5]) %}
+            {% set upstream_relation_schema = adapter.quote(sink[6]) %}
+            {% set deploy_schema = adapter.quote(sink[6] ~ "_dbt_deploy") %}
+            {% set new_upstream_relation = get_current_database() ~ '.' ~ deploy_schema ~ '.' ~ upstream_relation_name %}
+            {{ log("Altering sink " ~ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name ~ " to use new upstream relation " ~ new_upstream_relation, info=True) }}
+            ALTER SINK {{ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name }} SET FROM {{ new_upstream_relation }};
+        {% endfor %}
+    {% endif %}
+{% endfor %}
+{%- endcall %}
+
 {% call statement('swap', fetch_result=True, auto_begin=False) -%}
 BEGIN;
 
