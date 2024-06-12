@@ -1,92 +1,106 @@
 ---
 title: "ALTER SINK"
-description: "`ALTER SINK` changes certain characteristics of a sink."
+description: "`ALTER SINK` allows cutting a sink over to a new upstream relation without causing disruption to downstream consumers."
 menu:
   main:
     parent: 'commands'
 ---
 
-`ALTER SINK` changes certain characteristics of a sink.
+`ALTER SINK` allows cutting a sink over to a new upstream relation without
+causing disruption to downstream consumers. This is useful in the context
+of [blue/green deployments](/manage/dbt/development-workflows/#bluegreen-deployments).
 
 ## Syntax
 
 {{< diagram "alter-sink.svg" >}}
 
-## Context
+## Details
 
-Altering the `FROM` item of a sink results in Materialize picking a consistent
-cutover timestamp. The resulting topic will contain all the updates of the old
-item that happened before the cutover timestamp and all the updates of the new
-item that happened after the cutover timestamp. Care must be taken to ensure
-that the old and the new items make sense when stitched together. See the
-anomalies section for more details on what can be observed.
+To alter the upstream relation a sink depends on and ensure continuity in data
+processing, Materialize must pick a consistent cutover timestamp. When you
+execute an `ALTER SINK` command, the resulting output will contain all the
+updates that happened before the cutover timestamp for the old relation, as
+well as all the updates that happened after the cutover timestamp for the new
+relation.
 
-**Note**: In order to select a consistent timestamp Materialize waits for the
-previous definition of the sink to make enough progress such that there is
-overlap between the available timestamps of the desired new item. Attempting to
-`ALTER` an unhealthy sink that can't make progress will result to the command
+{{< note >}}
+To select a consistent timestamp, Materialize waits for the previous definition
+of the sink to make enough progress such that there is overlap between the
+available timestamps of the newly specified upstream relation. Attempting to
+`ALTER` an unhealthy sink that can't make progress will result in the command
 timing out.
+{{</ note >}}
 
 ### Valid schema changes
 
-Materialize allows altering a sink to a new item provided that the new item
-leads to a valid sink definition with the same rules as the `CREATE SINK`
+For `ALTER SINK` to be successful, the newly specified relation must lead to a
+valid sink definition with the same conditions as the original `CREATE SINK`
 statement.
 
-When using the Avro format with a schema registry care must be taken such that
-the generated Avro schema of the new item is compatible with the previously
-published schema. When that is not the case the `ALTER SINK` statement will
-succeed but the subsequent execution of the sink will result in errors and will
-be unable to make progress.
+When using the Avro format with a schema registry, the generated Avro
+schema for the new relation must be compatible with the previously published
+schema. If that's not the case, the `ALTER SINK` command will succeed, but the
+subsequent execution of the sink will result in errors and will not be able to
+make progress.
 
-### Possible anomalies
+### Cutover scenarios
 
-Depending on the contents and state of the old and new items a few different
-anomalies can be observed in the output topic as a result of altering a sink.
-These anomalies occur because `ALTER SINK` causes Materialize to emit updates
-from the new item only if they happen after the cutover timestamp.
+Because Materialize emits updates from the newly specified relation **only** if
+they happen after the cutover timestamp, you might observe different scenarios
+in the output topic. Depending on the contents and state of the old and new
+relations at the time the `ALTER SINK` command is executed, some common
+scenarios are:
 
-**Anomaly 1: Topic contains stale value for a key**
+**Scenario 1: Topic contains stale value for a key**
 
-As a consequence of not re-emitting a snapshot after `ALTER SINK`, all keys of
-the collection will appear to have the value they had in the old collection
-until an update happens to them. At that point the current value will be
-published to the topic.
+Since cutting over a sink to a new upstream relation using `ALTER SINK` does not
+emit a snapshot of the new relation, all keys will appear to have the old value
+for the key in the previous relation until an update happens to them. At that
+point, the current value will be published to the topic.
 
-It is important that readers of the topic are prepared to handle an old value
-for a key, for example by filling in additional columns with default values.
-Alternatively, forcing an update to all the keys after `ALTER SINK` will force
-the sink to re-emit all the updates.
+Consumers of the topic must be prepared to handle an old value for a key, for
+example by filling in additional columns with default values. Alternatively,
+forcing an update to all the keys after `ALTER SINK` will force the sink to
+re-emit all the updates.
 
-**Anomaly 2: Topic is missing a key that exists in the new item**
+**Scenario 2: Topic is missing a key that exists in the new relation**
 
-As a consequence of not re-emitting a snapshot after `ALTER SINK`, if
-additional keys exist in the new item that are not present in the old item they
-will not be visible in the topic after altering it. The keys will remain absent
-until they are updated, at which point Materialize will emit a record in the
-topic containing the new value.
+As a consequence of not re-emitting a snapshot after `ALTER SINK`, if additional
+keys exist in the new relation that are not present in the old one, these will
+not be visible in the topic after the cutover. The keys will remain absent
+until an update happens to them, at which point Materialize will emit a record
+to the topic containing the new value.
 
-This anomaly can be avoided by ensuring both the old and the new items have
-identical keyspaces.
+To avoid this, ensure that both the old and the new relations have identical
+keyspaces.
 
-**Anomaly 3: Topic contains a key that does not exist in the new item**
+**Scenario 3: Topic contains a key that does not exist in the new relation**
 
-Materialize does not compare the contents of the old item with the new item
-when altering a sink. This means that if the old item contains additional keys
-that are not present in the new item, their entries will remain in the topic
-without a corresponding tombstone record. This may cause readers to assume that
-certain keys exist when they don't.
+Materialize does not compare the contents of the old relation with the new
+relation when cutting a sink over. This means that, if the old relation
+contains additional keys that are not present in the new one, these records
+will remain in the topic without a corresponding tombstone record. This may
+cause readers to assume that certain keys exist when they don't.
 
-This anomaly can be avoided by ensuring both the old and the new items have
-identical keyspaces.
-
+To avoid this, ensure that both the old and the new relations have identical
+keyspaces.
 
 ## Examples
 
-To alter a sink so that it starts sinking the contents of `new_from`:
+To alter a sink originally created to use `matview_1` as the upstream relation,
+and start sinking the contents to `matview_2` instead:
 
 ```sql
-ALTER SINK foo SET FROM new_from;
+CREATE SINK avro_sink
+  FROM matview_1
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
+  KEY (key_col)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  ENVELOPE UPSERT;
+```
+
+```sql
+ALTER SINK foo SET FROM matview_2;
 ```
 
 ## Privileges
@@ -94,8 +108,8 @@ ALTER SINK foo SET FROM new_from;
 The privileges required to execute this statement are:
 
 - Ownership of the sink being altered.
-- `SELECT` privileges on the new item being written out to an external system.
-- `CREATE` privileges on the containing cluster.
+- `SELECT` privileges on the new relation being written out to an external system.
+- `CREATE` privileges on the cluster maintaining the sink.
 - `USAGE` privileges on all connections and secrets used in the sink definition.
 - `USAGE` privileges on the schemas that all connections and secrets in the statement are contained in.
 

@@ -49,7 +49,7 @@ Field | Use
 ------|-----
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a sink of the same name already exists. <br/><br/>If _not_ specified, throw an error if a sink of the same name already exists. _(Default)_
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
-**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this sink. If not specified, the `SIZE` option must be specified.
+**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this sink.
 _item&lowbar;name_ | The name of the source, table or materialized view you want to send to the sink.
 **CONNECTION** _connection_name_ | The name of the connection to use in the sink. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
 **KEY (** _key&lowbar;column_ **)** | An optional list of columns to use as the Kafka message key. If unspecified, the Kafka key is left unset.
@@ -475,7 +475,7 @@ There are three ways to resolve this error:
   ORDER BY k, v DESC;
 
   -- Materialize can now prove that `k` is a unique key of `deduped`.
-  CREATE SINK s IN CLUSTER my_io_cluster
+  CREATE SINK s
   FROM deduped
   INTO KAFKA CONNECTION kafka_connection (TOPIC 't')
   KEY (k)
@@ -492,7 +492,7 @@ There are three ways to resolve this error:
   uniqueness:
 
   ```sql
-  CREATE SINK s IN CLUSTER my_io_cluster
+  CREATE SINK s
   FROM original_input
   INTO KAFKA CONNECTION kafka_connection (TOPIC 't')
   -- We have outside knowledge that `k` is a unique key of `original_input`, but
@@ -599,7 +599,6 @@ CREATE CONNECTION csr_basic_http
 
 ```sql
 CREATE SINK avro_sink
-  IN CLUSTER my_io_cluster
   FROM <source, table or mview>
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
   KEY (key_col)
@@ -612,7 +611,6 @@ CREATE SINK avro_sink
 
 ```sql
 CREATE SINK json_sink
-  IN CLUSTER my_io_cluster
   FROM <source, table or mview>
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_json_topic')
   KEY (key_col)
@@ -630,7 +628,6 @@ CREATE SINK json_sink
 
 ```sql
 CREATE SINK avro_sink
-  IN CLUSTER my_io_cluster
   FROM <source, table or mview>
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -649,7 +646,7 @@ CREATE TABLE t (key int NOT NULL, value text NOT NULL);
 COMMENT ON TABLE t IS 'SQL comment on t';
 COMMENT ON COLUMN t.value IS 'SQL comment on t.value';
 
-CREATE SINK docs_sink IN CLUSTER ...
+CREATE SINK docs_sink
 FROM t
 INTO KAFKA CONNECTION kafka_connection (TOPIC 'doc-commont-example')
 KEY (key)
