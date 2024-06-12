@@ -61,6 +61,8 @@ struct InProgressRetractions {
     schemas: BTreeMap<SchemaKey, Schema>,
     clusters: BTreeMap<ClusterKey, Cluster>,
     items: BTreeMap<ItemKey, CatalogEntry>,
+    introspection_source_indexes: BTreeMap<GlobalId, CatalogEntry>,
+    system_object_mappings: BTreeMap<GlobalId, CatalogEntry>,
 }
 
 impl InProgressRetractions {
@@ -71,6 +73,8 @@ impl InProgressRetractions {
             schemas: BTreeMap::new(),
             clusters: BTreeMap::new(),
             items: BTreeMap::new(),
+            introspection_source_indexes: BTreeMap::new(),
+            system_object_mappings: BTreeMap::new(),
         }
     }
 }
@@ -575,7 +579,7 @@ impl CatalogState {
         &mut self,
         introspection_source_index: mz_catalog::durable::IntrospectionSourceIndex,
         diff: StateDiff,
-        _retractions: &mut InProgressRetractions,
+        retractions: &mut InProgressRetractions,
     ) {
         let cluster = self
             .clusters_by_id
@@ -593,6 +597,18 @@ impl CatalogState {
 
         match diff {
             StateDiff::Addition => {
+                if let Some(entry) = retractions
+                    .introspection_source_indexes
+                    .remove(&introspection_source_index.index_id)
+                {
+                    // Introspection source indexes can only be updated through the builtin
+                    // migration process, which allocates new IDs for each index.
+                    panic!(
+                        "cannot update introspection source indexes in place, entry: {:?}, durable: {:?}",
+                        entry, introspection_source_index
+                    )
+                }
+
                 self.insert_introspection_source_index(
                     introspection_source_index.cluster_id,
                     log,
@@ -601,7 +617,10 @@ impl CatalogState {
                 );
             }
             StateDiff::Retraction => {
-                self.drop_item(introspection_source_index.index_id);
+                let entry = self.drop_item(introspection_source_index.index_id);
+                retractions
+                    .introspection_source_indexes
+                    .insert(entry.id, entry);
             }
         }
     }
@@ -673,13 +692,23 @@ impl CatalogState {
         &mut self,
         system_object_mapping: mz_catalog::durable::SystemObjectMapping,
         diff: StateDiff,
-        _retractions: &mut InProgressRetractions,
+        retractions: &mut InProgressRetractions,
     ) {
         let id = system_object_mapping.unique_identifier.id;
 
         if let StateDiff::Retraction = diff {
-            self.drop_item(id);
+            let entry = self.drop_item(id);
+            retractions.system_object_mappings.insert(id, entry);
             return;
+        }
+
+        if let Some(entry) = retractions.system_object_mappings.remove(&id) {
+            // System objects can only be updated through the builtin migration process, which
+            // allocates new IDs for each object.
+            panic!(
+                "cannot update system objects in place, entry: {:?}, durable: {:?}",
+                entry, system_object_mapping
+            )
         }
 
         let builtin = BUILTIN_LOOKUP
