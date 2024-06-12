@@ -130,8 +130,8 @@ source as change events stream in, as a result of `INSERT`, `UPDATE` and
 
 It's important to note that the schema metadata is captured when the source is
 initially created, and is validated against the upstream schema upon restart.
-If you wish to add additional tables to the original publication and use them
-in Materialize, the source must be dropped and recreated.
+If you create new tables upstream after creating a PostgreSQL source and want to
+replicate them to Materialize, the source must be dropped and recreated.
 
 ##### PostgreSQL replication slots
 
@@ -198,7 +198,7 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ##### Schema changes
 
-{{% postgres-direct/postgres-schema-changes %}}
+{{% schema-changes %}}
 
 #### Publication membership
 
@@ -431,12 +431,12 @@ CREATE SOURCE mz_source
   ) FOR ALL TABLES;
 ```
 
-### Adding/dropping tables to/from a source
+### Handling errors and schema changes
 
-To handle upstream [schema changes](#schema-changes), use the
-[`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
-subsource, and then `ALTER SOURCE...ADD SUBSOURCE` to add the subsource back to
-the source.
+To handle upstream [schema changes](#schema-changes) or errored subsources, use
+the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
+subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
+the subsource back to the source.
 
 ```sql
 -- List all subsources in mz_source
@@ -448,6 +448,17 @@ DROP SOURCE table_1;
 -- Start ingesting the table with the updated schema or fix
 ALTER SOURCE mz_source ADD SUBSOURCE table_1;
 ```
+#### Adding subsources
+
+When adding subsources to a PostgreSQL source, Materialize opens a temporary
+replication slot to snapshot the new subsources' current states. After
+completing the snapshot, the table will be kept up-to-date, like all other
+tables in the publication.
+
+#### Dropping subsources
+
+Dropping a subsource prevents Materialize from ingesting any data from it, in
+addition to dropping any state that Materialize previously had for the table.
 
 ## Related pages
 

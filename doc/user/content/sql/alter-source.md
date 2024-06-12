@@ -31,7 +31,7 @@ menu:
 Field   | Use
 --------|-----
 _name_  | The identifier of the source you want to alter.
-**ADD SUBSOURCE** ... | PostgreSQL sources only: Add the identified tables from the upstream database (`table_name`) to the named source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options).
+**ADD SUBSOURCE** ... | Add the identified tables from the upstream database (`table_name`) to the named PostgreSQL or MySQL source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options).
 _retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 ### **ADD SUBSOURCE** `with_options`
@@ -42,17 +42,12 @@ Field                                | Value           | Description
 
 ## Context
 
-### Adding PostgreSQL subsources/tables
-
-When adding subsources to a PostgreSQL source, Materialize opens a temporary
-replication slot to snapshot the new subsources' current states. After
-completing the snapshot, the table will be kept up-to-date, just as all other
-tables in the publication.
+### Adding subsources to a PostgreSQL or MySQL source
 
 Note that using a combination of dropping and adding subsources lets you change
-the schema of the PostgreSQL tables that are ingested.
+the schema of the PostgreSQL or MySQL tables that are ingested.
 
-### Dropping PostgreSQL subsources/tables
+### Dropping subsources from a PostgreSQL or MySQL source
 
 Dropping a subsource prevents Materialize from ingesting any data from it, in
 addition to dropping any state that Materialize previously had for the table
