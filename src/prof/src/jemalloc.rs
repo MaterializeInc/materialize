@@ -45,7 +45,7 @@ pub const LG_PROF_SAMPLE: size_t = 19;
 #[allow(non_upper_case_globals)]
 #[export_name = "malloc_conf"]
 // if you change this, also change `LG_PROF_SAMPLE`
-pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
+pub static malloc_conf: &[u8] = b"prof:false,prof_active:false,lg_prof_sample:19\0";
 
 pub static PROF_CTL: Lazy<Option<Arc<Mutex<JemallocProfCtl>>>> = Lazy::new(|| {
     if let Some(ctl) = JemallocProfCtl::get() {
