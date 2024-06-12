@@ -15,6 +15,9 @@ class ObservedBaseError:
     internal_error_type: str
     occurrences: int = field(init=False, compare=False, hash=False)
 
+    def to_text(self) -> str:
+        raise NotImplementedError
+
     def to_markdown(self) -> str:
         raise NotImplementedError
 

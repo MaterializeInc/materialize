@@ -33,6 +33,9 @@ class KnownGitHubIssue:
 class GitHubIssueWithInvalidRegexp(ObservedBaseError, WithIssue):
     regex_pattern: str
 
+    def to_text(self) -> str:
+        return f"Invalid regex in ci-regexp: {self.regex_pattern}"
+
     def to_markdown(self) -> str:
         return f'<a href="{self.issue_url}">{self.issue_title} (#{self.issue_number})</a>: Invalid regex in ci-regexp: {self.regex_pattern}, ignoring'
 

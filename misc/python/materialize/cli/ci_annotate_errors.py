@@ -148,6 +148,7 @@ class JunitError:
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ObservedError(ObservedBaseError):
+    # abstract class, do not instantiate
     error_message: str | None
     error_type: str
     location: str
@@ -158,17 +159,23 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
     issue_is_closed: bool
     location_url: str | None = None
 
+    def _get_issue_presentation(self) -> str:
+        issue_presentation = f"#{self.issue_number}"
+        if self.issue_is_closed:
+            issue_presentation = f"{issue_presentation}, closed"
+
+        return issue_presentation
+
+    def to_text(self) -> str:
+        return f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {crop_text(self.error_message)}"
+
     def to_markdown(self) -> str:
         if self.location_url is None:
             location_markdown = self.location
         else:
             location_markdown = f'<a href="{self.location_url}">{self.location}</a>'
 
-        issue_presentation = f"#{self.issue_number}"
-        if self.issue_is_closed:
-            issue_presentation = f"{issue_presentation}, closed"
-
-        return f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({issue_presentation})</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
+        return f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -176,6 +183,14 @@ class ObservedErrorWithLocation(ObservedError):
     error_details: str | None = None
     max_error_length: int = 10000
     max_details_length: int = 10000
+
+    def to_text(self) -> str:
+        if self.error_details:
+            error_details = f" {crop_text(self.error_details, self.max_details_length)}"
+        else:
+            error_details = ""
+
+        return f"{self.error_type} in {self.location}: {crop_text(self.error_message, self.max_error_length)}{error_details}"
 
     def to_markdown(self) -> str:
         if self.error_details:
@@ -191,6 +206,9 @@ class ObservedErrorWithLocation(ObservedError):
 @dataclass(kw_only=True, unsafe_hash=True)
 class FailureInCoverageRun(ObservedError):
     occurrences: int = 1
+
+    def to_text(self) -> str:
+        return f"{self.location}: {crop_text(self.error_message)}"
 
     def to_markdown(self) -> str:
         return f"{self.location}:\n{format_error_message(self.error_message)}"
@@ -592,12 +610,19 @@ def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[Error
     return collected_panics
 
 
-def sanitize_text(text: str, max_length: int = 4000) -> str:
+def crop_text(text: str | None, max_length: int = 10_000) -> str:
+    if text is None:
+        return ""
+
     if len(text) > max_length:
         text = text[:max_length] + " [...]"
 
-    text = text.replace("```", r"\`\`\`")
+    return text
 
+
+def sanitize_text(text: str, max_length: int = 4_000) -> str:
+    text = crop_text(text, max_length)
+    text = text.replace("```", r"\`\`\`")
     return text
 
 
