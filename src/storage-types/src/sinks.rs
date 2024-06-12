@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use mz_dyncfg::ConfigSet;
+use mz_ore::num::NonNeg;
 use mz_persist_types::ShardId;
 use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -387,10 +388,10 @@ impl KafkaSinkCompressionType {
 pub struct KafkaSinkTopicOptions {
     /// The replication factor for the topic.
     /// If `None`, the broker default will be used.
-    pub replication_factor: Option<i32>,
+    pub replication_factor: Option<NonNeg<i32>>,
     /// The number of partitions to create.
     /// If `None`, the broker default will be used.
-    pub partition_count: Option<i32>,
+    pub partition_count: Option<NonNeg<i32>>,
     /// The initial configuration parameters for the topic.
     pub topic_config: BTreeMap<String, String>,
 }
@@ -398,16 +399,16 @@ pub struct KafkaSinkTopicOptions {
 impl RustType<ProtoKafkaSinkTopicOptions> for KafkaSinkTopicOptions {
     fn into_proto(&self) -> ProtoKafkaSinkTopicOptions {
         ProtoKafkaSinkTopicOptions {
-            replication_factor: self.replication_factor,
-            partition_count: self.partition_count,
+            replication_factor: self.replication_factor.map(|f| *f),
+            partition_count: self.partition_count.map(|f| *f),
             topic_config: self.topic_config.clone(),
         }
     }
 
     fn from_proto(proto: ProtoKafkaSinkTopicOptions) -> Result<Self, TryFromProtoError> {
         Ok(KafkaSinkTopicOptions {
-            replication_factor: proto.replication_factor,
-            partition_count: proto.partition_count,
+            replication_factor: proto.replication_factor.map(NonNeg::try_from).transpose()?,
+            partition_count: proto.partition_count.map(NonNeg::try_from).transpose()?,
             topic_config: proto.topic_config,
         })
     }

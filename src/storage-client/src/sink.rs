@@ -153,8 +153,8 @@ pub async fn ensure_kafka_topic(
     storage_configuration: &StorageConfiguration,
     topic: &str,
     KafkaSinkTopicOptions {
-        mut partition_count,
-        mut replication_factor,
+        partition_count,
+        replication_factor,
         topic_config,
     }: &KafkaSinkTopicOptions,
 ) -> Result<bool, anyhow::Error> {
@@ -169,6 +169,8 @@ pub async fn ensure_kafka_topic(
         )
         .await
         .add_context("creating admin client failed")?;
+    let mut partition_count = partition_count.map(|f| *f);
+    let mut replication_factor = replication_factor.map(|f| *f);
     // If either partition count or replication factor should be defaulted to the broker's config
     // (signaled by a value of None), explicitly poll the broker to discover the defaults.
     // Newer versions of Kafka can instead send create topic requests with -1 and have this happen

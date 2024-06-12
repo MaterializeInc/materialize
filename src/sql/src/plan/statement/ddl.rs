@@ -27,6 +27,7 @@ use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::HashSet;
+use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::VecExt;
@@ -2957,7 +2958,10 @@ fn kafka_sink_builder(
                 sql_bail!("{} must be a positive integer", name);
             }
         }
-        Ok(val)
+        Ok(val
+            .map(NonNeg::try_from)
+            .transpose()
+            .map_err(|_| PlanError::Unstructured(format!("{} must be a positive integer", name)))?)
     };
     let topic_partition_count = assert_positive(topic_partition_count, "TOPIC PARTITION COUNT")?;
     let topic_replication_factor =
@@ -3057,19 +3061,6 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    let mut topic_config = topic_config.unwrap_or_default();
-    // If the user did not provide a cleanup policy for the topic, default to infinite
-    // retention.
-    if !topic_config.contains_key("cleanup.policy") {
-        topic_config.insert("cleanup.policy".to_string(), "delete".to_string());
-        if topic_config.contains_key("retention.bytes") || topic_config.contains_key("retention.ms")
-        {
-            sql_bail!("Cannot specify retention.bytes or retention.ms without cleanup.policy");
-        }
-        topic_config.insert("retention.bytes".to_string(), "-1".to_string());
-        topic_config.insert("retention.ms".to_string(), "-1".to_string());
-    }
-
     Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
         connection_id,
         connection: connection_id,
@@ -3085,11 +3076,13 @@ fn kafka_sink_builder(
         topic_options: KafkaSinkTopicOptions {
             partition_count: topic_partition_count,
             replication_factor: topic_replication_factor,
-            topic_config,
+            topic_config: topic_config.unwrap_or_default(),
         },
         progress_topic_options: KafkaSinkTopicOptions {
             // We only allow configuring the progress topic replication factor for now.
-            partition_count: Some(1),
+            // For correctness, the partition count MUST be one and for performance the compaction
+            // policy MUST be enabled.
+            partition_count: Some(NonNeg::try_from(1).expect("1 is positive")),
             replication_factor: progress_topic_replication_factor,
             topic_config: btreemap! {
                 "cleanup.policy".to_string() => "compact".to_string(),

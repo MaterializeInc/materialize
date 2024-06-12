@@ -3583,7 +3583,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 let len = values.len();
                 for (i, (key, value)) in values.iter().enumerate() {
                     f.write_str("'");
-                    f.write_str(key.as_str());
+                    f.write_node(&display::escape_single_quote_string(key));
                     f.write_str("' => ");
                     f.write_node(value);
                     if i + 1 < len {
