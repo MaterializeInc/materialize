@@ -158,6 +158,7 @@ class ObservedErrorWithIssue(ObservedError):
     html_url: str
     title: str
     issue_number: int
+    issue_is_closed: bool
     location_url: str | None = None
 
     def to_markdown(self) -> str:
@@ -166,7 +167,11 @@ class ObservedErrorWithIssue(ObservedError):
         else:
             location_markdown = f'<a href="{self.location_url}">{self.location}</a>'
 
-        return f'{self.error_type} <a href="{self.html_url}">{self.title} (#{self.issue_number}, closed)</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
+        issue_presentation = f"#{self.issue_number}"
+        if self.issue_is_closed:
+            issue_presentation = f"{issue_presentation}, closed"
+
+        return f'{self.error_type} <a href="{self.html_url}">{self.title} ({issue_presentation})</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -377,6 +382,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                             html_url=issue.info["html_url"],
                             title=issue.info["title"],
                             issue_number=issue.info["number"],
+                            issue_is_closed=False,
                             location=location,
                             location_url=location_url,
                         )
@@ -401,6 +407,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                                 html_url=issue.info["html_url"],
                                 title=issue.info["title"],
                                 issue_number=issue.info["number"],
+                                issue_is_closed=True,
                                 location=location,
                             )
                         )
