@@ -12,7 +12,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
-use futures::executor::block_on;
 use mz_adapter::catalog::CatalogState;
 use mz_adapter::session::Session;
 use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
