@@ -56,14 +56,17 @@ def insert_annotation(
             build_step_id,
             test_suite,
             test_retry_count,
-            is_failure
+            is_failure,
+            insert_date
         )
         SELECT
             '{build_id}',
             '{step_id}',
             '{mz_sql_util.sanitize_literal_value(annotation.test_suite)}',
             {annotation.test_retry_count},
-            {annotation.is_failure};
+            {annotation.is_failure},
+            now()
+        ;
             """
     )
 

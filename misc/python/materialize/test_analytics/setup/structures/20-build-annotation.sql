@@ -18,7 +18,8 @@ CREATE TABLE build_annotation (
    build_step_id TEXT NOT NULL,
    test_suite TEXT NOT NULL,
    test_retry_count UINT4 NOT NULL,
-   is_failure BOOL NOT NULL
+   is_failure BOOL NOT NULL,
+   insert_date TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE build_annotation_error (
@@ -37,7 +38,7 @@ CREATE VIEW v_build_annotation_error AS
       b.build_number,
       b.branch,
       b.mz_version,
-      b.date,
+      ann.insert_date,
       ann.test_suite,
       ann.test_retry_count,
       err.error_type,
