@@ -30,6 +30,9 @@ use crate::stats::{OptionStats, StatsFn, StructStats};
 ///
 /// This exists because, among other reasons, mz's `Row` type does not declare
 /// the schema at the type level (as opposed to something like `Row(u64, i32)`).
+///
+/// TODO(parkmycar): Remove this and all `DynStruct*` friends once
+/// [`crate::columnar::Schema2`] is fully flushed out.
 #[derive(Debug, Clone)]
 #[cfg_attr(debug_assertions, derive(PartialEq))]
 pub struct DynStructCfg {

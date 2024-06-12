@@ -189,6 +189,9 @@ impl ColumnType {
 /// correspondence between DatumToPersist impls and ColumnTypes because a number
 /// of ScalarTypes map to the same set of `Datum`s (e.g. `String` and
 /// `VarChar`).
+///
+/// TODO(parkmycar): Remove this once [`mz_persist_types::columnar::Schema2`]
+/// and Stats are fully flushed out.
 pub trait DatumToPersist {
     /// The persist columnar type we're mapping to/from.
     type Data: Data<Cfg = Self::Cfg>;

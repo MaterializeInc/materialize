@@ -76,6 +76,8 @@ use crate::Codec;
 /// while DataType is object-safe and has exhaustiveness checking. A Data impl
 /// can be mapped to its corresponding DataType via [ColumnCfg::as_type] and
 /// back via DataType::data_fn.
+///
+/// TODO(parkmycar): Remove once [`Schema2`] is fully flushed out.
 pub trait Data: Debug + Send + Sync + Sized + 'static {
     /// If necessary, whatever information beyond the type of `Self` needed to
     /// produce a columnar schema for this type.
