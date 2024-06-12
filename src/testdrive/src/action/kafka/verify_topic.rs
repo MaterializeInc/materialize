@@ -76,6 +76,7 @@ pub async fn run_verify_topic(
 
     let topic_config: Option<serde_json::Value> = cmd.args.opt_parse("topic-config")?;
     let partition_count: Option<usize> = cmd.args.opt_parse("partition-count")?;
+    let replication_factor: Option<usize> = cmd.args.opt_parse("replication-factor")?;
 
     cmd.args.done()?;
 
@@ -108,6 +109,18 @@ pub async fn run_verify_topic(
                         partitions,
                         topic.partitions().len()
                     );
+                }
+            }
+
+            if let Some(replication_factor) = replication_factor {
+                for partition in topic.partitions() {
+                    if partition.replicas().len() != replication_factor {
+                        bail!(
+                            "expected replication factor {} but found {}",
+                            replication_factor,
+                            partition.replicas().len()
+                        );
+                    }
                 }
             }
             Ok(())

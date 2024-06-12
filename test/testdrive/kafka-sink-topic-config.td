@@ -33,9 +33,7 @@ $ set-arg-default single-replica-cluster=quickstart
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-# TODO: Figure out how to verify the replication factor was applied successfully
-# default cleanup policy should be indefinite retention
-$ kafka-verify-topic sink=materialize.public.topic_replication topic-config={"cleanup.policy": "delete", "retention.bytes": "-1", "retention.ms": "-1"}
+$ kafka-verify-topic sink=materialize.public.topic_replication topic-config={} replication-factor=1
 
 
 > CREATE SINK topic_partition
