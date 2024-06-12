@@ -486,16 +486,6 @@ pub enum PeekTarget {
     },
 }
 
-impl PeekTarget {
-    /// TODO(#25239): Add documentation.
-    pub fn id(&self) -> GlobalId {
-        match self {
-            PeekTarget::Index { id, .. } => *id,
-            PeekTarget::Persist { id, .. } => *id,
-        }
-    }
-}
-
 /// Peek a collection, either in an arrangement or Persist.
 ///
 /// This request elicits data from the worker, by naming the
@@ -537,7 +527,6 @@ pub struct Peek<T = mz_repr::Timestamp> {
 impl RustType<ProtoPeek> for Peek {
     fn into_proto(&self) -> ProtoPeek {
         ProtoPeek {
-            id: Some(self.target.id().into_proto()),
             key: match &self.literal_constraints {
                 // In the Some case, the vector is never empty, so it's safe to encode None as an
                 // empty vector, and Some(vector) as just the vector.
@@ -589,12 +578,12 @@ impl RustType<ProtoPeek> for Peek {
                     id: target.id.into_rust_if_some("ProtoIndexTarget::id")?,
                 },
                 Some(proto_peek::Target::Persist(target)) => PeekTarget::Persist {
-                    id: target.id.into_rust_if_some("ProtoIndexTarget::id")?,
-                    metadata: target.metadata.into_rust_if_some("ProtoPeek::target")?,
+                    id: target.id.into_rust_if_some("ProtoPersistTarget::id")?,
+                    metadata: target
+                        .metadata
+                        .into_rust_if_some("ProtoPersistTarget::metadata")?,
                 },
-                None => PeekTarget::Index {
-                    id: x.id.into_rust_if_some("ProtoPeek::id")?,
-                },
+                None => return Err(TryFromProtoError::missing_field("ProtoPeek::target")),
             },
         })
     }

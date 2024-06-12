@@ -63,8 +63,6 @@ message ProtoPersistTarget {
 }
 
 message ProtoPeek {
-    // TODO(bkirwi) remove this now-redundant field once persist peeks are locked in
-    mz_repr.global_id.ProtoGlobalId id = 1;
     repeated mz_repr.row.ProtoRow key = 2;
     mz_proto.ProtoU128 uuid = 3;
     uint64 timestamp = 4;
