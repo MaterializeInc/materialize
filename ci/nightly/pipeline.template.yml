@@ -871,11 +871,6 @@ steps:
         label: "K8s recovery: storage on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 30
-        # TODO: #25108 (k8s node recovery tests flaky)
-        retry:
-          automatic:
-            - exit_status: 1
-              limit: 2
         agents:
           queue: linux-aarch64
         inputs:
@@ -894,12 +889,6 @@ steps:
         label: "K8s recovery: compute on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 30
-        # TODO: #25108 (k8s node recovery tests flaky)
-        retry:
-          automatic:
-            - exit_status: 1
-              limit:
-                1
         agents:
           queue: linux-aarch64
         inputs:
@@ -918,11 +907,6 @@ steps:
         label: "K8s recovery: replicated compute on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 30
-        # TODO: #25108 (k8s node recovery tests flaky)
-        retry:
-          automatic:
-            - exit_status: 1
-              limit: 1
         agents:
           queue: linux-aarch64
         inputs:
@@ -941,11 +925,6 @@ steps:
         label: "K8s recovery: envd on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 30
-        # TODO: #25108 (k8s node recovery tests flaky)
-        retry:
-          automatic:
-            - exit_status: 1
-              limit: 1
         agents:
           queue: linux-aarch64
         inputs:
