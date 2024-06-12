@@ -17,7 +17,7 @@ def create_local_dev_config_for_sandbox() -> MzDbConfig:
     username = os.environ["MATERIALIZE_PROD_SANDBOX_USERNAME"]
     app_password = os.environ["MATERIALIZE_PROD_SANDBOX_APP_PASSWORD"]
 
-    database = "test_analytics"
+    database = "test_analytics_playground"
     search_path = "public"
 
     return MzDbConfig(
