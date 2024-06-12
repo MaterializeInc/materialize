@@ -15,6 +15,7 @@
 
 CREATE TABLE build_annotation (
    build_id TEXT NOT NULL,
+   build_step_id TEXT NOT NULL,
    test_suite TEXT NOT NULL,
    test_retry_count UINT4 NOT NULL,
    is_failure BOOL NOT NULL,
@@ -26,6 +27,7 @@ CREATE TABLE build_annotation (
 CREATE VIEW v_build_annotation AS
     SELECT
       ann.build_id,
+      ann.build_step_id,
       b.pipeline,
       b.build_number,
       b.branch,

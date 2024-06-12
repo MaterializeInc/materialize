@@ -37,6 +37,7 @@ def insert_annotation(
         return
 
     build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
+    step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
 
     sql_statements = []
 
@@ -46,6 +47,7 @@ def insert_annotation(
             INSERT INTO build_annotation
             (
                 build_id,
+                build_step_id,
                 test_suite,
                 test_retry_count,
                 is_failure,
@@ -55,6 +57,7 @@ def insert_annotation(
             )
             SELECT
                 '{build_id}',
+                '{step_id}',
                 '{annotation.test_suite}',
                 {annotation.test_retry_count},
                 {annotation.is_failure},
