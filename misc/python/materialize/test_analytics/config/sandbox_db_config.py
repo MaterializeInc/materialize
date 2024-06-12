@@ -11,6 +11,9 @@ import os
 
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
 
+# Note that after changing database structures, one will need to run
+# > GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN DATABASE test_analytics_playground TO "infra+qacanaryload@materialize.io";
+
 
 def create_local_dev_config_for_sandbox() -> MzDbConfig:
     hostname = os.environ["MATERIALIZE_PROD_SANDBOX_HOSTNAME"]
