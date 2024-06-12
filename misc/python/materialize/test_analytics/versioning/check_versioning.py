@@ -37,7 +37,7 @@ def main() -> None:
     errors = []
 
     for config in VERSION_SKEW_CHECK_CONFIGS:
-        errors.extend(check_per_file_versioning(config))
+        errors.extend(check_versioning(config))
 
     for error in errors:
         print(error)
@@ -46,14 +46,38 @@ def main() -> None:
         exit(1)
 
 
-def check_per_file_versioning(
-    config: VersioningConfig, override_directory: Path | None = None
-) -> list[str]:
+def check_versioning(config: VersioningConfig) -> list[str]:
+    """
+    :return: identified errors
+    """
     errors = []
 
+    hash_per_relative_path = compute_hashes(config)
+
+    if config.group_hash_to_single_value():
+        merged_sha_value = compute_sha256_of_utf8_string(
+            "-".join(hash_per_relative_path.values())
+        )
+        hash_per_relative_path.clear()
+        hash_per_relative_path["*"] = merged_sha_value
+
+    for relative_path, sha_value in hash_per_relative_path.items():
+        error = _check_hash_entry(relative_path, sha_value, config)
+        if error is not None:
+            errors.append(error)
+
+    return errors
+
+
+def compute_hashes(
+    config: VersioningConfig, override_directory: Path | None = None
+) -> dict[str, str]:
+    """
+    :return: sha256 hash per relative file path
+    """
+    hash_per_file_path = dict()
     parent_directory = override_directory or config.root_directory
 
-    hashes_of_files_in_current_dir = []
     for file_path in sorted(parent_directory.iterdir()):
         file_name = file_path.name
 
@@ -62,45 +86,35 @@ def check_per_file_versioning(
 
         if file_path.is_dir():
             if config.recursive:
-                errors.extend(
-                    check_per_file_versioning(config, override_directory=file_path)
+                hash_per_file_path.update(
+                    compute_hashes(config, override_directory=file_path)
                 )
             continue
 
         sha_value = compute_sha256_of_file(file_path)
 
-        if config.group_hash_by_directory():
-            hashes_of_files_in_current_dir.append(sha_value)
-        else:
-            error = _check_hash_entry(file_name, sha_value, file_path, config)
-            if error is not None:
-                errors.append(error)
+        relative_path = file_path.relative_to(config.root_directory)
+        hash_per_file_path[str(relative_path)] = sha_value
 
-    if config.group_hash_by_directory():
-        entry_key = str(parent_directory.relative_to(config.root_directory))
-        sha_value = compute_sha256_of_utf8_string(
-            "-".join(hashes_of_files_in_current_dir)
-        )
-        error = _check_hash_entry(entry_key, sha_value, parent_directory, config)
-        if error is not None:
-            errors.append(error)
-
-    return errors
+    return hash_per_file_path
 
 
 def _check_hash_entry(
-    entry_key: str, sha_value: str, file_path: Path, config: VersioningConfig
+    path: str, sha_value: str, config: VersioningConfig
 ) -> str | None:
-    if entry_key not in config.sha256_per_entry.keys():
+    hash_definition_location = (
+        f"'{config.sha256_per_entry_dict_name}' in '{config.sha256_definition_file}'"
+    )
+    if path not in config.sha256_per_entry.keys():
         return (
-            f"Entry {file_path} has no hash record in '{config.sha256_per_entry_dict_name}'.\n"
-            f"Hint: Add an entry '{entry_key}' with value '{sha_value}'."
+            f"Path '{path}' has no hash record in {hash_definition_location}.\n"
+            f"Hint: Add an entry '{path}' with value '{sha_value}'."
         )
-    elif config.sha256_per_entry[entry_key] != sha_value:
+    elif config.sha256_per_entry[path] != sha_value:
         return (
-            f"File {file_path} has a divergent hash record in '{config.sha256_per_entry_dict_name}'.\n"
-            f"{config.task_on_hash_mismatch}\n"
-            f"Hint: Update the entry '{entry_key}' with value '{sha_value}'."
+            f"Path '{path}' has a divergent hash record in {hash_definition_location}!\n"
+            f"Important: {config.task_on_hash_mismatch}\n"
+            f"Afterwards: Update the entry '{path}' with value '{sha_value}'."
         )
 
     return None

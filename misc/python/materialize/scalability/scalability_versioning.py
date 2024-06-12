@@ -8,28 +8,21 @@
 # by the Apache License, Version 2.0.
 from pathlib import Path
 
+from materialize import MZ_ROOT
+
 SCALABILITY_FRAMEWORK_VERSION = "1.0.0"
+SCALABILITY_FRAMEWORK_HASH_FILE = Path(__file__).relative_to(MZ_ROOT)
 
 SCALABILITY_FRAMEWORK_DIR = Path(__file__).resolve().parent
 SCALABILITY_WORKLOADS_DIR = SCALABILITY_FRAMEWORK_DIR / "workloads"
 
-SHA256_BY_FRAMEWORK_DIR: dict[str, str] = {}
-SHA256_BY_FRAMEWORK_DIR["."] = (
-    "548ce5557f5b3c1104634c66a36fb2e67a496967944b92ade3fa515ffce25bdc"
-)
-SHA256_BY_FRAMEWORK_DIR["df"] = (
-    "e327f9eddd4bd9f14d69f549221f8acefd27ee63c199b7ca3b46c40bbbdfcc3f"
-)
-SHA256_BY_FRAMEWORK_DIR["io"] = (
-    "c93a7db5b5411b0bed09d19175570457d5561aebbe6c28a4892c78f9f6842981"
-)
-SHA256_BY_FRAMEWORK_DIR["plot"] = (
-    "f728940456ad6dfee9c7025dcb7bb264de31d6897152898a1b097547cb4173c5"
-)
-SHA256_BY_FRAMEWORK_DIR["scalability"] = (
-    "6fb4acfc1f56456c47398bb633fab96338672f442386791ca43b1474d6a225b0"
+# Consider increasing the #SCALABILITY_FRAMEWORK_VERSION if changes are expected to impact results!
+SHA256_OF_FRAMEWORK: dict[str, str] = {}
+SHA256_OF_FRAMEWORK["*"] = (
+    "2af533ec9ee10ef5a1d3c16373d89c51a63e5183603f2af849109868554ad3b7"
 )
 
+# Consider increasing the workload's class #version() if changes are expected to impact results!
 SHA256_BY_WORKLOAD_FILE: dict[str, str] = {}
 SHA256_BY_WORKLOAD_FILE["connection_workloads.py"] = (
     "6fb4acfc1f56456c47398bb633fab96338672f442386791ca43b1474d6a225b0"
