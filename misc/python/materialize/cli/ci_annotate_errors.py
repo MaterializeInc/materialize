@@ -306,15 +306,7 @@ def annotate_errors(
 
     add_annotation_raw(style=annotation_style, markdown=annotation.to_markdown())
 
-    cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
-    build_annotation_storage.insert_annotation(
-        cursor,
-        [
-            build_annotation_storage.AnnotationEntry(
-                type="error", header=get_suite_name(), markdown=annotation.to_markdown()
-            )
-        ],
-    )
+    store_annotation_in_test_analytics(test_analytics_db_config, annotation)
 
 
 def group_identical_errors(
@@ -502,18 +494,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
             known_errors=[],
         )
         add_annotation_raw(style="error", markdown=annotation.to_markdown())
-
-        cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
-        build_annotation_storage.insert_annotation(
-            cursor,
-            [
-                build_annotation_storage.AnnotationEntry(
-                    type="error",
-                    header=get_suite_name(),
-                    markdown=annotation.to_markdown(),
-                )
-            ],
-        )
+        store_annotation_in_test_analytics(test_analytics_db_config, annotation)
 
     return len(unknown_errors)
 
@@ -714,6 +695,22 @@ def format_error_message(error_message: str | None, max_length: int = 10_000) ->
 
     # Don't have too huge output, so truncate
     return f"```\n{sanitize_text(error_message, max_length)}\n```"
+
+
+def store_annotation_in_test_analytics(
+    test_analytics_db_config: MzDbConfig, annotation: Annotation
+) -> None:
+    cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
+    build_annotation_storage.insert_annotation(
+        cursor,
+        [
+            build_annotation_storage.AnnotationEntry(
+                type="error",
+                header=get_suite_name(),
+                markdown=annotation.to_markdown(),
+            )
+        ],
+    )
 
 
 if __name__ == "__main__":
