@@ -13,11 +13,12 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- Deploy Sink Validation
--- This macro queries all sinks and their dependent objects in the current database and specified schema.
--- Sinks in other schemas and databases are also included if they reference objects in the specified schema.
--- It prints debug information including the list of sinks to be altered, their current dependent objects,
--- and the new dependent objects from the _dbt_deploy schema.
+-- Fetches all sinks and their dependent objects in the current database and
+-- specified schema. Sinks in other schemas and databases are also included if
+-- they reference objects in the specified schema. To support validation, the
+-- macro outputs debug information, including the list of sinks to be altered,
+-- their current dependent objects, and the new dependent objects from
+-- the _dbt_deploy deployment schema.
 
 {% macro get_current_database() %}
     {% set current_database_query = "SELECT current_database()" %}
