@@ -30,7 +30,6 @@ def insert_result(
     cursor: Cursor,
     framework_version: str,
     results: list[ScalabilityFrameworkResultEntry],
-    verbose: bool = False,
 ) -> None:
     build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
     step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
@@ -64,4 +63,4 @@ def insert_result(
                 """
         )
 
-    execute_updates(sql_statements, cursor, verbose)
+    execute_updates(sql_statements, cursor)

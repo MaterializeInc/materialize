@@ -19,7 +19,7 @@ from materialize.test_analytics.connection.test_analytics_connection import (
 from materialize.test_analytics.test_analytics_db import TEST_ANALYTICS_DATA_VERSION
 
 
-def insert_build(cursor: Cursor, verbose: bool = False) -> None:
+def insert_build(cursor: Cursor) -> None:
     pipeline = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_PIPELINE_SLUG)
     build_number = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_NUMBER)
     build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
@@ -65,14 +65,13 @@ def insert_build(cursor: Cursor, verbose: bool = False) -> None:
         """
     )
 
-    execute_updates(sql_statements, cursor, verbose)
+    execute_updates(sql_statements, cursor)
 
 
 def insert_build_step(
     cursor: Cursor,
     was_successful: bool,
     include_insert_build: bool = True,
-    verbose: bool = False,
 ) -> None:
     if include_insert_build:
         insert_build(cursor)
@@ -136,4 +135,4 @@ def insert_build_step(
         """
     )
 
-    execute_updates(sql_statements, cursor, verbose)
+    execute_updates(sql_statements, cursor)

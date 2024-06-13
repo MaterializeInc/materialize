@@ -15,23 +15,40 @@
 
 CREATE TABLE build_annotation (
    build_id TEXT NOT NULL,
-   type TEXT NOT NULL,
-   header TEXT,
-   markdown TEXT NOT NULL
+   build_step_id TEXT NOT NULL,
+   test_suite TEXT NOT NULL,
+   test_retry_count UINT4 NOT NULL,
+   is_failure BOOL NOT NULL,
+   insert_date TIMESTAMPTZ NOT NULL
 );
 
-CREATE VIEW v_build_annotation AS
+CREATE TABLE build_annotation_error (
+   build_step_id TEXT NOT NULL,
+   error_type TEXT NOT NULL,
+   content TEXT NOT NULL,
+   issue TEXT,
+   occurrence_count UINT4 NOT NULL
+);
+
+CREATE VIEW v_build_annotation_error AS
     SELECT
       ann.build_id,
+      ann.build_step_id,
       b.pipeline,
       b.build_number,
       b.branch,
       b.mz_version,
-      b.date,
-      ann.type,
-      ann.header,
-      ann.markdown
+      b.date AS build_date,
+      ann.insert_date AS annotation_insert_date,
+      ann.test_suite,
+      ann.test_retry_count,
+      err.error_type,
+      err.content,
+      err.issue,
+      err.occurrence_count
     FROM build_annotation ann
+    LEFT OUTER JOIN build_annotation_error err
+    ON ann.build_step_id = err.build_step_id
     INNER JOIN build b
     ON ann.build_id = b.build_id
 ;

@@ -15,49 +15,75 @@ from materialize.buildkite import BuildkiteEnvVar
 from materialize.test_analytics.connection.test_analytics_connection import (
     execute_updates,
 )
+from materialize.test_analytics.util import mz_sql_util
+
+
+@dataclass
+class AnnotationErrorEntry:
+    error_type: str
+    message: str
+    issue: str | None
+    occurrence_count: int
 
 
 @dataclass
 class AnnotationEntry:
-    type: str
-    header: str | None
-    markdown: str
+    test_suite: str
+    test_retry_count: int
+    is_failure: bool
+    errors: list[AnnotationErrorEntry]
 
 
 def insert_annotation(
     cursor: Cursor,
-    annotations: list[AnnotationEntry],
-    verbose: bool = False,
+    annotation: AnnotationEntry,
 ) -> None:
-    if True:
-        # disable uploading annotations for now because of planned schema changes
-        return
-
     build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
+    step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
 
     sql_statements = []
 
-    for annotation in annotations:
-        annotation_header_value = (
-            "NULL" if annotation.header is None else f"'{annotation.header}'"
+    sql_statements.append(
+        f"""
+        INSERT INTO build_annotation
+        (
+            build_id,
+            build_step_id,
+            test_suite,
+            test_retry_count,
+            is_failure,
+            insert_date
         )
+        SELECT
+            '{build_id}',
+            '{step_id}',
+            {mz_sql_util.as_sanitized_literal(annotation.test_suite)},
+            {annotation.test_retry_count},
+            {annotation.is_failure},
+            now()
+        ;
+            """
+    )
 
+    for error in annotation.errors:
         sql_statements.append(
             f"""
-            INSERT INTO build_annotation
+            INSERT INTO build_annotation_error
             (
-                build_id,
-                type,
-                header,
-                markdown
+                build_step_id,
+                error_type,
+                content,
+                issue,
+                occurrence_count
             )
             SELECT
-                '{build_id}',
-                '{annotation.type}',
-                {annotation_header_value},
-                '{annotation.markdown}
-            ;
-            """
+                '{step_id}',
+                '{error.error_type}',
+                {mz_sql_util.as_sanitized_literal(error.message)},
+                {mz_sql_util.as_sanitized_literal(error.issue)},
+                {error.occurrence_count}
+        ;
+        """
         )
 
-    execute_updates(sql_statements, cursor, verbose)
+    execute_updates(sql_statements, cursor)

@@ -12,7 +12,11 @@ from dataclasses import dataclass, field
 
 @dataclass(unsafe_hash=True)
 class ObservedBaseError:
+    internal_error_type: str
     occurrences: int = field(init=False, compare=False, hash=False)
+
+    def to_text(self) -> str:
+        raise NotImplementedError
 
     def to_markdown(self) -> str:
         raise NotImplementedError
@@ -22,3 +26,10 @@ class ObservedBaseError:
             return ""
 
         return f"\n({self.occurrences} occurrences)"
+
+
+@dataclass(unsafe_hash=True)
+class WithIssue:
+    issue_number: int
+    issue_url: str
+    issue_title: str

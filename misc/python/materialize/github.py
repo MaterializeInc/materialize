@@ -16,7 +16,7 @@ from typing import Any
 
 import requests
 
-from materialize.observed_error import ObservedBaseError
+from materialize.observed_error import ObservedBaseError, WithIssue
 
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
@@ -30,14 +30,14 @@ class KnownGitHubIssue:
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
-class GitHubIssueWithInvalidRegexp(ObservedBaseError):
-    html_url: str
-    title: str
-    issue_number: int
+class GitHubIssueWithInvalidRegexp(ObservedBaseError, WithIssue):
     regex_pattern: str
 
+    def to_text(self) -> str:
+        return f"Invalid regex in ci-regexp: {self.regex_pattern}"
+
     def to_markdown(self) -> str:
-        return f'<a href="{self.html_url}">{self.title} (#{self.issue_number})</a>: Invalid regex in ci-regexp: {self.regex_pattern}, ignoring'
+        return f'<a href="{self.issue_url}">{self.issue_title} (#{self.issue_number})</a>: Invalid regex in ci-regexp: {self.regex_pattern}, ignoring'
 
 
 def get_known_issues_from_github_page(page: int = 1) -> Any:
@@ -85,8 +85,9 @@ def get_known_issues_from_github() -> (
             except:
                 issues_with_invalid_regex.append(
                     GitHubIssueWithInvalidRegexp(
-                        html_url=issue.info["html_url"],
-                        title=issue.info["title"],
+                        internal_error_type="GITHUB_INVALID_REGEXP",
+                        issue_url=issue.info["html_url"],
+                        issue_title=issue.info["title"],
                         issue_number=issue.info["number"],
                         regex_pattern=match.strip(),
                     )

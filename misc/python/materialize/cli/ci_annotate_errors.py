@@ -17,6 +17,7 @@ import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from itertools import chain
 from typing import Any
 
 from junitparser.junitparser import Error, Failure, JUnitXml
@@ -36,13 +37,17 @@ from materialize.github import (
     for_github_re,
     get_known_issues_from_github,
 )
-from materialize.observed_error import ObservedBaseError
+from materialize.observed_error import ObservedBaseError, WithIssue
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_hostname,
 )
 from materialize.test_analytics.connection import test_analytics_connection
+from materialize.test_analytics.data import build_data_storage
 from materialize.test_analytics.data.build_annotation import build_annotation_storage
+from materialize.test_analytics.data.build_annotation.build_annotation_storage import (
+    AnnotationErrorEntry,
+)
 
 # Unexpected failures, report them
 ERROR_RE = re.compile(
@@ -149,18 +154,26 @@ class JunitError:
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ObservedError(ObservedBaseError):
+    # abstract class, do not instantiate
     error_message: str | None
     error_type: str
     location: str
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
-class ObservedErrorWithIssue(ObservedError):
-    html_url: str
-    title: str
-    issue_number: int
+class ObservedErrorWithIssue(ObservedError, WithIssue):
     issue_is_closed: bool
     location_url: str | None = None
+
+    def _get_issue_presentation(self) -> str:
+        issue_presentation = f"#{self.issue_number}"
+        if self.issue_is_closed:
+            issue_presentation = f"{issue_presentation}, closed"
+
+        return issue_presentation
+
+    def to_text(self) -> str:
+        return f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {crop_text(self.error_message)}"
 
     def to_markdown(self) -> str:
         if self.location_url is None:
@@ -168,11 +181,7 @@ class ObservedErrorWithIssue(ObservedError):
         else:
             location_markdown = f'<a href="{self.location_url}">{self.location}</a>'
 
-        issue_presentation = f"#{self.issue_number}"
-        if self.issue_is_closed:
-            issue_presentation = f"{issue_presentation}, closed"
-
-        return f'{self.error_type} <a href="{self.html_url}">{self.title} ({issue_presentation})</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
+        return f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -180,6 +189,14 @@ class ObservedErrorWithLocation(ObservedError):
     error_details: str | None = None
     max_error_length: int = 10000
     max_details_length: int = 10000
+
+    def to_text(self) -> str:
+        if self.error_details:
+            error_details = f" {crop_text(self.error_details, self.max_details_length)}"
+        else:
+            error_details = ""
+
+        return f"{self.error_type} in {self.location}: {crop_text(self.error_message, self.max_error_length)}{error_details}"
 
     def to_markdown(self) -> str:
         if self.error_details:
@@ -194,7 +211,9 @@ class ObservedErrorWithLocation(ObservedError):
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class FailureInCoverageRun(ObservedError):
-    occurrences: int = 1
+
+    def to_text(self) -> str:
+        return f"{self.location}: {crop_text(self.error_message)}"
 
     def to_markdown(self) -> str:
         return f"{self.location}:\n{format_error_message(self.error_message)}"
@@ -307,15 +326,7 @@ def annotate_errors(
 
     add_annotation_raw(style=annotation_style, markdown=annotation.to_markdown())
 
-    cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
-    build_annotation_storage.insert_annotation(
-        cursor,
-        [
-            build_annotation_storage.AnnotationEntry(
-                type="error", header=get_suite_name(), markdown=annotation.to_markdown()
-            )
-        ],
-    )
+    store_annotation_in_test_analytics(test_analytics_db_config, annotation)
 
 
 def group_identical_errors(
@@ -380,8 +391,9 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                         ObservedErrorWithIssue(
                             error_message=error_message,
                             error_type="Known issue",
-                            html_url=issue.info["html_url"],
-                            title=issue.info["title"],
+                            internal_error_type="KNOWN_ISSUE",
+                            issue_url=issue.info["html_url"],
+                            issue_title=issue.info["title"],
                             issue_number=issue.info["number"],
                             issue_is_closed=False,
                             location=location,
@@ -405,8 +417,9 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                             ObservedErrorWithIssue(
                                 error_message=error_message,
                                 error_type="Potential regression",
-                                html_url=issue.info["html_url"],
-                                title=issue.info["title"],
+                                internal_error_type="POTENTIAL_REGRESSION",
+                                issue_url=issue.info["html_url"],
+                                issue_title=issue.info["title"],
                                 issue_number=issue.info["number"],
                                 issue_is_closed=True,
                                 location=location,
@@ -420,6 +433,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                         error_message=error_message,
                         location=location,
                         error_type="Unknown error",
+                        internal_error_type="UNKNOWN ERROR",
                     )
                 )
 
@@ -430,6 +444,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
             ObservedErrorWithLocation(
                 error_message=error_message,
                 error_type="Failure",
+                internal_error_type="JUNIT_FAILURE",
                 location=location,
                 error_details=details,
                 max_error_length=1_000,
@@ -455,7 +470,10 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
                 # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
                 known_errors.append(
                     FailureInCoverageRun(
-                        error_type="Failure", error_message=msg, location=error.testcase
+                        error_type="Failure",
+                        internal_error_type="FAILURE_IN_COVERAGE_MODE",
+                        error_message=msg,
+                        location=error.testcase,
                     )
                 )
             else:
@@ -496,18 +514,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
             known_errors=[],
         )
         add_annotation_raw(style="error", markdown=annotation.to_markdown())
-
-        cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
-        build_annotation_storage.insert_annotation(
-            cursor,
-            [
-                build_annotation_storage.AnnotationEntry(
-                    type="error",
-                    header=get_suite_name(),
-                    markdown=annotation.to_markdown(),
-                )
-            ],
-        )
+        store_annotation_in_test_analytics(test_analytics_db_config, annotation)
 
     return len(unknown_errors)
 
@@ -608,12 +615,19 @@ def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[Error
     return collected_panics
 
 
-def sanitize_text(text: str, max_length: int = 4000) -> str:
+def crop_text(text: str | None, max_length: int = 10_000) -> str:
+    if text is None:
+        return ""
+
     if len(text) > max_length:
         text = text[:max_length] + " [...]"
 
-    text = text.replace("```", r"\`\`\`")
+    return text
 
+
+def sanitize_text(text: str, max_length: int = 4_000) -> str:
+    text = crop_text(text, max_length)
+    text = text.replace("```", r"\`\`\`")
     return text
 
 
@@ -692,14 +706,19 @@ def get_job_state() -> str:
     raise ValueError("Job not found")
 
 
-def get_suite_name() -> str:
+def get_suite_name(include_retry_info: bool = True) -> str:
     suite_name = os.getenv("BUILDKITE_LABEL", "Unknown Test")
 
-    retry_count = int(os.getenv("BUILDKITE_RETRY_COUNT", "0"))
-    if retry_count > 0:
-        suite_name += f" (#{retry_count + 1})"
+    if include_retry_info:
+        retry_count = get_retry_count()
+        if retry_count > 0:
+            suite_name += f" (#{retry_count + 1})"
 
     return suite_name
+
+
+def get_retry_count() -> int:
+    return int(os.getenv("BUILDKITE_RETRY_COUNT", "0"))
 
 
 def format_error_message(error_message: str | None, max_length: int = 10_000) -> str:
@@ -708,6 +727,41 @@ def format_error_message(error_message: str | None, max_length: int = 10_000) ->
 
     # Don't have too huge output, so truncate
     return f"```\n{sanitize_text(error_message, max_length)}\n```"
+
+
+def store_annotation_in_test_analytics(
+    test_analytics_db_config: MzDbConfig, annotation: Annotation
+) -> None:
+    cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
+
+    # make sure that a build entry exists
+    build_data_storage.insert_build_step(
+        cursor, was_successful=not annotation.is_failure
+    )
+
+    error_entries = [
+        AnnotationErrorEntry(
+            error_type=error.internal_error_type,
+            message=error.to_text(),
+            issue=(
+                f"materialize/{error.issue_number}"
+                if isinstance(error, WithIssue)
+                else None
+            ),
+            occurrence_count=error.occurrences,
+        )
+        for error in chain(annotation.known_errors, annotation.unknown_errors)
+    ]
+
+    build_annotation_storage.insert_annotation(
+        cursor,
+        build_annotation_storage.AnnotationEntry(
+            test_suite=get_suite_name(include_retry_info=False),
+            test_retry_count=get_retry_count(),
+            is_failure=annotation.is_failure,
+            errors=error_entries,
+        ),
+    )
 
 
 if __name__ == "__main__":

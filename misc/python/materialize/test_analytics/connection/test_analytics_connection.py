@@ -42,11 +42,18 @@ def create_cursor(config: MzDbConfig, connection: Connection | None = None) -> C
 
 
 def execute_updates(
-    sql_statements: list[str], cursor: Cursor, verbose: bool = False
+    sql_statements: list[str], cursor: Cursor, log_sql: bool = True
 ) -> None:
     for sql in sql_statements:
-        sql = dedent(sql)
-        if verbose:
-            print(f"> {sql}")
+        try:
+            sql = dedent(sql)
+            if log_sql:
+                print(f"> {sql}")
 
-        cursor.execute(sql)
+            cursor.execute(sql)
+        except Exception as e:
+            print(f"An error occurred! {e}")
+            print(f"SQL was: {sql}")
+            raise RuntimeError(
+                f"Failed to write to test analytics database! Cause: {e}"
+            )
