@@ -105,7 +105,7 @@ def insert_build_step(
         )
         SELECT
           '{step_id}',
-          '{build_id},
+          '{build_id}',
           '{step_key}',
           {shard_index},
           {retry_count},
