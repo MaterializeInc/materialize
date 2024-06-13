@@ -241,6 +241,8 @@ openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 
+tikv-jemalloc-sys = { git = "https://github.com/teskje/jemallocator.git", branch = "custom-jemalloc" }
+
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.
 columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
