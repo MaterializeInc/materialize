@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# ci_upload_heap_profiles.py - Upload memory heap profiles during an mzcompose run
+# ci_upload_heap_profiles.py - Record and upload memory heap profiles during an mzcompose run
 
 import argparse
 import json
@@ -26,7 +26,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         prog="ci-upload-heap-profiles",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="ci-upload-heap-profiles uploads memory heap profiles during an mzcompose run",
+        description="ci-upload-heap-profiles records and uploads memory heap profiles during an mzcompose run",
     )
 
     parser.add_argument("composition", type=str)
