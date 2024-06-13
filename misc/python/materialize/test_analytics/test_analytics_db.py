@@ -9,4 +9,4 @@
 
 """Test analytics database."""
 
-TEST_ANALYTICS_DATA_VERSION: int = 2
+TEST_ANALYTICS_DATA_VERSION: int = 3

@@ -76,8 +76,7 @@ def insert_build_step(
     if include_insert_build:
         insert_build(cursor)
 
-    pipeline = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_PIPELINE_SLUG)
-    build_number = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_NUMBER)
+    build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
     build_url = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_URL)
     step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
     step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
@@ -95,8 +94,7 @@ def insert_build_step(
         INSERT INTO build_step
         (
             build_step_id,
-            pipeline,
-            build_number,
+            build_id,
             build_step_key,
             shard_index,
             retry_count,
@@ -108,8 +106,7 @@ def insert_build_step(
         )
         SELECT
           '{step_id}',
-          '{pipeline}',
-          {build_number},
+          '{build_id},
           '{step_key}',
           {shard_index},
           {retry_count},
@@ -126,8 +123,7 @@ def insert_build_step(
         f"""
         UPDATE build_step
         SET is_latest_retry = FALSE
-        WHERE pipeline = '{pipeline}'
-        AND build_number = {build_number}
+        WHERE build_idb = '{build_id}'
         AND build_step_key = '{step_key}'
         AND (shard_index = {shard_index} OR shard_index IS NULL)
         AND build_step_id <> '{step_id}'
