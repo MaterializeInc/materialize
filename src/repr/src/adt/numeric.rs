@@ -852,6 +852,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberCopyNegate` on OS `linux`
     fn proptest_packed_numeric_roundtrip() {
         fn test(og: Numeric) {
             let packed = PackedNumeric::from_value(og);
@@ -872,6 +873,7 @@ mod tests {
     // for generating an arbitrary Numeric. In that case feel free to
     // regenerate the snapshot.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberCopyNegate` on OS `linux`
     fn packed_numeric_stability() {
         /// This is the seed [`proptest`] uses for their deterministic RNG. We
         /// copy it here to prevent breaking this test if [`proptest`] changes.
