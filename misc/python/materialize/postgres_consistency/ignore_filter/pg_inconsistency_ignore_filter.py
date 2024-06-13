@@ -465,7 +465,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             )
 
         if query_template.matches_any_expression(
-            partial(matches_fun_by_name, function_name_in_lower_case="COALESCE"), True
+            partial(matches_fun_by_name, function_name_in_lower_case="coalesce"), True
         ):
             return YesIgnore(
                 "Postgres resolves all arguments, possibly resulting in an evaluation error"
