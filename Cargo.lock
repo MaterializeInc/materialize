@@ -9313,7 +9313,7 @@ dependencies = [
 [[package]]
 name = "tikv-jemalloc-sys"
 version = "0.5.4+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7"
-source = "git+https://github.com/teskje/jemallocator.git?branch=custom-jemalloc#3886ceef09c5057c24aa5adc5a124a674a7df8bd"
+source = "git+https://github.com/teskje/jemallocator.git?branch=custom-jemalloc#0ff8837e3d9d4e6104e3c95262eeb8e651835b95"
 dependencies = [
  "cc",
  "libc",
