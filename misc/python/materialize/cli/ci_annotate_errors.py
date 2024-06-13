@@ -298,7 +298,13 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    return annotate_logged_errors(args.log_files, cloud_hostname=args.cloud_hostname)
+    test_analytics_db_config = create_test_analytics_config_with_hostname(
+        args.cloud_hostname
+    )
+    # always insert a build step regardless whether it has annotations or not
+    store_build_step_in_test_analytics(test_analytics_db_config)
+
+    return annotate_logged_errors(args.log_files, test_analytics_db_config)
 
 
 def annotate_errors(
@@ -311,9 +317,7 @@ def annotate_errors(
     annotation_style = "info" if not unknown_errors else "error"
     unknown_errors = group_identical_errors(unknown_errors)
     known_errors = group_identical_errors(known_errors)
-    is_failure = (
-        len(unknown_errors) > 0 or os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
-    )
+    is_failure = len(unknown_errors) > 0 or not has_successful_buildkite_status()
 
     annotation = Annotation(
         suite_name=get_suite_name(),
@@ -346,7 +350,9 @@ def group_identical_errors(
     return consolidated_errors
 
 
-def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
+def annotate_logged_errors(
+    log_files: list[str], test_analytics_db_config: MzDbConfig
+) -> int:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
     were no errors logged. This will be used to fail a test even if the test
@@ -481,9 +487,6 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
         else:
             raise RuntimeError(f"Unexpected error type: {type(error)}")
 
-    test_analytics_db_config = create_test_analytics_config_with_hostname(
-        cloud_hostname
-    )
     build_history_on_main = get_failures_on_main()
     annotate_errors(
         unknown_errors, known_errors, build_history_on_main, test_analytics_db_config
@@ -502,7 +505,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
         and len(known_errors) == 0
         and ui.env_is_truthy("BUILDKITE")
         and os.getenv("BUILDKITE_BRANCH") != "main"
-        and os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
+        and not has_successful_buildkite_status()
         and get_job_state() not in ("canceling", "canceled")
     ):
         annotation = Annotation(
@@ -721,6 +724,10 @@ def get_retry_count() -> int:
     return int(os.getenv("BUILDKITE_RETRY_COUNT", "0"))
 
 
+def has_successful_buildkite_status() -> bool:
+    return os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") == "0"
+
+
 def format_error_message(error_message: str | None, max_length: int = 10_000) -> str:
     if not error_message:
         return ""
@@ -729,14 +736,27 @@ def format_error_message(error_message: str | None, max_length: int = 10_000) ->
     return f"```\n{sanitize_text(error_message, max_length)}\n```"
 
 
+def store_build_step_in_test_analytics(test_analytics_db_config: MzDbConfig) -> None:
+    try:
+        cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
+
+        build_data_storage.insert_build_step(
+            cursor, was_successful=has_successful_buildkite_status()
+        )
+    except Exception as e:
+        # never cause the whole script to fail
+        print(e)
+
+
 def store_annotation_in_test_analytics(
     test_analytics_db_config: MzDbConfig, annotation: Annotation
 ) -> None:
     try:
         cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
 
-        # make sure that a build entry exists
-        build_data_storage.insert_build_step(
+        # the build step was already inserted before
+        # the buildkite status may have been successful but the build may still fail due to unknown errors in the log
+        build_data_storage.update_build_step_success(
             cursor, was_successful=not annotation.is_failure
         )
 

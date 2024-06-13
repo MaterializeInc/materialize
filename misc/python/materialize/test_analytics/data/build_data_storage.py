@@ -136,3 +136,21 @@ def insert_build_step(
     )
 
     execute_updates(sql_statements, cursor)
+
+
+def update_build_step_success(
+    cursor: Cursor,
+    was_successful: bool,
+) -> None:
+    step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
+
+    sql_statements = []
+    sql_statements.append(
+        f"""
+        UPDATE build_step
+        SET success = {was_successful}
+        WHERE build_step_id = '{step_id}';
+        """
+    )
+
+    execute_updates(sql_statements, cursor)
