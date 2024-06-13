@@ -874,6 +874,7 @@ impl DataSubscribeTask {
 
 #[cfg(test)]
 mod tests {
+    use itertools::{Either, Itertools};
     use mz_persist_types::Opaque;
 
     use crate::tests::writer;
@@ -1060,13 +1061,14 @@ mod tests {
         txns.expect_commit_at(6, d0, &["6"], &log).await;
         txns.expect_commit_at(7, d0, &["7"], &log).await;
 
+        let until = 5;
         let mut sub = DataSubscribe::new(
             "as_of_until",
             client,
             txns.txns_id(),
             d0,
             3,
-            Antichain::from_elem(5),
+            Antichain::from_elem(until),
             true,
         );
         // Manually step the dataflow, instead of going through the
@@ -1077,13 +1079,27 @@ mod tests {
             tokio::task::yield_now().await;
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        let actual = sub.capture.into_iter().collect::<Vec<_>>();
+        let (actual_progresses, actual_events): (Vec<_>, Vec<_>) =
+            sub.capture.into_iter().partition_map(|event| match event {
+                Event::Progress(progress) => Either::Left(progress),
+                Event::Messages(ts, data) => Either::Right((ts, data)),
+            });
         let expected = vec![
-            Event::Messages(3, vec![("2".to_owned(), 3, 1), ("3".to_owned(), 3, 1)]),
-            Event::Messages(3, vec![("4".to_owned(), 4, 1)]),
-            Event::Progress(vec![(0, -1), (3, 1)]),
-            Event::Progress(vec![(3, -1)]),
+            (3, vec![("2".to_owned(), 3, 1), ("3".to_owned(), 3, 1)]),
+            (3, vec![("4".to_owned(), 4, 1)]),
         ];
-        assert_eq!(actual, expected);
+        assert_eq!(actual_events, expected);
+
+        // The number and contents of progress messages is not guaranteed and
+        // depends on the downgrade behavior. The only thing we can assert is
+        // the max progress timestamp, if there is one, is less than the until.
+        if let Some(max_progress_ts) = actual_progresses
+            .into_iter()
+            .flatten()
+            .map(|(ts, _diff)| ts)
+            .max()
+        {
+            assert!(max_progress_ts < until, "{max_progress_ts} < {until}");
+        }
     }
 }
