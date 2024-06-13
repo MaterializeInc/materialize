@@ -28,6 +28,7 @@ use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -777,7 +778,7 @@ where
 
         // We create a new read handle every time someone requests a snapshot
         // and then immediately expire it instead of keeping a read handle
-        // permanently in our state to avoid having it heartbeat continously.
+        // permanently in our state to avoid having it heartbeat continually.
         // The assumption is that calls to snapshot are rare and therefore worth
         // it to always create a new handle.
         let read_handle = persist_client
@@ -789,7 +790,7 @@ where
                     shard_name: id.to_string(),
                     handle_purpose: format!("snapshot {}", id),
                 },
-                false,
+                USE_CRITICAL_SINCE_SNAPSHOT.get(&self.persist.cfg),
             )
             .await
             .expect("invalid persist usage");
