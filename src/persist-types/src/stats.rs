@@ -12,22 +12,33 @@
 //! Aggregate statistics about data stored in persist.
 
 use std::any::Any;
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 
+use arrow::array::Array;
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use proptest::prelude::*;
+use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use prost::Message;
-use serde::ser::{SerializeMap, SerializeStruct};
-use serde_json::json;
 
 use crate::columnar::Data;
 use crate::dyn_col::DynColumnRef;
 use crate::dyn_struct::ValidityRef;
 use crate::part::Part;
-use crate::stats::impls::any_struct_stats_cols;
-use crate::timestamp::try_parse_monotonic_iso8601_timestamp;
+use crate::stats::bytes::any_bytes_stats;
+use crate::stats::primitive::any_primitive_stats;
+
+pub mod bytes;
+pub mod json;
+pub mod primitive;
+pub mod structured;
+
+pub use bytes::{AtomicBytesStats, BytesStats};
+pub use json::{JsonMapElementStats, JsonStats};
+pub use primitive::{PrimitiveStats, PrimitiveStatsVariants};
+pub use structured::StructStats;
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_types.stats.rs"));
 
@@ -132,6 +143,16 @@ pub trait DynStats: Debug + Send + Sync + 'static {
     fn debug_json(&self) -> serde_json::Value;
 }
 
+/// Trim, possibly in a lossy way, statistics to reduce the serialization costs.
+pub trait TrimStats: Message {
+    /// Attempts to reduce the serialization costs of these stats.
+    ///
+    /// This is lossy (might increase the false positive rate) and so should
+    /// be avoided if the full fidelity stats are within an acceptable cost
+    /// threshold.
+    fn trim(&mut self);
+}
+
 /// Aggregate statistics about data contained in a [Part].
 #[derive(Arbitrary, Debug)]
 pub struct PartStats {
@@ -154,23 +175,6 @@ impl PartStats {
     }
 }
 
-/// Statistics about a column of some non-optional parquet type.
-#[cfg_attr(any(test), derive(Clone))]
-pub struct PrimitiveStats<T> {
-    /// An inclusive lower bound on the data contained in the column.
-    ///
-    /// This will often be a tight bound, but it's not guaranteed. Persist
-    /// reserves the right to (for example) invent smaller bounds for long byte
-    /// strings. SUBTLE: This means that this exact value may not be present in
-    /// the column.
-    ///
-    /// Similarly, if the column is empty, this will contain `T: Default`.
-    /// Emptiness will be indicated in statistics higher up (i.e.
-    /// [StructStats]).
-    pub lower: T,
-    /// Same as [Self::lower] but an (also inclusive) upper bound.
-    pub upper: T,
-}
 
 /// Statistics about a column of some optional type.
 pub struct OptionStats<T> {
@@ -180,170 +184,38 @@ pub struct OptionStats<T> {
     pub none: usize,
 }
 
-/// Statistics about a column of a struct type with a uniform schema (the same
-/// columns and associated `T: Data` types in each instance of the struct).
-#[derive(Arbitrary, Default)]
-pub struct StructStats {
-    /// The count of structs in the column.
-    pub len: usize,
-    /// Statistics about each of the columns in the struct.
-    ///
-    /// This will often be all of the columns, but it's not guaranteed. Persist
-    /// reserves the right to prune statistics about some or all of the columns.
-    #[proptest(strategy = "any_struct_stats_cols()")]
-    pub cols: BTreeMap<String, Box<dyn DynStats>>,
-}
-
-impl std::fmt::Debug for StructStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.debug_json(), f)
-    }
-}
-
-impl serde::Serialize for StructStats {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let StructStats { len, cols } = self;
-        let mut s = s.serialize_struct("StructStats", 2)?;
-        let () = s.serialize_field("len", len)?;
-        let () = s.serialize_field("cols", &DynStatsCols(cols))?;
-        s.end()
-    }
-}
-
-struct DynStatsCols<'a>(&'a BTreeMap<String, Box<dyn DynStats>>);
-
-impl serde::Serialize for DynStatsCols<'_> {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut s = s.serialize_map(Some(self.0.len()))?;
-        for (k, v) in self.0.iter() {
-            let v = v.debug_json();
-            let () = s.serialize_entry(k, &v)?;
-        }
-        s.end()
-    }
-}
-
-impl StructStats {
-    /// Returns the statistics for the given column in the struct.
-    ///
-    /// This will often be all of the columns, but it's not guaranteed. Persist
-    /// reserves the right to prune statistics about some or all of the columns.
-    pub fn col<T: Data>(&self, name: &str) -> Result<Option<&T::Stats>, String> {
-        let Some(stats) = self.cols.get(name) else {
-            return Ok(None);
-        };
-        match stats.as_any().downcast_ref() {
-            Some(x) => Ok(Some(x)),
-            None => Err(format!(
-                "expected stats type {} got {}",
-                std::any::type_name::<T::Stats>(),
-                stats.type_name()
-            )),
-        }
-    }
-}
-
-// Aggregate statistics about a column of Json elements.
-//
-// Each element could be any of a JsonNull, a bool, a string, a numeric, a list,
-// or a map/object. The column might be a single type but could also be a
-// mixture of any subset of these types.
-#[cfg_attr(any(test), derive(Clone))]
-pub enum JsonStats {
-    /// A sentinel that indicates there were no elements.
-    None,
-    /// There were elements from more than one category of: bools, strings,
-    /// numerics, lists, maps.
-    Mixed,
-    /// A sentinel that indicates all elements were `Datum::JsonNull`s.
-    JsonNulls,
-    /// The min and max bools, or None if there were none.
-    Bools(PrimitiveStats<bool>),
-    /// The min and max strings, or None if there were none.
-    Strings(PrimitiveStats<String>),
-    /// The min and max numerics, or None if there were none.
-    /// Since we don't have a decimal type here yet, this is stored in serialized
-    /// form.
-    Numerics(PrimitiveStats<Vec<u8>>),
-    /// A sentinel that indicates all elements were `Datum::List`s.
-    ///
-    /// TODO: We could also do something for list indexes analogous to what we
-    /// do for map keys, but it initially seems much less likely that a user
-    /// would expect that to work with pushdown, so don't bother keeping the
-    /// stats until someone asks for it.
-    Lists,
-    /// Recursive statistics about the set of keys present in any maps/objects
-    /// in the column, or None if there were no maps/objects.
-    Maps(BTreeMap<String, JsonMapElementStats>),
-}
-
-#[derive(Default)]
-#[cfg_attr(any(test), derive(Clone))]
-pub struct JsonMapElementStats {
-    pub len: usize,
-    pub stats: JsonStats,
-}
-
-impl Default for JsonStats {
-    fn default() -> Self {
-        JsonStats::None
-    }
-}
-
-impl Debug for JsonStats {
+impl<T: DynStats> Debug for OptionStats<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Debug::fmt(&self.debug_json(), f)
     }
 }
 
-impl JsonStats {
-    pub fn debug_json(&self) -> serde_json::Value {
-        match self {
-            JsonStats::None => json!({}),
-            JsonStats::Mixed => "json_mixed".into(),
-            JsonStats::JsonNulls => "json_nulls".into(),
-            JsonStats::Bools(x) => x.debug_json(),
-            JsonStats::Strings(x) => x.debug_json(),
-            JsonStats::Numerics(x) => x.debug_json(),
-            JsonStats::Lists => "json_lists".into(),
-            JsonStats::Maps(x) => x
-                .iter()
-                .map(|(k, v)| (k.clone(), v.debug_json()))
-                .collect::<serde_json::Map<_, _>>()
-                .into(),
-        }
+impl<T: DynStats> DynStats for OptionStats<T> {
+    fn as_any(&self) -> &dyn Any {
+        self
     }
-}
-
-impl JsonMapElementStats {
-    pub fn debug_json(&self) -> serde_json::Value {
-        json!({"len": self.len, "stats": self.stats.debug_json()})
+    fn into_proto(&self) -> ProtoDynStats {
+        let mut ret = self.some.into_proto();
+        // This prevents us from serializing `OptionStats<OptionStats<T>>`, but
+        // that's intentionally out of scope. See the comment on ProtoDynStats.
+        assert!(ret.option.is_none());
+        ret.option = Some(ProtoOptionStats {
+            none: self.none.into_proto(),
+        });
+        ret
     }
-}
-
-/// Statistics about a column of `Vec<u8>`.
-pub enum BytesStats {
-    Primitive(PrimitiveStats<Vec<u8>>),
-    Json(JsonStats),
-    Atomic(AtomicBytesStats),
-}
-
-/// `Vec<u8>` stats that cannot safely be trimmed.
-#[derive(Debug)]
-#[cfg_attr(any(test), derive(Clone))]
-pub struct AtomicBytesStats {
-    /// See [PrimitiveStats::lower]
-    pub lower: Vec<u8>,
-    /// See [PrimitiveStats::upper]
-    pub upper: Vec<u8>,
-}
-
-impl AtomicBytesStats {
     fn debug_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "lower": hex::encode(&self.lower),
-            "upper": hex::encode(&self.upper),
-        })
+        match self.some.debug_json() {
+            serde_json::Value::Object(mut x) => {
+                if self.none > 0 {
+                    x.insert("nulls".to_owned(), self.none.into());
+                }
+                serde_json::Value::Object(x)
+            }
+            s => {
+                serde_json::json!({"nulls": self.none, "not nulls": s})
+            }
+        }
     }
 }
 
@@ -352,205 +224,83 @@ impl AtomicBytesStats {
 #[cfg_attr(any(test), derive(Clone))]
 pub struct NoneStats;
 
-/// The length to truncate `Vec<u8>` and `String` stats to.
-//
-// Ideally, this would be in LaunchDarkly, but the plumbing is tough.
-pub const TRUNCATE_LEN: usize = 100;
+impl DynStats for NoneStats {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 
-/// Whether a truncated value should be a lower or upper bound on the original.
-pub enum TruncateBound {
-    /// Truncate such that the result is <= the original.
-    Lower,
-    /// Truncate such that the result is >= the original.
-    Upper,
+    fn into_proto(&self) -> ProtoDynStats {
+        ProtoDynStats {
+            option: None,
+            kind: Some(proto_dyn_stats::Kind::None(RustType::into_proto(self))),
+        }
+    }
+
+    fn debug_json(&self) -> serde_json::Value {
+        serde_json::Value::String(format!("{self:?}"))
+    }
 }
 
-/// Truncates a u8 slice to the given maximum byte length.
-///
-/// If `bound` is Lower, the returned value will sort <= the original value, and
-/// if `bound` is Upper, it will sort >= the original value.
-///
-/// Lower bounds will always return Some. Upper bounds might return None if the
-/// part that fits in `max_len` is entirely made of `u8::MAX`.
-pub fn truncate_bytes(x: &[u8], max_len: usize, bound: TruncateBound) -> Option<Vec<u8>> {
-    if x.len() <= max_len {
-        return Some(x.to_owned());
+impl<T: Data> ColumnStats<T> for NoneStats {
+    fn lower<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
+        None
     }
-    match bound {
-        // Any truncation is a lower bound.
-        TruncateBound::Lower => Some(x[..max_len].to_owned()),
-        TruncateBound::Upper => {
-            for idx in (0..max_len).rev() {
-                if x[idx] < u8::MAX {
-                    let mut ret = x[..=idx].to_owned();
-                    ret[idx] += 1;
-                    return Some(ret);
-                }
-            }
-            None
+
+    fn upper<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
+        None
+    }
+
+    fn none_count(&self) -> usize {
+        0
+    }
+}
+
+impl<T> ColumnStats<Option<T>> for OptionStats<NoneStats>
+where
+    Option<T>: Data,
+{
+    fn lower<'a>(&'a self) -> Option<<Option<T> as Data>::Ref<'a>> {
+        None
+    }
+
+    fn upper<'a>(&'a self) -> Option<<Option<T> as Data>::Ref<'a>> {
+        None
+    }
+
+    fn none_count(&self) -> usize {
+        self.none
+    }
+}
+
+impl<T: Array> StatsFrom<T> for NoneStats {
+    fn stats_from(col: &T, _validity: ValidityRef) -> Self {
+        assert!(col.logical_nulls().is_none());
+        NoneStats
+    }
+}
+
+impl<T: Array> StatsFrom<T> for OptionStats<NoneStats> {
+    fn stats_from(col: &T, validity: ValidityRef) -> Self {
+        debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
+        let none = col
+            .logical_nulls()
+            .as_ref()
+            .map_or(0, |nulls| nulls.null_count());
+
+        OptionStats {
+            none,
+            some: NoneStats,
         }
     }
 }
 
-/// Truncates a string to the given maximum byte length.
-///
-/// The returned value is a valid utf-8 string. If `bound` is Lower, it will
-/// sort <= the original string, and if `bound` is Upper, it will sort >= the
-/// original string.
-///
-/// Lower bounds will always return Some. Upper bounds might return None if the
-/// part that fits in `max_len` is entirely made of `char::MAX` (so in practice,
-/// probably ~never).
-pub fn truncate_string(x: &str, max_len: usize, bound: TruncateBound) -> Option<String> {
-    if x.len() <= max_len {
-        return Some(x.to_owned());
+impl RustType<()> for NoneStats {
+    fn into_proto(&self) -> () {
+        ()
     }
-    // For the output to be valid utf-8, we have to truncate along a char
-    // boundary.
-    let truncation_idx = x
-        .char_indices()
-        .map(|(idx, c)| idx + c.len_utf8())
-        .take_while(|char_end| *char_end <= max_len)
-        .last()
-        .unwrap_or(0);
-    let truncated = &x[..truncation_idx];
-    match bound {
-        // Any truncation is a lower bound.
-        TruncateBound::Lower => Some(truncated.to_owned()),
-        TruncateBound::Upper => {
-            // See if we can find a char that's not already the max. If so, take
-            // the last of these and increment it.
-            for (idx, c) in truncated.char_indices().rev() {
-                if let Ok(new_last_char) = char::try_from(u32::from(c) + 1) {
-                    // NB: It's technically possible for `new_last_char` to be
-                    // more bytes than `c`, which means we could go over
-                    // max_len. It isn't a hard requirement for the initial
-                    // caller of this, so don't bother with the complexity yet.
-                    let mut ret = String::with_capacity(idx + new_last_char.len_utf8());
-                    ret.push_str(&truncated[..idx]);
-                    ret.push(new_last_char);
-                    return Some(ret);
-                }
-            }
-            None
-        }
-    }
-}
 
-pub trait TrimStats: Message {
-    /// Attempts to reduce the serialization costs of these stats.
-    ///
-    /// This is lossy (might increase the false positive rate) and so should
-    /// be avoided if the full fidelity stats are within an acceptable cost
-    /// threshold.
-    fn trim(&mut self);
-}
-
-impl TrimStats for ProtoPrimitiveStats {
-    fn trim(&mut self) {
-        use proto_primitive_stats::*;
-        match (&mut self.lower, &mut self.upper) {
-            (Some(Lower::LowerString(lower)), Some(Upper::UpperString(upper))) => {
-                // If the lower and upper strings both look like iso8601
-                // timestamps, then (1) they're small and (2) that's an
-                // extremely high signal that we might want to keep them around
-                // for filtering. We technically could still recover useful
-                // bounds here in the interpret code, but the complexity isn't
-                // worth it, so just skip any trimming.
-                if try_parse_monotonic_iso8601_timestamp(lower).is_some()
-                    && try_parse_monotonic_iso8601_timestamp(upper).is_some()
-                {
-                    return;
-                }
-
-                let common_prefix = lower
-                    .char_indices()
-                    .zip(upper.chars())
-                    .take_while(|((_, x), y)| x == y)
-                    .last();
-                if let Some(((o, x), y)) = common_prefix {
-                    let new_len = o + std::cmp::max(x.len_utf8(), y.len_utf8());
-                    *lower = truncate_string(lower, new_len, TruncateBound::Lower)
-                        .expect("lower bound should always truncate");
-                    if let Some(new_upper) = truncate_string(upper, new_len, TruncateBound::Upper) {
-                        *upper = new_upper;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-impl TrimStats for ProtoPrimitiveBytesStats {
-    fn trim(&mut self) {
-        let common_prefix = self
-            .lower
-            .iter()
-            .zip(self.upper.iter())
-            .take_while(|(x, y)| x == y)
-            .count();
-        self.lower = truncate_bytes(&self.lower, common_prefix + 1, TruncateBound::Lower)
-            .expect("lower bound should always truncate");
-        if let Some(upper) = truncate_bytes(&self.upper, common_prefix + 1, TruncateBound::Upper) {
-            self.upper = upper;
-        }
-    }
-}
-
-impl TrimStats for ProtoJsonStats {
-    fn trim(&mut self) {
-        use proto_json_stats::*;
-        match &mut self.kind {
-            Some(Kind::Strings(stats)) => {
-                stats.trim();
-            }
-            Some(Kind::Maps(stats)) => {
-                for value in &mut stats.elements {
-                    if let Some(stats) = &mut value.stats {
-                        stats.trim();
-                    }
-                }
-            }
-            Some(
-                Kind::None(_)
-                | Kind::Mixed(_)
-                | Kind::JsonNulls(_)
-                | Kind::Bools(_)
-                | Kind::Numerics(_)
-                | Kind::Lists(_),
-            ) => {}
-            None => {}
-        }
-    }
-}
-
-impl TrimStats for ProtoBytesStats {
-    fn trim(&mut self) {
-        use proto_bytes_stats::*;
-        match &mut self.kind {
-            Some(Kind::Primitive(stats)) => stats.trim(),
-            Some(Kind::Json(stats)) => stats.trim(),
-            // We explicitly don't trim atomic stats!
-            Some(Kind::Atomic(_)) => {}
-            None => {}
-        }
-    }
-}
-
-impl TrimStats for ProtoStructStats {
-    fn trim(&mut self) {
-        use proto_dyn_stats::*;
-
-        for value in self.cols.values_mut() {
-            match &mut value.kind {
-                Some(Kind::Primitive(stats)) => stats.trim(),
-                Some(Kind::Bytes(stats)) => stats.trim(),
-                Some(Kind::Struct(stats)) => stats.trim(),
-                Some(Kind::None(())) => (),
-                None => {}
-            }
-        }
+    fn from_proto(_proto: ()) -> Result<Self, TryFromProtoError> {
+        Ok(NoneStats)
     }
 }
 
@@ -736,1469 +486,121 @@ fn trim_to_budget_jsonb(
     stats.elements.extend(stats_to_keep);
 }
 
-mod impls {
-    use std::any::Any;
-    use std::collections::BTreeMap;
-    use std::fmt::Debug;
-
-    use arrow::array::{Array, BinaryArray, BooleanArray, PrimitiveArray, StringArray};
-    use arrow::buffer::BooleanBuffer;
-    use arrow::datatypes::ArrowPrimitiveType;
-    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-    use proptest::strategy::Union;
-    use proptest::{collection, prelude::*};
-    use serde::Serialize;
-
-    use crate::columnar::Data;
-    use crate::dyn_struct::{DynStruct, DynStructCol, ValidityRef};
-    use crate::stats::{
-        proto_bytes_stats, proto_dyn_stats, proto_json_stats, proto_primitive_stats,
-        truncate_bytes, truncate_string, AtomicBytesStats, BytesStats, ColumnStats, DynStats,
-        JsonMapElementStats, JsonStats, NoneStats, OptionStats, PrimitiveStats,
-        ProtoAtomicBytesStats, ProtoBytesStats, ProtoDynStats, ProtoJsonMapElementStats,
-        ProtoJsonMapStats, ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveBytesStats,
-        ProtoPrimitiveStats, ProtoStructStats, StatsFrom, StructStats, TruncateBound, TRUNCATE_LEN,
-    };
-
-    impl<T: Serialize> Debug for PrimitiveStats<T>
-    where
-        PrimitiveStats<T>: RustType<ProtoPrimitiveStats>,
-    {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            let l = serde_json::to_value(&self.lower).expect("valid json");
-            let u = serde_json::to_value(&self.upper).expect("valid json");
-            Debug::fmt(&serde_json::json!({"lower": l, "upper": u}), f)
-        }
+impl RustType<ProtoDynStats> for Box<dyn DynStats> {
+    fn into_proto(&self) -> ProtoDynStats {
+        DynStats::into_proto(self.as_ref())
     }
 
-    impl<T: Serialize> DynStats for PrimitiveStats<T>
-    where
-        PrimitiveStats<T>: RustType<ProtoPrimitiveStats> + Send + Sync + 'static,
-    {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-        fn into_proto(&self) -> ProtoDynStats {
-            ProtoDynStats {
-                option: None,
-                kind: Some(proto_dyn_stats::Kind::Primitive(RustType::into_proto(self))),
+    fn from_proto(mut proto: ProtoDynStats) -> Result<Self, TryFromProtoError> {
+        struct BoxFn;
+        impl DynStatsFn<Box<dyn DynStats>> for BoxFn {
+            fn call<T: DynStats>(self, t: T) -> Result<Box<dyn DynStats>, TryFromProtoError> {
+                Ok(Box::new(t))
             }
         }
-        fn debug_json(&self) -> serde_json::Value {
-            let l = serde_json::to_value(&self.lower).expect("valid json");
-            let u = serde_json::to_value(&self.upper).expect("valid json");
-            serde_json::json!({"lower": l, "upper": u})
-        }
-    }
-
-    impl Debug for PrimitiveStats<Vec<u8>> {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            Debug::fmt(&self.debug_json(), f)
-        }
-    }
-
-    impl DynStats for PrimitiveStats<Vec<u8>> {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-        fn into_proto(&self) -> ProtoDynStats {
-            ProtoDynStats {
-                option: None,
-                kind: Some(proto_dyn_stats::Kind::Bytes(ProtoBytesStats {
-                    kind: Some(proto_bytes_stats::Kind::Primitive(RustType::into_proto(
-                        self,
-                    ))),
-                })),
-            }
-        }
-        fn debug_json(&self) -> serde_json::Value {
-            serde_json::json!({
-                "lower": hex::encode(&self.lower),
-                "upper": hex::encode(&self.upper),
-            })
-        }
-    }
-
-    impl<T: DynStats> Debug for OptionStats<T> {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            Debug::fmt(&self.debug_json(), f)
-        }
-    }
-
-    impl<T: DynStats> DynStats for OptionStats<T> {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-        fn into_proto(&self) -> ProtoDynStats {
-            let mut ret = self.some.into_proto();
-            // This prevents us from serializing `OptionStats<OptionStats<T>>`, but
-            // that's intentionally out of scope. See the comment on ProtoDynStats.
-            assert!(ret.option.is_none());
-            ret.option = Some(ProtoOptionStats {
-                none: self.none.into_proto(),
-            });
-            ret
-        }
-        fn debug_json(&self) -> serde_json::Value {
-            match self.some.debug_json() {
-                serde_json::Value::Object(mut x) => {
-                    if self.none > 0 {
-                        x.insert("nulls".to_owned(), self.none.into());
-                    }
-                    serde_json::Value::Object(x)
-                }
-                s => {
-                    serde_json::json!({"nulls": self.none, "not nulls": s})
-                }
-            }
-        }
-    }
-
-    impl DynStats for StructStats {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-        fn into_proto(&self) -> ProtoDynStats {
-            ProtoDynStats {
-                option: None,
-                kind: Some(proto_dyn_stats::Kind::Struct(RustType::into_proto(self))),
-            }
-        }
-        fn debug_json(&self) -> serde_json::Value {
-            let mut cols = serde_json::Map::new();
-            cols.insert("len".to_owned(), self.len.into());
-            for (name, stats) in self.cols.iter() {
-                cols.insert(name.clone(), stats.debug_json());
-            }
-            cols.into()
-        }
-    }
-
-    impl Debug for BytesStats {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            Debug::fmt(&self.debug_json(), f)
-        }
-    }
-
-    impl DynStats for BytesStats {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-        fn into_proto(&self) -> ProtoDynStats {
-            ProtoDynStats {
-                option: None,
-                kind: Some(proto_dyn_stats::Kind::Bytes(RustType::into_proto(self))),
-            }
-        }
-        fn debug_json(&self) -> serde_json::Value {
-            match self {
-                BytesStats::Primitive(x) => x.debug_json(),
-                BytesStats::Json(x) => x.debug_json(),
-                BytesStats::Atomic(x) => x.debug_json(),
-            }
-        }
-    }
-
-    impl DynStats for NoneStats {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn into_proto(&self) -> ProtoDynStats {
-            ProtoDynStats {
-                option: None,
-                kind: Some(proto_dyn_stats::Kind::None(RustType::into_proto(self))),
+        struct OptionStatsFn<F>(usize, F);
+        impl<R, F: DynStatsFn<R>> DynStatsFn<R> for OptionStatsFn<F> {
+            fn call<T: DynStats>(self, some: T) -> Result<R, TryFromProtoError> {
+                let OptionStatsFn(none, f) = self;
+                f.call(OptionStats { none, some })
             }
         }
 
-        fn debug_json(&self) -> serde_json::Value {
-            serde_json::Value::String(format!("{self:?}"))
-        }
-    }
-
-    macro_rules! stats_primitive {
-        ($data:ty, $ref:ident) => {
-            impl ColumnStats<$data> for PrimitiveStats<$data> {
-                fn lower<'a>(&'a self) -> Option<<$data as Data>::Ref<'a>> {
-                    Some(self.lower.$ref())
-                }
-                fn upper<'a>(&'a self) -> Option<<$data as Data>::Ref<'a>> {
-                    Some(self.upper.$ref())
-                }
-                fn none_count(&self) -> usize {
-                    0
-                }
+        match proto.option.take() {
+            Some(option) => {
+                let none = option.none.into_rust()?;
+                dyn_from_proto(proto, OptionStatsFn(none, BoxFn))
             }
-
-            impl ColumnStats<Option<$data>> for OptionStats<PrimitiveStats<$data>> {
-                fn lower<'a>(&'a self) -> Option<<Option<$data> as Data>::Ref<'a>> {
-                    Some(self.some.lower())
-                }
-                fn upper<'a>(&'a self) -> Option<<Option<$data> as Data>::Ref<'a>> {
-                    Some(self.some.upper())
-                }
-                fn none_count(&self) -> usize {
-                    self.none
-                }
-            }
-        };
-    }
-
-    stats_primitive!(bool, clone);
-    stats_primitive!(u8, clone);
-    stats_primitive!(u16, clone);
-    stats_primitive!(u32, clone);
-    stats_primitive!(u64, clone);
-    stats_primitive!(i8, clone);
-    stats_primitive!(i16, clone);
-    stats_primitive!(i32, clone);
-    stats_primitive!(i64, clone);
-    stats_primitive!(f32, clone);
-    stats_primitive!(f64, clone);
-    stats_primitive!(Vec<u8>, as_slice);
-    stats_primitive!(String, as_str);
-
-    impl ColumnStats<Vec<u8>> for BytesStats {
-        fn lower<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
-            match self {
-                BytesStats::Primitive(x) => x.lower(),
-                BytesStats::Json(_) => None,
-                BytesStats::Atomic(x) => Some(&x.lower),
-            }
+            None => dyn_from_proto(proto, BoxFn),
         }
-        fn upper<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
-            match self {
-                BytesStats::Primitive(x) => x.upper(),
-                BytesStats::Json(_) => None,
-                BytesStats::Atomic(x) => Some(&x.upper),
-            }
-        }
-        fn none_count(&self) -> usize {
-            0
-        }
-    }
-
-    impl ColumnStats<Option<Vec<u8>>> for OptionStats<BytesStats> {
-        fn lower<'a>(&'a self) -> Option<<Option<Vec<u8>> as Data>::Ref<'a>> {
-            self.some.lower().map(Some)
-        }
-        fn upper<'a>(&'a self) -> Option<<Option<Vec<u8>> as Data>::Ref<'a>> {
-            self.some.upper().map(Some)
-        }
-        fn none_count(&self) -> usize {
-            self.none
-        }
-    }
-
-    impl ColumnStats<DynStruct> for StructStats {
-        fn lower<'a>(&'a self) -> Option<<DynStruct as Data>::Ref<'a>> {
-            // Not meaningful for structs
-            None
-        }
-        fn upper<'a>(&'a self) -> Option<<DynStruct as Data>::Ref<'a>> {
-            // Not meaningful for structs
-            None
-        }
-        fn none_count(&self) -> usize {
-            0
-        }
-    }
-
-    impl ColumnStats<Option<DynStruct>> for OptionStats<StructStats> {
-        fn lower<'a>(&'a self) -> Option<<Option<DynStruct> as Data>::Ref<'a>> {
-            self.some.lower().map(Some)
-        }
-        fn upper<'a>(&'a self) -> Option<<Option<DynStruct> as Data>::Ref<'a>> {
-            self.some.upper().map(Some)
-        }
-        fn none_count(&self) -> usize {
-            self.none
-        }
-    }
-
-    impl<T: Data> ColumnStats<T> for NoneStats {
-        fn lower<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
-            None
-        }
-
-        fn upper<'a>(&'a self) -> Option<<T as Data>::Ref<'a>> {
-            None
-        }
-
-        fn none_count(&self) -> usize {
-            0
-        }
-    }
-
-    impl<T> ColumnStats<Option<T>> for OptionStats<NoneStats>
-    where
-        Option<T>: Data,
-    {
-        fn lower<'a>(&'a self) -> Option<<Option<T> as Data>::Ref<'a>> {
-            None
-        }
-
-        fn upper<'a>(&'a self) -> Option<<Option<T> as Data>::Ref<'a>> {
-            None
-        }
-
-        fn none_count(&self) -> usize {
-            self.none
-        }
-    }
-
-    impl StatsFrom<BooleanBuffer> for PrimitiveStats<bool> {
-        fn stats_from(col: &BooleanBuffer, validity: ValidityRef) -> Self {
-            let array = BooleanArray::new(col.clone(), validity.0.as_ref().cloned());
-            let lower = arrow::compute::min_boolean(&array).unwrap_or_default();
-            let upper = arrow::compute::max_boolean(&array).unwrap_or_default();
-            PrimitiveStats { lower, upper }
-        }
-    }
-
-    impl StatsFrom<BooleanArray> for OptionStats<PrimitiveStats<bool>> {
-        fn stats_from(col: &BooleanArray, validity: ValidityRef) -> Self {
-            debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-            let lower = arrow::compute::min_boolean(col).unwrap_or_default();
-            let upper = arrow::compute::max_boolean(col).unwrap_or_default();
-            let none = col.logical_nulls().map_or(0, |nulls| nulls.null_count());
-            OptionStats {
-                none,
-                some: PrimitiveStats { lower, upper },
-            }
-        }
-    }
-
-    impl<T: ArrowPrimitiveType> StatsFrom<PrimitiveArray<T>> for PrimitiveStats<T::Native> {
-        fn stats_from(col: &PrimitiveArray<T>, validity: ValidityRef) -> Self {
-            assert!(col.logical_nulls().is_none());
-
-            // Create a new array with the provided validity.
-            let array =
-                PrimitiveArray::<T>::new(col.values().clone(), validity.0.as_ref().cloned());
-
-            let lower = arrow::compute::min(&array).unwrap_or_default();
-            let upper = arrow::compute::max(&array).unwrap_or_default();
-            PrimitiveStats { lower, upper }
-        }
-    }
-
-    impl<T: ArrowPrimitiveType> StatsFrom<PrimitiveArray<T>>
-        for OptionStats<PrimitiveStats<T::Native>>
-    {
-        fn stats_from(col: &PrimitiveArray<T>, validity: ValidityRef) -> Self {
-            debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-
-            let lower = arrow::compute::min::<T>(col).unwrap_or_default();
-            let upper = arrow::compute::max::<T>(col).unwrap_or_default();
-            let none = col.logical_nulls().map_or(0, |nulls| nulls.null_count());
-
-            OptionStats {
-                none,
-                some: PrimitiveStats { lower, upper },
-            }
-        }
-    }
-
-    impl StatsFrom<BinaryArray> for PrimitiveStats<Vec<u8>> {
-        fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-            assert!(col.logical_nulls().is_none());
-
-            // Create a new array with the provided validity.
-            let array = BinaryArray::new(
-                col.offsets().clone(),
-                col.values().clone(),
-                validity.0.as_ref().cloned(),
-            );
-
-            let lower = arrow::compute::min_binary(&array).unwrap_or_default();
-            let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
-                .expect("lower bound should always truncate");
-
-            let upper = arrow::compute::max_binary(&array).unwrap_or_default();
-            let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
-                // NB: The cost+trim stuff will remove the column entirely if
-                // it's still too big (also this should be extremely rare in
-                // practice).
-                .unwrap_or_else(|| upper.to_owned());
-
-            PrimitiveStats { lower, upper }
-        }
-    }
-
-    impl StatsFrom<BinaryArray> for OptionStats<PrimitiveStats<Vec<u8>>> {
-        fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-            debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-
-            let lower = arrow::compute::min_binary(col).unwrap_or_default();
-            let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
-                .expect("lower bound should always truncate");
-            let upper = arrow::compute::max_binary(col).unwrap_or_default();
-            let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
-                // NB: The cost+trim stuff will remove the column entirely if
-                // it's still too big (also this should be extremely rare in
-                // practice).
-                .unwrap_or_else(|| upper.to_owned());
-
-            let none = col
-                .logical_nulls()
-                .as_ref()
-                .map_or(0, |nulls| nulls.null_count());
-            OptionStats {
-                none,
-                some: PrimitiveStats { lower, upper },
-            }
-        }
-    }
-
-    impl StatsFrom<BinaryArray> for BytesStats {
-        fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-            BytesStats::Primitive(<PrimitiveStats<Vec<u8>>>::stats_from(col, validity))
-        }
-    }
-
-    impl StatsFrom<BinaryArray> for OptionStats<BytesStats> {
-        fn stats_from(col: &BinaryArray, validity: ValidityRef) -> Self {
-            let stats = OptionStats::<PrimitiveStats<Vec<u8>>>::stats_from(col, validity);
-            OptionStats {
-                none: stats.none,
-                some: BytesStats::Primitive(stats.some),
-            }
-        }
-    }
-
-    impl StatsFrom<StringArray> for PrimitiveStats<String> {
-        fn stats_from(col: &StringArray, validity: ValidityRef) -> Self {
-            assert!(col.logical_nulls().is_none());
-
-            // Create a new array with the provided validity.
-            let array = StringArray::new(
-                col.offsets().clone(),
-                col.values().clone(),
-                validity.0.as_ref().cloned(),
-            );
-
-            let lower = arrow::compute::min_string(&array).unwrap_or_default();
-            let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
-                .expect("lower bound should always truncate");
-            let upper = arrow::compute::max_string(&array).unwrap_or_default();
-            let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
-                // NB: The cost+trim stuff will remove the column entirely if
-                // it's still too big (also this should be extremely rare in
-                // practice).
-                .unwrap_or_else(|| upper.to_owned());
-
-            PrimitiveStats { lower, upper }
-        }
-    }
-
-    impl StatsFrom<StringArray> for OptionStats<PrimitiveStats<String>> {
-        fn stats_from(col: &StringArray, validity: ValidityRef) -> Self {
-            debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-
-            let lower = arrow::compute::min_string(col).unwrap_or_default();
-            let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
-                .expect("lower bound should always truncate");
-            let upper = arrow::compute::max_string(col).unwrap_or_default();
-            let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
-                // NB: The cost+trim stuff will remove the column entirely if
-                // it's still too big (also this should be extremely rare in
-                // practice).
-                .unwrap_or_else(|| upper.to_owned());
-            let none = col.logical_nulls().map_or(0, |nulls| nulls.null_count());
-
-            OptionStats {
-                none,
-                some: PrimitiveStats { lower, upper },
-            }
-        }
-    }
-
-    impl StatsFrom<DynStructCol> for StructStats {
-        fn stats_from(col: &DynStructCol, validity: ValidityRef) -> Self {
-            assert!(col.validity.is_none());
-            col.stats(validity).expect("valid stats").some
-        }
-    }
-
-    impl StatsFrom<DynStructCol> for OptionStats<StructStats> {
-        fn stats_from(col: &DynStructCol, validity: ValidityRef) -> Self {
-            debug_assert!(validity.is_superset(col.validity.as_ref()));
-            col.stats(validity).expect("valid stats")
-        }
-    }
-
-    impl<T: Array> StatsFrom<T> for NoneStats {
-        fn stats_from(col: &T, _validity: ValidityRef) -> Self {
-            assert!(col.logical_nulls().is_none());
-            NoneStats
-        }
-    }
-
-    impl<T: Array> StatsFrom<T> for OptionStats<NoneStats> {
-        fn stats_from(col: &T, validity: ValidityRef) -> Self {
-            debug_assert!(validity.is_superset(col.logical_nulls().as_ref()));
-            let none = col
-                .logical_nulls()
-                .as_ref()
-                .map_or(0, |nulls| nulls.null_count());
-
-            OptionStats {
-                none,
-                some: NoneStats,
-            }
-        }
-    }
-
-    impl RustType<ProtoStructStats> for StructStats {
-        fn into_proto(&self) -> ProtoStructStats {
-            ProtoStructStats {
-                len: self.len.into_proto(),
-                cols: self
-                    .cols
-                    .iter()
-                    .map(|(k, v)| (k.into_proto(), v.into_proto()))
-                    .collect(),
-            }
-        }
-
-        fn from_proto(proto: ProtoStructStats) -> Result<Self, TryFromProtoError> {
-            let mut cols = BTreeMap::new();
-            for (k, v) in proto.cols {
-                cols.insert(k.into_rust()?, v.into_rust()?);
-            }
-            Ok(StructStats {
-                len: proto.len.into_rust()?,
-                cols,
-            })
-        }
-    }
-
-    impl RustType<ProtoJsonStats> for JsonStats {
-        fn into_proto(&self) -> ProtoJsonStats {
-            ProtoJsonStats {
-                kind: Some(match self {
-                    JsonStats::None => proto_json_stats::Kind::None(()),
-                    JsonStats::Mixed => proto_json_stats::Kind::Mixed(()),
-                    JsonStats::JsonNulls => proto_json_stats::Kind::JsonNulls(()),
-                    JsonStats::Bools(x) => proto_json_stats::Kind::Bools(RustType::into_proto(x)),
-                    JsonStats::Strings(x) => {
-                        proto_json_stats::Kind::Strings(RustType::into_proto(x))
-                    }
-                    JsonStats::Numerics(x) => {
-                        proto_json_stats::Kind::Numerics(RustType::into_proto(x))
-                    }
-                    JsonStats::Lists => proto_json_stats::Kind::Lists(()),
-                    JsonStats::Maps(x) => proto_json_stats::Kind::Maps(ProtoJsonMapStats {
-                        elements: x
-                            .iter()
-                            .map(|(k, v)| ProtoJsonMapElementStats {
-                                name: k.into_proto(),
-                                len: v.len.into_proto(),
-                                stats: Some(RustType::into_proto(&v.stats)),
-                            })
-                            .collect(),
-                    }),
-                }),
-            }
-        }
-
-        fn from_proto(proto: ProtoJsonStats) -> Result<Self, TryFromProtoError> {
-            Ok(match proto.kind {
-                Some(proto_json_stats::Kind::None(())) => JsonStats::None,
-                Some(proto_json_stats::Kind::Mixed(())) => JsonStats::Mixed,
-                Some(proto_json_stats::Kind::JsonNulls(())) => JsonStats::JsonNulls,
-                Some(proto_json_stats::Kind::Bools(x)) => JsonStats::Bools(x.into_rust()?),
-                Some(proto_json_stats::Kind::Strings(x)) => JsonStats::Strings(x.into_rust()?),
-                Some(proto_json_stats::Kind::Numerics(x)) => JsonStats::Numerics(x.into_rust()?),
-                Some(proto_json_stats::Kind::Lists(())) => JsonStats::Lists,
-                Some(proto_json_stats::Kind::Maps(x)) => {
-                    let mut elements = BTreeMap::new();
-                    for x in x.elements {
-                        let stats = JsonMapElementStats {
-                            len: x.len.into_rust()?,
-                            stats: x.stats.into_rust_if_some("JsonMapElementStats::stats")?,
-                        };
-                        elements.insert(x.name.into_rust()?, stats);
-                    }
-                    JsonStats::Maps(elements)
-                }
-                // Unknown JSON stats type: assume this might have any value.
-                None => JsonStats::Mixed,
-            })
-        }
-    }
-
-    impl RustType<ProtoBytesStats> for BytesStats {
-        fn into_proto(&self) -> ProtoBytesStats {
-            let kind = match self {
-                BytesStats::Primitive(x) => {
-                    proto_bytes_stats::Kind::Primitive(RustType::into_proto(x))
-                }
-                BytesStats::Json(x) => proto_bytes_stats::Kind::Json(RustType::into_proto(x)),
-                BytesStats::Atomic(x) => proto_bytes_stats::Kind::Atomic(RustType::into_proto(x)),
-            };
-            ProtoBytesStats { kind: Some(kind) }
-        }
-
-        fn from_proto(proto: ProtoBytesStats) -> Result<Self, TryFromProtoError> {
-            match proto.kind {
-                Some(proto_bytes_stats::Kind::Primitive(x)) => Ok(BytesStats::Primitive(
-                    PrimitiveStats::<Vec<u8>>::from_proto(x)?,
-                )),
-                Some(proto_bytes_stats::Kind::Json(x)) => {
-                    Ok(BytesStats::Json(JsonStats::from_proto(x)?))
-                }
-                Some(proto_bytes_stats::Kind::Atomic(x)) => {
-                    Ok(BytesStats::Atomic(AtomicBytesStats::from_proto(x)?))
-                }
-                None => Err(TryFromProtoError::missing_field("ProtoBytesStats::kind")),
-            }
-        }
-    }
-
-    impl RustType<ProtoAtomicBytesStats> for AtomicBytesStats {
-        fn into_proto(&self) -> ProtoAtomicBytesStats {
-            ProtoAtomicBytesStats {
-                lower: self.lower.into_proto(),
-                upper: self.upper.into_proto(),
-            }
-        }
-
-        fn from_proto(proto: ProtoAtomicBytesStats) -> Result<Self, TryFromProtoError> {
-            Ok(AtomicBytesStats {
-                lower: proto.lower.into_rust()?,
-                upper: proto.upper.into_rust()?,
-            })
-        }
-    }
-
-    impl RustType<()> for NoneStats {
-        fn into_proto(&self) -> () {
-            ()
-        }
-
-        fn from_proto(_proto: ()) -> Result<Self, TryFromProtoError> {
-            Ok(NoneStats)
-        }
-    }
-
-    impl RustType<ProtoDynStats> for Box<dyn DynStats> {
-        fn into_proto(&self) -> ProtoDynStats {
-            DynStats::into_proto(self.as_ref())
-        }
-
-        fn from_proto(mut proto: ProtoDynStats) -> Result<Self, TryFromProtoError> {
-            struct BoxFn;
-            impl DynStatsFn<Box<dyn DynStats>> for BoxFn {
-                fn call<T: DynStats>(self, t: T) -> Result<Box<dyn DynStats>, TryFromProtoError> {
-                    Ok(Box::new(t))
-                }
-            }
-            struct OptionStatsFn<F>(usize, F);
-            impl<R, F: DynStatsFn<R>> DynStatsFn<R> for OptionStatsFn<F> {
-                fn call<T: DynStats>(self, some: T) -> Result<R, TryFromProtoError> {
-                    let OptionStatsFn(none, f) = self;
-                    f.call(OptionStats { none, some })
-                }
-            }
-
-            match proto.option.take() {
-                Some(option) => {
-                    let none = option.none.into_rust()?;
-                    dyn_from_proto(proto, OptionStatsFn(none, BoxFn))
-                }
-                None => dyn_from_proto(proto, BoxFn),
-            }
-        }
-    }
-
-    /// Basically `FnOnce<T: DynStats>(self, t: T) -> R`, if rust would let us
-    /// type that.
-    ///
-    /// We use this in `dyn_from_proto` so that OptionStats can hold a `some: T`
-    /// instead of a `Box<dyn DynStats>`.
-    trait DynStatsFn<R> {
-        fn call<T: DynStats>(self, t: T) -> Result<R, TryFromProtoError>;
-    }
-
-    fn dyn_from_proto<R, F: DynStatsFn<R>>(
-        proto: ProtoDynStats,
-        f: F,
-    ) -> Result<R, TryFromProtoError> {
-        assert!(proto.option.is_none());
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoDynStats::kind"))?;
-        match kind {
-            // Sniff the type of x.lower and use that to determine which type of
-            // PrimitiveStats to decode it as.
-            proto_dyn_stats::Kind::Primitive(x) => match x.lower {
-                Some(proto_primitive_stats::Lower::LowerBool(_)) => {
-                    f.call(PrimitiveStats::<bool>::from_proto(x)?)
-                }
-                Some(proto_primitive_stats::Lower::LowerU8(_)) => {
-                    f.call(PrimitiveStats::<u8>::from_proto(x)?)
-                }
-                Some(proto_primitive_stats::Lower::LowerU16(_)) => {
-                    f.call(PrimitiveStats::<u16>::from_proto(x)?)
-                }
-                Some(proto_primitive_stats::Lower::LowerU32(_)) => {
-                    f.call(PrimitiveStats::<u32>::from_proto(x)?)
-                }
-                Some(proto_primitive_stats::Lower::LowerU64(_)) => {
-                    f.call(PrimitiveStats::<u64>::from_proto(x)?)
-                }
-                Some(proto_primitive_stats::Lower::LowerI8(_)) => {
-                    f.call(PrimitiveStats::<i8>::from_proto(x)?)
-                }
-                Some(proto_primitive_stats::Lower::LowerI16(_)) => {
-                    f.call(PrimitiveStats::<i16>::from_proto(x)?)
-                }
-                Some(proto_primitive_stats::Lower::LowerI32(_)) => {
-                    f.call(PrimitiveStats::<i32>::from_proto(x)?)
-                }
-                Some(proto_primitive_stats::Lower::LowerI64(_)) => {
-                    f.call(PrimitiveStats::<i64>::from_proto(x)?)
-                }
-                Some(proto_primitive_stats::Lower::LowerF32(_)) => {
-                    f.call(PrimitiveStats::<f32>::from_proto(x)?)
-                }
-                Some(proto_primitive_stats::Lower::LowerF64(_)) => {
-                    f.call(PrimitiveStats::<f64>::from_proto(x)?)
-                }
-                Some(proto_primitive_stats::Lower::LowerString(_)) => {
-                    f.call(PrimitiveStats::<String>::from_proto(x)?)
-                }
-                None => Err(TryFromProtoError::missing_field("ProtoPrimitiveStats::min")),
-            },
-            proto_dyn_stats::Kind::Struct(x) => f.call(StructStats::from_proto(x)?),
-            proto_dyn_stats::Kind::Bytes(x) => f.call(BytesStats::from_proto(x)?),
-            proto_dyn_stats::Kind::None(x) => f.call(NoneStats::from_proto(x)?),
-        }
-    }
-
-    macro_rules! primitive_stats_rust_type {
-        ($typ:ty, $lower:ident, $upper:ident) => {
-            impl RustType<ProtoPrimitiveStats> for PrimitiveStats<$typ> {
-                fn into_proto(&self) -> ProtoPrimitiveStats {
-                    ProtoPrimitiveStats {
-                        lower: Some(proto_primitive_stats::Lower::$lower(
-                            self.lower.into_proto(),
-                        )),
-                        upper: Some(proto_primitive_stats::Upper::$upper(
-                            self.upper.into_proto(),
-                        )),
-                    }
-                }
-
-                fn from_proto(proto: ProtoPrimitiveStats) -> Result<Self, TryFromProtoError> {
-                    let lower = proto.lower.ok_or_else(|| {
-                        TryFromProtoError::missing_field("ProtoPrimitiveStats::lower")
-                    })?;
-                    let lower = match lower {
-                        proto_primitive_stats::Lower::$lower(x) => x.into_rust()?,
-                        _ => {
-                            return Err(TryFromProtoError::missing_field(
-                                "proto_primitive_stats::Lower::$lower",
-                            ))
-                        }
-                    };
-                    let upper = proto.upper.ok_or_else(|| {
-                        TryFromProtoError::missing_field("ProtoPrimitiveStats::max")
-                    })?;
-                    let upper = match upper {
-                        proto_primitive_stats::Upper::$upper(x) => x.into_rust()?,
-                        _ => {
-                            return Err(TryFromProtoError::missing_field(
-                                "proto_primitive_stats::Upper::$upper",
-                            ))
-                        }
-                    };
-                    Ok(PrimitiveStats { lower, upper })
-                }
-            }
-        };
-    }
-
-    primitive_stats_rust_type!(bool, LowerBool, UpperBool);
-    primitive_stats_rust_type!(u8, LowerU8, UpperU8);
-    primitive_stats_rust_type!(u16, LowerU16, UpperU16);
-    primitive_stats_rust_type!(u32, LowerU32, UpperU32);
-    primitive_stats_rust_type!(u64, LowerU64, UpperU64);
-    primitive_stats_rust_type!(i8, LowerI8, UpperI8);
-    primitive_stats_rust_type!(i16, LowerI16, UpperI16);
-    primitive_stats_rust_type!(i32, LowerI32, UpperI32);
-    primitive_stats_rust_type!(i64, LowerI64, UpperI64);
-    primitive_stats_rust_type!(f32, LowerF32, UpperF32);
-    primitive_stats_rust_type!(f64, LowerF64, UpperF64);
-    primitive_stats_rust_type!(String, LowerString, UpperString);
-
-    impl RustType<ProtoPrimitiveBytesStats> for PrimitiveStats<Vec<u8>> {
-        fn into_proto(&self) -> ProtoPrimitiveBytesStats {
-            ProtoPrimitiveBytesStats {
-                lower: self.lower.into_proto(),
-                upper: self.upper.into_proto(),
-            }
-        }
-
-        fn from_proto(proto: ProtoPrimitiveBytesStats) -> Result<Self, TryFromProtoError> {
-            let lower = proto.lower.into_rust()?;
-            let upper = proto.upper.into_rust()?;
-            Ok(PrimitiveStats { lower, upper })
-        }
-    }
-
-    pub(crate) fn any_struct_stats_cols(
-    ) -> impl Strategy<Value = BTreeMap<String, Box<dyn DynStats>>> {
-        collection::btree_map(any::<String>(), any_box_dyn_stats(), 1..5)
-    }
-
-    fn any_primitive_stats<T>() -> impl Strategy<Value = PrimitiveStats<T>>
-    where
-        T: Arbitrary + Ord + Serialize,
-        PrimitiveStats<T>: RustType<ProtoPrimitiveStats>,
-    {
-        Strategy::prop_map(any::<(T, T)>(), |(x0, x1)| {
-            if x0 <= x1 {
-                PrimitiveStats {
-                    lower: x0,
-                    upper: x1,
-                }
-            } else {
-                PrimitiveStats {
-                    lower: x1,
-                    upper: x0,
-                }
-            }
-        })
-    }
-
-    fn any_primitive_vec_u8_stats() -> impl Strategy<Value = PrimitiveStats<Vec<u8>>> {
-        Strategy::prop_map(any::<(Vec<u8>, Vec<u8>)>(), |(x0, x1)| {
-            if x0 <= x1 {
-                PrimitiveStats {
-                    lower: x0,
-                    upper: x1,
-                }
-            } else {
-                PrimitiveStats {
-                    lower: x1,
-                    upper: x0,
-                }
-            }
-        })
-    }
-
-    fn any_bytes_stats() -> impl Strategy<Value = BytesStats> {
-        Union::new(vec![
-            any_primitive_vec_u8_stats()
-                .prop_map(BytesStats::Primitive)
-                .boxed(),
-            any_json_stats().prop_map(BytesStats::Json).boxed(),
-            any_primitive_vec_u8_stats()
-                .prop_map(|x| {
-                    BytesStats::Atomic(AtomicBytesStats {
-                        lower: x.lower,
-                        upper: x.upper,
-                    })
-                })
-                .boxed(),
-        ])
-    }
-
-    fn any_json_stats() -> impl Strategy<Value = JsonStats> {
-        let leaf = Union::new(vec![
-            any::<()>().prop_map(|_| JsonStats::None).boxed(),
-            any::<()>().prop_map(|_| JsonStats::Mixed).boxed(),
-            any::<()>().prop_map(|_| JsonStats::JsonNulls).boxed(),
-            any_primitive_stats::<bool>()
-                .prop_map(JsonStats::Bools)
-                .boxed(),
-            any_primitive_stats::<String>()
-                .prop_map(JsonStats::Strings)
-                .boxed(),
-            any::<()>().prop_map(|_| JsonStats::Lists).boxed(),
-        ]);
-        leaf.prop_recursive(2, 5, 3, |inner| {
-            (collection::btree_map(any::<String>(), inner, 0..3)).prop_map(|cols| {
-                let cols = cols
-                    .into_iter()
-                    .map(|(k, stats)| (k, JsonMapElementStats { len: 1, stats }))
-                    .collect();
-                JsonStats::Maps(cols)
-            })
-        })
-    }
-
-    fn any_box_dyn_stats() -> impl Strategy<Value = Box<dyn DynStats>> {
-        fn into_box_dyn_stats<T: DynStats>(x: T) -> Box<dyn DynStats> {
-            let x: Box<dyn DynStats> = Box::new(x);
-            x
-        }
-        let leaf = Union::new(vec![
-            any_primitive_stats::<bool>()
-                .prop_map(into_box_dyn_stats)
-                .boxed(),
-            any_primitive_stats::<i64>()
-                .prop_map(into_box_dyn_stats)
-                .boxed(),
-            any_primitive_stats::<String>()
-                .prop_map(into_box_dyn_stats)
-                .boxed(),
-            any_bytes_stats().prop_map(into_box_dyn_stats).boxed(),
-        ]);
-        leaf.prop_recursive(2, 10, 3, |inner| {
-            (
-                any::<usize>(),
-                collection::btree_map(any::<String>(), inner, 0..3),
-            )
-                .prop_map(|(len, cols)| into_box_dyn_stats(StructStats { len, cols }))
-        })
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use arrow::array::BinaryArray;
-    use mz_proto::RustType;
-    use proptest::prelude::*;
+/// Basically `FnOnce<T: DynStats>(self, t: T) -> R`, if rust would let us
+/// type that.
+///
+/// We use this in `dyn_from_proto` so that OptionStats can hold a `some: T`
+/// instead of a `Box<dyn DynStats>`.
+trait DynStatsFn<R> {
+    fn call<T: DynStats>(self, t: T) -> Result<R, TryFromProtoError>;
+}
 
-    use crate::columnar::sealed::ColumnMut;
-    use crate::columnar::ColumnPush;
-    use crate::dyn_struct::ValidityRef;
-
-    use super::*;
-
-    #[mz_ore::test]
-    fn test_truncate_bytes() {
-        #[track_caller]
-        fn testcase(x: &[u8], max_len: usize, upper_should_exist: bool) {
-            let lower = truncate_bytes(x, max_len, TruncateBound::Lower)
-                .expect("lower should always exist");
-            assert!(lower.len() <= max_len);
-            assert!(lower.as_slice() <= x);
-            let upper = truncate_bytes(x, max_len, TruncateBound::Upper);
-            assert_eq!(upper_should_exist, upper.is_some());
-            if let Some(upper) = upper {
-                assert!(upper.len() <= max_len);
-                assert!(upper.as_slice() >= x);
+fn dyn_from_proto<R, F: DynStatsFn<R>>(proto: ProtoDynStats, f: F) -> Result<R, TryFromProtoError> {
+    assert!(proto.option.is_none());
+    let kind = proto
+        .kind
+        .ok_or_else(|| TryFromProtoError::missing_field("ProtoDynStats::kind"))?;
+    match kind {
+        // Sniff the type of x.lower and use that to determine which type of
+        // PrimitiveStats to decode it as.
+        proto_dyn_stats::Kind::Primitive(x) => match x.lower {
+            Some(proto_primitive_stats::Lower::LowerBool(_)) => {
+                f.call(PrimitiveStats::<bool>::from_proto(x)?)
             }
-        }
-
-        testcase(&[], 0, true);
-        testcase(&[], 1, true);
-        testcase(&[1], 0, false);
-        testcase(&[1], 1, true);
-        testcase(&[1], 2, true);
-        testcase(&[1, 2], 1, true);
-        testcase(&[1, 255], 2, true);
-        testcase(&[255, 255], 2, true);
-        testcase(&[255, 255, 255], 2, false);
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn test_truncate_bytes_proptest() {
-        fn testcase(x: &[u8]) {
-            for max_len in 0..=x.len() {
-                let lower = truncate_bytes(x, max_len, TruncateBound::Lower)
-                    .expect("lower should always exist");
-                let upper = truncate_bytes(x, max_len, TruncateBound::Upper);
-                assert!(lower.len() <= max_len);
-                assert!(lower.as_slice() <= x);
-                if let Some(upper) = upper {
-                    assert!(upper.len() <= max_len);
-                    assert!(upper.as_slice() >= x);
-                }
+            Some(proto_primitive_stats::Lower::LowerU8(_)) => {
+                f.call(PrimitiveStats::<u8>::from_proto(x)?)
             }
-        }
-
-        proptest!(|(x in any::<Vec<u8>>())| {
-            // The proptest! macro interferes with rustfmt.
-            testcase(x.as_slice())
-        });
-    }
-
-    #[mz_ore::test]
-    fn test_truncate_string() {
-        #[track_caller]
-        fn testcase(x: &str, max_len: usize, upper_should_exist: bool) {
-            let lower = truncate_string(x, max_len, TruncateBound::Lower)
-                .expect("lower should always exist");
-            let upper = truncate_string(x, max_len, TruncateBound::Upper);
-            assert!(lower.len() <= max_len);
-            assert!(lower.as_str() <= x);
-            assert_eq!(upper_should_exist, upper.is_some());
-            if let Some(upper) = upper {
-                assert!(upper.len() <= max_len);
-                assert!(upper.as_str() >= x);
+            Some(proto_primitive_stats::Lower::LowerU16(_)) => {
+                f.call(PrimitiveStats::<u16>::from_proto(x)?)
             }
-        }
-
-        testcase("", 0, true);
-        testcase("1", 0, false);
-        testcase("1", 1, true);
-        testcase("12", 1, true);
-        testcase("⛄", 0, false);
-        testcase("⛄", 1, false);
-        testcase("⛄", 3, true);
-        testcase("\u{10FFFF}", 3, false);
-        testcase("\u{10FFFF}", 4, true);
-        testcase("\u{10FFFF}", 5, true);
-        testcase("⛄⛄", 3, true);
-        testcase("⛄⛄", 4, true);
-        testcase("⛄\u{10FFFF}", 6, true);
-        testcase("⛄\u{10FFFF}", 7, true);
-        testcase("\u{10FFFF}\u{10FFFF}", 7, false);
-        testcase("\u{10FFFF}\u{10FFFF}", 8, true);
-
-        // Just because I find this to be delightful.
-        assert_eq!(
-            truncate_string("⛄⛄", 3, TruncateBound::Upper),
-            Some("⛅".to_string())
-        );
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn test_truncate_string_proptest() {
-        fn testcase(x: &str) {
-            for max_len in 0..=x.len() {
-                let lower = truncate_string(x, max_len, TruncateBound::Lower)
-                    .expect("lower should always exist");
-                let upper = truncate_string(x, max_len, TruncateBound::Upper);
-                assert!(lower.len() <= max_len);
-                assert!(lower.as_str() <= x);
-                if let Some(upper) = upper {
-                    // As explained in a comment in the impl, we don't quite
-                    // treat the max_len as a hard bound here. Give it a little
-                    // wiggle room.
-                    assert!(upper.len() <= max_len + char::MAX.len_utf8());
-                    assert!(upper.as_str() >= x);
-                }
+            Some(proto_primitive_stats::Lower::LowerU32(_)) => {
+                f.call(PrimitiveStats::<u32>::from_proto(x)?)
             }
-        }
-
-        proptest!(|(x in any::<String>())| {
-            // The proptest! macro interferes with rustfmt.
-            testcase(x.as_str())
-        });
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn primitive_cost_trim_proptest() {
-        fn primitive_stats<'a, T: Data<Cfg = ()>, F>(xs: &'a [T], f: F) -> (&'a [T], T::Stats)
-        where
-            F: for<'b> Fn(&'b T) -> T::Ref<'b>,
-        {
-            let mut col = T::Mut::new(&());
-            for x in xs {
-                col.push(f(x));
+            Some(proto_primitive_stats::Lower::LowerU64(_)) => {
+                f.call(PrimitiveStats::<u64>::from_proto(x)?)
             }
-
-            let col = col.finish();
-            let stats = T::Stats::stats_from(&col, ValidityRef(None));
-            (xs, stats)
-        }
-        fn testcase<T: Data + PartialOrd + Clone + Debug, P>(xs_stats: (&[T], PrimitiveStats<T>))
-        where
-            PrimitiveStats<T>: RustType<P> + DynStats,
-            P: TrimStats,
-        {
-            let (xs, stats) = xs_stats;
-            for x in xs {
-                assert!(&stats.lower <= x);
-                assert!(&stats.upper >= x);
+            Some(proto_primitive_stats::Lower::LowerI8(_)) => {
+                f.call(PrimitiveStats::<i8>::from_proto(x)?)
             }
-
-            let mut proto_stats = RustType::into_proto(&stats);
-            let cost_before = proto_stats.encoded_len();
-            proto_stats.trim();
-            assert!(proto_stats.encoded_len() <= cost_before);
-            let stats: PrimitiveStats<T> = RustType::from_proto(proto_stats).unwrap();
-            for x in xs {
-                assert!(&stats.lower <= x);
-                assert!(&stats.upper >= x);
+            Some(proto_primitive_stats::Lower::LowerI16(_)) => {
+                f.call(PrimitiveStats::<i16>::from_proto(x)?)
             }
-        }
-
-        proptest!(|(a in any::<bool>(), b in any::<bool>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
-        });
-        proptest!(|(a in any::<u8>(), b in any::<u8>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
-        });
-        proptest!(|(a in any::<u16>(), b in any::<u16>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
-        });
-        proptest!(|(a in any::<u32>(), b in any::<u32>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
-        });
-        proptest!(|(a in any::<u64>(), b in any::<u64>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
-        });
-        proptest!(|(a in any::<i8>(), b in any::<i8>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
-        });
-        proptest!(|(a in any::<i16>(), b in any::<i16>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
-        });
-        proptest!(|(a in any::<i32>(), b in any::<i32>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
-        });
-        proptest!(|(a in any::<i64>(), b in any::<i64>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
-        });
-        proptest!(|(a in any::<f32>(), b in any::<f32>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
-        });
-        proptest!(|(a in any::<f64>(), b in any::<f64>())| {
-            testcase(primitive_stats(&[a, b], |x| *x))
-        });
-
-        // Construct strings that are "interesting" in that they have some
-        // (possibly empty) shared prefix.
-        proptest!(|(prefix in any::<String>(), a in any::<String>(), b in any::<String>())| {
-            let vals = &[format!("{}{}", prefix, a), format!("{}{}", prefix, b)];
-            testcase(primitive_stats(vals, |x| x))
-        });
-
-        // Construct strings that are "interesting" in that they have some
-        // (possibly empty) shared prefix.
-        proptest!(|(prefix in any::<Vec<u8>>(), a in any::<Vec<u8>>(), b in any::<Vec<u8>>())| {
-            let mut sa = prefix.clone();
-            sa.extend(&a);
-            let mut sb = prefix;
-            sb.extend(&b);
-            let vals = &[sa, sb];
-            let array = BinaryArray::from_vec(vals.iter().map(|v| v.as_ref()).collect());
-            let stats = PrimitiveStats::<Vec<u8>>::stats_from(&array, ValidityRef(None));
-            testcase((vals, stats));
-        });
-    }
-
-    #[mz_ore::test]
-    fn struct_trim_to_budget() {
-        #[track_caller]
-        fn testcase(cols: &[(&str, usize)], required: Option<&str>) {
-            let cols = cols
-                .iter()
-                .map(|(key, cost)| {
-                    let stats: Box<dyn DynStats> = Box::new(PrimitiveStats {
-                        lower: vec![],
-                        upper: vec![0u8; *cost],
-                    });
-                    ((*key).to_owned(), stats)
-                })
-                .collect();
-            let mut stats: ProtoStructStats = RustType::into_proto(&StructStats { len: 0, cols });
-            let mut budget = stats.encoded_len().next_power_of_two();
-            while budget > 0 {
-                let cost_before = stats.encoded_len();
-                let trimmed = trim_to_budget(&mut stats, budget, |col| Some(col) == required);
-                let cost_after = stats.encoded_len();
-                assert!(cost_before >= cost_after);
-                assert_eq!(trimmed, cost_before - cost_after);
-                if let Some(required) = required {
-                    assert!(stats.cols.contains_key(required));
-                } else {
-                    assert!(cost_after <= budget);
-                }
-                budget = budget / 2;
+            Some(proto_primitive_stats::Lower::LowerI32(_)) => {
+                f.call(PrimitiveStats::<i32>::from_proto(x)?)
             }
-        }
-
-        testcase(&[], None);
-        testcase(&[("a", 100)], None);
-        testcase(&[("a", 1), ("b", 2), ("c", 4)], None);
-        testcase(&[("a", 1), ("b", 2), ("c", 4)], Some("b"));
-    }
-
-    #[mz_ore::test]
-    fn jsonb_trim_to_budget() {
-        #[track_caller]
-        fn testcase(cols: &[(&str, usize)], required: Option<&str>) {
-            let cols = cols
-                .iter()
-                .map(|(key, cost)| {
-                    let stats = JsonStats::Numerics(PrimitiveStats {
-                        lower: vec![],
-                        upper: vec![0u8; *cost],
-                    });
-                    let len = stats.debug_json().to_string().len();
-                    ((*key).to_owned(), JsonMapElementStats { len, stats })
-                })
-                .collect();
-
-            // Serialize into proto and extract the necessary type.
-            let stats: ProtoJsonStats = RustType::into_proto(&JsonStats::Maps(cols));
-            let ProtoJsonStats {
-                kind: Some(proto_json_stats::Kind::Maps(mut stats)),
-            } = stats
-            else {
-                panic!("serialized produced wrong type!");
-            };
-
-            let mut budget = stats.encoded_len().next_power_of_two();
-            while budget > 0 {
-                let cost_before = stats.encoded_len();
-                trim_to_budget_jsonb(&mut stats, &mut budget, &|col| Some(col) == required);
-                let cost_after = stats.encoded_len();
-                assert!(cost_before >= cost_after);
-
-                // Assert force keep columns were kept.
-                if let Some(required) = required {
-                    assert!(stats
-                        .elements
-                        .iter()
-                        .any(|element| element.name == required));
-                } else {
-                    assert!(cost_after <= budget);
-                }
-
-                budget = budget / 2;
+            Some(proto_primitive_stats::Lower::LowerI64(_)) => {
+                f.call(PrimitiveStats::<i64>::from_proto(x)?)
             }
-        }
-
-        testcase(&[], None);
-        testcase(&[("a", 100)], None);
-        testcase(&[("a", 1), ("b", 2), ("c", 4)], None);
-        testcase(&[("a", 1), ("b", 2), ("c", 4)], Some("b"));
+            Some(proto_primitive_stats::Lower::LowerF32(_)) => {
+                f.call(PrimitiveStats::<f32>::from_proto(x)?)
+            }
+            Some(proto_primitive_stats::Lower::LowerF64(_)) => {
+                f.call(PrimitiveStats::<f64>::from_proto(x)?)
+            }
+            Some(proto_primitive_stats::Lower::LowerString(_)) => {
+                f.call(PrimitiveStats::<String>::from_proto(x)?)
+            }
+            None => Err(TryFromProtoError::missing_field("ProtoPrimitiveStats::min")),
+        },
+        proto_dyn_stats::Kind::Struct(x) => f.call(StructStats::from_proto(x)?),
+        proto_dyn_stats::Kind::Bytes(x) => f.call(BytesStats::from_proto(x)?),
+        proto_dyn_stats::Kind::None(x) => f.call(NoneStats::from_proto(x)?),
     }
+}
 
-    #[mz_ore::test]
-    fn jsonb_trim_to_budget_smoke() {
-        let og_stats = JsonStats::Maps(
-            [
-                (
-                    "a".to_string(),
-                    JsonMapElementStats {
-                        len: 1,
-                        stats: JsonStats::Strings(PrimitiveStats {
-                            lower: "foobar".to_string(),
-                            upper: "foobaz".to_string(),
-                        }),
-                    },
-                ),
-                (
-                    "context".to_string(),
-                    JsonMapElementStats {
-                        len: 100,
-                        stats: JsonStats::Maps(
-                            [
-                                (
-                                    "b".to_string(),
-                                    JsonMapElementStats {
-                                        len: 99,
-                                        stats: JsonStats::Numerics(PrimitiveStats {
-                                            lower: vec![],
-                                            upper: vec![42u8; 99],
-                                        }),
-                                    },
-                                ),
-                                (
-                                    "c".to_string(),
-                                    JsonMapElementStats {
-                                        len: 1,
-                                        stats: JsonStats::Bools(PrimitiveStats {
-                                            lower: false,
-                                            upper: true,
-                                        }),
-                                    },
-                                ),
-                            ]
-                            .into(),
-                        ),
-                    },
-                ),
-            ]
-            .into(),
-        );
-
-        // Serialize into proto and extract the necessary type.
-        let stats: ProtoJsonStats = RustType::into_proto(&og_stats);
-        let ProtoJsonStats {
-            kind: Some(proto_json_stats::Kind::Maps(mut stats)),
-        } = stats
-        else {
-            panic!("serialized produced wrong type!");
-        };
-
-        let mut budget_shortfall = 50;
-        // We should recurse into the "context" message and only drop the "b" column.
-        trim_to_budget_jsonb(&mut stats, &mut budget_shortfall, &|_name| false);
-
-        let mut elements = stats
-            .elements
-            .into_iter()
-            .map(|element| (element.name.clone(), element))
-            .collect::<BTreeMap<String, _>>();
-        assert!(elements.remove("a").is_some());
-
-        let context = elements.remove("context").expect("trimmed too much");
-        let Some(ProtoJsonStats {
-            kind: Some(proto_json_stats::Kind::Maps(context)),
-        }) = context.stats
-        else {
-            panic!("serialized produced wrong type!")
-        };
-
-        // We should only have one element in "context" because we trimmed "b".
-        assert_eq!(context.elements.len(), 1);
-        assert_eq!(context.elements[0].name, "c");
-
-        // Redo the triming, force keeping the largest column.
-
-        // Serialize into proto and extract the necessary type.
-        let stats: ProtoJsonStats = RustType::into_proto(&og_stats);
-        let ProtoJsonStats {
-            kind: Some(proto_json_stats::Kind::Maps(mut stats)),
-        } = stats
-        else {
-            panic!("serialized produced wrong type!");
-        };
-
-        let mut budget_shortfall = 50;
-        // We're force keeping "b" which is larger than our budgets_shortfall, so we should drop
-        // everything else.
-        trim_to_budget_jsonb(&mut stats, &mut budget_shortfall, &|name| name == "b");
-
-        assert_eq!(stats.elements.len(), 1);
-        assert_eq!(stats.elements[0].name, "context");
-
-        let Some(ProtoJsonStats {
-            kind: Some(proto_json_stats::Kind::Maps(context)),
-        }) = &stats.elements[0].stats
-        else {
-            panic!("serialized produced wrong type!")
-        };
-
-        assert_eq!(context.elements.len(), 1);
-        assert_eq!(context.elements[0].name, "b");
+/// Returns a [`Strategy`] that generates arbitrary `Box<dyn DynStats>`.
+pub(crate) fn any_box_dyn_stats() -> impl Strategy<Value = Box<dyn DynStats>> {
+    fn into_box_dyn_stats<T: DynStats>(x: T) -> Box<dyn DynStats> {
+        let x: Box<dyn DynStats> = Box::new(x);
+        x
     }
-
-    // Regression test for a bug found during code review of initial stats
-    // trimming PR.
-    #[mz_ore::test]
-    fn stats_trim_regression_json() {
-        // Make sure we recursively trim json string and map stats by asserting
-        // that the goes down after trimming.
-        #[track_caller]
-        fn testcase(stats: JsonStats) {
-            let mut stats = stats.into_proto();
-            let before = stats.encoded_len();
-            stats.trim();
-            let after = stats.encoded_len();
-            assert!(after < before, "{} vs {}: {:?}", after, before, stats);
-        }
-
-        let col = JsonStats::Strings(PrimitiveStats {
-            lower: "foobar".into(),
-            upper: "foobaz".into(),
-        });
-        testcase(col.clone());
-        let mut cols = BTreeMap::new();
-        cols.insert("col".into(), JsonMapElementStats { len: 1, stats: col });
-        testcase(JsonStats::Maps(cols));
-    }
-
-    // Confirm that fields are being trimmed from largest to smallest.
-    #[mz_ore::test]
-    fn trim_order_regression() {
-        fn dyn_stats(lower: &'static str, upper: &'static str) -> Box<dyn DynStats> {
-            Box::new(PrimitiveStats {
-                lower: lower.to_owned(),
-                upper: upper.to_owned(),
-            })
-        }
-        let stats = StructStats {
-            len: 2,
-            cols: BTreeMap::from([
-                ("foo".to_owned(), dyn_stats("a", "b")),
-                (
-                    "bar".to_owned(),
-                    dyn_stats("aaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaab"),
-                ),
-            ]),
-        };
-
-        // The threshold here is arbitrary... we just care that there's some budget where
-        // we'll discard the large field before the small one.
-        let mut proto_stats = RustType::into_proto(&stats);
-        trim_to_budget(&mut proto_stats, 30, |_| false);
-        assert!(proto_stats.cols.contains_key("foo"));
-        assert!(!proto_stats.cols.contains_key("bar"));
-    }
-
-    // Regression test for a bug found by a customer: trim_to_budget method only
-    // operates on the top level struct columns. This (sorta) worked before
-    // #19309, but now there are always two columns at the top level, "ok" and
-    // "err", and the real columns are all nested under "ok".
-    #[mz_ore::test]
-    fn stats_trim_to_budget_regression_recursion() {
-        fn str_stats(n: usize, l: &str, u: &str) -> Box<dyn DynStats> {
-            let stats: Box<dyn DynStats> = Box::new(OptionStats {
-                none: n,
-                some: PrimitiveStats {
-                    lower: l.to_owned(),
-                    upper: u.to_owned(),
-                },
-            });
-            stats
-        }
-
-        const BIG: usize = 100;
-
-        // Model our ok/err structure for SourceData stats for a RelationDesc
-        // with wide columns.
-        let mut cols = BTreeMap::new();
-        for col in 'a'..='z' {
-            let col = col.to_string();
-            let stats = str_stats(2, "", &col.repeat(BIG));
-            cols.insert(col, stats);
-        }
-        cols.insert("foo_timestamp".to_string(), str_stats(2, "foo", "foo"));
-        let source_data_stats = StructStats {
-            len: 2,
-            cols: BTreeMap::from([
-                ("err".to_owned(), str_stats(2, "", "")),
-                ("ok".to_owned(), Box::new(StructStats { len: 2, cols })),
-            ]),
-        };
-        let mut proto_stats = RustType::into_proto(&source_data_stats);
-        let trimmed = trim_to_budget(&mut proto_stats, BIG, |x| {
-            x.ends_with("timestamp") || x == "err"
-        });
-        // Sanity-check that the test is trimming something.
-        assert!(trimmed > 0);
-        // We don't want to trim either "ok" or "err".
-        assert!(proto_stats.cols.contains_key("ok"));
-        assert!(proto_stats.cols.contains_key("err"));
-        // Assert that we kept the timestamp column.
-        let ok = proto_stats.cols.get("ok").unwrap();
-        let proto_dyn_stats::Kind::Struct(ok_struct) = ok.kind.as_ref().unwrap() else {
-            panic!("ok was of unexpected type {:?}", ok);
-        };
-        assert!(ok_struct.cols.contains_key("foo_timestamp"));
-    }
-
-    // Regression test for a bug where "lossless" trimming would truncate an
-    // upper and lower bound that both parsed as our special iso8601 timestamps
-    // into something that no longer did.
-    #[mz_ore::test]
-    fn stats_trim_iso8601_recursion() {
-        use proto_primitive_stats::*;
-
-        let orig = PrimitiveStats {
-            lower: "2023-08-19T12:00:00.000Z".to_owned(),
-            upper: "2023-08-20T12:00:00.000Z".to_owned(),
-        };
-        let mut stats = RustType::into_proto(&orig);
-        stats.trim();
-        // Before the fix, this resulted in "2023-08-" and "2023-08.".
-        assert_eq!(stats.lower.unwrap(), Lower::LowerString(orig.lower));
-        assert_eq!(stats.upper.unwrap(), Upper::UpperString(orig.upper));
-    }
+    let leaf = Union::new(vec![
+        any_primitive_stats::<bool>()
+            .prop_map(into_box_dyn_stats)
+            .boxed(),
+        any_primitive_stats::<i64>()
+            .prop_map(into_box_dyn_stats)
+            .boxed(),
+        any_primitive_stats::<String>()
+            .prop_map(into_box_dyn_stats)
+            .boxed(),
+        any_bytes_stats().prop_map(into_box_dyn_stats).boxed(),
+    ]);
+    leaf.prop_recursive(2, 10, 3, |inner| {
+        (
+            any::<usize>(),
+            proptest::collection::btree_map(any::<String>(), inner, 0..3),
+        )
+            .prop_map(|(len, cols)| into_box_dyn_stats(StructStats { len, cols }))
+    })
 }
