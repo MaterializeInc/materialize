@@ -1524,13 +1524,13 @@ class WebhookSources(Generator):
 
 TENANT_ID = str(uuid.uuid4())
 ADMIN_USER = "u1@example.com"
-OTHER_USER = "u2@example.com"
 ADMIN_ROLE = "MaterializePlatformAdmin"
 OTHER_ROLE = "MaterializePlatform"
 USERS = {
     ADMIN_USER: {
         "email": ADMIN_USER,
         "password": str(uuid.uuid4()),
+        "id": str(uuid.uuid4()),
         "tenant_id": TENANT_ID,
         "initial_api_tokens": [
             {
