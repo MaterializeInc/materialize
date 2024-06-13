@@ -11,6 +11,7 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -50,6 +51,9 @@ def main() -> int:
         filename = f"prof-{service}{suffix}-{time_str}.pb.gz"
         with open(filename, "wb") as f:
             f.write(heap_profile)
+        filename_latest = f"prof-{service}{suffix}-latest.pb.gz"
+        with open(filename_latest, "wb") as f:
+            f.write(heap_profile)
         if args.upload:
             subprocess.run(
                 [
@@ -58,9 +62,10 @@ def main() -> int:
                     "upload",
                     "--log-level",
                     "error",
-                    filename,
+                    filename_latest,
                 ]
             )
+        os.remove(filename_latest)
 
     services = json.loads(
         subprocess.run(
