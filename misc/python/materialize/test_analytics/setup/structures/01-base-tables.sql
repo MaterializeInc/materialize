@@ -37,6 +37,7 @@ CREATE TABLE build_step (
     build_step_key TEXT NOT NULL,
     shard_index UINT4,
     retry_count UINT4 NOT NULL,
+    insert_date TIMESTAMPTZ, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
     url TEXT NOT NULL,
     is_latest_retry BOOL NOT NULL,
     success BOOL NOT NULL,
