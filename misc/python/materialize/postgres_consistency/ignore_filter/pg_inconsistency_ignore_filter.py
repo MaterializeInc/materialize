@@ -289,6 +289,12 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#24578: different representation")
 
+        if db_operation.pattern == "$ % $" and (
+            ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics
+            or ExpressionCharacteristics.TINY_VALUE in all_involved_characteristics
+        ):
+            return YesIgnore("#27634: modulo with large / tiny values")
+
         if db_operation.is_tagged(TAG_REGEX):
             return YesIgnore(
                 "Materialize regular expressions are similar to, but not identical to, PostgreSQL regular expressions."
