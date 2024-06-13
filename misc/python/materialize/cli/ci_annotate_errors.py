@@ -732,36 +732,40 @@ def format_error_message(error_message: str | None, max_length: int = 10_000) ->
 def store_annotation_in_test_analytics(
     test_analytics_db_config: MzDbConfig, annotation: Annotation
 ) -> None:
-    cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
+    try:
+        cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
 
-    # make sure that a build entry exists
-    build_data_storage.insert_build_step(
-        cursor, was_successful=not annotation.is_failure
-    )
-
-    error_entries = [
-        AnnotationErrorEntry(
-            error_type=error.internal_error_type,
-            message=error.to_text(),
-            issue=(
-                f"materialize/{error.issue_number}"
-                if isinstance(error, WithIssue)
-                else None
-            ),
-            occurrence_count=error.occurrences,
+        # make sure that a build entry exists
+        build_data_storage.insert_build_step(
+            cursor, was_successful=not annotation.is_failure
         )
-        for error in chain(annotation.known_errors, annotation.unknown_errors)
-    ]
 
-    build_annotation_storage.insert_annotation(
-        cursor,
-        build_annotation_storage.AnnotationEntry(
-            test_suite=get_suite_name(include_retry_info=False),
-            test_retry_count=get_retry_count(),
-            is_failure=annotation.is_failure,
-            errors=error_entries,
-        ),
-    )
+        error_entries = [
+            AnnotationErrorEntry(
+                error_type=error.internal_error_type,
+                message=error.to_text(),
+                issue=(
+                    f"materialize/{error.issue_number}"
+                    if isinstance(error, WithIssue)
+                    else None
+                ),
+                occurrence_count=error.occurrences,
+            )
+            for error in chain(annotation.known_errors, annotation.unknown_errors)
+        ]
+
+        build_annotation_storage.insert_annotation(
+            cursor,
+            build_annotation_storage.AnnotationEntry(
+                test_suite=get_suite_name(include_retry_info=False),
+                test_retry_count=get_retry_count(),
+                is_failure=annotation.is_failure,
+                errors=error_entries,
+            ),
+        )
+    except Exception as e:
+        # never cause the whole script to fail
+        print(e)
 
 
 if __name__ == "__main__":

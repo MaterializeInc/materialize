@@ -16,6 +16,17 @@ from pg8000 import Connection, Cursor
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
 
 
+class TestAnalyticsUploadError(Exception):
+    def __init__(self, message: str, sql: str):
+        super().__init__(message)
+        # storing it here as well makes it easier to access the message
+        self.message = message
+        self.sql = sql
+
+    def __str__(self) -> str:
+        return f"{self.message} (last executed sql: {self.sql})"
+
+
 def create_connection(config: MzDbConfig) -> Connection:
     connection = pg8000.connect(
         host=config.hostname,
@@ -44,16 +55,19 @@ def create_cursor(config: MzDbConfig, connection: Connection | None = None) -> C
 def execute_updates(
     sql_statements: list[str], cursor: Cursor, log_sql: bool = True
 ) -> None:
-    for sql in sql_statements:
-        try:
+    if len(sql_statements) == 0:
+        return
+
+    last_executed_sql = sql_statements[0]
+
+    try:
+        for sql in sql_statements:
             sql = dedent(sql)
+            last_executed_sql = sql
             if log_sql:
                 print(f"> {sql}")
 
             cursor.execute(sql)
-        except Exception as e:
-            print(f"An error occurred! {e}")
-            print(f"SQL was: {sql}")
-            raise RuntimeError(
-                f"Failed to write to test analytics database! Cause: {e}"
-            )
+    except Exception as e:
+        error_msg = f"Failed to write to test analytics database! Cause: {e}"
+        raise TestAnalyticsUploadError(error_msg, sql=last_executed_sql)
