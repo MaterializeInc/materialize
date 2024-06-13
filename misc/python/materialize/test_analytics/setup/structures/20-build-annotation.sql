@@ -37,6 +37,7 @@ CREATE VIEW v_build_annotation_error AS
       b.pipeline,
       b.build_number,
       b.branch,
+      b.commit_hash,
       b.mz_version,
       b.date AS build_date,
       ann.insert_date AS annotation_insert_date,
