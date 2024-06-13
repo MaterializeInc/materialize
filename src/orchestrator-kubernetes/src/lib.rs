@@ -1405,11 +1405,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         let last_state = cs.last_state.as_ref().and_then(|s| s.terminated.as_ref());
                         let termination_state = current_state.or(last_state);
 
-                        // 137 is the exit code corresponding to OOM in Kubernetes. It'd be a bit
-                        // clearer to compare the reason to "OOMKilled", but this doesn't work in
-                        // Kind for some reason, preventing us from writing automated tests.
+                        // The interesting exit codes are 135 (SIGBUS) and 137 (SIGKILL). SIGKILL
+                        // occurs when the OOM killer terminates the container, SIGBUS occurs when
+                        // the container runs out of disk. We treat the latter as an OOM condition
+                        // too since we only use disk for spilling memory.
                         let exit_code = termination_state.map(|s| s.exit_code);
-                        exit_code == Some(137)
+                        exit_code == Some(135) || exit_code == Some(137)
                     })
                 })
                 .unwrap_or(false);
