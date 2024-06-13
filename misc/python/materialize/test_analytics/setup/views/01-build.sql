@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-CREATE OR REPLACE VIEW count_builds_per_week AS
+CREATE OR REPLACE VIEW v_count_builds_per_week AS
 SELECT
     EXTRACT(YEAR FROM date) AS year,
     EXTRACT(WEEK FROM date) AS week,
@@ -28,7 +28,7 @@ GROUP BY
     b.branch,
     b.pipeline;
 
-CREATE OR REPLACE VIEW count_builds_per_mz_version AS
+CREATE OR REPLACE VIEW v_count_builds_per_mz_version AS
 SELECT
     b.mz_version,
     b.branch,
@@ -43,7 +43,7 @@ GROUP BY
     b.branch,
     b.pipeline;
 
-CREATE OR REPLACE VIEW last_build_per_week AS
+CREATE OR REPLACE VIEW v_last_build_per_week AS
 SELECT
     EXTRACT(YEAR FROM date) AS year,
     EXTRACT(WEEK FROM date) AS week,
