@@ -54,7 +54,7 @@ use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
 /// objects that maintain denormalized state.
 // TODO(jkosh44) It might be simpler or more future proof to include all object types here, even if
 // the update step is a no-op for certain types.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct InProgressRetractions {
     roles: BTreeMap<RoleKey, Role>,
     databases: BTreeMap<DatabaseKey, Database>,
@@ -63,20 +63,6 @@ struct InProgressRetractions {
     items: BTreeMap<ItemKey, CatalogEntry>,
     introspection_source_indexes: BTreeMap<GlobalId, CatalogEntry>,
     system_object_mappings: BTreeMap<GlobalId, CatalogEntry>,
-}
-
-impl InProgressRetractions {
-    fn new() -> InProgressRetractions {
-        InProgressRetractions {
-            roles: BTreeMap::new(),
-            databases: BTreeMap::new(),
-            schemas: BTreeMap::new(),
-            clusters: BTreeMap::new(),
-            items: BTreeMap::new(),
-            introspection_source_indexes: BTreeMap::new(),
-            system_object_mappings: BTreeMap::new(),
-        }
-    }
 }
 
 /// Sort [`StateUpdate`]s in dependency order.
@@ -265,7 +251,7 @@ impl CatalogState {
         let mut state = ApplyState::Updates(Vec::new());
         let updates = sort_updates(updates);
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        let mut retractions = InProgressRetractions::new();
+        let mut retractions = InProgressRetractions::default();
 
         for update in updates {
             match (&mut state, update) {
@@ -920,34 +906,17 @@ impl CatalogState {
                         database_spec: schema.database().clone(),
                         schema_spec: schema.id().clone(),
                     },
-                    item: item.name,
+                    item: item.name.clone(),
                 };
-                self.insert_item(
-                    item.id,
-                    item.oid,
-                    name,
-                    catalog_item,
-                    item.owner_id,
-                    PrivilegeMap::from_mz_acl_items(item.privileges),
-                );
-                // If there's a matching retraction, update the new item with denormalized state
-                // from the retraction.
-                if let Some(CatalogEntry {
-                    item: _,
-                    referenced_by,
-                    used_by,
-                    id,
-                    oid: _,
-                    name: _,
-                    owner_id: _,
-                    privileges: _,
-                }) = retractions.items.remove(&key)
-                {
-                    assert_eq!(id, item.id);
-                    let entry = self.entry_by_id.get_mut(&id).expect("just inserted");
-                    entry.referenced_by = referenced_by;
-                    entry.used_by = used_by;
-                }
+                let entry = match retractions.items.remove(&key) {
+                    Some(mut retraction) => {
+                        assert_eq!(retraction.id, item.id);
+                        retraction.update_from((item, catalog_item, name));
+                        retraction
+                    }
+                    None => (item, catalog_item, name).into(),
+                };
+                self.insert_entry(entry);
             }
             StateDiff::Retraction => {
                 let entry = self.drop_item(item.id);
@@ -1178,9 +1147,9 @@ fn apply_with_update<K, V, D>(
             let mem_key = key_fn(&durable);
             let durable_key = durable.key();
             let value = match retractions.remove(&durable_key) {
-                Some(mut value) => {
-                    value.update_from(durable);
-                    value
+                Some(mut retraction) => {
+                    retraction.update_from(durable);
+                    retraction
                 }
                 None => durable.into(),
             };
