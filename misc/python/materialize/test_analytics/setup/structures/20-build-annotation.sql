@@ -37,6 +37,7 @@ CREATE VIEW v_build_annotation_error AS
       b.pipeline,
       b.build_number,
       b.branch,
+      b.commit_hash,
       b.mz_version,
       b.date AS build_date,
       ann.insert_date AS annotation_insert_date,
@@ -51,4 +52,31 @@ CREATE VIEW v_build_annotation_error AS
     ON ann.build_step_id = err.build_step_id
     INNER JOIN build b
     ON ann.build_id = b.build_id
+;
+
+CREATE VIEW v_build_annotation_overview AS
+    SELECT
+      bae.build_id,
+      bae.build_step_id,
+      bae.pipeline,
+      bae.build_number,
+      bae.branch,
+      bae.commit_hash,
+      bae.mz_version,
+      bae.build_date,
+      bae.test_suite,
+      bae.test_retry_count,
+      count(bae.content) AS distinct_error_count
+    FROM v_build_annotation_error bae
+    GROUP BY
+      bae.build_id,
+      bae.build_step_id,
+      bae.pipeline,
+      bae.build_number,
+      bae.branch,
+      bae.commit_hash,
+      bae.mz_version,
+      bae.build_date,
+      bae.test_suite,
+      bae.test_retry_count
 ;
