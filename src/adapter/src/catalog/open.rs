@@ -156,6 +156,7 @@ impl CatalogItemRebuilder {
                     None,
                     is_retained_metrics_object,
                     custom_logical_compaction_window,
+                    false,
                 )
                 .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")),
         }
@@ -403,7 +404,7 @@ impl Catalog {
     /// we must maintain a completed set otherwise races could result in orphaned views languishing
     /// in awaiting with nothing retriggering the attempt.
     #[instrument(name = "catalog::parse_views")]
-    pub(crate) async fn parse_views(
+    pub(crate) async fn parse_builtin_views(
         state: &mut CatalogState,
         builtin_views: Vec<(&Builtin<NameReference>, GlobalId)>,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
@@ -444,7 +445,7 @@ impl Catalog {
                     let handle = mz_ore::task::spawn(
                         || "parse view",
                         async move {
-                            let res = task_state.parse_item(&create_sql, None, false, None);
+                            let res = task_state.parse_item(&create_sql, None, false, None, true);
                             (id, res)
                         }
                         .instrument(span),

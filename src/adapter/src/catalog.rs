@@ -2284,7 +2284,7 @@ mod tests {
             .expect("unable to open debug catalog");
             let item = catalog
                 .state()
-                .parse_view_item(create_sql)
+                .deserialize_item(&create_sql)
                 .expect("unable to parse view");
             catalog
                 .transact(

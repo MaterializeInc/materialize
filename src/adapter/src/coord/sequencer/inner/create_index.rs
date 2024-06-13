@@ -147,7 +147,8 @@ impl Coordinator {
         };
 
         let state = self.catalog().state();
-        let plan_result = state.deserialize_plan(&item.create_sql, true);
+        let plan_result =
+            state.deserialize_plan_with_enable_for_item_parsing(&item.create_sql, true);
         let (plan, resolved_ids) = return_if_err!(plan_result, ctx);
 
         let plan::Plan::CreateIndex(plan) = plan else {

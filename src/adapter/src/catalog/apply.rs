@@ -204,88 +204,19 @@ impl CatalogState {
         &mut self,
         updates: Vec<StateUpdate>,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        // Most updates are applied one at a time, but builtin view additions are applied separately
-        // in a batch for performance reasons. A constraint is that updates must be applied in
-        // order. This method is modeled as a simple state machine that batches then applies groups
-        // of builtin view additions and all other updates.
-
-        enum ApplyState {
-            Updates(Vec<StateUpdate>),
-            BuiltinViewAdditions(Vec<(&'static Builtin<NameReference>, GlobalId)>),
-        }
-
-        fn lookup_builtin_view_addition(
-            system_object_mapping: mz_catalog::durable::SystemObjectMapping,
-        ) -> (&'static Builtin<NameReference>, GlobalId) {
-            let (_, builtin) = BUILTIN_LOOKUP
-                .get(&system_object_mapping.description)
-                .expect("missing builtin view");
-            (*builtin, system_object_mapping.unique_identifier.id)
-        }
-
-        let mut state = ApplyState::Updates(Vec::new());
+        let mut apply_state = BootstrapApplyState::Updates(Vec::new());
         let updates = sort_updates(updates);
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
 
         for update in updates {
-            match (&mut state, update) {
-                (
-                    ApplyState::Updates(updates),
-                    StateUpdate {
-                        kind: StateUpdateKind::SystemObjectMapping(system_object_mapping),
-                        diff: StateDiff::Addition,
-                    },
-                ) if matches!(
-                    system_object_mapping.description.object_type,
-                    CatalogItemType::View
-                ) =>
-                {
-                    // Apply updates and start batching builtin view additions.
-                    let builtin_table_update = self.apply_updates(std::mem::take(updates));
-                    builtin_table_updates.extend(builtin_table_update);
-                    let view_addition = lookup_builtin_view_addition(system_object_mapping);
-                    state = ApplyState::BuiltinViewAdditions(vec![view_addition]);
-                }
-                (ApplyState::Updates(updates), update) => {
-                    // Continue batching updates.
-                    updates.push(update);
-                }
-                (
-                    ApplyState::BuiltinViewAdditions(builtin_view_additions),
-                    StateUpdate {
-                        kind: StateUpdateKind::SystemObjectMapping(system_object_mapping),
-                        diff: StateDiff::Addition,
-                    },
-                ) if matches!(
-                    system_object_mapping.description.object_type,
-                    CatalogItemType::View
-                ) =>
-                {
-                    // Continue batching builtin view additions.
-                    let view_addition = lookup_builtin_view_addition(system_object_mapping);
-                    builtin_view_additions.push(view_addition);
-                }
-                (ApplyState::BuiltinViewAdditions(builtin_view_additions), update) => {
-                    // Apply all builtin view additions in a batch and start batching updates.
-                    let builtin_table_update =
-                        Catalog::parse_views(self, std::mem::take(builtin_view_additions)).await;
-                    builtin_table_updates.extend(builtin_table_update);
-                    state = ApplyState::Updates(vec![update]);
-                }
-            }
+            let next_apply_state = BootstrapApplyState::new(update);
+            let builtin_table_update = apply_state.step(next_apply_state, self).await;
+            builtin_table_updates.extend(builtin_table_update);
         }
 
         // Apply remaining state.
-        match state {
-            ApplyState::Updates(updates) => {
-                let builtin_table_update = self.apply_updates(updates);
-                builtin_table_updates.extend(builtin_table_update);
-            }
-            ApplyState::BuiltinViewAdditions(builtin_view_additions) => {
-                let builtin_table_update = Catalog::parse_views(self, builtin_view_additions).await;
-                builtin_table_updates.extend(builtin_table_update);
-            }
-        }
+        let builtin_table_update = apply_state.apply(self).await;
+        builtin_table_updates.extend(builtin_table_update);
 
         builtin_table_updates
     }
@@ -699,6 +630,7 @@ impl CatalogState {
                         None,
                         index.is_retained_metrics_object,
                         if index.is_retained_metrics_object { Some(self.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
+                        false,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -1009,6 +941,99 @@ impl CatalogState {
     }
 }
 
+/// Most updates are applied one at a time, but during bootstrap, certain types are applied
+/// separately in a batch for performance reasons. A constraint is that updates must be applied in
+/// order. This method is modeled as a state machine that batches then applies groups of updates.
+enum BootstrapApplyState {
+    /// Additions of builtin views.
+    BuiltinViewAdditions(Vec<(&'static Builtin<NameReference>, GlobalId)>),
+    /// Item updates that aren't builtin view additions.
+    Items(Vec<StateUpdate>),
+    /// All other updates.
+    Updates(Vec<StateUpdate>),
+}
+
+impl BootstrapApplyState {
+    fn new(update: StateUpdate) -> BootstrapApplyState {
+        match update {
+            StateUpdate {
+                kind: StateUpdateKind::SystemObjectMapping(system_object_mapping),
+                diff: StateDiff::Addition,
+            } if matches!(
+                system_object_mapping.description.object_type,
+                CatalogItemType::View
+            ) =>
+            {
+                let view_addition = lookup_builtin_view_addition(system_object_mapping);
+                BootstrapApplyState::BuiltinViewAdditions(vec![view_addition])
+            }
+            StateUpdate {
+                kind: StateUpdateKind::IntrospectionSourceIndex(_),
+                ..
+            }
+            | StateUpdate {
+                kind: StateUpdateKind::SystemObjectMapping(_),
+                ..
+            }
+            | StateUpdate {
+                kind: StateUpdateKind::Item(_),
+                ..
+            } => BootstrapApplyState::Items(vec![update]),
+            update => BootstrapApplyState::Updates(vec![update]),
+        }
+    }
+
+    async fn apply(
+        &mut self,
+        state: &mut CatalogState,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        match self {
+            // `Catalog::parse_builtin_views` enables all "enable_for_item_parsing" internally.
+            BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions) => {
+                Catalog::parse_builtin_views(state, std::mem::take(builtin_view_additions)).await
+            }
+            // We enable all "enable_for_item_parsing" feature flags when applying item updates
+            // during bootstrap.
+            BootstrapApplyState::Items(updates) => state
+                .with_enable_for_item_parsing(|state| state.apply_updates(std::mem::take(updates))),
+            BootstrapApplyState::Updates(updates) => state.apply_updates(std::mem::take(updates)),
+        }
+    }
+
+    async fn step(
+        &mut self,
+        next: BootstrapApplyState,
+        state: &mut CatalogState,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        match (self, next) {
+            (
+                BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions),
+                BootstrapApplyState::BuiltinViewAdditions(next_builtin_view_additions),
+            ) => {
+                // Continue batching builtin view additions.
+                builtin_view_additions.extend(next_builtin_view_additions);
+                Vec::new()
+            }
+            (BootstrapApplyState::Items(updates), BootstrapApplyState::Items(next_updates)) => {
+                // Continue batching item updates.
+                updates.extend(next_updates);
+                Vec::new()
+            }
+            (BootstrapApplyState::Updates(updates), BootstrapApplyState::Updates(next_updates)) => {
+                // Continue batching updates.
+                updates.extend(next_updates);
+                Vec::new()
+            }
+            (apply_state, next_apply_state) => {
+                // Apply the current batch and start batching new apply state.
+                let builtin_table_update = apply_state.apply(state).await;
+                *apply_state = next_apply_state;
+                builtin_table_update
+            }
+        }
+    }
+}
+
 /// Inserts `key` and `value` into `map` if `diff` is an addition, otherwise remove them from `map`
 /// if `diff` is a retraction.
 fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: impl FnOnce() -> V, diff: StateDiff)
@@ -1034,4 +1059,13 @@ where
             );
         }
     }
+}
+
+fn lookup_builtin_view_addition(
+    system_object_mapping: mz_catalog::durable::SystemObjectMapping,
+) -> (&'static Builtin<NameReference>, GlobalId) {
+    let (_, builtin) = BUILTIN_LOOKUP
+        .get(&system_object_mapping.description)
+        .expect("missing builtin view");
+    (*builtin, system_object_mapping.unique_identifier.id)
 }
