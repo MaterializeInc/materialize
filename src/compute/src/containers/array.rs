@@ -22,7 +22,7 @@ impl<T> Array<T> {
     /// Create a new [`Array`] with the specified capacity. The actual capacity of the returned
     /// array is at least as big as the requested capacity.
     pub fn with_capacity(capacity: usize) -> Self {
-        // Allocate memory, fall-back to regular heap allocations if we cannot aquire memory through
+        // Allocate memory, fall-back to regular heap allocations if we cannot acquire memory through
         // lgalloc.
         let (handle, boxed) = if let Ok((ptr, actual_capacity, handle)) =
             lgalloc::allocate::<MaybeUninit<T>>(capacity)
@@ -40,7 +40,7 @@ impl<T> Array<T> {
         } else {
             // We failed to allocate through lgalloc, fall back to heap.
             let mut vec = Vec::with_capacity(capacity);
-            // SAFETY: We treat all element as uninitialized and track initialized elements
+            // SAFETY: We treat all elements as uninitialized and track initialized elements
             // through `self.length`.
             unsafe {
                 vec.set_len(vec.capacity());
@@ -88,13 +88,17 @@ impl<T> Array<T> {
 
     /// Remove all elements. Drops the contents, but leaves the allocation untouched.
     pub fn clear(&mut self) {
-        for e in &mut self.elements[..self.length] {
+        let elems = &mut self.elements[..self.length];
+        // We are about to run the type's destructor, which may panic. Therefore we set the length
+        // of the array to zero so that if we have to unwind the stack we don't end up re-dropping
+        // in valid memory through the Drop impl of Array itself.
+        self.length = 0;
+        for e in elems {
             // SAFETY: We know elements up to `length` are initialized.
             unsafe {
                 e.assume_init_drop();
             }
         }
-        self.length = 0;
     }
 }
 
@@ -129,5 +133,33 @@ impl<T> Drop for Array<T> {
                 ManuallyDrop::drop(&mut self.elements);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn double_drop() {
+        static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+        struct DropGuard;
+
+        impl Drop for DropGuard {
+            fn drop(&mut self) {
+                let drops = DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+                // If this is the first time we're being dropped, panic.
+                if drops == 0 {
+                    panic!();
+                }
+            }
+        }
+
+        let mut array = Array::with_capacity(1);
+        array.push(DropGuard);
+        let _ = mz_ore::panic::catch_unwind(move || array.clear());
+        assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
     }
 }
