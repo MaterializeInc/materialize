@@ -19,9 +19,9 @@ use cloud_resource_controller::KubernetesResourceReader;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Affinity, Capabilities, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource,
-    EphemeralVolumeSource, NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm,
-    ObjectFieldSelector, ObjectReference, PersistentVolumeClaim, PersistentVolumeClaimSpec,
+    Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
+    NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, ObjectFieldSelector,
+    ObjectReference, PersistentVolumeClaim, PersistentVolumeClaimSpec,
     PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
     PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ResourceRequirements,
     SeccompProfile, Secret, SecurityContext, Service as K8sService, ServicePort, ServiceSpec,
@@ -1392,35 +1392,25 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 .ok_or_else(|| anyhow!("missing label: {service_id_label}"))?
                 .clone();
 
-            fn is_state_oom(state: &ContainerState) -> bool {
-                state
-                    .terminated
-                    .as_ref()
-                    // 137 is the exit code corresponding to OOM in Kubernetes.
-                    // It'd be a bit clearer to compare the reason to "OOMKilled",
-                    // but this doesn't work in Kind for some reason, preventing us from
-                    // writing automated tests.
-                    .map(|terminated| terminated.exit_code == 137)
-                    .unwrap_or(false)
-            }
             let oomed = pod
                 .status
                 .as_ref()
                 .and_then(|status| status.container_statuses.as_ref())
                 .map(|container_statuses| {
                     container_statuses.iter().any(|cs| {
-                        // We check whether the current _or_ the last state
-                        // is an OOM kill. The reason for this is that after a kill,
-                        // the state toggles from "Terminated" to "Waiting" very quickly,
-                        // at which point the OOM error appears int he last state,
-                        // not the current one.
-                        //
-                        // This "oomed" value is ignored later on if the pod is ready,
-                        // so there is no risk that we will go directly from "Terminated"
-                        // to "Running" and incorrectly report that we are currently
-                        // oom-killed.
-                        cs.last_state.as_ref().map(is_state_oom).unwrap_or(false)
-                            || cs.state.as_ref().map(is_state_oom).unwrap_or(false)
+                        // The container might have already transitioned from "terminated" to
+                        // "waiting"/"running" state, in which case we need to check its previous
+                        // state to find out why it terminated.
+                        let current_state = cs.state.as_ref().and_then(|s| s.terminated.as_ref());
+                        let last_state = cs.last_state.as_ref().and_then(|s| s.terminated.as_ref());
+                        let termination_state = current_state.or(last_state);
+
+                        // The interesting exit codes are 135 (SIGBUS) and 137 (SIGKILL). SIGKILL
+                        // occurs when the OOM killer terminates the container, SIGBUS occurs when
+                        // the container runs out of disk. We treat the latter as an OOM condition
+                        // too since we only use disk for spilling memory.
+                        let exit_code = termination_state.map(|s| s.exit_code);
+                        exit_code == Some(135) || exit_code == Some(137)
                     })
                 })
                 .unwrap_or(false);
