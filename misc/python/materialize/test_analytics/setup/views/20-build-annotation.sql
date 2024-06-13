@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-CREATE VIEW v_build_annotation_error AS
+CREATE OR REPLACE VIEW v_build_annotation_error AS
     SELECT
       ann.build_id,
       ann.build_step_id,
@@ -37,7 +37,7 @@ CREATE VIEW v_build_annotation_error AS
     ON ann.build_id = b.build_id
 ;
 
-CREATE VIEW v_build_annotation_overview AS
+CREATE OR REPLACE VIEW v_build_annotation_overview AS
     SELECT
       bae.build_id,
       bae.build_step_id,

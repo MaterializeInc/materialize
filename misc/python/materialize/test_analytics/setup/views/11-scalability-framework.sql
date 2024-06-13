@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-CREATE VIEW v_scalability_framework_result_per_day AS
+CREATE OR REPLACE VIEW v_scalability_framework_result_per_day AS
     SELECT
         branch,
         workload_name,

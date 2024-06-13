@@ -14,7 +14,7 @@
 -- limitations under the License.
 
 -- meta data of (the latest retry of) each eventually successful benchmark build step
-CREATE VIEW successful_build_steps AS
+CREATE OR REPLACE VIEW successful_build_steps AS
 SELECT
     b.pipeline,
     b.build_number,
