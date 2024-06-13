@@ -13,20 +13,6 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-
--- result of individual workloads
-CREATE TABLE scalability_framework_result (
-   build_id TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
-   build_step_id TEXT NOT NULL,
-   framework_version TEXT NOT NULL,
-   workload_name TEXT NOT NULL,
-   workload_group TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
-   workload_version TEXT NOT NULL,
-   concurrency INT NOT NULL,
-   count INT,
-   tps DOUBLE
-);
-
 CREATE VIEW v_scalability_framework_result_per_day AS
     SELECT
         branch,

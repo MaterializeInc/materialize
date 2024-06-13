@@ -13,21 +13,6 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-
--- result of individual benchmark scenarios
-CREATE TABLE feature_benchmark_result (
-   build_id TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
-   build_step_id TEXT NOT NULL,
-   framework_version TEXT NOT NULL,
-   scenario_name TEXT NOT NULL,
-   scenario_version TEXT NOT NULL,
-   scale TEXT NOT NULL,
-   wallclock DOUBLE,
-   messages INT,
-   memory_mz DOUBLE,
-   memory_clusterd DOUBLE
-);
-
 CREATE VIEW v_feature_benchmark_result_per_day AS
     SELECT
         branch,
