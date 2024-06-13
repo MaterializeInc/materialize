@@ -27,8 +27,7 @@ SELECT
     bs.shard_index
 FROM build b
 INNER JOIN build_step bs
-  ON b.build_number = bs.build_number
-  AND b.pipeline = bs.pipeline
+  ON b.build_id = bs.build_id
 WHERE bs.success = TRUE
   AND bs.is_latest_retry = TRUE;
 
