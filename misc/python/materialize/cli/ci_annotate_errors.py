@@ -311,9 +311,7 @@ def annotate_errors(
     annotation_style = "info" if not unknown_errors else "error"
     unknown_errors = group_identical_errors(unknown_errors)
     known_errors = group_identical_errors(known_errors)
-    is_failure = (
-        len(unknown_errors) > 0 or os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
-    )
+    is_failure = len(unknown_errors) > 0 or not has_successful_buildkite_status()
 
     annotation = Annotation(
         suite_name=get_suite_name(),
@@ -502,7 +500,7 @@ def annotate_logged_errors(log_files: list[str], cloud_hostname: str) -> int:
         and len(known_errors) == 0
         and ui.env_is_truthy("BUILDKITE")
         and os.getenv("BUILDKITE_BRANCH") != "main"
-        and os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
+        and not has_successful_buildkite_status()
         and get_job_state() not in ("canceling", "canceled")
     ):
         annotation = Annotation(
@@ -719,6 +717,10 @@ def get_suite_name(include_retry_info: bool = True) -> str:
 
 def get_retry_count() -> int:
     return int(os.getenv("BUILDKITE_RETRY_COUNT", "0"))
+
+
+def has_successful_buildkite_status() -> bool:
+    return os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") == "0"
 
 
 def format_error_message(error_message: str | None, max_length: int = 10_000) -> str:
