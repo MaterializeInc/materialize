@@ -986,7 +986,7 @@ where
                     };
 
                     if subsource_resolver
-                        .resolve_details_idx(&external_reference.0)
+                        .resolve_idx(&external_reference.0)
                         .is_err()
                     {
                         tracing::warn!(

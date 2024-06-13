@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::Config;
-use mz_repr::adt::system::Oid;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{
@@ -21,8 +20,9 @@ use mz_sql_parser::ast::{
     WithOptionValue,
 };
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
+use mz_storage_types::sources::SubsourceResolver;
+use tokio_postgres::types::Oid;
 
-use crate::catalog::SubsourceCatalog;
 use crate::names::{Aug, PartialItemName, ResolvedItemName};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
@@ -30,52 +30,16 @@ use crate::plan::{PlanError, StatementContext};
 use super::error::PgSourcePurificationError;
 use super::RequestedSubsource;
 
-pub(super) fn derive_catalog_from_publication_tables<'a>(
-    database: &'a str,
-    publication_tables: &'a [PostgresTableDesc],
-) -> Result<SubsourceCatalog<&'a PostgresTableDesc>, PlanError> {
-    // An index from table name -> schema name -> database name -> PostgresTableDesc
-    let mut tables_by_name = BTreeMap::new();
-    for table in publication_tables.iter() {
-        tables_by_name
-            .entry(table.name.clone())
-            .or_insert_with(BTreeMap::new)
-            .entry(table.namespace.clone())
-            .or_insert_with(BTreeMap::new)
-            .entry(database.to_string())
-            .or_insert(table);
-    }
-
-    Ok(SubsourceCatalog(tables_by_name))
-}
-
+/// Ensure that we have select permissions on all tables; we have to do this before we
+/// start snapshotting because if we discover we cannot `COPY` from a table while
+/// snapshotting, we break the entire source.
 pub(super) async fn validate_requested_subsources_privileges(
     config: &Config,
-    requested_subsources: &[RequestedSubsource<'_, PostgresTableDesc>],
     ssh_tunnel_manager: &SshTunnelManager,
+    table_oids: &[Oid],
 ) -> Result<(), PlanError> {
-    // Ensure that we have select permissions on all tables; we have to do this before we
-    // start snapshotting because if we discover we cannot `COPY` from a table while
-    // snapshotting, we break the entire source.
-    let tables_to_check_permissions = requested_subsources
-        .iter()
-        .map(
-            |RequestedSubsource {
-                 upstream_name: UnresolvedItemName(inner),
-                 ..
-             }| [inner[1].as_str(), inner[2].as_str()],
-        )
-        .collect();
-
-    privileges::check_table_privileges(config, tables_to_check_permissions, ssh_tunnel_manager)
-        .await?;
-
-    let oids: Vec<_> = requested_subsources
-        .iter()
-        .map(|RequestedSubsource { table, .. }| table.oid)
-        .collect();
-
-    replica_identity::check_replica_identity_full(config, oids, ssh_tunnel_manager).await?;
+    privileges::check_table_privileges(config, ssh_tunnel_manager, table_oids).await?;
+    replica_identity::check_replica_identity_full(config, ssh_tunnel_manager, table_oids).await?;
 
     Ok(())
 }
@@ -86,7 +50,8 @@ pub(super) async fn validate_requested_subsources_privileges(
 /// Additionally, modify `text_columns` so that they contain database-qualified
 /// references to the columns.
 pub(super) fn generate_text_columns(
-    publication_catalog: &SubsourceCatalog<&PostgresTableDesc>,
+    subsource_resolver: &SubsourceResolver,
+    references: &[PostgresTableDesc],
     text_columns: &mut [UnresolvedItemName],
     option_name: &str,
 ) -> Result<BTreeMap<u32, BTreeSet<String>>, PlanError> {
@@ -107,13 +72,15 @@ pub(super) fn generate_text_columns(
 
         let qual_name = UnresolvedItemName(qual);
 
-        let (mut fully_qualified_name, desc) =
-            publication_catalog
-                .resolve(qual_name)
-                .map_err(|e| PlanError::InvalidOptionValue {
+        let (mut fully_qualified_name, idx) =
+            subsource_resolver.resolve(&qual_name.0, 3).map_err(|e| {
+                PlanError::InvalidOptionValue {
                     option_name: option_name.to_string(),
-                    err: Box::new(e),
-                })?;
+                    err: Box::new(e.into()),
+                }
+            })?;
+
+        let desc = &references[idx];
 
         if !desc.columns.iter().any(|column| column.name == col) {
             let column = mz_repr::ColumnName::from(col);
@@ -203,7 +170,7 @@ pub(crate) fn generate_targeted_subsources(
                         full_name.push(name);
                         unsupported_cols.push((
                             UnresolvedItemName(full_name).to_ast_string(),
-                            Oid(c.type_oid),
+                            mz_repr::adt::system::Oid(c.type_oid),
                         ));
                         continue;
                     }
@@ -321,62 +288,52 @@ pub(crate) fn generate_targeted_subsources(
 }
 
 mod privileges {
-    use postgres_array::{Array, Dimension};
-
     use mz_postgres_util::{Config, PostgresError};
 
-    use super::SshTunnelManager;
+    use super::*;
     use crate::plan::PlanError;
     use crate::pure::PgSourcePurificationError;
 
     async fn check_schema_privileges(
         config: &Config,
-        schemas: Vec<&str>,
         ssh_tunnel_manager: &SshTunnelManager,
+        table_oids: &[Oid],
     ) -> Result<(), PlanError> {
         let client = config
             .connect("check_schema_privileges", ssh_tunnel_manager)
             .await?;
 
-        let schemas_len = schemas.len();
-
-        let schemas = Array::from_parts(
-            schemas,
-            vec![Dimension {
-                len: i32::try_from(schemas_len).expect("fewer than i32::MAX schemas"),
-                lower_bound: 0,
-            }],
-        );
-
-        let invalid_schema_privileges = client
+        let invalid_schema_privileges_rows = client
             .query(
                 "
-            SELECT
-                s, has_schema_privilege($2::text, s, 'usage') AS p
-            FROM
-                (SELECT unnest($1::text[])) AS o (s);",
+                WITH distinct_namespace AS (
+                    SELECT
+                        DISTINCT n.oid, n.nspname AS schema_name
+                    FROM unnest($1::OID[]) AS oids (oid)
+                    JOIN pg_class AS c ON c.oid = oids.oid
+                    JOIN pg_namespace AS n ON c.relnamespace = n.oid
+                )
+                SELECT d.schema_name
+                FROM distinct_namespace AS d
+                WHERE
+                    NOT has_schema_privilege($2::TEXT, d.oid, 'usage')",
                 &[
-                    &schemas,
+                    &table_oids,
                     &config.get_user().expect("connection specifies user"),
                 ],
             )
             .await
-            .map_err(PostgresError::from)?
+            .map_err(PostgresError::from)?;
+
+        let mut invalid_schema_privileges = invalid_schema_privileges_rows
             .into_iter()
-            .filter_map(|row| {
-                // Only get rows that do not have sufficient privileges.
-                let privileges: bool = row.get("p");
-                if !privileges {
-                    Some(row.get("s"))
-                } else {
-                    None
-                }
-            })
+            .map(|row| row.get("schema_name"))
             .collect::<Vec<String>>();
 
         if invalid_schema_privileges.is_empty() {
             Ok(())
         } else {
+            invalid_schema_privileges.sort();
             Err(PgSourcePurificationError::UserLacksUsageOnSchemas {
                 user: config
                     .get_user()
@@ -399,64 +356,37 @@ mod privileges {
     /// If `config` does not specify a user.
     pub async fn check_table_privileges(
         config: &Config,
-        tables: Vec<[&str; 2]>,
         ssh_tunnel_manager: &SshTunnelManager,
+        table_oids: &[Oid],
     ) -> Result<(), PlanError> {
-        let schemas = tables.iter().map(|t| t[0]).collect();
-        check_schema_privileges(config, schemas, ssh_tunnel_manager).await?;
+        check_schema_privileges(config, ssh_tunnel_manager, table_oids).await?;
 
         let client = config
             .connect("check_table_privileges", ssh_tunnel_manager)
             .await?;
 
-        let tables_len = tables.len();
-
-        let tables = Array::from_parts(
-            tables.into_iter().map(|i| i.to_vec()).flatten().collect(),
-            vec![
-                Dimension {
-                    len: i32::try_from(tables_len).expect("fewer than i32::MAX tables"),
-                    lower_bound: 1,
-                },
-                Dimension {
-                    len: 2,
-                    lower_bound: 1,
-                },
-            ],
-        );
-
-        let mut invalid_table_privileges = client
+        let invalid_table_privileges_rows = client
             .query(
                 "
-            WITH
-                data AS (SELECT $1::text[] AS arr)
             SELECT
-                t, has_table_privilege($2::text, t, 'select') AS p
-            FROM
-                (
-                    SELECT
-                        format('%I.%I', arr[i][1], arr[i][2]) AS t
-                    FROM
-                        data, ROWS FROM (generate_subscripts((SELECT arr FROM data), 1)) AS i
-                )
-                    AS o (t);",
+                format('%I.%I', n.nspname, c.relname) AS schema_qualified_table_name
+             FROM unnest($1::oid[]) AS oids (oid)
+             JOIN
+                 pg_class c ON c.oid = oids.oid
+             JOIN
+                 pg_namespace n ON c.relnamespace = n.oid
+             WHERE NOT has_table_privilege($2::text, c.oid, 'select')",
                 &[
-                    &tables,
+                    &table_oids,
                     &config.get_user().expect("connection specifies user"),
                 ],
             )
             .await
-            .map_err(PostgresError::from)?
+            .map_err(PostgresError::from)?;
+
+        let mut invalid_table_privileges = invalid_table_privileges_rows
             .into_iter()
-            .filter_map(|row| {
-                // Only get rows that do not have sufficient privileges.
-                let privileges: bool = row.get("p");
-                if !privileges {
-                    Some(row.get("t"))
-                } else {
-                    None
-                }
-            })
+            .map(|row| row.get("schema_qualified_table_name"))
             .collect::<Vec<String>>();
 
         if invalid_table_privileges.is_empty() {
@@ -466,7 +396,7 @@ mod privileges {
             Err(PgSourcePurificationError::UserLacksSelectOnTables {
                 user: config
                     .get_user()
-                    .expect("connection specifies user")
+                    .expect("connection must specify user")
                     .to_string(),
                 tables: invalid_table_privileges,
             })?
@@ -475,51 +405,41 @@ mod privileges {
 }
 
 mod replica_identity {
-    use postgres_array::{Array, Dimension};
-    use tokio_postgres::types::Oid;
-
     use mz_postgres_util::{Config, PostgresError};
 
-    use super::SshTunnelManager;
+    use super::*;
     use crate::plan::PlanError;
     use crate::pure::PgSourcePurificationError;
 
     /// Ensures that all provided OIDs are tables with `REPLICA IDENTITY FULL`.
     pub async fn check_replica_identity_full(
         config: &Config,
-        oids: Vec<Oid>,
         ssh_tunnel_manager: &SshTunnelManager,
+        table_oids: &[Oid],
     ) -> Result<(), PlanError> {
         let client = config
             .connect("check_replica_identity_full", ssh_tunnel_manager)
             .await?;
 
-        let oids_len = oids.len();
-
-        let oids = Array::from_parts(
-            oids,
-            vec![Dimension {
-                len: i32::try_from(oids_len).expect("fewer than i32::MAX schemas"),
-                lower_bound: 0,
-            }],
-        );
-
-        let mut invalid_replica_identity = client
+        let invalid_replica_identity_rows = client
             .query(
                 "
             SELECT
-                input.oid::REGCLASS::TEXT AS name
-            FROM
-                (SELECT unnest($1::OID[]) AS oid) AS input
-                LEFT JOIN pg_class ON input.oid = pg_class.oid
-            WHERE
-                relreplident != 'f' OR relreplident IS NULL;",
-                &[&oids],
+                format('%I.%I', n.nspname, c.relname) AS schema_qualified_table_name
+             FROM unnest($1::oid[]) AS oids (oid)
+             JOIN
+                 pg_class c ON c.oid = oids.oid
+             JOIN
+                 pg_namespace n ON c.relnamespace = n.oid
+             WHERE relreplident != 'f' OR relreplident IS NULL;",
+                &[&table_oids],
             )
             .await
-            .map_err(PostgresError::from)?
+            .map_err(PostgresError::from)?;
+
+        let mut invalid_replica_identity = invalid_replica_identity_rows
             .into_iter()
-            .map(|row| row.get("name"))
+            .map(|row| row.get("schema_qualified_table_name"))
             .collect::<Vec<String>>();
 
         if invalid_replica_identity.is_empty() {
