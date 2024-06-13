@@ -114,7 +114,13 @@ def insert_build_step(
           {was_successful},
           '{aws_instance_type}',
           NULL
-        ;
+        FROM build_step
+        WHERE NOT EXISTS
+        (
+            SELECT 1
+            FROM build_step
+            WHERE build_step_id = '{step_id}'
+        );
         """
     )
 
