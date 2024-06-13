@@ -37,7 +37,6 @@ class AnnotationEntry:
 def insert_annotation(
     cursor: Cursor,
     annotation: AnnotationEntry,
-    verbose: bool = False,
 ) -> None:
     if True:
         # disable uploading annotations for now because of planned schema changes
@@ -91,4 +90,4 @@ def insert_annotation(
         """
         )
 
-    execute_updates(sql_statements, cursor, verbose)
+    execute_updates(sql_statements, cursor)

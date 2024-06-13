@@ -42,12 +42,12 @@ def create_cursor(config: MzDbConfig, connection: Connection | None = None) -> C
 
 
 def execute_updates(
-    sql_statements: list[str], cursor: Cursor, verbose: bool = False
+    sql_statements: list[str], cursor: Cursor, log_sql: bool = True
 ) -> None:
     for sql in sql_statements:
         try:
             sql = dedent(sql)
-            if verbose:
+            if log_sql:
                 print(f"> {sql}")
 
             cursor.execute(sql)
