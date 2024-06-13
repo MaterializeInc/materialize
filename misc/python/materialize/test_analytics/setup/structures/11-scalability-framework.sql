@@ -20,6 +20,7 @@ CREATE TABLE scalability_framework_result (
    build_step_id TEXT NOT NULL,
    framework_version TEXT NOT NULL,
    workload_name TEXT NOT NULL,
+   workload_group TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
    workload_version TEXT NOT NULL,
    concurrency INT NOT NULL,
    count INT,
@@ -30,6 +31,7 @@ CREATE VIEW v_scalability_framework_result_per_day AS
     SELECT
         branch,
         workload_name,
+        workload_group,
         framework_version,
         workload_version,
         concurrency,
@@ -45,6 +47,7 @@ CREATE VIEW v_scalability_framework_result_per_day AS
     GROUP BY
         branch,
         workload_name,
+        workload_group,
         framework_version,
         workload_version,
         concurrency,

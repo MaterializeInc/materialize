@@ -130,7 +130,7 @@ class BenchmarkExecutor:
         workload: Workload,
     ) -> WorkloadResult:
         print(f"Running workload {workload.name()} on {endpoint}")
-        self.result.record_workload_version(workload)
+        self.result.record_workload_metadata(workload)
 
         df_totals = DfTotals()
         df_details = DfDetails()
