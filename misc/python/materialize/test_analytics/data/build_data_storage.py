@@ -59,8 +59,7 @@ def insert_build(cursor: Cursor) -> None:
         (
             SELECT 1
             FROM build
-            WHERE pipeline = '{pipeline}'
-            AND build_number = {build_number}
+            WHERE build_id = '{build_id}'
         );
         """
     )
