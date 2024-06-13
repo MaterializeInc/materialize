@@ -33,6 +33,7 @@ USERS = {
     ADMIN_USER: {
         "email": ADMIN_USER,
         "password": str(uuid.uuid4()),
+        "id": str(uuid.uuid4()),
         "tenant_id": TENANT_ID,
         "initial_api_tokens": [
             {
@@ -45,6 +46,7 @@ USERS = {
     OTHER_USER: {
         "email": OTHER_USER,
         "password": str(uuid.uuid4()),
+        "id": str(uuid.uuid4()),
         "tenant_id": TENANT_ID,
         "initial_api_tokens": [
             {
