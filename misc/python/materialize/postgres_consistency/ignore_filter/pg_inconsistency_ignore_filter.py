@@ -26,6 +26,7 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     involves_data_type_category,
     is_any_date_time_expression,
     is_known_to_involve_exact_data_types,
+    is_operation_tagged,
     matches_any_expression_arg,
     matches_fun_by_any_name,
     matches_fun_by_name,
@@ -331,7 +332,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Consequence of #23571")
 
-        if db_operation.pattern == "CAST ($ AS $)":
+        if db_operation.is_tagged(TAG_CASTING):
             casting_target = expression.args[1]
             assert isinstance(casting_target, EnumConstant)
 
@@ -359,7 +360,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             }:
                 return YesIgnore("#27457: ordering on array different (<, <=, ...)")
 
-        if db_operation.pattern == "CAST ($ AS $)" and expression.matches(
+        if db_operation.is_tagged(TAG_CASTING) and expression.matches(
             partial(
                 is_known_to_involve_exact_data_types,
                 internal_data_type_identifiers={
@@ -679,7 +680,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
-            partial(matches_op_by_pattern, pattern="CAST ($ AS $)"),
+            partial(is_operation_tagged, tag=TAG_CASTING),
             True,
         ) and query_template.matches_specific_select_or_filter_expression(
             col_index,
