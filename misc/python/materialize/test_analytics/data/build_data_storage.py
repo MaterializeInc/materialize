@@ -59,8 +59,7 @@ def insert_build(cursor: Cursor) -> None:
         (
             SELECT 1
             FROM build
-            WHERE pipeline = '{pipeline}'
-            AND build_number = {build_number}
+            WHERE build_id = '{build_id}'
         );
         """
     )
@@ -115,7 +114,13 @@ def insert_build_step(
           {was_successful},
           '{aws_instance_type}',
           NULL
-        ;
+        FROM build_step
+        WHERE NOT EXISTS
+        (
+            SELECT 1
+            FROM build_step
+            WHERE build_step_id = '{step_id}'
+        );
         """
     )
 
