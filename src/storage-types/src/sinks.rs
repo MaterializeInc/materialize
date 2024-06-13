@@ -10,9 +10,11 @@
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use mz_dyncfg::ConfigSet;
+use mz_ore::num::NonNeg;
 use mz_persist_types::ShardId;
 use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -382,6 +384,36 @@ impl KafkaSinkCompressionType {
     }
 }
 
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+pub struct KafkaSinkTopicOptions {
+    /// The replication factor for the topic.
+    /// If `None`, the broker default will be used.
+    pub replication_factor: Option<NonNeg<i32>>,
+    /// The number of partitions to create.
+    /// If `None`, the broker default will be used.
+    pub partition_count: Option<NonNeg<i32>>,
+    /// The initial configuration parameters for the topic.
+    pub topic_config: BTreeMap<String, String>,
+}
+
+impl RustType<ProtoKafkaSinkTopicOptions> for KafkaSinkTopicOptions {
+    fn into_proto(&self) -> ProtoKafkaSinkTopicOptions {
+        ProtoKafkaSinkTopicOptions {
+            replication_factor: self.replication_factor.map(|f| *f),
+            partition_count: self.partition_count.map(|f| *f),
+            topic_config: self.topic_config.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaSinkTopicOptions) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaSinkTopicOptions {
+            replication_factor: proto.replication_factor.map(NonNeg::try_from).transpose()?,
+            partition_count: proto.partition_count.map(NonNeg::try_from).transpose()?,
+            topic_config: proto.topic_config,
+        })
+    }
+}
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: GlobalId,
@@ -395,6 +427,10 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub headers_index: Option<usize>,
     pub value_desc: RelationDesc,
     pub topic: String,
+    /// Options to use when creating the topic if it doesn't already exist.
+    pub topic_options: KafkaSinkTopicOptions,
+    /// Options to use when creating the progress topic if it doesn't already exist.
+    pub progress_topic_options: KafkaSinkTopicOptions,
     pub compression_type: KafkaSinkCompressionType,
     pub progress_group_id: KafkaIdStyle,
     pub transactional_id: KafkaIdStyle,
@@ -488,6 +524,8 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             compression_type,
             progress_group_id,
             transactional_id,
+            topic_options,
+            progress_topic_options,
         } = self;
 
         let compatibility_checks = [
@@ -519,6 +557,11 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             (
                 transactional_id == &other.transactional_id,
                 "transactional_id",
+            ),
+            (topic_options == &other.topic_options, "topic_config"),
+            (
+                progress_topic_options == &other.progress_topic_options,
+                "progress_topic_options",
             ),
         ];
         for (compatible, field) in compatibility_checks {
@@ -553,6 +596,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             compression_type,
             progress_group_id,
             transactional_id,
+            topic_options,
+            progress_topic_options,
         } = self;
         KafkaSinkConnection {
             connection_id,
@@ -566,6 +611,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             compression_type,
             progress_group_id,
             transactional_id,
+            topic_options,
+            progress_topic_options,
         }
     }
 }
@@ -627,6 +674,8 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             }),
             progress_group_id: Some(self.progress_group_id.into_proto()),
             transactional_id: Some(self.transactional_id.into_proto()),
+            topic_options: Some(self.topic_options.into_proto()),
+            progress_topic_options: Some(self.progress_topic_options.into_proto()),
         }
     }
 
@@ -667,6 +716,14 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             transactional_id: proto
                 .transactional_id
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::transactional_id")?,
+            topic_options: match proto.topic_options {
+                Some(topic_options) => topic_options.into_rust()?,
+                None => Default::default(),
+            },
+            progress_topic_options: match proto.progress_topic_options {
+                Some(progress_topic_options) => progress_topic_options.into_rust()?,
+                None => Default::default(),
+            },
         })
     }
 }

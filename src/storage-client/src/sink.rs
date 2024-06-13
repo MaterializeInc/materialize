@@ -16,7 +16,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::ContextCreationErrorExt;
-use mz_storage_types::sinks::KafkaSinkConnection;
+use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkTopicOptions};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::ClientContext;
 use tracing::warn;
@@ -141,50 +141,6 @@ async fn discover_topic_configs<C: ClientContext>(
     })
 }
 
-/// Configuration of a topic created by `ensure_kafka_topic`.
-// TODO(benesch): some fields here use `-1` to indicate broker default, while
-// others use `None` to indicate broker default and `-1` has a different special
-// meaning. This is not very Rusty and very easy to get wrong. We should adjust
-// the API for this method to use types that are safer and have more obvious
-// meaning. For example, `partition_count` could have type
-// `Option<NonNeg<i32>>`, where `-1` is prohibited as a value and the Rustier
-// `None` value represents the broker default (n.b.: `u32` is not a good choice
-// because the maximum number of Kafka partitions is `i32::MAX`, not
-// `u32::MAX`).
-#[derive(Debug, Clone)]
-pub struct TopicConfig {
-    /// The number of partitions to create.
-    ///
-    /// Use `-1` to indicate broker default.
-    pub partition_count: i32,
-    /// The replication factor.
-    ///
-    /// Use `-1` to indicate broker default.
-    pub replication_factor: i32,
-    /// Describes how to clean up old data in the topic.
-    pub cleanup_policy: TopicCleanupPolicy,
-}
-
-/// Describes how to clean up old data in the topic.
-#[derive(Debug, Clone)]
-pub enum TopicCleanupPolicy {
-    /// Clean up the topic using a time and/or size based retention policies.
-    Retention {
-        /// A time-based retention policy.
-        ///
-        /// `None` indicates broker default. `Some(-1)` indicates infinite
-        /// retention.
-        ms: Option<i64>,
-        /// A size based retention policy.
-        ///
-        /// `None` indicates broker default. `Some(-1)` indicates infinite
-        /// retention.
-        bytes: Option<i64>,
-    },
-    /// Clean up the topic using key-based compaction.
-    Compaction,
-}
-
 /// Ensures that the named Kafka topic exists.
 ///
 /// If the topic does not exist, the function creates the topic with the
@@ -196,11 +152,11 @@ pub async fn ensure_kafka_topic(
     connection: &KafkaSinkConnection,
     storage_configuration: &StorageConfiguration,
     topic: &str,
-    TopicConfig {
-        mut partition_count,
-        mut replication_factor,
-        cleanup_policy,
-    }: TopicConfig,
+    KafkaSinkTopicOptions {
+        partition_count,
+        replication_factor,
+        topic_config,
+    }: &KafkaSinkTopicOptions,
 ) -> Result<bool, anyhow::Error> {
     let client: AdminClient<_> = connection
         .connection
@@ -213,55 +169,48 @@ pub async fn ensure_kafka_topic(
         )
         .await
         .add_context("creating admin client failed")?;
-    // if either partition count or replication factor should be defaulted to the broker's config
-    // (signaled by a value of -1), explicitly poll the broker to discover the defaults.
+    let mut partition_count = partition_count.map(|f| *f);
+    let mut replication_factor = replication_factor.map(|f| *f);
+    // If either partition count or replication factor should be defaulted to the broker's config
+    // (signaled by a value of None), explicitly poll the broker to discover the defaults.
     // Newer versions of Kafka can instead send create topic requests with -1 and have this happen
     // behind the scenes, but this is unsupported and will result in errors on pre-2.4 Kafka.
-    if partition_count == -1 || replication_factor == -1 {
+    if partition_count.is_none() || replication_factor.is_none() {
         let fetch_timeout = storage_configuration
             .parameters
             .kafka_timeout_config
             .fetch_metadata_timeout;
         match discover_topic_configs(&client, topic, fetch_timeout).await {
             Ok(configs) => {
-                if partition_count == -1 {
-                    partition_count = configs.partition_count;
+                if partition_count.is_none() {
+                    partition_count = Some(configs.partition_count);
                 }
-                if replication_factor == -1 {
-                    replication_factor = configs.replication_factor;
+                if replication_factor.is_none() {
+                    replication_factor = Some(configs.replication_factor);
                 }
             }
             Err(e) => {
-                // Since recent versions of Kafka can handle an explicit -1 config, this
-                // request will probably still succeed. Logging anyways for visibility.
+                // Recent versions of Kafka can handle an explicit -1 config, so use this instead
+                // and the request will probably still succeed. Logging anyways for visibility.
                 warn!("Failed to discover default values for topic configs: {e}");
+                if partition_count.is_none() {
+                    partition_count = Some(-1);
+                }
+                if replication_factor.is_none() {
+                    replication_factor = Some(-1);
+                }
             }
         };
     }
 
     let mut kafka_topic = NewTopic::new(
         topic,
-        partition_count,
-        TopicReplication::Fixed(replication_factor),
+        partition_count.expect("always set above"),
+        TopicReplication::Fixed(replication_factor.expect("always set above")),
     );
 
-    let retention_ms;
-    let retention_bytes;
-    match cleanup_policy {
-        TopicCleanupPolicy::Retention { ms, bytes } => {
-            kafka_topic = kafka_topic.set("cleanup.policy", "delete");
-            if let Some(ms) = ms {
-                retention_ms = ms.to_string();
-                kafka_topic = kafka_topic.set("retention.ms", &retention_ms);
-            }
-            if let Some(bytes) = &bytes {
-                retention_bytes = bytes.to_string();
-                kafka_topic = kafka_topic.set("retention.bytes", &retention_bytes);
-            }
-        }
-        TopicCleanupPolicy::Compaction => {
-            kafka_topic = kafka_topic.set("cleanup.policy", "compact");
-        }
+    for (key, value) in topic_config {
+        kafka_topic = kafka_topic.set(key, value);
     }
 
     mz_kafka_util::admin::ensure_topic(

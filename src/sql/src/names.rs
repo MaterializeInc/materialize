@@ -1778,6 +1778,10 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     .map(|v| self.fold_with_option_value(v))
                     .collect(),
             ),
+            Map(map) => Map(map
+                .into_iter()
+                .map(|(k, v)| (k, self.fold_with_option_value(v)))
+                .collect()),
             Value(v) => Value(self.fold_value(v)),
             DataType(dt) => DataType(self.fold_data_type(dt)),
             Secret(secret) => {
