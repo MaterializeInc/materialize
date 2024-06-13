@@ -121,7 +121,7 @@ async fn test_client() -> Result<(), anyhow::Error> {
         assert_eq!(schema_test_id, res.id);
         assert_raw_schemas_eq(schema_v1, &res.raw);
 
-        let res = client.get_subject(subject_with_slashes).await?;
+        let res = client.get_subject_latest(subject_with_slashes).await?;
         assert_eq!(1, res.version);
         assert_eq!(subject_with_slashes, res.name);
         assert_eq!(schema_test_id, res.schema.id);

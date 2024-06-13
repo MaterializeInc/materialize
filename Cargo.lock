@@ -10626,6 +10626,7 @@ dependencies = [
  "postgres-types",
  "predicates",
  "proc-macro2",
+ "proptest-derive",
  "prost",
  "prost-reflect",
  "prost-types",
