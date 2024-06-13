@@ -1400,6 +1400,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn proptest_datums() {
         let strat = any::<ColumnType>().prop_flat_map(|ty| {
             proptest::collection::vec(arb_datum_for_column(&ty), 0..16)
