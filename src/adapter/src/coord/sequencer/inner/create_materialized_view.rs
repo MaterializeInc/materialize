@@ -865,6 +865,7 @@ impl Coordinator {
             df_meta,
             stage,
             plan::ExplaineeStatementKind::CreateMaterializedView,
+            None,
         )?;
 
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))

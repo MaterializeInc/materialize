@@ -162,6 +162,7 @@ use crate::coord::read_policy::ReadHoldsInner;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
+use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{
@@ -549,6 +550,7 @@ pub struct PeekStageFinish {
     /// When present, an optimizer trace to be used for emitting a plan insights
     /// notice.
     plan_insights_optimizer_trace: Option<OptimizerTrace>,
+    insights_ctx: Option<PlanInsightsContext>,
     global_lir_plan: optimize::peek::GlobalLirPlan,
     optimization_finished_at: EpochMillis,
 }
@@ -567,6 +569,7 @@ pub struct PeekStageExplainPlan {
     optimizer: optimize::peek::Optimizer,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
+    insights_ctx: Option<PlanInsightsContext>,
 }
 
 #[derive(Debug)]
@@ -679,6 +682,16 @@ impl ExplainContext {
             ExplainContext::PlanInsightsNotice(..) => true,
             ExplainContext::Pushdown => false,
         }
+    }
+
+    fn needs_plan_insights(&self) -> bool {
+        matches!(
+            self,
+            ExplainContext::Plan(ExplainPlanContext {
+                stage: ExplainStage::PlanInsights,
+                ..
+            }) | ExplainContext::PlanInsightsNotice(_)
+        )
     }
 }
 

@@ -32,7 +32,7 @@ use tracing::dispatcher;
 use tracing_subscriber::prelude::*;
 
 use crate::coord::peek::FastPathPlan;
-use crate::explain::insights;
+use crate::explain::insights::{self, PlanInsightsContext};
 use crate::explain::Explainable;
 use crate::AdapterError;
 
@@ -137,6 +137,7 @@ impl OptimizerTrace {
         dataflow_metainfo: DataflowMetainfo,
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
+        insights_ctx: Option<PlanInsightsContext>,
     ) -> Result<Vec<Row>, AdapterError> {
         let collect_all = |format| {
             self.collect_all(
@@ -200,6 +201,15 @@ impl OptimizerTrace {
                     })
                 };
 
+                let is_fast_path = fast_path_plan.is_some();
+                let mut plan_insights =
+                    insights::plan_insights(humanizer, global_plan, fast_path_plan);
+                if let (Some(plan_insights), Some(insights_ctx), false) =
+                    (plan_insights.as_mut(), insights_ctx, is_fast_path)
+                {
+                    plan_insights.compute_fast_path_clusters(insights_ctx);
+                }
+
                 let output = serde_json::json!({
                     "plans": {
                         "raw": get_plan(NamedPlan::Raw),
@@ -208,7 +218,7 @@ impl OptimizerTrace {
                             "fast_path": get_plan(NamedPlan::FastPath),
                         }
                     },
-                    "insights": insights::plan_insights(humanizer, global_plan, fast_path_plan),
+                    "insights": plan_insights,
                 });
                 let output = serde_json::to_string_pretty(&output).expect("JSON string");
                 vec![Row::pack_slice(&[Datum::from(output.as_str())])]
@@ -277,6 +287,7 @@ impl OptimizerTrace {
         row_set_finishing: Option<RowSetFinishing>,
         target_cluster: Option<&str>,
         dataflow_metainfo: DataflowMetainfo,
+        insights_ctx: Option<PlanInsightsContext>,
     ) -> Result<String, AdapterError> {
         let rows = self.into_rows(
             ExplainFormat::Json,
@@ -288,6 +299,7 @@ impl OptimizerTrace {
             dataflow_metainfo,
             ExplainStage::PlanInsights,
             plan::ExplaineeStatementKind::Select,
+            insights_ctx,
         )?;
 
         // When using `ExplainStage::PlanInsights`, we're guaranteed that the

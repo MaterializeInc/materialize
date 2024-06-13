@@ -469,6 +469,7 @@ impl Coordinator {
             Default::default(),
             stage,
             plan::ExplaineeStatementKind::CreateView,
+            None,
         )?;
 
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))

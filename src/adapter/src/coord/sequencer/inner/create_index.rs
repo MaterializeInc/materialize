@@ -584,6 +584,7 @@ impl Coordinator {
             df_meta,
             stage,
             plan::ExplaineeStatementKind::CreateIndex,
+            None,
         )?;
 
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))

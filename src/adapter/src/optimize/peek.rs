@@ -104,6 +104,14 @@ impl Optimizer {
     pub fn config(&self) -> &OptimizerConfig {
         &self.config
     }
+
+    pub fn metrics(&self) -> &OptimizerMetrics {
+        &self.metrics
+    }
+
+    pub fn duration(&self) -> Duration {
+        self.duration
+    }
 }
 
 // A bogey `Debug` implementation that hides fields. This is needed to make the
