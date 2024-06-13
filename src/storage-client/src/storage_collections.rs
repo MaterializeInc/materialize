@@ -1412,16 +1412,11 @@ where
         // Reorder in dependency order.
         to_register.sort_by_key(|(id, ..)| *id);
 
-        // New collections that are being created.
-        let mut new_collections = BTreeSet::new();
-
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
         for (id, mut description, write_handle, since_handle, metadata) in to_register {
-            new_collections.insert(id);
-
             // Ensure that the ingestion has an export for its primary source.
             // This is done in an akward spot to appease the borrow checker.
             if let DataSource::Ingestion(ingestion) = &mut description.data_source {
