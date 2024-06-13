@@ -16,9 +16,9 @@
 -- meta data of the build
 CREATE TABLE build (
    pipeline TEXT NOT NULL,
-   build_number INT NOT NULL,
+   build_number UINT4 NOT NULL,
    build_id TEXT NOT NULL,
-   branch TEXT,
+   branch TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
    commit_hash TEXT NOT NULL,
    mz_version TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
    date TIMESTAMPTZ NOT NULL,
@@ -33,10 +33,10 @@ CREATE TABLE build_step (
     build_step_id TEXT NOT NULL,
     build_id TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
     pipeline TEXT, -- should eventually be removed (but will break on older versions)
-    build_number INT, -- should eventually be removed (but will break on older versions)
+    build_number UINT4, -- should eventually be removed (but will break on older versions)
     build_step_key TEXT NOT NULL,
-    shard_index INT,
-    retry_count INT NOT NULL,
+    shard_index UINT4,
+    retry_count UINT4 NOT NULL,
     url TEXT NOT NULL,
     is_latest_retry BOOL NOT NULL,
     success BOOL NOT NULL,
