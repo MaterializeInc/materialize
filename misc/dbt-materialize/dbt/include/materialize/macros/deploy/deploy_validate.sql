@@ -77,7 +77,7 @@
     {% endfor %}
 {% endmacro %}
 
-{% macro deploy_sink_validation() %}
+{% macro deploy_validate() %}
     {% set current_target_name = target.name %}
     {% set deployment = var('deployment') %}
     {% set target_config = deployment[current_target_name] %}
