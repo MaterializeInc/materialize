@@ -67,7 +67,15 @@ rm -rf cores
 
 bin/ci-builder run stable zstd --rm parallel-workload-queries.log || true
 
-mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-ps-a.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml')
+for i in prof-*.pb.gz; do
+    gzip -d "$i" || true
+done
+rm -f heap-profiles.tar.zstd
+rm -f prof-*latest.pb
+tar -I "zstd -19" -cvpf heap-profiles.tar.zstd prof-*.pb || true
+rm -f prof-*.pb || true
+
+mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-ps-a.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml' -o -name 'heap-profiles.tar.zstd')
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 buildkite-agent artifact upload "$artifacts_str"
 bin/ci-builder run stable bin/ci-annotate-errors "${artifacts[@]}"

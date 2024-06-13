@@ -82,15 +82,15 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     mzcompose --mz-quiet cp balancerd:/usr/local/bin/balancerd coverage/ || true
 fi
 
-if is_truthy "${CI_HEAP_PROFILES:-}"; then
-    (while true; do
-        sleep 5
-        # faketty because otherwise docker will complain about not being inside
-        # of a TTY when run in a background job
-        faketty bin/ci-builder run stable bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
-    done
-    ) &
-fi
+rm -f prof-*.gz
+
+(while true; do
+    sleep 5
+    # faketty because otherwise docker will complain about not being inside
+    # of a TTY when run in a background job
+    faketty bin/ci-builder run stable bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
+done
+) &
 
 ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]}\`"
 

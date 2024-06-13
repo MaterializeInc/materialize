@@ -7,10 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# ci_upload_heap_profiles.py - Upload memory heap profiles during an mzcompose run
+# ci_upload_heap_profiles.py - Record and upload memory heap profiles during an mzcompose run
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -26,7 +27,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         prog="ci-upload-heap-profiles",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="ci-upload-heap-profiles uploads memory heap profiles during an mzcompose run",
+        description="ci-upload-heap-profiles records and uploads memory heap profiles during an mzcompose run",
     )
 
     parser.add_argument("composition", type=str)
@@ -50,6 +51,9 @@ def main() -> int:
         filename = f"prof-{service}{suffix}-{time_str}.pb.gz"
         with open(filename, "wb") as f:
             f.write(heap_profile)
+        filename_latest = f"prof-{service}{suffix}-latest.pb.gz"
+        with open(filename_latest, "wb") as f:
+            f.write(heap_profile)
         if args.upload:
             subprocess.run(
                 [
@@ -58,9 +62,10 @@ def main() -> int:
                     "upload",
                     "--log-level",
                     "error",
-                    filename,
+                    filename_latest,
                 ]
             )
+        os.remove(filename_latest)
 
     services = json.loads(
         subprocess.run(
