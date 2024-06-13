@@ -222,7 +222,8 @@ pub async fn ensure_kafka_topic(
     .with_context(|| format!("Error creating topic {} for sink", topic))
 }
 
-/// Publish value and optional key schemas for a given topic.
+/// Publish value and optional key schemas for a given topic, and set
+/// compatibility levels for the schemas if applicable.
 ///
 /// TODO(benesch): do we need to delete the Kafka topic if publishing the
 /// schema fails?
@@ -231,34 +232,62 @@ pub async fn publish_kafka_schemas(
     topic: String,
     key_schema: Option<String>,
     key_schema_type: Option<mz_ccsr::SchemaType>,
-    value_schema: &str,
+    value_schema: String,
     value_schema_type: mz_ccsr::SchemaType,
+    key_compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
+    value_compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
 ) -> Result<(Option<i32>, i32), anyhow::Error> {
-    let value_schema_id = ccsr
-        .publish_schema(
-            &format!("{}-value", topic),
-            value_schema,
-            value_schema_type,
-            &[],
-        )
+    let key_subject = format!("{}-key", topic);
+    let value_subject = format!("{}-value", topic);
+
+    if let Some(key_compatibility_level) = key_compatibility_level {
+        let ccsr = ccsr.clone();
+        let key_subject = key_subject.clone();
+        async move {
+            ccsr.set_subject_compatibility_level(&key_subject, &key_compatibility_level)
+                .await
+        }
+        .run_in_task(|| "set_key_compatibility_level".to_string())
         .await
-        .context("unable to publish value schema to registry in kafka sink")?;
+        .context("unable to update key schema compatibility level in kafka sink")?;
+    }
+
+    if let Some(value_compatibility_level) = value_compatibility_level {
+        let ccsr = ccsr.clone();
+        let value_subject = value_subject.clone();
+        async move {
+            ccsr.set_subject_compatibility_level(&value_subject, &value_compatibility_level)
+                .await
+        }
+        .run_in_task(|| "set_value_compatibility_level".to_string())
+        .await
+        .context("unable to update value schema compatibility level in kafka sink")?;
+    }
 
     let key_schema_id = if let Some(key_schema) = key_schema {
+        let ccsr = ccsr.clone();
         let key_schema_type =
             key_schema_type.ok_or_else(|| anyhow!("expected schema type for key schema"))?;
         Some(
             async move {
-                ccsr.publish_schema(&format!("{}-key", topic), &key_schema, key_schema_type, &[])
+                ccsr.publish_schema(&key_subject, &key_schema, key_schema_type, &[])
                     .await
             }
-            .run_in_task(|| "publish_kafka_schemas".to_string())
+            .run_in_task(|| "publish_kafka_key_schema".to_string())
             .await
             .context("unable to publish key schema to registry in kafka sink")?,
         )
     } else {
         None
     };
+
+    let value_schema_id = async move {
+        ccsr.publish_schema(&value_subject, &value_schema, value_schema_type, &[])
+            .await
+    }
+    .run_in_task(|| "publish_kafka_value_schema".to_string())
+    .await
+    .context("unable to publish value schema to registry in kafka sink")?;
 
     Ok((key_schema_id, value_schema_id))
 }
