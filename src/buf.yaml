@@ -60,3 +60,4 @@ build:
   excludes:
     # external code
     - testdrive/ci/protobuf-bin
+    - testdrive/ci/protobuf-include
