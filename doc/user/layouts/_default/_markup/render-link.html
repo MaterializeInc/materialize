@@ -1,3 +1,10 @@
 {{- $url := .Destination | safeURL -}}
-<a href="{{if hasPrefix $url "/"}}{{$url | relURL}}{{else}}{{$url}}{{end}}"{{with .Title}} title="{{.}}"{{end}}>{{.Text | safeHTML}}</a>
+{{- $parentPath := partial "relative-link.html" . -}}
+<a href="
+  {{- if hasPrefix $url "/" -}}
+    {{- $parentPath }}{{ $url | relURL -}}
+  {{- else -}}
+    {{- $url -}}
+  {{- end -}}
+" {{with .Title}} title="{{.}}"{{end}}>{{.Text | safeHTML}}</a>
 {{- /* Chomp trailing newline. */ -}}

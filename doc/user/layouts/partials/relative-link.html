@@ -1,0 +1,10 @@
+{{- $baseURL := .Page.Site.BaseURL -}}
+{{- $parsedURL := urls.Parse $baseURL -}}
+{{/*
+  This is the subdirectory within which the docs are hosted. We prepend it to relative URLs
+  since Hugo versions > 0.87 changed how relative URLs are generated and we wish to maintain
+  the legacy behavior.
+  */}}
+{{- $parentPath := strings.TrimRight "/" $parsedURL.Path -}}
+{{- /* Chomp trailing newline. */ -}}
+{{ return $parentPath }}

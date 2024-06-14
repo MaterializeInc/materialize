@@ -1,3 +1,12 @@
-<a class="cta {{with .Get "full_width"}}full_width{{end}}" href="{{ .Get "href" | relURL }}" {{with .Get "target"}}target="{{.}}"{{end}}}>
+{{- $url := .Get "href" | safeURL -}}
+{{- $parentPath := partial "relative-link.html" . -}}
+<a class="cta {{with .Get "full_width"}}full_width{{end}}" href="
+  {{- if hasPrefix $url "/" -}}
+    {{- $parentPath }}{{ $url | relURL -}}
+  {{- else -}}
+    {{- $url -}}
+  {{- end -}}
+" {{with .Get "target"}}target="{{.}}"{{end}}>
   {{ .Inner | $.Page.RenderString }}
 </a>
+{{- /* Chomp trailing newline. */ -}}
