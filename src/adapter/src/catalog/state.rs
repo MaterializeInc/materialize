@@ -783,7 +783,7 @@ impl CatalogState {
     pub(crate) fn parse_plan(
         create_sql: &str,
         pcx: Option<&PlanContext>,
-        catalog: &mut ConnCatalog,
+        catalog: &ConnCatalog,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
@@ -837,9 +837,9 @@ impl CatalogState {
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
     ) -> Result<CatalogItem, AdapterError> {
-        let mut session_catalog = self.for_system_session();
+        let session_catalog = self.for_system_session();
 
-        let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &mut session_catalog)?;
+        let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &session_catalog)?;
 
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
