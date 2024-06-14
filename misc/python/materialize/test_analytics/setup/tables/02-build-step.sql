@@ -13,20 +13,6 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- meta data of the build
-CREATE TABLE build (
-   pipeline TEXT NOT NULL,
-   build_number UINT4 NOT NULL,
-   build_id TEXT NOT NULL,
-   branch TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
-   commit_hash TEXT NOT NULL,
-   mz_version TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
-   date TIMESTAMPTZ NOT NULL,
-   build_url TEXT NOT NULL,
-   data_version TEXT, -- should eventually be changed to INT and NOT NULL (but will break on versions that do not set it)
-   remarks TEXT
-);
-
 -- meta data of the build step
 CREATE TABLE build_step (
     -- build_step_id is assumed to be globally unique for now
