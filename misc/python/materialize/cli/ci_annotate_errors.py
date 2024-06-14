@@ -159,6 +159,7 @@ class ObservedError(ObservedBaseError):
     error_details: str | None = None
     error_type: str
     location: str
+    location_url: str | None = None
     max_error_length: int = 10000
     max_details_length: int = 10000
 
@@ -166,7 +167,6 @@ class ObservedError(ObservedBaseError):
 @dataclass(kw_only=True, unsafe_hash=True)
 class ObservedErrorWithIssue(ObservedError, WithIssue):
     issue_is_closed: bool
-    location_url: str | None = None
 
     def _get_issue_presentation(self) -> str:
         issue_presentation = f"#{self.issue_number}"
@@ -187,9 +187,11 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
         else:
             location_markdown = f'<a href="{self.location_url}">{self.location}</a>'
 
-        result = f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
+        result = f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {location_markdown}:\n{format_error_message(self.error_message, self.max_details_length)}'
         if self.error_details is not None:
-            result += f"\n{format_error_message(self.error_details)}"
+            result += (
+                f"\n{format_error_message(self.error_details, self.max_details_length)}"
+            )
         return result
 
 
@@ -211,7 +213,12 @@ class ObservedErrorWithLocation(ObservedError):
         else:
             formatted_error_details = ""
 
-        return f"{self.error_type} in {self.location}:\n{format_error_message(self.error_message, self.max_error_length)}{formatted_error_details}"
+        if self.location_url is None:
+            location_markdown = self.location
+        else:
+            location_markdown = f'<a href="{self.location_url}">{self.location}</a>'
+
+        return f"{self.error_type} in {location_markdown}:\n{format_error_message(self.error_message, self.max_error_length)}{formatted_error_details}"
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -442,6 +449,7 @@ def annotate_logged_errors(
                                 issue_number=issue.info["number"],
                                 issue_is_closed=True,
                                 location=location,
+                                location_url=location_url,
                             )
                         )
                         already_reported_issue_numbers.add(issue.info["number"])
@@ -452,6 +460,7 @@ def annotate_logged_errors(
                         error_message=error_message,
                         error_details=error_details,
                         location=location,
+                        location_url=location_url,
                         error_type="Unknown error",
                         internal_error_type="UNKNOWN ERROR",
                     )
