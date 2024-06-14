@@ -39,3 +39,30 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_day AS
         scale,
         date_trunc('day', date)
 ;
+
+CREATE OR REPLACE VIEW v_feature_benchmark_result_per_week AS
+    SELECT
+        branch,
+        scenario_name,
+        framework_version,
+        scenario_version,
+        scale,
+        date_trunc('week', date) AS day,
+        max(wallclock) AS max_wallclock,
+        max(messages) AS max_messages,
+        max(memory_mz) AS max_memory_mz,
+        max(memory_clusterd) AS max_memory_clusterd
+    FROM feature_benchmark_result r
+    INNER JOIN build b
+    ON b.build_id = r.build_id
+    INNER JOIN build_step bs
+    ON bs.build_step_id = r.build_step_id
+    WHERE bs.is_latest_retry = TRUE
+    GROUP BY
+        branch,
+        scenario_name,
+        framework_version,
+        scenario_version,
+        scale,
+        date_trunc('week', date)
+;
