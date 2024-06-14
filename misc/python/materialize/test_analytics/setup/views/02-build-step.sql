@@ -32,3 +32,23 @@ INNER JOIN build_step bs
   ON b.build_id = bs.build_id
 WHERE bs.success = TRUE
   AND bs.is_latest_retry = TRUE;
+
+CREATE OR REPLACE VIEW v_build_step_success AS
+SELECT
+    b.branch,
+    b.pipeline,
+    bs.build_step_key,
+    bs.shard_index,
+    count(*) AS count_all,
+    sum(CASE WHEN bs.success THEN 1 ELSE 0 END) AS count_successful,
+    avg(bs.retry_count) AS mean_retry_count
+FROM build b
+INNER JOIN build_step bs
+  ON b.build_id = bs.build_id
+WHERE bs.is_latest_retry = TRUE
+GROUP BY
+    b.branch,
+    b.pipeline,
+    bs.build_step_key,
+    bs.shard_index
+;
