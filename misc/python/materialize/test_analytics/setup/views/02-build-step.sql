@@ -13,16 +13,19 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- meta data of (the latest retry of) each eventually successful benchmark build step
+-- meta data of (the latest retry of) each eventually successful build step
 CREATE OR REPLACE VIEW v_successful_build_steps AS
 SELECT
+    b.build_id,
+    bs.build_step_id,
+    b.branch,
     b.pipeline,
     b.build_number,
-    b.build_id,
     b.commit_hash,
     b.mz_version,
     b.date,
     b.build_url,
+    bs.build_step_key,
     bs.shard_index
 FROM build b
 INNER JOIN build_step bs
