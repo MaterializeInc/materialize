@@ -226,6 +226,15 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             )
             .await?;
 
+            if let Some(active_pid) = slot_metadata.active_pid {
+                tracing::warn!(
+                    %id, %active_pid,
+                    "replication slot already in use; \
+                    replication will likely fail to start; \
+                    this is typically caused by a zombie connection from a prior incarnation of the source"
+                );
+            }
+
             let resume_upper = Antichain::from_iter(
                 subsource_resume_uppers
                     .values()
