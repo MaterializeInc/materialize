@@ -56,6 +56,7 @@
         AND upstream_relation_schemas.name = {{ dbt.string_literal(schema) }};
     {% endset %}
     {% set results = run_query(query) %}
+    {{ log("Found " ~ results.rows|length ~ " sinks in schema: " ~ schema, info=True) }}
     {{ return(results) }}
 {% endmacro %}
 

@@ -555,3 +555,84 @@ class TestTargetDeploy:
                 "{ignore_existing_objects: True}",
             ]
         )
+
+
+class TestRunWithSinkAlter:
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "vars": {
+                "deployment": {
+                    "default": {
+                        "clusters": ["prod"],
+                        "schemas": ["prod"],
+                    }
+                },
+            }
+        }
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS sink CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS prod CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS prod CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP MATERIALIZED VIEW IF EXISTS prod.prod_view CASCADE")
+        project.run_sql(
+            "DROP MATERIALIZED VIEW IF EXISTS prod_dbt_deploy.prod_view CASCADE"
+        )
+        project.run_sql("DROP SINK IF EXISTS prod_dbt_deploy.sink CASCADE")
+
+    def test_dbt_deploy_with_sink(self, project):
+        project.run_sql("CREATE CLUSTER sink SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE MATERIALIZED VIEW prod.prod_view AS SELECT 1")
+        project.run_sql(
+            "CREATE MATERIALIZED VIEW prod_dbt_deploy.prod_view AS SELECT 1"
+        )
+        project.run_sql(
+            "CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (BROKER 'redpanda:9092', SECURITY PROTOCOL PLAINTEXT)"
+        )
+        project.run_sql(
+            "CREATE SINK prod.sink IN CLUSTER sink FROM prod.prod_view INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink') FORMAT JSON ENVELOPE DEBEZIUM"
+        )
+
+        # Get the IDs of the materialized views
+        before_view_id = project.run_sql(
+            "SELECT id FROM mz_materialized_views WHERE name = 'prod_view' AND schema_id = (SELECT id FROM mz_schemas WHERE name = 'prod')",
+            fetch="one",
+        )[0]
+        after_view_id = project.run_sql(
+            "SELECT id FROM mz_materialized_views WHERE name = 'prod_view' AND schema_id = (SELECT id FROM mz_schemas WHERE name = 'prod_dbt_deploy')",
+            fetch="one",
+        )[0]
+
+        before_sink = project.run_sql(
+            "SELECT name, id, create_sql FROM mz_sinks WHERE name = 'sink'",
+            fetch="one",
+        )
+        assert (
+            before_view_id in before_sink[2]
+        ), "Before deployment, the sink should point to the original view ID"
+
+        run_dbt(["run-operation", "deploy_promote"])
+
+        after_sink = project.run_sql(
+            "SELECT name, id, create_sql FROM mz_sinks WHERE name = 'sink'",
+            fetch="one",
+        )
+
+        assert (
+            after_view_id in after_sink[2]
+        ), "After deployment, the sink should point to the new view ID"
+
+        assert before_sink[0] == after_sink[0], "Sink name should be the same"
+        assert (
+            before_view_id != after_view_id
+        ), "Sink's view ID should be different after deployment"
+
+        run_dbt(["run-operation", "deploy_cleanup"])
