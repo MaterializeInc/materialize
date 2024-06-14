@@ -156,7 +156,6 @@ impl CatalogItemRebuilder {
                     None,
                     is_retained_metrics_object,
                     custom_logical_compaction_window,
-                    false,
                 )
                 .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")),
         }
@@ -445,7 +444,7 @@ impl Catalog {
                     let handle = mz_ore::task::spawn(
                         || "parse view",
                         async move {
-                            let res = task_state.parse_item(&create_sql, None, false, None, true);
+                            let res = task_state.parse_item(&create_sql, None, false, None);
                             (id, res)
                         }
                         .instrument(span),

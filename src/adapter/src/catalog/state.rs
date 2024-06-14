@@ -822,7 +822,7 @@ impl CatalogState {
 
     /// Parses the given SQL string into a pair of [`CatalogItem`].
     pub(crate) fn deserialize_item(&self, create_sql: &str) -> Result<CatalogItem, AdapterError> {
-        self.parse_item(create_sql, None, false, None, false)
+        self.parse_item(create_sql, None, false, None)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
@@ -836,15 +836,10 @@ impl CatalogState {
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
-        with_enable_for_item_parsing: bool,
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
 
-        let (plan, resolved_ids) = if with_enable_for_item_parsing {
-            Self::parse_plan_with_enable_for_item_parsing(create_sql, pcx, &mut session_catalog)?
-        } else {
-            Self::parse_plan(create_sql, pcx, &mut session_catalog)?
-        };
+        let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &mut session_catalog)?;
 
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {

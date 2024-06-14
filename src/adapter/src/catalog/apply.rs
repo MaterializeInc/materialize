@@ -698,7 +698,6 @@ impl CatalogState {
                         None,
                         index.is_retained_metrics_object,
                         if index.is_retained_metrics_object { Some(self.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
-                        false,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -1073,9 +1072,18 @@ impl BootstrapApplyState {
         retractions: &mut InProgressRetractions,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         match self {
-            // `Catalog::parse_builtin_views` enables all "enable_for_item_parsing" internally.
             BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions) => {
-                Catalog::parse_builtin_views(state, std::mem::take(builtin_view_additions)).await
+                // We enable all "enable_for_item_parsing" feature flags when applying item updates
+                // during bootstrap.
+                //
+                // See [`CatalogState::with_enable_for_item_parsing`] for more details.
+                let restore = state.system_configuration.clone();
+                state.system_configuration.enable_for_item_parsing();
+                let builtin_table_updates =
+                    Catalog::parse_builtin_views(state, std::mem::take(builtin_view_additions))
+                        .await;
+                state.system_configuration = restore;
+                builtin_table_updates
             }
             // We enable all "enable_for_item_parsing" feature flags when applying item updates
             // during bootstrap.
