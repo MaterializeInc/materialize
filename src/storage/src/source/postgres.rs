@@ -349,25 +349,39 @@ async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), Tran
     }
 }
 
+/// The state of a replication slot.
+struct SlotMetadata {
+    /// The process ID of the session using this slot if the slot is currently actively being used.
+    /// None if inactive.
+    active_pid: Option<i32>,
+    /// The address (LSN) up to which the logical slot's consumer has confirmed receiving data.
+    /// Data corresponding to the transactions committed before this LSN is not available anymore.
+    confirmed_flush_lsn: MzOffset,
+}
+
 /// Fetches the minimum LSN at which this slot can safely resume.
-async fn fetch_slot_resume_lsn(
+async fn fetch_slot_metadata(
     client: &Client,
     slot: &str,
     interval: Duration,
-) -> Result<MzOffset, TransientError> {
+) -> Result<SlotMetadata, TransientError> {
     loop {
-        let query = format!(
-            "SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{slot}'"
-        );
-        let Some(row) = simple_query_opt(client, &query).await? else {
+        let query = "SELECT active_pid, confirmed_flush_lsn
+                FROM pg_replication_slots WHERE slot_name = $1";
+        let Some(row) = client.query_opt(query, &[&slot]).await? else {
             return Err(TransientError::MissingReplicationSlot);
         };
 
-        match row.get("confirmed_flush_lsn") {
+        match row.get::<_, Option<PgLsn>>("confirmed_flush_lsn") {
             // For postgres, `confirmed_flush_lsn` means that the slot is able to produce
             // all transactions that happen at tx_lsn >= confirmed_flush_lsn. Therefore this value
             // already has "upper" semantics.
-            Some(flush_lsn) => return Ok(MzOffset::from(flush_lsn.parse::<PgLsn>().unwrap())),
+            Some(lsn) => {
+                return Ok(SlotMetadata {
+                    confirmed_flush_lsn: MzOffset::from(lsn),
+                    active_pid: row.get("active_pid"),
+                })
+            }
             // It can happen that confirmed_flush_lsn is NULL as the slot initializes
             // This could probably be a `tokio::time::interval`, but its only is called twice,
             // so its fine like this.
