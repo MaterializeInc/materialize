@@ -20,6 +20,7 @@ from materialize.test_analytics.connection.test_analytics_connection import (
 @dataclass
 class ScalabilityFrameworkResultEntry:
     workload_name: str
+    workload_group: str
     workload_version: str
     concurrency: int
     count: int
@@ -45,6 +46,7 @@ def insert_result(
                     build_step_id,
                     framework_version,
                     workload_name,
+                    workload_group,
                     workload_version,
                     concurrency,
                     count,
@@ -55,6 +57,7 @@ def insert_result(
                     '{step_id}',
                     '{framework_version}',
                     '{result_entry.workload_name}',
+                    '{result_entry.workload_group}',
                     '{result_entry.workload_version}',
                     {result_entry.concurrency},
                     {result_entry.count},

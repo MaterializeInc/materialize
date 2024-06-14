@@ -13,6 +13,7 @@ from materialize.scalability.comparison_outcome import ComparisonOutcome
 from materialize.scalability.df.df_details import DfDetails
 from materialize.scalability.df.df_totals import DfTotals, concat_df_totals
 from materialize.scalability.workload import Workload
+from materialize.scalability.workload_markers import WorkloadMarker
 from materialize.scalability.workload_result import WorkloadResult
 from materialize.scalability.workload_version import WorkloadVersion
 
@@ -25,19 +26,24 @@ class BenchmarkResult:
     df_total_by_endpoint_name_and_workload: dict[str, dict[str, DfTotals]]
     df_details_by_endpoint_name_and_workload: dict[str, dict[str, DfDetails]]
     workload_version_by_name: dict[str, WorkloadVersion]
+    workload_group_by_name: dict[str, str]
 
     def __init__(self):
         self.overall_comparison_outcome = ComparisonOutcome()
         self.df_total_by_endpoint_name_and_workload = dict()
         self.df_details_by_endpoint_name_and_workload = dict()
         self.workload_version_by_name = dict()
+        self.workload_group_by_name = dict()
 
     def add_regression(self, comparison_outcome: ComparisonOutcome | None) -> None:
         if comparison_outcome is not None:
             self.overall_comparison_outcome.merge(comparison_outcome)
 
-    def record_workload_version(self, workload: Workload) -> None:
+    def record_workload_metadata(self, workload: Workload) -> None:
         self.workload_version_by_name[workload.name()] = workload.version()
+
+        assert isinstance(workload, WorkloadMarker)
+        self.workload_group_by_name[workload.name()] = workload.group_name()
 
     def get_endpoint_names(self) -> list[str]:
         return list(self.df_total_by_endpoint_name_and_workload.keys())
