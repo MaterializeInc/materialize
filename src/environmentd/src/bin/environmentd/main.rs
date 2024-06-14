@@ -408,13 +408,12 @@ pub struct Args {
     )]
     bootstrap_builtin_system_cluster_replica_size: String,
     /// The size of the builtin catalog server cluster replicas if bootstrapping.
-    // TODO(#26731): rename to `bootstrap_builtin_catalog_server_cluster_replica_size`
     #[clap(
         long,
-        env = "BOOTSTRAP_BUILTIN_INTROSPECTION_CLUSTER_REPLICA_SIZE",
+        env = "BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE",
         default_value = "1"
     )]
-    bootstrap_builtin_introspection_cluster_replica_size: String,
+    bootstrap_builtin_catalog_server_cluster_replica_size: String,
     /// The size of the builtin probe cluster replicas if bootstrapping.
     #[clap(
         long,
@@ -938,7 +937,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 bootstrap_builtin_system_cluster_replica_size: args
                     .bootstrap_builtin_system_cluster_replica_size,
                 bootstrap_builtin_catalog_server_cluster_replica_size: args
-                    .bootstrap_builtin_introspection_cluster_replica_size,
+                    .bootstrap_builtin_catalog_server_cluster_replica_size,
                 bootstrap_builtin_probe_cluster_replica_size: args
                     .bootstrap_builtin_probe_cluster_replica_size,
                 bootstrap_builtin_support_cluster_replica_size: args
