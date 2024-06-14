@@ -6016,7 +6016,6 @@ dependencies = [
  "num_enum",
  "once_cell",
  "paste",
- "postgres_array",
  "proptest",
  "proptest-derive",
  "prost",
