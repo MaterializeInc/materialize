@@ -52,3 +52,46 @@ GROUP BY
     bs.build_step_key,
     bs.shard_index
 ;
+
+CREATE OR REPLACE VIEW v_build_step_success AS
+WITH MUTUALLY RECURSIVE data (build_step_id TEXT, build_step_key TEXT, predecessor_index INT, predecessor_build_number INT, pipeline TEXT) AS
+(
+    SELECT
+        bs.build_step_id, bs.build_step_key, 0, b.build_number, b.pipeline
+    FROM
+        build_step bs
+    INNER JOIN build b
+    ON b.build_id = bs.build_id
+    WHERE b.branch = 'main'
+    AND bs.is_latest_retry = TRUE
+    UNION
+    SELECT
+        d.build_step_id, d.build_step_key, d.predecessor_index + 1, max(b2.build_number), d.pipeline
+    FROM
+        data d
+    INNER JOIN build b2
+    ON d.pipeline = b2.pipeline
+    AND d.predecessor_build_number > b2.build_number
+    INNER JOIN build_step bs2
+    ON b2.build_id = bs2.build_id
+    WHERE d.predecessor_index <= 5
+    AND bs2.is_latest_retry = TRUE
+    GROUP BY
+        d.build_step_id,
+        d.build_step_key,
+        d.predecessor_index,
+        d.pipeline
+)
+SELECT
+    d.build_step_id, d.build_step_key, d.predecessor_index, d.pipeline, d.predecessor_build_number, b.build_id, bs.build_step_id
+FROM
+    data d
+INNER JOIN build b
+ON d.pipeline = b.pipeline
+AND b.build_number = d.predecessor_build_number
+INNER JOIN build_step bs
+ON b.build_number = bs.build_number
+AND bs.build_step_key = d.build_step_key
+WHERE d.predecessor_index <> 0
+AND bs.is_latest_retry = TRUE
+;
