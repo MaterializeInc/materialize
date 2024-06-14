@@ -90,10 +90,16 @@
 {% endif %}
 
 {% if not dry_run %}
-    {% call statement('alter_sinks', fetch_result=True, auto_begin=True) %}
-        -- 'ALTER SINK ... SET FROM ...' cannot be run inside a transaction block
-        {{ process_sinks(schemas, dry_run) }}
-    {% endcall %}
+    {% set alter_sink_statements = process_sinks(schemas, dry_run) %}
+    {% if alter_sink_statements %}
+        {% call statement('alter_sinks', fetch_result=True, auto_begin=True) %}
+            {% for stmt in alter_sink_statements %}
+                {{ stmt }}
+            {% endfor %}
+        {% endcall %}
+    {% else %}
+        {{ log("No ALTER SINK statements to execute", info=True) }}
+    {% endif %}
 {% else %}
     {{ process_sinks(schemas, dry_run) }}
 {% endif %}
@@ -203,6 +209,7 @@
 {% endmacro %}
 
 {% macro process_sinks(schemas, dry_run) %}
+    {% set statements = [] %}
     {% for schema in schemas %}
         {% set sinks_and_upstream_relations = get_sinks_and_upstream_relations(schema) %}
         {% if sinks_and_upstream_relations is not none and sinks_and_upstream_relations.rows %}
@@ -218,11 +225,15 @@
                     {{ log("DRY RUN: ALTER SINK " ~ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name ~ " SET FROM " ~ new_upstream_relation, info=True) }}
                 {% else %}
                     {{ log("Altering sink " ~ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name ~ " to use new upstream relation " ~ new_upstream_relation, info=True) }}
-                    ALTER SINK {{ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name }} SET FROM {{ new_upstream_relation }};
+                    {% set stmt = "ALTER SINK " ~ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name ~ " SET FROM " ~ new_upstream_relation %}
+                    {% do statements.append(stmt) %}
                 {% endif %}
             {% endfor %}
         {% else %}
             {{ log("No sinks found in schema " ~ schema ~ ", skipping ALTER SINK operations for this schema", info=True) }}
         {% endif %}
     {% endfor %}
+    {% if not dry_run %}
+        {{ return(statements) }}
+    {% endif %}
 {% endmacro %}
