@@ -39,3 +39,30 @@ CREATE OR REPLACE VIEW v_scalability_framework_result_per_day AS
         concurrency,
         date_trunc('day', date)
 ;
+
+CREATE OR REPLACE VIEW v_scalability_framework_result_per_week AS
+    SELECT
+        branch,
+        workload_name,
+        workload_group,
+        framework_version,
+        workload_version,
+        concurrency,
+        date_trunc('week', date) AS day,
+        min(count) AS min_count,
+        min(tps) AS min_tps
+    FROM scalability_framework_result r
+    INNER JOIN build b
+    ON b.build_id = r.build_id
+    INNER JOIN build_step bs
+    ON bs.build_step_id = r.build_step_id
+    WHERE bs.is_latest_retry = TRUE
+    GROUP BY
+        branch,
+        workload_name,
+        workload_group,
+        framework_version,
+        workload_version,
+        concurrency,
+        date_trunc('week', date)
+;
