@@ -405,6 +405,26 @@ class TestTargetDeploy:
             )
         )
 
+        run_dbt(["run-operation", "deploy_promote", "--args", "{dry_run: true}"])
+
+        after_clusters = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+        after_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+
+        assert before_clusters["prod"] != after_clusters["prod_dbt_deploy"]
+        assert before_clusters["prod_dbt_deploy"] != after_clusters["prod"]
+        assert before_schemas["prod"] != after_schemas["prod_dbt_deploy"]
+        assert before_schemas["prod"] != after_schemas["prod_dbt_deploy"]
+
         run_dbt(["run-operation", "deploy_promote"])
 
         after_clusters = dict(
@@ -583,6 +603,7 @@ class TestRunWithSinkAlter:
             "DROP MATERIALIZED VIEW IF EXISTS prod_dbt_deploy.prod_view CASCADE"
         )
         project.run_sql("DROP SINK IF EXISTS prod_dbt_deploy.sink CASCADE")
+        project.run_sql("DROP SINK IF EXISTS prod.sink CASCADE")
 
     def test_dbt_deploy_with_sink(self, project):
         project.run_sql("CREATE CLUSTER sink SIZE = '1'")
@@ -618,6 +639,19 @@ class TestRunWithSinkAlter:
         assert (
             before_view_id in before_sink[2]
         ), "Before deployment, the sink should point to the original view ID"
+
+        run_dbt(["run-operation", "deploy_promote", "--args", "{dry_run: true}"])
+
+        after_sink = project.run_sql(
+            "SELECT name, id, create_sql FROM mz_sinks WHERE name = 'sink'",
+            fetch="one",
+        )
+
+        assert (
+            after_view_id in after_sink[2]
+        ), "The sink should point to the same view ID after a dry_run"
+
+        assert before_sink[0] == after_sink[0], "Sink name should be the same"
 
         run_dbt(["run-operation", "deploy_promote"])
 

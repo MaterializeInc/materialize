@@ -89,29 +89,14 @@
     {{ deploy_await(poll_interval) }}
 {% endif %}
 
--- Check sinks and prepare for ALTER SINK commands
-{% for schema in schemas %}
-    {% set sinks_and_upstream_relations = get_sinks_and_upstream_relations(schema) %}
-    {% if sinks_and_upstream_relations is not none and sinks_and_upstream_relations.rows %}
-        {% for sink in sinks_and_upstream_relations.rows %}
-            {% set sink_name = adapter.quote(sink[2]) %}
-            {% set sink_schema_name = adapter.quote(sink[3]) %}
-            {% set sink_database_name = adapter.quote(sink[4]) %}
-            {% set upstream_relation_name = adapter.quote(sink[5]) %}
-            {% set upstream_relation_schema = adapter.quote(sink[6]) %}
-            {% set deploy_schema = adapter.quote(sink[6] ~ "_dbt_deploy") %}
-            {% set new_upstream_relation = get_current_database() ~ '.' ~ deploy_schema ~ '.' ~ upstream_relation_name %}
-            {% if not dry_run %}
-                {{ log("Altering sink " ~ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name ~ " to use new upstream relation " ~ new_upstream_relation, info=True) }}
-                ALTER SINK {{ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name }} SET FROM {{ new_upstream_relation }};
-            {% else %}
-                {{ log("DRY RUN: ALTER SINK " ~ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name ~ " SET FROM " ~ new_upstream_relation, info=True) }}
-            {% endif %}
-        {% endfor %}
-    {% else %}
-        {{ log("No sinks found in schema " ~ schema ~ ", skipping ALTER SINK operations for this schema", info=True) }}
-    {% endif %}
-{% endfor %}
+{% if not dry_run %}
+    {% call statement('alter_sinks', fetch_result=True, auto_begin=True) %}
+        -- 'ALTER SINK ... SET FROM ...' cannot be run inside a transaction block
+        {{ process_sinks(schemas, dry_run) }}
+    {% endcall %}
+{% else %}
+    {{ process_sinks(schemas, dry_run) }}
+{% endif %}
 
 {% if not dry_run %}
     {% call statement('swap', fetch_result=True, auto_begin=False) -%}
@@ -215,4 +200,29 @@
     {% set results = run_query(query) %}
     {{ log("Found " ~ results.rows|length ~ " sinks in schema: " ~ schema, info=True) }}
     {{ return(results) }}
+{% endmacro %}
+
+{% macro process_sinks(schemas, dry_run) %}
+    {% for schema in schemas %}
+        {% set sinks_and_upstream_relations = get_sinks_and_upstream_relations(schema) %}
+        {% if sinks_and_upstream_relations is not none and sinks_and_upstream_relations.rows %}
+            {% for sink in sinks_and_upstream_relations.rows %}
+                {% set sink_name = adapter.quote(sink[2]) %}
+                {% set sink_schema_name = adapter.quote(sink[3]) %}
+                {% set sink_database_name = adapter.quote(sink[4]) %}
+                {% set upstream_relation_name = adapter.quote(sink[5]) %}
+                {% set upstream_relation_schema = adapter.quote(sink[6]) %}
+                {% set deploy_schema = adapter.quote(sink[6] ~ "_dbt_deploy") %}
+                {% set new_upstream_relation = get_current_database() ~ '.' ~ deploy_schema ~ '.' ~ upstream_relation_name %}
+                {% if dry_run %}
+                    {{ log("DRY RUN: ALTER SINK " ~ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name ~ " SET FROM " ~ new_upstream_relation, info=True) }}
+                {% else %}
+                    {{ log("Altering sink " ~ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name ~ " to use new upstream relation " ~ new_upstream_relation, info=True) }}
+                    ALTER SINK {{ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name }} SET FROM {{ new_upstream_relation }};
+                {% endif %}
+            {% endfor %}
+        {% else %}
+            {{ log("No sinks found in schema " ~ schema ~ ", skipping ALTER SINK operations for this schema", info=True) }}
+        {% endif %}
+    {% endfor %}
 {% endmacro %}
