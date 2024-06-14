@@ -236,12 +236,14 @@ impl CatalogState {
 
         for update in updates {
             let next_apply_state = BootstrapApplyState::new(update);
-            let builtin_table_update = apply_state.step(next_apply_state, self).await;
+            let builtin_table_update = apply_state
+                .step(next_apply_state, self, &mut retractions)
+                .await;
             builtin_table_updates.extend(builtin_table_update);
         }
 
         // Apply remaining state.
-        let builtin_table_update = apply_state.apply(self).await;
+        let builtin_table_update = apply_state.apply(self, &mut retractions).await;
         builtin_table_updates.extend(builtin_table_update);
 
         builtin_table_updates
@@ -1068,6 +1070,7 @@ impl BootstrapApplyState {
     async fn apply(
         &mut self,
         state: &mut CatalogState,
+        retractions: &mut InProgressRetractions,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         match self {
             // `Catalog::parse_builtin_views` enables all "enable_for_item_parsing" internally.
@@ -1076,9 +1079,12 @@ impl BootstrapApplyState {
             }
             // We enable all "enable_for_item_parsing" feature flags when applying item updates
             // during bootstrap.
-            BootstrapApplyState::Items(updates) => state
-                .with_enable_for_item_parsing(|state| state.apply_updates(std::mem::take(updates))),
-            BootstrapApplyState::Updates(updates) => state.apply_updates(std::mem::take(updates)),
+            BootstrapApplyState::Items(updates) => state.with_enable_for_item_parsing(|state| {
+                state.apply_updates(std::mem::take(updates), retractions)
+            }),
+            BootstrapApplyState::Updates(updates) => {
+                state.apply_updates(std::mem::take(updates), retractions)
+            }
         }
     }
 
@@ -1086,6 +1092,7 @@ impl BootstrapApplyState {
         &mut self,
         next: BootstrapApplyState,
         state: &mut CatalogState,
+        retractions: &mut InProgressRetractions,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         match (self, next) {
             (
@@ -1108,7 +1115,7 @@ impl BootstrapApplyState {
             }
             (apply_state, next_apply_state) => {
                 // Apply the current batch and start batching new apply state.
-                let builtin_table_update = apply_state.apply(state).await;
+                let builtin_table_update = apply_state.apply(state, retractions).await;
                 *apply_state = next_apply_state;
                 builtin_table_update
             }
