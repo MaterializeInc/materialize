@@ -54,7 +54,7 @@ def trim_match(
     match_end_index = match.end()
 
     if one_line_match_presentation:
-        match_text = _trim_match_to_one_line(
+        match_text, (match_begin_index, match_end_index) = _trim_match_to_one_line(
             match_text, match_begin_index, match_end_index
         )
 
@@ -71,7 +71,10 @@ def trim_match(
 
 def _trim_match_to_one_line(
     input: str, match_begin_index: int, match_end_index: int
-) -> str:
+) -> tuple[str, tuple[int, int]]:
+    """
+    :return: trimmed text, new match_begin_index, new match_end_index
+    """
     cut_off_index_begin = input.rfind("\n", 0, match_begin_index)
     if cut_off_index_begin == -1:
         cut_off_index_begin = 0
@@ -79,7 +82,10 @@ def _trim_match_to_one_line(
     if cut_off_index_end == -1:
         cut_off_index_end = len(input)
     input = input[cut_off_index_begin:cut_off_index_end]
-    return input
+    return input, (
+        match_begin_index - cut_off_index_begin,
+        match_end_index - cut_off_index_begin,
+    )
 
 
 def _trim_match_to_max_length(
