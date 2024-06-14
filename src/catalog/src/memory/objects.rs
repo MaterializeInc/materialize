@@ -57,7 +57,7 @@ use once_cell::sync::Lazy;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
@@ -1320,6 +1320,27 @@ impl CatalogItem {
         *create_sql = ast.to_ast_string_stable();
         debug!("rewrote: {}", ast.to_ast_string_redacted());
         Ok(t)
+    }
+
+    /// Set's the create_sql field of this item.
+    pub fn set_create_sql(&mut self, create_sql: String) {
+        match self {
+            CatalogItem::Table(table) => table.create_sql = Some(create_sql),
+            CatalogItem::Source(source) => source.create_sql = Some(create_sql),
+            CatalogItem::Log(log) => {
+                error!("cannot set SQL for logs, log: {log:?}, sql: {create_sql}");
+            }
+            CatalogItem::View(view) => view.create_sql = create_sql,
+            CatalogItem::MaterializedView(mview) => mview.create_sql = create_sql,
+            CatalogItem::Sink(sink) => sink.create_sql = create_sql,
+            CatalogItem::Index(index) => index.create_sql = create_sql,
+            CatalogItem::Type(typ) => typ.create_sql = Some(create_sql),
+            CatalogItem::Func(func) => {
+                error!("cannot set SQL for funcs, func: {func:?}, sql: {create_sql}");
+            }
+            CatalogItem::Secret(secret) => secret.create_sql = create_sql,
+            CatalogItem::Connection(connection) => connection.create_sql = create_sql,
+        }
     }
 
     /// If the object is considered a "compute object"

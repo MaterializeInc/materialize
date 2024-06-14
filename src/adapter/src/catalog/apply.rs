@@ -919,15 +919,18 @@ impl CatalogState {
                 let entry = match retractions.items.remove(&key) {
                     Some(mut retraction) => {
                         assert_eq!(retraction.id, item.id);
-                        // We only reparse the SQL if it's changed. Otherwise, we use the existing
-                        // item. This is a performance optimization and not needed for correctness.
-                        // This makes it difficult to use the `UpdateFrom` trait, but the structure
-                        // is still the same as the trait.
+                        // We only update the item if the SQL  is changed. Otherwise, we use the
+                        // existing item. This is a performance optimization and not needed for
+                        // correctness. This makes it difficult to use the `UpdateFrom` trait, but
+                        // the structure is still the same as the trait.
                         if retraction.create_sql() != create_sql {
-                            let item = self
-                                .deserialize_item(&create_sql)
-                                .expect("invalid persisted SQL");
-                            retraction.item = item;
+                            // WARNING:
+                            // We don't actually reparse, replan, or re-optimize the new SQL, we
+                            // just set it in the item. This assumption relies on the fact that no
+                            // DDL can change any of the fields that are derived from the SQL. If
+                            // this ever changes then we'll need to start reparsing, replaning, and
+                            // reoptimizing the SQL.
+                            retraction.item.set_create_sql(create_sql);
                         }
                         retraction.id = id;
                         retraction.oid = oid;
@@ -938,9 +941,9 @@ impl CatalogState {
                         retraction
                     }
                     None => {
-                        let catalog_item = self
-                            .deserialize_item(&create_sql)
-                            .expect("invalid persisted SQL");
+                        let catalog_item = self.deserialize_item(&create_sql).unwrap_or_else(|e| {
+                            panic!("invalid persisted SQL: {}: {:?}", create_sql, e)
+                        });
                         CatalogEntry {
                             item: catalog_item,
                             referenced_by: Vec::new(),
