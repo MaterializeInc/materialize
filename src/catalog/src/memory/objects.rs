@@ -525,63 +525,6 @@ impl From<CatalogEntry> for durable::Item {
     }
 }
 
-// `durable::Item` requires outside state to be converted into a `CatalogEntry`.
-impl From<(durable::Item, CatalogItem, QualifiedItemName)> for CatalogEntry {
-    fn from(
-        (
-            durable::Item {
-                id,
-                oid,
-                owner_id,
-                privileges,
-                // Converted externally into the `CatalogItem` and `QualifiedItemName`.
-                schema_id: _,
-                name: _,
-                create_sql: _,
-            },
-            catalog_item,
-            name,
-        ): (durable::Item, CatalogItem, QualifiedItemName),
-    ) -> Self {
-        CatalogEntry {
-            item: catalog_item,
-            referenced_by: Vec::new(),
-            used_by: Vec::new(),
-            id,
-            oid,
-            name,
-            owner_id,
-            privileges: PrivilegeMap::from_mz_acl_items(privileges),
-        }
-    }
-}
-impl UpdateFrom<(durable::Item, CatalogItem, QualifiedItemName)> for CatalogEntry {
-    fn update_from(
-        &mut self,
-        (
-            durable::Item {
-                id,
-                oid,
-                owner_id,
-                privileges,
-                // Converted externally into the `CatalogItem` and `QualifiedItemName`.
-                schema_id: _,
-                name: _,
-                create_sql: _,
-            },
-            catalog_item,
-            name,
-        ): (durable::Item, CatalogItem, QualifiedItemName),
-    ) {
-        self.item = catalog_item;
-        self.id = id;
-        self.oid = oid;
-        self.name = name;
-        self.owner_id = owner_id;
-        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct Table {
     pub create_sql: Option<String>,
