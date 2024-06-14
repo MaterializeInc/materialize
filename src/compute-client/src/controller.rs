@@ -699,21 +699,10 @@ where
             self.maintenance_scheduled = false;
         }
 
-        // Process pending ready responses.
-        match self.response_rx.try_recv() {
-            Ok(response) => return Some(response),
-            Err(crossbeam_channel::TryRecvError::Empty) => (),
-            Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                // This should never happen, since the `ComputeController` is always holding on to
-                // a copy of the `response_tx`.
-                panic!("response_tx has disconnected");
-            }
-        }
-
         // Process pending responses from replicas.
         if let Some((instance_id, replica_id, response)) = self.stashed_replica_response.take() {
             if let Some(instance) = self.instances.get_mut(&instance_id) {
-                return instance.handle_response(response, replica_id);
+                instance.handle_response(response, replica_id);
             } else {
                 warn!(
                     ?instance_id,
@@ -723,7 +712,16 @@ where
             };
         }
 
-        None
+        // Return a ready response, if any.
+        match self.response_rx.try_recv() {
+            Ok(response) => Some(response),
+            Err(crossbeam_channel::TryRecvError::Empty) => None,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                // This should never happen, since the `ComputeController` is always holding on to
+                // a copy of the `response_tx`.
+                panic!("response_tx has disconnected");
+            }
+        }
     }
 
     #[mz_ore::instrument(level = "debug")]

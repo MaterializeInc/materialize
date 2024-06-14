@@ -1811,27 +1811,22 @@ where
         }
     }
 
-    pub fn handle_response(
-        &mut self,
-        response: ComputeResponse<T>,
-        replica_id: ReplicaId,
-    ) -> Option<ComputeControllerResponse<T>> {
+    pub fn handle_response(&mut self, response: ComputeResponse<T>, replica_id: ReplicaId) {
         match response {
             ComputeResponse::Frontiers(id, frontiers) => {
-                self.handle_frontiers_response(id, frontiers, replica_id)
+                self.handle_frontiers_response(id, frontiers, replica_id);
             }
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
-                self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
+                self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id);
             }
             ComputeResponse::CopyToResponse(id, response) => {
-                self.handle_copy_to_response(id, response, replica_id)
+                self.handle_copy_to_response(id, response, replica_id);
             }
             ComputeResponse::SubscribeResponse(id, response) => {
-                self.handle_subscribe_response(id, response, replica_id)
+                self.handle_subscribe_response(id, response, replica_id);
             }
             ComputeResponse::Status(response) => {
                 self.handle_status_response(response, replica_id);
-                None
             }
         }
     }
@@ -1843,9 +1838,7 @@ where
         id: GlobalId,
         frontiers: FrontiersResponse<T>,
         replica_id: ReplicaId,
-    ) -> Option<ComputeControllerResponse<T>> {
-        let mut response = None;
-
+    ) {
         // According to the compute protocol, replicas are not allowed to send `Frontiers`
         // responses that regress frontiers they have reported previously. We still perform a check
         // here, rather than risking the controller becoming confused trying to handle regressions.
@@ -1854,7 +1847,7 @@ where
                %id, %replica_id, ?frontiers,
                "frontiers update for unknown collection",
             );
-            return None;
+            return;
         };
 
         // Apply a write frontier advancement.
@@ -1865,7 +1858,7 @@ where
                        %id, %replica_id, ?old_frontier, ?new_frontier,
                        "collection write frontier regression",
                     );
-                    return None;
+                    return;
                 }
             }
 
@@ -1880,7 +1873,7 @@ where
 
             if let Ok(coll) = self.collection(id) {
                 if coll.write_frontier != old_global_frontier {
-                    response = Some(ComputeControllerResponse::FrontierUpper {
+                    self.deliver_response(ComputeControllerResponse::FrontierUpper {
                         id,
                         upper: coll.write_frontier.clone(),
                     });
@@ -1892,8 +1885,6 @@ where
         if let Some(new_frontier) = frontiers.input_frontier {
             self.update_replica_input_frontiers(replica_id, &[(id, new_frontier.clone())].into());
         }
-
-        response
     }
 
     fn handle_peek_response(
@@ -1902,15 +1893,17 @@ where
         response: PeekResponse,
         otel_ctx: OpenTelemetryContext,
         replica_id: ReplicaId,
-    ) -> Option<ComputeControllerResponse<T>> {
+    ) {
         // We might not be tracking this peek anymore, because we have served a response already or
         // because it was canceled. If this is the case, we ignore the response.
-        let peek = self.peeks.get(&uuid)?;
+        let Some(peek) = self.peeks.get(&uuid) else {
+            return;
+        };
 
         // If the peek is targeting a replica, ignore responses from other replicas.
         let target_replica = peek.target_replica.unwrap_or(replica_id);
         if target_replica != replica_id {
-            return None;
+            return;
         }
 
         let duration = peek.requested_at.elapsed();
@@ -1920,7 +1913,7 @@ where
 
         // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
         // currently want the parent to be whatever the compute worker did with this peek.
-        Some(ComputeControllerResponse::PeekResponse(
+        self.deliver_response(ComputeControllerResponse::PeekResponse(
             uuid, response, otel_ctx,
         ))
     }
@@ -1930,30 +1923,30 @@ where
         sink_id: GlobalId,
         response: CopyToResponse,
         replica_id: ReplicaId,
-    ) -> Option<ComputeControllerResponse<T>> {
+    ) {
         // We might not be tracking this COPY TO because we have already returned a response
         // from one of the replicas. In that case, we ignore the response.
-        if self.copy_tos.remove(&sink_id) {
-            let result = match response {
-                CopyToResponse::RowCount(count) => Ok(count),
-                CopyToResponse::Error(error) => Err(anyhow::anyhow!(error)),
-                // We should never get here: Replicas only drop copy to collections in response
-                // to the controller allowing them to do so, and when the controller drops a
-                // copy to it also removes it from the list of tracked copy_tos (see
-                // [`Instance::drop_collections`]).
-                CopyToResponse::Dropped => {
-                    tracing::error!(
-                        %sink_id,
-                        %replica_id,
-                        "received `Dropped` response for a tracked copy to",
-                    );
-                    return None;
-                }
-            };
-            Some(ComputeControllerResponse::CopyToResponse(sink_id, result))
-        } else {
-            None
+        if !self.copy_tos.remove(&sink_id) {
+            return;
         }
+
+        let result = match response {
+            CopyToResponse::RowCount(count) => Ok(count),
+            CopyToResponse::Error(error) => Err(anyhow::anyhow!(error)),
+            // We should never get here: Replicas only drop copy to collections in response
+            // to the controller allowing them to do so, and when the controller drops a
+            // copy to it also removes it from the list of tracked copy_tos (see
+            // [`Instance::drop_collections`]).
+            CopyToResponse::Dropped => {
+                tracing::error!(
+                    %sink_id, %replica_id,
+                    "received `Dropped` response for a tracked copy to",
+                );
+                return;
+            }
+        };
+
+        self.deliver_response(ComputeControllerResponse::CopyToResponse(sink_id, result));
     }
 
     fn handle_subscribe_response(
@@ -1961,11 +1954,13 @@ where
         subscribe_id: GlobalId,
         response: SubscribeResponse<T>,
         replica_id: ReplicaId,
-    ) -> Option<ComputeControllerResponse<T>> {
+    ) {
         if !self.collections.contains_key(&subscribe_id) {
-            tracing::warn!(?replica_id, "Response for unknown subscribe {subscribe_id}",);
-            tracing::error!("Replica sent a response for an unknown subscribe");
-            return None;
+            tracing::error!(
+                %subscribe_id, %replica_id,
+                "received response for an unknown subscribe",
+            );
+            return;
         }
 
         // Always apply replica write frontier updates. Even if the subscribe is not tracked
@@ -1988,10 +1983,12 @@ where
         self.update_replica_input_frontiers(replica_id, &write_frontier_updates);
 
         // If the subscribe is not tracked, or targets a different replica, there is nothing to do.
-        let mut subscribe = self.subscribes.get(&subscribe_id)?.clone();
+        let Some(mut subscribe) = self.subscribes.get(&subscribe_id).cloned() else {
+            return;
+        };
         let replica_targeted = subscribe.target_replica.unwrap_or(replica_id) == replica_id;
         if !replica_targeted {
-            return None;
+            return;
         }
 
         // Apply a global frontier update.
@@ -2022,16 +2019,14 @@ where
                     if let Ok(updates) = updates.as_mut() {
                         updates.retain(|(time, _data, _diff)| lower.less_equal(time));
                     }
-                    Some(ComputeControllerResponse::SubscribeResponse(
+                    self.deliver_response(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,
                         SubscribeBatch {
                             lower,
                             upper,
                             updates,
                         },
-                    ))
-                } else {
-                    None
+                    ));
                 }
             }
             SubscribeResponse::DroppedAt(frontier) => {
@@ -2046,7 +2041,6 @@ where
                     "received `DroppedAt` response for a tracked subscribe",
                 );
                 self.subscribes.remove(&subscribe_id);
-                None
             }
         }
     }
