@@ -38,11 +38,13 @@ message ProtoStorageParameters {
     mz_proto.ProtoDuration statistics_interval = 22;
     mz_proto.ProtoDuration statistics_collection_interval = 23;
     ProtoPgSourceSnapshotConfig pg_snapshot_config = 24;
-    bool enable_dependency_read_hold_asserts = 27;
     mz_proto.ProtoDuration user_storage_managed_collections_batch_duration = 28;
     ProtoMySqlSourceTimeouts mysql_source_timeouts = 29;
 
     mz_dyncfg.ConfigUpdates dyncfg_updates = 30;
+
+    reserved 27;
+    reserved "enable_dependency_read_hold_asserts";
 }
 
 message ProtoPgSourceTcpTimeouts {

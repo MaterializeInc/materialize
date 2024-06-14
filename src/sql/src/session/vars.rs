@@ -1267,7 +1267,6 @@ impl SystemVars {
             &OPTIMIZER_ONESHOT_STATS_TIMEOUT,
             &PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE,
             &WEBHOOK_CONCURRENT_REQUEST_LIMIT,
-            &ENABLE_DEPENDENCY_READ_HOLD_ASSERTS,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL,
@@ -2158,10 +2157,6 @@ impl SystemVars {
     /// Returns the `pg_timestamp_oracle_connection_pool_ttl_stagger` configuration parameter.
     pub fn pg_timestamp_oracle_connection_pool_ttl_stagger(&self) -> Duration {
         *self.expect_value(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER)
-    }
-
-    pub fn enable_dependency_read_hold_asserts(&self) -> bool {
-        *self.expect_value(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
     }
 
     /// Returns the `user_storage_managed_collections_batch_duration` configuration parameter.
