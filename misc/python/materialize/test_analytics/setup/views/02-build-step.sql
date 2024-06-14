@@ -54,10 +54,10 @@ GROUP BY
 ;
 
 CREATE OR REPLACE VIEW v_build_step_success AS
-WITH MUTUALLY RECURSIVE data (build_step_id TEXT, build_step_key TEXT, predecessor_index INT, predecessor_build_number INT, pipeline TEXT) AS
+WITH MUTUALLY RECURSIVE data (build_id TEXT, pipeline TEXT, build_number INT, build_step_id TEXT, build_step_key TEXT, success BOOL, predecessor_index INT, predecessor_build_number INT) AS
 (
     SELECT
-        bs.build_step_id, bs.build_step_key, 0, b.build_number, b.pipeline
+        bs.build_id, b.pipeline, b.build_number, bs.build_step_id, bs.build_step_key, bs.success, 0, b.build_number
     FROM
         build_step bs
     INNER JOIN build b
@@ -66,7 +66,7 @@ WITH MUTUALLY RECURSIVE data (build_step_id TEXT, build_step_key TEXT, predecess
     AND bs.is_latest_retry = TRUE
     UNION
     SELECT
-        d.build_step_id, d.build_step_key, d.predecessor_index + 1, max(b2.build_number), d.pipeline
+        d.build_id, d.pipeline, d.build_number, d.build_step_id, d.build_step_key, d.success, d.predecessor_index + 1, max(b2.build_number)
     FROM
         data d
     INNER JOIN build b2
@@ -77,21 +77,34 @@ WITH MUTUALLY RECURSIVE data (build_step_id TEXT, build_step_key TEXT, predecess
     WHERE d.predecessor_index <= 5
     AND bs2.is_latest_retry = TRUE
     GROUP BY
+        d.build_id,
+        d.pipeline,
+        d.build_number,
         d.build_step_id,
         d.build_step_key,
         d.predecessor_index,
-        d.pipeline
+        d.success
 )
 SELECT
-    d.build_step_id, d.build_step_key, d.predecessor_index, d.pipeline, d.predecessor_build_number, b.build_id, bs.build_step_id
+    d.build_id,
+    d.pipeline,
+    d.build_number,
+    d.build_step_id,
+    d.build_step_key,
+    d.success,
+    d.predecessor_index,
+    d.predecessor_build_number AS predecessor_build_number,
+    pred_b.build_id AS predecessor_build_id,
+    pred_bs.build_step_id AS predecessor_build_step_id,
+    pred_bs.success AS predecessor_build_step_success
 FROM
     data d
-INNER JOIN build b
-ON d.pipeline = b.pipeline
-AND b.build_number = d.predecessor_build_number
-INNER JOIN build_step bs
-ON b.build_number = bs.build_number
-AND bs.build_step_key = d.build_step_key
+INNER JOIN build pred_b
+ON d.pipeline = pred_b.pipeline
+AND d.predecessor_build_number = pred_b.build_number
+INNER JOIN build_step pred_bs
+ON pred_b.build_id = pred_bs.build_id
+AND d.build_step_key = pred_bs.build_step_key
 WHERE d.predecessor_index <> 0
-AND bs.is_latest_retry = TRUE
+AND pred_bs.is_latest_retry = TRUE
 ;
