@@ -449,9 +449,24 @@ criteria = "safe-to-deploy"
 version = "0.6.5"
 
 [[audits.postgres]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "0.19.5"
+
+[[audits.postgres]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "0.19.5@git:02336bebb28507665184c21566e5d1dc8de1dd7d"
+
+[[audits.postgres]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.19.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
+
+[[audits.postgres-openssl]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "0.5.0@git:02336bebb28507665184c21566e5d1dc8de1dd7d"
 
 [[audits.postgres-openssl]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -459,9 +474,19 @@ criteria = "safe-to-deploy"
 version = "0.5.0@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 
 [[audits.postgres-protocol]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "0.6.5@git:02336bebb28507665184c21566e5d1dc8de1dd7d"
+
+[[audits.postgres-protocol]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.6.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
+
+[[audits.postgres-types]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "0.2.5@git:02336bebb28507665184c21566e5d1dc8de1dd7d"
 
 [[audits.postgres-types]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -662,6 +687,11 @@ version = "0.12.0@git:0c26e5e4198085d6c90db11930f2dba52e9f32cc"
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.12.0@git:0c26e5e4198085d6c90db11930f2dba52e9f32cc"
+
+[[audits.tokio-postgres]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "0.7.8@git:02336bebb28507665184c21566e5d1dc8de1dd7d"
 
 [[audits.tokio-postgres]]
 who = "Roshan Jobanputra <roshan@materialize.com>"

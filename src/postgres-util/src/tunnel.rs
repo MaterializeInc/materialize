@@ -204,7 +204,8 @@ impl Config {
             .await
         {
             Ok(t) => {
-                info!(%task_name, %address, "connected");
+                let backend_pid = t.backend_pid();
+                info!(%task_name, %address, %backend_pid, "connected");
                 Ok(t)
             }
             Err(e) => {
