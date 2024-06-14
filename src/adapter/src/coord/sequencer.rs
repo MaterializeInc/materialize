@@ -696,13 +696,8 @@ impl Coordinator {
         .await
     }
 
-    pub(crate) fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {
-        let id = self.transient_id_counter;
-        if id == u64::MAX {
-            coord_bail!("id counter overflows i64");
-        }
-        self.transient_id_counter += 1;
-        Ok(GlobalId::Transient(id))
+    pub(crate) fn allocate_transient_id(&self) -> GlobalId {
+        self.transient_id_gen.allocate_id()
     }
 
     fn should_emit_rbac_notice(&self, session: &Session) -> Option<AdapterNotice> {
