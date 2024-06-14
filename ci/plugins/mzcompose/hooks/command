@@ -82,23 +82,12 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     mzcompose --mz-quiet cp balancerd:/usr/local/bin/balancerd coverage/ || true
 fi
 
-rm -f prof-*.gz
-
 if is_truthy "${CI_HEAP_PROFILES:-}"; then
     (while true; do
         sleep 5
         # faketty because otherwise docker will complain about not being inside
         # of a TTY when run in a background job
         faketty bin/ci-builder run stable bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
-    done
-    ) &
-# We don't want any performance impact on benchmarks. Kafka-matrix goes OoM, might be close to its memory limit anyway.
-elif [[ "$BUILDKITE_STEP_KEY" != scalability-benchmark-* ]] && [[ "$BUILDKITE_STEP_KEY" != feature-benchmark-* ]] && [ "$BUILDKITE_STEP_KEY" != "kafka-matrix" ]; then
-    (while true; do
-        sleep 5
-        # faketty because otherwise docker will complain about not being inside
-        # of a TTY when run in a background job
-        faketty bin/ci-builder run stable bin/ci-upload-heap-profiles --no-upload "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
     done
     ) &
 fi
