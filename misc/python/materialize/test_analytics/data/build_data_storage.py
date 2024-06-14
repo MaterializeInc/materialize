@@ -53,7 +53,7 @@ def insert_build(cursor: Cursor) -> None:
           '{mz_version}',
           now(),
           '{build_url}',
-          '{TEST_ANALYTICS_DATA_VERSION}',
+          {TEST_ANALYTICS_DATA_VERSION},
           NULL
         WHERE NOT EXISTS
         (

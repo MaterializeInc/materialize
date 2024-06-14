@@ -18,11 +18,11 @@ CREATE TABLE build (
    pipeline TEXT NOT NULL,
    build_number UINT4 NOT NULL,
    build_id TEXT NOT NULL,
-   branch TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
+   branch TEXT NOT NULL,
    commit_hash TEXT NOT NULL,
-   mz_version TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
+   mz_version TEXT NOT NULL,
    date TIMESTAMPTZ NOT NULL,
    build_url TEXT NOT NULL,
-   data_version TEXT, -- should eventually be changed to INT and NOT NULL (but will break on versions that do not set it)
+   data_version UINT4 NOT NULL,
    remarks TEXT
 );

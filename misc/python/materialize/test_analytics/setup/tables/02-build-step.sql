@@ -17,13 +17,11 @@
 CREATE TABLE build_step (
     -- build_step_id is assumed to be globally unique for now
     build_step_id TEXT NOT NULL,
-    build_id TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
-    pipeline TEXT, -- should eventually be removed (but will break on older versions)
-    build_number UINT4, -- should eventually be removed (but will break on older versions)
+    build_id TEXT NOT NULL,
     build_step_key TEXT NOT NULL,
     shard_index UINT4,
     retry_count UINT4 NOT NULL,
-    insert_date TIMESTAMPTZ, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
+    insert_date TIMESTAMPTZ NOT NULL,
     url TEXT NOT NULL,
     is_latest_retry BOOL NOT NULL,
     success BOOL NOT NULL,
