@@ -200,6 +200,7 @@ WHERE c.name = <CLUSTER_NAME>;
 The most common reasons for query hanging are:
 
 * An upstream source is stalled
+* An upstream object is still hydrating
 * Your cluster is unhealthy
 
 Each of these reasons requires a different approach for troubleshooting. Follow
@@ -217,6 +218,18 @@ guidance.
 <!-- TODO: update this to use the query history UI once it's available -->
 To detect and address stalled sources, follow the [`Ingest data` troubleshooting](/ingest-data/troubleshooting)
 guide.
+
+### Hydrating upstream objects
+When a source, materialized view, or index is created or updated, the underlying cluster must first do an
+initial processing for the object over all the existing data. We call this process hydration. Queries that depend on hydrating objects will block until hydration is
+complete.
+
+Hydration takes time proportional to data volume and query complexity. Indexes and materialized views with large amounts of data will take longer to hydrate than indexes and materialized views with small amounts of data. Similarly, indexes and materialized views for complex queries will take longer to hydrate than indexes and materialized views for simple queries.
+
+Hydration also happens every time a cluster is restarted or sized up, including during
+[Materialize's routine maintenance window](/releases#schedule).
+
+To see whether an object is still hydrating, use the [workflow graph in the Materialize console](#detect) for the object.
 
 ### Unhealthy cluster
 
