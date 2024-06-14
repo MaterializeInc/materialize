@@ -654,7 +654,9 @@ where
                     &dep_collection.implied_capability,
                     collection_implied_capability
                 ),
-                "dependency since cannot be in advance of dependent's since"
+                "dependency since ({dep}@{:?}) cannot be in advance of dependent's since ({id}@{:?})",
+                dep_collection.implied_capability,
+                collection_implied_capability,
             );
         }
 
