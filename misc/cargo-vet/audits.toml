@@ -200,7 +200,7 @@ version = "1.0.5"
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:05a27dafa809c7f561a5a445d623db68559a95b4"
+version = "0.12.0@git:f051b828fc579efbf69c03ce669cb92fbe51a362"
 
 [[audits.domain]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
@@ -646,22 +646,22 @@ version = "0.17.0"
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+version = "0.12.0@git:0c26e5e4198085d6c90db11930f2dba52e9f32cc"
 
 [[audits.timely_bytes]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+version = "0.12.0@git:0c26e5e4198085d6c90db11930f2dba52e9f32cc"
 
 [[audits.timely_communication]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+version = "0.12.0@git:0c26e5e4198085d6c90db11930f2dba52e9f32cc"
 
 [[audits.timely_logging]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+version = "0.12.0@git:0c26e5e4198085d6c90db11930f2dba52e9f32cc"
 
 [[audits.tokio-postgres]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
