@@ -209,10 +209,17 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .connect_replication(&config.config.connection_context.ssh_tunnel_manager)
                 .await?;
 
+            let metadata_client = connection_config
+                .connect(
+                    "replication metadata",
+                    &config.config.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
             tracing::info!(%id, "ensuring replication slot {slot} exists");
             super::ensure_replication_slot(&replication_client, slot).await?;
-            let slot_lsn = super::fetch_slot_resume_lsn(
-                &replication_client,
+            let slot_metadata = super::fetch_slot_metadata(
+                &metadata_client,
                 slot,
                 mz_storage_types::dyncfgs::PG_FETCH_SLOT_RESUME_LSN_INTERVAL
                     .get(config.config.config_set()),
@@ -224,7 +231,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     .values()
                     .flat_map(|f| f.elements())
                     // Advance any upper as far as the slot_lsn.
-                    .map(|t| std::cmp::max(*t, slot_lsn)),
+                    .map(|t| std::cmp::max(*t, slot_metadata.confirmed_flush_lsn)),
             );
 
             let Some(resume_lsn) = resume_upper.into_option() else {
@@ -268,17 +275,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let mut committed_uppers = pin!(committed_uppers);
 
-            let client = connection_config
-                .connect(
-                    "replication metadata",
-                    &config.config.connection_context.ssh_tunnel_manager,
-                )
-                .await?;
-
             let stream_result = raw_stream(
                 &config,
                 replication_client,
-                client,
+                metadata_client,
                 &connection.publication_details.slot,
                 &connection.publication_details.timeline_id,
                 &connection.publication,
@@ -525,13 +525,19 @@ async fn raw_stream<'a>(
     // to avoid a TOCTOU issue we must do this check after starting the replication stream. We
     // cannot use the replication client to do that because it's already in CopyBoth mode.
     // [1] https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION-SLOT-LOGICAL
-    let min_resume_lsn = super::fetch_slot_resume_lsn(
+    let slot_metadata = super::fetch_slot_metadata(
         &metadata_client,
         slot,
         mz_storage_types::dyncfgs::PG_FETCH_SLOT_RESUME_LSN_INTERVAL
             .get(config.config.config_set()),
     )
     .await?;
+    let min_resume_lsn = slot_metadata.confirmed_flush_lsn;
+    tracing::info!(
+        %config.id,
+        "started replication using backend PID={:?}. wal_sender_timeout={:?}",
+        slot_metadata.active_pid, wal_sender_timeout
+    );
 
     let progress_stat_shared_value = Arc::new(Mutex::new(None));
     let progress_stat_task_value = Arc::clone(&progress_stat_shared_value);
