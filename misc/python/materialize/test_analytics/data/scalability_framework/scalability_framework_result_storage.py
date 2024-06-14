@@ -8,13 +8,9 @@
 # by the Apache License, Version 2.0.
 from dataclasses import dataclass
 
-from pg8000 import Cursor
-
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
-from materialize.test_analytics.connection.test_analytics_connection import (
-    execute_updates,
-)
+from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 
 
 @dataclass
@@ -27,43 +23,45 @@ class ScalabilityFrameworkResultEntry:
     tps: float
 
 
-def insert_result(
-    cursor: Cursor,
-    framework_version: str,
-    results: list[ScalabilityFrameworkResultEntry],
-) -> None:
-    build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
-    step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
+class ScalabilityFrameworkResultStorage(BaseDataStorage):
 
-    sql_statements = []
+    def insert_result(
+        self,
+        framework_version: str,
+        results: list[ScalabilityFrameworkResultEntry],
+    ) -> None:
+        build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
+        step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
 
-    for result_entry in results:
-        sql_statements.append(
-            f"""
-                INSERT INTO scalability_framework_result
-                (
-                    build_id,
-                    build_step_id,
-                    framework_version,
-                    workload_name,
-                    workload_group,
-                    workload_version,
-                    concurrency,
-                    count,
-                    tps
-                )
-                SELECT
-                    '{build_id}',
-                    '{step_id}',
-                    '{framework_version}',
-                    '{result_entry.workload_name}',
-                    '{result_entry.workload_group}',
-                    '{result_entry.workload_version}',
-                    {result_entry.concurrency},
-                    {result_entry.count},
-                    {result_entry.tps}
-                ;
-                """
-        )
+        sql_statements = []
 
-    execute_updates(sql_statements, cursor)
+        for result_entry in results:
+            sql_statements.append(
+                f"""
+                    INSERT INTO scalability_framework_result
+                    (
+                        build_id,
+                        build_step_id,
+                        framework_version,
+                        workload_name,
+                        workload_group,
+                        workload_version,
+                        concurrency,
+                        count,
+                        tps
+                    )
+                    SELECT
+                        '{build_id}',
+                        '{step_id}',
+                        '{framework_version}',
+                        '{result_entry.workload_name}',
+                        '{result_entry.workload_group}',
+                        '{result_entry.workload_version}',
+                        {result_entry.concurrency},
+                        {result_entry.count},
+                        {result_entry.tps}
+                    ;
+                    """
+            )
+
+        self.writer.execute_updates(sql_statements)

@@ -61,11 +61,10 @@ from materialize.scalability.workloads.self_test_workloads import *  # noqa: F40
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )
-from materialize.test_analytics.connection import test_analytics_connection
-from materialize.test_analytics.data import build_data_storage
 from materialize.test_analytics.data.scalability_framework import (
     scalability_framework_result_storage,
 )
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 from materialize.util import YesNoOnce, all_subclasses
 from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS,
@@ -572,10 +571,8 @@ def upload_results_to_test_analytics(
             endpoint_version_info
         ]
 
-        cursor = test_analytics_connection.create_cursor(
-            create_test_analytics_config(c)
-        )
-        build_data_storage.insert_build_step(cursor, was_successful=was_successful)
+        test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+        test_analytics.builds.insert_build_step(was_successful=was_successful)
 
         result_entries = []
 
@@ -595,8 +592,7 @@ def upload_results_to_test_analytics(
                     )
                 )
 
-        scalability_framework_result_storage.insert_result(
-            cursor,
+        test_analytics.scalability_results.insert_result(
             framework_version=SCALABILITY_FRAMEWORK_VERSION,
             results=result_entries,
         )
