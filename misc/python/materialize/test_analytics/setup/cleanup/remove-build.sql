@@ -15,9 +15,9 @@
 
 -- replace %build-ids% with a criterion
 
-DELETE FROM build WHERE build_id IN (%build-ids%);
-DELETE FROM build_step WHERE build_id IN (%build-ids%);
 DELETE FROM feature_benchmark_result WHERE build_id IN (%build-ids%);
 DELETE FROM scalability_framework_result WHERE build_id IN (%build-ids%);
 DELETE FROM build_annotation_error WHERE build_step_id IN (SELECT build_step_id FROM build_annotation WHERE build_id IN (%build-ids%));
 DELETE FROM build_annotation WHERE build_id IN (%build-ids%);
+DELETE FROM build_step WHERE build_id IN (%build-ids%);
+DELETE FROM build WHERE build_id IN (%build-ids%);
