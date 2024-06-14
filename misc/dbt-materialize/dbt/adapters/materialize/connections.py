@@ -38,10 +38,10 @@ logger = AdapterLogger("Materialize")
 # after the session is established.
 def connect(**kwargs):
     options = [
-        # Ensure that dbt's introspection queries get routed to the
-        # `mz_introspection` cluster, even if the server or role's default is
+        # Ensure that dbt's catalog queries get routed to the
+        # `mz_catalog_server` cluster, even if the server or role's default is
         # different.
-        "--auto_route_introspection_queries=on",
+        "--auto_route_catalog_queries=on",
         # dbt prints notices to stdout, which is very distracting because dbt
         # can establish many new connections during `dbt run`.
         "--welcome_message=off",
