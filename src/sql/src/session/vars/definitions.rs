@@ -1444,15 +1444,6 @@ pub static USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION: VarDefinition = VarD
     true,
 );
 
-pub static ENABLE_DEPENDENCY_READ_HOLD_ASSERTS: VarDefinition = VarDefinition::new(
-    "enable_dependency_read_hold_asserts",
-    value!(bool; true),
-    "Whether to have the storage client check if a subsource's implied capability is less than \
-        its write frontier. This should only be set to false in cases where customer envs cannot
-        boot (Materialize).",
-    true,
-);
-
 /// Configuration for gRPC client connections.
 pub mod grpc_client {
     use super::*;

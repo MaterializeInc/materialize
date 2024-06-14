@@ -68,7 +68,6 @@ pub struct StorageParameters {
     // but people mostly care about either rates, or the values to within 1 minute.
     pub statistics_collection_interval: Duration,
     pub pg_snapshot_config: PgSourceSnapshotConfig,
-    pub enable_dependency_read_hold_asserts: bool,
     /// Duration that we wait to batch rows for user owned, storage managed, collections.
     pub user_storage_managed_collections_batch_duration: Duration,
 
@@ -104,7 +103,6 @@ impl Default for StorageParameters {
             statistics_interval: STATISTICS_INTERVAL_DEFAULT,
             statistics_collection_interval: STATISTICS_COLLECTION_INTERVAL_DEFAULT,
             pg_snapshot_config: Default::default(),
-            enable_dependency_read_hold_asserts: true,
             user_storage_managed_collections_batch_duration:
                 STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
             dyncfg_updates: Default::default(),
@@ -203,7 +201,6 @@ impl StorageParameters {
             statistics_interval,
             statistics_collection_interval,
             pg_snapshot_config,
-            enable_dependency_read_hold_asserts,
             user_storage_managed_collections_batch_duration,
             dyncfg_updates,
         }: StorageParameters,
@@ -230,7 +227,6 @@ impl StorageParameters {
         self.statistics_interval = statistics_interval;
         self.statistics_collection_interval = statistics_collection_interval;
         self.pg_snapshot_config = pg_snapshot_config;
-        self.enable_dependency_read_hold_asserts = enable_dependency_read_hold_asserts;
         self.user_storage_managed_collections_batch_duration =
             user_storage_managed_collections_batch_duration;
         self.dyncfg_updates.extend(dyncfg_updates);
@@ -271,7 +267,6 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             statistics_interval: Some(self.statistics_interval.into_proto()),
             statistics_collection_interval: Some(self.statistics_collection_interval.into_proto()),
             pg_snapshot_config: Some(self.pg_snapshot_config.into_proto()),
-            enable_dependency_read_hold_asserts: self.enable_dependency_read_hold_asserts,
             user_storage_managed_collections_batch_duration: Some(
                 self.user_storage_managed_collections_batch_duration
                     .into_proto(),
@@ -339,7 +334,6 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             pg_snapshot_config: proto
                 .pg_snapshot_config
                 .into_rust_if_some("ProtoStorageParameters::pg_snapshot_config")?,
-            enable_dependency_read_hold_asserts: proto.enable_dependency_read_hold_asserts,
             user_storage_managed_collections_batch_duration: proto
                 .user_storage_managed_collections_batch_duration
                 .into_rust_if_some(
