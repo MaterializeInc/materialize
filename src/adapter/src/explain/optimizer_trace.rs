@@ -126,7 +126,7 @@ impl OptimizerTrace {
 
     /// Convert the optimizer trace into a vector or rows that can be returned
     /// to the client.
-    pub fn into_rows(
+    pub async fn into_rows(
         self,
         format: ExplainFormat,
         config: &ExplainConfig,
@@ -207,7 +207,7 @@ impl OptimizerTrace {
                 if let (Some(plan_insights), Some(insights_ctx), false) =
                     (plan_insights.as_mut(), insights_ctx, is_fast_path)
                 {
-                    plan_insights.compute_fast_path_clusters(insights_ctx);
+                    plan_insights.compute_fast_path_clusters(insights_ctx).await;
                 }
 
                 let output = serde_json::json!({
@@ -280,7 +280,7 @@ impl OptimizerTrace {
 
     /// Collect a [`insights::PlanInsights`] with insights about the the
     /// optimized plans rendered as a JSON `String`.
-    pub fn into_plan_insights(
+    pub async fn into_plan_insights(
         self,
         features: &OptimizerFeatures,
         humanizer: &dyn ExprHumanizer,
@@ -289,18 +289,20 @@ impl OptimizerTrace {
         dataflow_metainfo: DataflowMetainfo,
         insights_ctx: Option<PlanInsightsContext>,
     ) -> Result<String, AdapterError> {
-        let rows = self.into_rows(
-            ExplainFormat::Json,
-            &ExplainConfig::default(),
-            features,
-            humanizer,
-            row_set_finishing,
-            target_cluster,
-            dataflow_metainfo,
-            ExplainStage::PlanInsights,
-            plan::ExplaineeStatementKind::Select,
-            insights_ctx,
-        )?;
+        let rows = self
+            .into_rows(
+                ExplainFormat::Json,
+                &ExplainConfig::default(),
+                features,
+                humanizer,
+                row_set_finishing,
+                target_cluster,
+                dataflow_metainfo,
+                ExplainStage::PlanInsights,
+                plan::ExplaineeStatementKind::Select,
+                insights_ctx,
+            )
+            .await?;
 
         // When using `ExplainStage::PlanInsights`, we're guaranteed that the
         // output is a single row containing a single column containing the plan

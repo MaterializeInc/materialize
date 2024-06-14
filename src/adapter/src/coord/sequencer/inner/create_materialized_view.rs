@@ -75,7 +75,9 @@ impl Staged for CreateMaterializedViewStage {
                     .await
             }
             CreateMaterializedViewStage::Explain(stage) => {
-                coord.create_materialized_view_explain(ctx.session(), stage)
+                coord
+                    .create_materialized_view_explain(ctx.session(), stage)
+                    .await
             }
         }
     }
@@ -809,7 +811,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    fn create_materialized_view_explain(
+    async fn create_materialized_view_explain(
         &mut self,
         session: &Session,
         CreateMaterializedViewExplain {
@@ -855,18 +857,20 @@ impl Coordinator {
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
 
-        let rows = optimizer_trace.into_rows(
-            format,
-            &config,
-            &features,
-            &expr_humanizer,
-            None,
-            Some(target_cluster.name.as_str()),
-            df_meta,
-            stage,
-            plan::ExplaineeStatementKind::CreateMaterializedView,
-            None,
-        )?;
+        let rows = optimizer_trace
+            .into_rows(
+                format,
+                &config,
+                &features,
+                &expr_humanizer,
+                None,
+                Some(target_cluster.name.as_str()),
+                df_meta,
+                stage,
+                plan::ExplaineeStatementKind::CreateMaterializedView,
+                None,
+            )
+            .await?;
 
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
     }

@@ -51,7 +51,9 @@ impl Staged for CreateViewStage {
         match self {
             CreateViewStage::Optimize(stage) => coord.create_view_optimize(stage).await,
             CreateViewStage::Finish(stage) => coord.create_view_finish(ctx.session(), stage).await,
-            CreateViewStage::Explain(stage) => coord.create_view_explain(ctx.session(), stage),
+            CreateViewStage::Explain(stage) => {
+                coord.create_view_explain(ctx.session(), stage).await
+            }
         }
     }
 
@@ -422,7 +424,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    fn create_view_explain(
+    async fn create_view_explain(
         &mut self,
         session: &Session,
         CreateViewExplain {
@@ -459,18 +461,20 @@ impl Coordinator {
         let features =
             OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
 
-        let rows = optimizer_trace.into_rows(
-            format,
-            &config,
-            &features,
-            &expr_humanizer,
-            None,
-            None, // Views don't have a target cluster.
-            Default::default(),
-            stage,
-            plan::ExplaineeStatementKind::CreateView,
-            None,
-        )?;
+        let rows = optimizer_trace
+            .into_rows(
+                format,
+                &config,
+                &features,
+                &expr_humanizer,
+                None,
+                None, // Views don't have a target cluster.
+                Default::default(),
+                stage,
+                plan::ExplaineeStatementKind::CreateView,
+                None,
+            )
+            .await?;
 
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
     }

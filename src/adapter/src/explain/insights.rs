@@ -18,6 +18,7 @@ use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::plan::HirRelationExpr;
+use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::EmptyStatisticsOracle;
 use serde::Serialize;
 
@@ -61,32 +62,45 @@ pub struct PlanInsights {
 }
 
 impl PlanInsights {
-    pub fn compute_fast_path_clusters(&mut self, ctx: PlanInsightsContext) {
-        for (name, compute_instance) in ctx.compute_instances {
-            let mut optimizer = optimize::peek::Optimizer::new(
-                Arc::clone(&ctx.catalog),
-                compute_instance,
-                ctx.finishing.clone(),
-                ctx.view_id,
-                ctx.index_id,
-                ctx.optimizer_config.clone(),
-                ctx.metrics.clone(),
-            );
-
-            let res: Result<_, OptimizerError> = (|| {
-                // HIR ⇒ MIR lowering and MIR optimization (local)
-                let local_mir_plan = optimizer.catch_unwind_optimize(ctx.raw_expr.clone())?;
-                // Attach resolved context required to continue the pipeline.
-                let local_mir_plan = local_mir_plan.resolve(
-                    ctx.timestamp_context.clone(),
-                    &ctx.session,
-                    Box::new(EmptyStatisticsOracle {}),
+    pub async fn compute_fast_path_clusters(&mut self, ctx: PlanInsightsContext) {
+        let session: Arc<dyn SessionMetadata + Send> = Arc::new(ctx.session);
+        let tasks = ctx
+            .compute_instances
+            .into_iter()
+            .map(|(name, compute_instance)| {
+                // Optimize in parallel.
+                let raw_expr = ctx.raw_expr.clone();
+                let session = Arc::clone(&session);
+                let timestamp_context = ctx.timestamp_context.clone();
+                let mut optimizer = optimize::peek::Optimizer::new(
+                    Arc::clone(&ctx.catalog),
+                    compute_instance,
+                    ctx.finishing.clone(),
+                    ctx.view_id,
+                    ctx.index_id,
+                    ctx.optimizer_config.clone(),
+                    ctx.metrics.clone(),
                 );
-                // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
-                Ok(global_lir_plan)
-            })();
-            let Ok(plan) = res else {
+                mz_ore::task::spawn_blocking(
+                    || "compute fast path clusters",
+                    move || {
+                        // HIR ⇒ MIR lowering and MIR optimization (local)
+                        let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                        // Attach resolved context required to continue the pipeline.
+                        let local_mir_plan = local_mir_plan.resolve(
+                            timestamp_context,
+                            &*session,
+                            Box::new(EmptyStatisticsOracle {}),
+                        );
+                        // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
+                        let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+                        Ok::<_, OptimizerError>((name, global_lir_plan))
+                    },
+                )
+            });
+        for task in tasks {
+            let res = task.await;
+            let Ok(Ok((name, plan))) = res else {
                 continue;
             };
             let (plan, _, _) = plan.unapply();

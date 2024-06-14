@@ -276,7 +276,7 @@ impl Coordinator {
                     return;
                 }
                 ExplainPlan(stage) => {
-                    let result = self.peek_stage_explain_plan(&mut ctx, stage);
+                    let result = self.peek_stage_explain_plan(&mut ctx, stage).await;
                     ctx.retire(result);
                     return;
                 }
@@ -873,14 +873,16 @@ impl Coordinator {
             .override_from(&target_cluster.config.features());
 
         if let Some(trace) = plan_insights_optimizer_trace {
-            let insights = trace.into_plan_insights(
-                &features,
-                &self.catalog().for_session(session),
-                Some(plan.finishing),
-                Some(target_cluster.name.as_str()),
-                df_meta,
-                insights_ctx,
-            )?;
+            let insights = trace
+                .into_plan_insights(
+                    &features,
+                    &self.catalog().for_session(session),
+                    Some(plan.finishing),
+                    Some(target_cluster.name.as_str()),
+                    df_meta,
+                    insights_ctx,
+                )
+                .await?;
             session.add_notice(AdapterNotice::PlanInsights(insights));
         }
 
@@ -1018,7 +1020,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    fn peek_stage_explain_plan(
+    async fn peek_stage_explain_plan(
         &mut self,
         ctx: &mut ExecuteContext,
         PeekStageExplainPlan {
@@ -1059,18 +1061,20 @@ impl Coordinator {
         let target_cluster = self.catalog().get_cluster(optimizer.cluster_id());
         let features = optimizer.config().features.clone();
 
-        let rows = optimizer_trace.into_rows(
-            format,
-            &config,
-            &features,
-            &expr_humanizer,
-            finishing,
-            Some(target_cluster.name.as_str()),
-            df_meta,
-            stage,
-            plan::ExplaineeStatementKind::Select,
-            insights_ctx,
-        )?;
+        let rows = optimizer_trace
+            .into_rows(
+                format,
+                &config,
+                &features,
+                &expr_humanizer,
+                finishing,
+                Some(target_cluster.name.as_str()),
+                df_meta,
+                stage,
+                plan::ExplaineeStatementKind::Select,
+                insights_ctx,
+            )
+            .await?;
 
         Ok(Self::send_immediate_rows(rows))
     }
