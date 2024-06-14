@@ -44,6 +44,7 @@ use timely::{Container, PartialOrder};
 use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
+use crate::controller::introspection::UnifiedIntrospection;
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionState, ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates,
@@ -61,6 +62,10 @@ use crate::protocol::response::{
     StatusResponse, SubscribeBatch, SubscribeResponse,
 };
 use crate::service::{ComputeClient, ComputeGrpcClient};
+
+/// The error returned by replica-targeted peeks and subscribes when the target replica
+/// disconnects.
+pub(super) const ERROR_TARGET_REPLICA_FAILED: &str = "target replica failed or was dropped";
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]
@@ -212,14 +217,12 @@ pub(super) struct Instance<T> {
     response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
     /// Sender for introspection updates to be recorded.
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    /// Unified introspection manager.
+    unified_introspection: UnifiedIntrospection,
     /// A number that increases with each restart of `environmentd`.
     envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
     replica_epochs: BTreeMap<ReplicaId, u64>,
-    /// A generator for transient [`GlobalId`]s.
-    // TODO(#26730): use this to generate IDs for introspection subscribes
-    #[allow(dead_code)]
-    transient_id_gen: Arc<TransientIdGen>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
     /// Dynamic system configuration.
@@ -307,6 +310,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         self.report_dependency_updates(id, 1);
     }
 
+    /// Remove the identified collection from the instance state.
     fn remove_collection(&mut self, id: GlobalId) {
         // Update introspection.
         self.report_dependency_updates(id, -1);
@@ -355,9 +359,20 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
     /// Enqueue the given response for delivery to the controller clients.
     fn deliver_response(&mut self, response: ComputeControllerResponse<T>) {
-        self.response_tx
-            .send(response)
-            .expect("global controller never drops");
+        use ComputeControllerResponse::*;
+
+        // Let `UnifiedIntrospection` intercept responses for introspection subscribes.
+        match response {
+            SubscribeResponse(id, batch) if self.unified_introspection.tracks_subscribe(id) => {
+                self.unified_introspection
+                    .report_subscribe_updates(id, batch);
+            }
+            _ => {
+                self.response_tx
+                    .send(response)
+                    .expect("global controller never drops");
+            }
+        }
     }
 
     /// Enqueue the given introspection updates for recording.
@@ -594,9 +609,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             history: _,
             response_tx: _,
             introspection_tx: _,
+            unified_introspection,
             envd_epoch,
             replica_epochs,
-            transient_id_gen: _,
             metrics: _,
             dyncfg: _,
         } = self;
@@ -626,6 +641,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .map(|(id, subscribe)| (id.to_string(), format!("{subscribe:?}")))
             .collect();
         let copy_tos: Vec<_> = copy_tos.iter().map(|id| id.to_string()).collect();
+        let unified_introspection = format!("{unified_introspection:?}");
         let replica_epochs: BTreeMap<_, _> = replica_epochs
             .iter()
             .map(|(id, epoch)| (id.to_string(), epoch))
@@ -639,6 +655,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field("peeks", peeks)?,
             field("subscribes", subscribes)?,
             field("copy_tos", copy_tos)?,
+            field("unified_introspection", unified_introspection)?,
             field("envd_epoch", envd_epoch)?,
             field("replica_epochs", replica_epochs)?,
         ]);
@@ -671,6 +688,11 @@ where
             })
             .collect();
         let history = ComputeCommandHistory::new(metrics.for_history());
+        let unified_introspection = UnifiedIntrospection::new(
+            arranged_logs.clone(),
+            introspection_tx.clone(),
+            transient_id_gen,
+        );
 
         let mut instance = Self {
             build_info,
@@ -686,9 +708,9 @@ where
             history,
             response_tx,
             introspection_tx,
+            unified_introspection,
             envd_epoch,
             replica_epochs: Default::default(),
-            transient_id_gen,
             metrics,
             dyncfg,
         };
@@ -799,6 +821,18 @@ where
         }
     }
 
+    /// Remove the identified subscribe from the instance state.
+    fn remove_subscribe(&mut self, id: GlobalId) {
+        self.subscribes.remove(&id);
+
+        // If this subscribe was an introspection subscribe, clean up its `collection` and
+        // `unified_introspection` state as well.
+        if self.unified_introspection.tracks_subscribe(id) {
+            self.unified_introspection.drop_subscribe(id);
+            self.drop_collections(vec![id]).expect("must exist");
+        }
+    }
+
     /// Assign a target replica to the identified subscribe.
     ///
     /// If a subscribe has a target replica assigned, only subscribe responses
@@ -881,6 +915,8 @@ where
         // Add replica to tracked state.
         self.add_replica_state(id, client, config);
 
+        self.install_introspection_subscribes(id);
+
         Ok(())
     }
 
@@ -896,16 +932,18 @@ where
         // introspection index). We produce an error to inform upstream.
         let to_drop: Vec<_> = self.subscribes_targeting(id).collect();
         for subscribe_id in to_drop {
-            let subscribe = self.subscribes.remove(&subscribe_id).unwrap();
+            let subscribe = &self.subscribes[&subscribe_id];
             let response = ComputeControllerResponse::SubscribeResponse(
                 subscribe_id,
                 SubscribeBatch {
                     lower: subscribe.frontier.clone(),
-                    upper: subscribe.frontier,
-                    updates: Err("target replica failed or was dropped".into()),
+                    upper: subscribe.frontier.clone(),
+                    updates: Err(ERROR_TARGET_REPLICA_FAILED.into()),
                 },
             );
             self.deliver_response(response);
+
+            self.remove_subscribe(subscribe_id);
         }
 
         // Peeks targeting this replica might not be served anymore (if the replica is dropped).
@@ -917,7 +955,7 @@ where
         for (uuid, peek) in self.peeks_targeting(id) {
             peek_responses.push(ComputeControllerResponse::PeekResponse(
                 uuid,
-                PeekResponse::Error("target replica failed or was dropped".into()),
+                PeekResponse::Error(ERROR_TARGET_REPLICA_FAILED.into()),
                 peek.otel_ctx.clone(),
             ));
             to_drop.push(uuid);
@@ -955,6 +993,31 @@ where
 
         for replica_id in failed_replicas {
             self.rehydrate_replica(replica_id);
+        }
+    }
+
+    fn install_introspection_subscribes(&mut self, replica_id: ReplicaId) {
+        let subscribes = self
+            .unified_introspection
+            .init_subscribes_for_replica(replica_id);
+
+        for (subscribe_id, mut dataflow) in subscribes {
+            // Select a dataflow as-of based on the input read frontiers.
+            let mut as_of = Antichain::from_elem(T::minimum());
+            for id in dataflow.import_ids() {
+                let since = self
+                    .collections
+                    .get(&id)
+                    .expect("introspection subscribes only read from compute collections")
+                    .read_frontier();
+                as_of.join_assign(&since.to_owned());
+            }
+            dataflow.as_of = Some(as_of);
+
+            self.create_dataflow(dataflow)
+                .expect("valid dataflow description");
+            self.set_subscribe_target_replica(subscribe_id, replica_id)
+                .expect("valid subscribe target");
         }
     }
 
@@ -1948,25 +2011,26 @@ where
                 if PartialOrder::less_than(&subscribe.frontier, &upper) {
                     let lower = std::mem::replace(&mut subscribe.frontier, upper.clone());
 
-                    if upper.is_empty() {
-                        // This subscribe cannot produce more data. Stop tracking it.
-                        self.subscribes.remove(&subscribe_id);
-                    } else {
-                        // This subscribe can produce more data. Update our tracking of it.
-                        self.subscribes.insert(subscribe_id, subscribe);
-                    }
-
                     if let Ok(updates) = updates.as_mut() {
                         updates.retain(|(time, _data, _diff)| lower.less_equal(time));
                     }
+
                     self.deliver_response(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,
                         SubscribeBatch {
                             lower,
-                            upper,
+                            upper: upper.clone(),
                             updates,
                         },
                     ));
+
+                    if upper.is_empty() {
+                        // This subscribe cannot produce more data. Stop tracking it.
+                        self.remove_subscribe(subscribe_id);
+                    } else {
+                        // This subscribe can produce more data. Update our tracking of it.
+                        self.subscribes.insert(subscribe_id, subscribe);
+                    }
                 }
             }
             SubscribeResponse::DroppedAt(frontier) => {
@@ -1980,7 +2044,7 @@ where
                     frontier = ?frontier.elements(),
                     "received `DroppedAt` response for a tracked subscribe",
                 );
-                self.subscribes.remove(&subscribe_id);
+                self.remove_subscribe(subscribe_id);
             }
         }
     }

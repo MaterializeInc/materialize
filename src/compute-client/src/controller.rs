@@ -73,6 +73,7 @@ use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
 mod instance;
+mod introspection;
 mod replica;
 mod sequential_hydration;
 
