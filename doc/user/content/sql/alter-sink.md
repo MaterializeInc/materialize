@@ -16,19 +16,18 @@ of [blue/green deployments](/manage/dbt/development-workflows/#bluegreen-deploym
 
 ## Details
 
-To alter the upstream relation a sink depends on and ensure continuity in data
-processing, Materialize must pick a consistent cutover timestamp. When you
+To alter the upstream relation a sink depends on while ensuring continuity in
+data processing, Materialize must pick a consistent cutover timestamp. When you
 execute an `ALTER SINK` command, the resulting output will contain all the
 updates that happened before the cutover timestamp for the old relation, as
 well as all the updates that happened after the cutover timestamp for the new
 relation.
 
 {{< note >}}
-To select a consistent timestamp, Materialize waits for the previous definition
-of the sink to make enough progress such that there is overlap between the
-available timestamps of the newly specified upstream relation. Attempting to
-`ALTER` an unhealthy sink that can't make progress will result in the command
-timing out.
+To select a consistent timestamp, Materialize must wait for the previous
+definition of the sink to emit results up until the oldest timestamp at which
+the contents of the new upstream relation are known. Attempting to `ALTER` an
+unhealthy sink that can't make progress will result in the command timing out.
 {{</ note >}}
 
 ### Valid schema changes
@@ -42,6 +41,11 @@ schema for the new relation must be compatible with the previously published
 schema. If that's not the case, the `ALTER SINK` command will succeed, but the
 subsequent execution of the sink will result in errors and will not be able to
 make progress.
+
+To monitor the status of a sink after an `ALTER SINK` command, navigate to the
+respective object page in the [Materialize console](https://console.materialize.com/),
+or query the [`mz_internal.mz_sink_statuses`](/sql/system-catalog/mz_internal/#mz_sink_statuses)
+system catalog view.
 
 ### Cutover scenarios
 

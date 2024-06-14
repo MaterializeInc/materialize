@@ -138,7 +138,7 @@ format independently from the value format.
 <p style="font-size:14px"><b>Syntax:</b> <code>FORMAT AVRO</code></p>
 
 When using the Avro format, the value of each Kafka message is an Avro record
-containing a field for each column of the sink's underlying relation. The names
+containing a field for each column of the sink's upstream relation. The names
 and ordering of the fields in the record match the names and ordering of the
 columns in the relation.
 
@@ -224,10 +224,10 @@ the value schema, unless overridden by the [`AVRO ... FULLNAME` options](#csr-co
 Materialize searches for documentation in the following locations, in order:
 
 1. For the key schema, a [`KEY DOC ON TYPE` option](#doc-on-option-syntax)
-   naming the sink's underlying relation. For the value schema, a
+   naming the sink's upstream relation. For the value schema, a
    [`VALUE DOC ON TYPE` option](#doc-on-option-syntax) naming the
-   sink's underlying relation.
-2. A [comment](/sql/comment-on) on the sink's underlying relation.
+   sink's upstream relation.
+2. A [comment](/sql/comment-on) on the sink's upstream relation.
 
 For record types within the container record type, Materialize searches for
 documentation in the following locations, in order:
@@ -261,7 +261,7 @@ the `doc` attribute is omitted for that field or type.
 <p style="font-size:14px"><b>Syntax:</b> <code>FORMAT JSON</code></p>
 
 When using the JSON format, the value of each Kafka message is a JSON object
-containing a field for each column of the sink's underlying relation. The names
+containing a field for each column of the sink's upstream relation. The names
 and ordering of the fields in the record match the names and ordering of the
 columns in the relation.
 
@@ -290,14 +290,14 @@ Other                        | Values are cast to [`text`] and then converted to
 
 ## Envelopes
 
-The sink's envelope determines how changes to the sink's underlying relation are
+The sink's envelope determines how changes to the sink's upstream relation are
 mapped to Kafka messages.
 
 There are two fundamental types of change events:
 
-  * An **insertion** event is the addition of a new row to the underlying
+  * An **insertion** event is the addition of a new row to the upstream
     relation.
-  * A **deletion** event is the removal of an existing row from the underlying
+  * A **deletion** event is the removal of an existing row from the upstream
     relation.
 
 When a `KEY` is specified, an insertion event and deletion event that occur at
@@ -310,7 +310,7 @@ both the old and new value for the given key.
 
 The upsert envelope:
 
-  * Requires that you specify a unique key for the sink's underlying relation
+  * Requires that you specify a unique key for the sink's upstream relation
     using the `KEY` option. See [upsert key selection](#upsert-key-selection)
     for details.
   * For an insertion event, emits the row without additional decoration.
@@ -399,11 +399,16 @@ of this topic are not user-specified.
 
 #### End-to-end exactly-once processing
 
-Exactly-once semantics are an end-to-end property of a system, but Materialize only controls the initial produce step. To ensure _end-to-end_ exactly-once message delivery, you should ensure that:
+Exactly-once semantics are an end-to-end property of a system, but Materialize
+only controls the initial produce step. To ensure _end-to-end_ exactly-once
+message delivery, you should ensure that:
 
-- The broker is configured with replication factor greater than 3, with unclean leader election disabled (`unclean.leader.election.enable=false`).
-- All downstream consumers are configured to only read committed data (`isolation.level=read_committed`).
-- The consumers' processing is idempotent, and offsets are only committed when processing is complete.
+- The broker is configured with replication factor greater than 3, with unclean
+  leader election disabled (`unclean.leader.election.enable=false`).
+- All downstream consumers are configured to only read committed data
+  (`isolation.level=read_committed`).
+- The consumers' processing is idempotent, and offsets are only committed when
+  processing is complete.
 
 For more details, see [the Kafka documentation](https://kafka.apache.org/documentation/).
 
@@ -432,7 +437,7 @@ Create           | Topic            | The specified `TOPIC` option
 ### Upsert key selection
 
 The `KEY` that you specify for an upsert envelope sink must be a unique key of
-the sink's underlying relation.
+the sink's upstream relation.
 
 Materialize will attempt to validate the uniqueness of the specified key. If
 validation fails, you'll receive an error message like one of the following:
@@ -440,21 +445,21 @@ validation fails, you'll receive an error message like one of the following:
 ```
 ERROR:  upsert key could not be validated as unique
 DETAIL: Materialize could not prove that the specified upsert envelope key
-("col1") is a unique key of the underlying relation. There are no known
-valid unique keys for the underlying relation.
+("col1") is a unique key of the upstream relation. There are no known
+valid unique keys for the upstream relation.
 
 ERROR:  upsert key could not be validated as unique
 DETAIL: Materialize could not prove that the specified upsert envelope key
-("col1") is a unique key of the underlying relation. The following keys
-are known to be unique for the underlying relation:
+("col1") is a unique key of the upstream relation. The following keys
+are known to be unique for the upstream relation:
   ("col2")
   ("col3", "col4")
 ```
 
 The first error message indicates that Materialize could not prove the existence
-of any unique keys for the sink's underlying relation. The second error message
+of any unique keys for the sink's upstream relation. The second error message
 indicates that Materialize could prove that `col2` and `(col3, col4)` were
-unique keys of the sink's underlying relation, but could not provide the
+unique keys of the sink's upstream relation, but could not provide the
 uniqueness of the specified upsert key of `col1`.
 
 There are three ways to resolve this error:
@@ -517,9 +522,12 @@ There are three ways to resolve this error:
 
 ### Creating a connection
 
-A connection describes how to connect and authenticate to an external system you want Materialize to write data to.
+A connection describes how to connect and authenticate to an external system you
+want Materialize to write data to.
 
-Once created, a connection is **reusable** across multiple `CREATE SINK` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+Once created, a connection is **reusable** across multiple `CREATE SINK`
+statements. For more details on creating connections, check the
+[`CREATE CONNECTION`](/sql/create-connection) documentation page.
 
 #### Broker
 
