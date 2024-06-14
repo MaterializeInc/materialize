@@ -14,28 +14,33 @@ from materialize.scalability.workload import Workload
 class WorkloadMarker(Workload):
     """Workload marker to group workloads."""
 
-    pass
+    def group_name(self) -> str:
+        raise NotImplementedError
 
 
 class DmlDqlWorkload(WorkloadMarker):
     """Workloads that only run DML & DQL statements."""
 
-    pass
+    def group_name(self) -> str:
+        return "DML & DQL"
 
 
 class DdlWorkload(WorkloadMarker):
     """Workloads that run DDL statements."""
 
-    pass
+    def group_name(self) -> str:
+        return "DDL"
 
 
 class ConnectionWorkload(WorkloadMarker):
     """Workloads that perform connection operations."""
 
-    pass
+    def group_name(self) -> str:
+        return "Connection"
 
 
 class SelfTestWorkload(WorkloadMarker):
     """Used to self-test the framework, not relevant for regular benchmark runs."""
 
-    pass
+    def group_name(self) -> str:
+        return "Self-Test"

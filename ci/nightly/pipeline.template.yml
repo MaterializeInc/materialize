@@ -11,16 +11,6 @@ steps:
   - group: Builds
     key: builds
     steps:
-      - id: build-x86_64
-        label: Build x86_64
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
-        depends_on: []
-        timeout_in_minutes: 60
-        # For releases we trigger nightly from the test job directly, no need to build again
-        branches: "!v*.*"
-        agents:
-          queue: builder-linux-x86_64
-
       - id: build-aarch64
         label: Build aarch64
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
@@ -803,18 +793,6 @@ steps:
               composition: platform-checks
               args: [--scenario=TxnWalFencing, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-migrate-x86-64-aarch64
-        label: "Checks migrate from x86-64 to aarch64"
-        depends_on: [build-x86_64, build-aarch64]
-        timeout_in_minutes: 180
-        agents:
-          queue: builder-linux-x86_64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=MigrateX86Aarch64]
-        sanitizer: skip
-
       - id: checks-toggle-persist-roundtrip-spine
         label: "Checks toggling persist roundtrip spine"
         depends_on: build-aarch64
@@ -836,19 +814,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=TogglePersistBatchColumnarFormat, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-migrate-aarch64-x86-64
-        label: "Checks migrate from aarch64 to x86-64"
-        depends_on: [build-x86_64, build-aarch64]
-        timeout_in_minutes: 120
-        agents:
-          # On x86-64 because of 24794
-          queue: builder-linux-x86_64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=MigrateAarch64X86]
-        sanitizer: skip
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
@@ -1027,13 +992,12 @@ steps:
 
   - id: cloud-canary
     label: "Canary Deploy in Staging Cloud"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 1200
     concurrency: 1
     concurrency_group: 'cloud-canary'
     agents:
-      # no matching manifest for linux/arm64/v8 in the manifest list entries
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary

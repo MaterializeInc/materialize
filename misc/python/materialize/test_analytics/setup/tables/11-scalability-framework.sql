@@ -13,11 +13,16 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- replace %build-ids% with a criterion
 
-DELETE FROM feature_benchmark_result WHERE build_id IN (%build-ids%);
-DELETE FROM scalability_framework_result WHERE build_id IN (%build-ids%);
-DELETE FROM build_annotation_error WHERE build_step_id IN (SELECT build_step_id FROM build_annotation WHERE build_id IN (%build-ids%));
-DELETE FROM build_annotation WHERE build_id IN (%build-ids%);
-DELETE FROM build_step WHERE build_id IN (%build-ids%);
-DELETE FROM build WHERE build_id IN (%build-ids%);
+-- result of individual workloads
+CREATE TABLE scalability_framework_result (
+   build_id TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
+   build_step_id TEXT NOT NULL,
+   framework_version TEXT NOT NULL,
+   workload_name TEXT NOT NULL,
+   workload_group TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
+   workload_version TEXT NOT NULL,
+   concurrency INT NOT NULL,
+   count INT,
+   tps DOUBLE
+);

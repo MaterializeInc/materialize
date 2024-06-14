@@ -13,11 +13,19 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- replace %build-ids% with a criterion
+CREATE TABLE build_annotation (
+   build_id TEXT NOT NULL,
+   build_step_id TEXT NOT NULL,
+   test_suite TEXT NOT NULL,
+   test_retry_count UINT4 NOT NULL,
+   is_failure BOOL NOT NULL,
+   insert_date TIMESTAMPTZ NOT NULL
+);
 
-DELETE FROM feature_benchmark_result WHERE build_id IN (%build-ids%);
-DELETE FROM scalability_framework_result WHERE build_id IN (%build-ids%);
-DELETE FROM build_annotation_error WHERE build_step_id IN (SELECT build_step_id FROM build_annotation WHERE build_id IN (%build-ids%));
-DELETE FROM build_annotation WHERE build_id IN (%build-ids%);
-DELETE FROM build_step WHERE build_id IN (%build-ids%);
-DELETE FROM build WHERE build_id IN (%build-ids%);
+CREATE TABLE build_annotation_error (
+   build_step_id TEXT NOT NULL,
+   error_type TEXT NOT NULL,
+   content TEXT NOT NULL,
+   issue TEXT,
+   occurrence_count UINT4 NOT NULL
+);

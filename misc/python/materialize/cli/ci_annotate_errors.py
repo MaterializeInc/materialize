@@ -156,14 +156,17 @@ class JunitError:
 class ObservedError(ObservedBaseError):
     # abstract class, do not instantiate
     error_message: str | None
+    error_details: str | None = None
     error_type: str
     location: str
+    location_url: str | None = None
+    max_error_length: int = 10000
+    max_details_length: int = 10000
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ObservedErrorWithIssue(ObservedError, WithIssue):
     issue_is_closed: bool
-    location_url: str | None = None
 
     def _get_issue_presentation(self) -> str:
         issue_presentation = f"#{self.issue_number}"
@@ -173,7 +176,10 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
         return issue_presentation
 
     def to_text(self) -> str:
-        return f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {crop_text(self.error_message)}"
+        result = f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {crop_text(self.error_message, self.max_error_length)}"
+        if self.error_details is not None:
+            result += f"\n{crop_text(self.error_details, self.max_details_length)}"
+        return result
 
     def to_markdown(self) -> str:
         if self.location_url is None:
@@ -181,15 +187,16 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
         else:
             location_markdown = f'<a href="{self.location_url}">{self.location}</a>'
 
-        return f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {location_markdown}:\n{format_error_message(self.error_message)}'
+        result = f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {location_markdown}:\n{format_error_message(self.error_message, self.max_details_length)}'
+        if self.error_details is not None:
+            result += (
+                f"\n{format_error_message(self.error_details, self.max_details_length)}"
+            )
+        return result
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ObservedErrorWithLocation(ObservedError):
-    error_details: str | None = None
-    max_error_length: int = 10000
-    max_details_length: int = 10000
-
     def to_text(self) -> str:
         if self.error_details:
             error_details = f" {crop_text(self.error_details, self.max_details_length)}"
@@ -206,7 +213,12 @@ class ObservedErrorWithLocation(ObservedError):
         else:
             formatted_error_details = ""
 
-        return f"{self.error_type} in {self.location}:\n{format_error_message(self.error_message, self.max_error_length)}{formatted_error_details}"
+        if self.location_url is None:
+            location_markdown = self.location
+        else:
+            location_markdown = f'<a href="{self.location_url}">{self.location}</a>'
+
+        return f"{self.error_type} in {location_markdown}:\n{format_error_message(self.error_message, self.max_error_length)}{formatted_error_details}"
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -379,12 +391,18 @@ def annotate_logged_errors(
     # Keep track of known errors so we log each only once
     already_reported_issue_numbers: set[int] = set()
 
-    def handle_log_error(
-        error_message_as_bytes: bytes, location: str, location_url: str | None
+    def handle_error(
+        error_message: str,
+        error_details: str | None,
+        location: str,
+        location_url: str | None,
     ):
-        error_message = error_message_as_bytes.decode("utf-8")
+        search_string = error_message.encode("utf-8")
+        if error_details is not None:
+            search_string += ("\n" + error_details).encode("utf-8")
+
         for issue in known_issues:
-            match = issue.regex.search(for_github_re(error_message_as_bytes))
+            match = issue.regex.search(for_github_re(search_string))
             if match and issue.info["state"] == "open":
                 if issue.apply_to and issue.apply_to not in (
                     step_key.lower(),
@@ -396,6 +414,7 @@ def annotate_logged_errors(
                     known_errors.append(
                         ObservedErrorWithIssue(
                             error_message=error_message,
+                            error_details=error_details,
                             error_type="Known issue",
                             internal_error_type="KNOWN_ISSUE",
                             issue_url=issue.info["html_url"],
@@ -410,7 +429,7 @@ def annotate_logged_errors(
                 break
         else:
             for issue in known_issues:
-                match = issue.regex.search(for_github_re(error_message_as_bytes))
+                match = issue.regex.search(for_github_re(search_string))
                 if match and issue.info["state"] == "closed":
                     if issue.apply_to and issue.apply_to not in (
                         step_key.lower(),
@@ -422,6 +441,7 @@ def annotate_logged_errors(
                         unknown_errors.append(
                             ObservedErrorWithIssue(
                                 error_message=error_message,
+                                error_details=error_details,
                                 error_type="Potential regression",
                                 internal_error_type="POTENTIAL_REGRESSION",
                                 issue_url=issue.info["html_url"],
@@ -429,6 +449,7 @@ def annotate_logged_errors(
                                 issue_number=issue.info["number"],
                                 issue_is_closed=True,
                                 location=location,
+                                location_url=location_url,
                             )
                         )
                         already_reported_issue_numbers.add(issue.info["number"])
@@ -437,26 +458,13 @@ def annotate_logged_errors(
                 unknown_errors.append(
                     ObservedErrorWithLocation(
                         error_message=error_message,
+                        error_details=error_details,
                         location=location,
+                        location_url=location_url,
                         error_type="Unknown error",
                         internal_error_type="UNKNOWN ERROR",
                     )
                 )
-
-    def handle_junit_error(
-        error_message: str | None, details: str | None, location: str
-    ):
-        unknown_errors.append(
-            ObservedErrorWithLocation(
-                error_message=error_message,
-                error_type="Failure",
-                internal_error_type="JUNIT_FAILURE",
-                location=location,
-                error_details=details,
-                max_error_length=1_000,
-                max_details_length=9_000,
-            )
-        )
 
     for error in errors:
         if isinstance(error, ErrorLog):
@@ -469,7 +477,7 @@ def annotate_logged_errors(
                 location: str = error.file
                 location_url = None
 
-            handle_log_error(error.match, location, location_url)
+            handle_error(error.match.decode("utf-8"), None, location, location_url)
         elif isinstance(error, JunitError):
             if "in Code Coverage" in error.text or "covered" in error.message:
                 msg = "\n".join(filter(None, [error.message, error.text]))
@@ -483,7 +491,12 @@ def annotate_logged_errors(
                     )
                 )
             else:
-                handle_junit_error(error.message, error.text, error.testcase)
+                handle_error(
+                    error.message,
+                    error.text,
+                    error.testcase,
+                    None,
+                )
         else:
             raise RuntimeError(f"Unexpected error type: {type(error)}")
 

@@ -581,10 +581,13 @@ def upload_results_to_test_analytics(
 
         for workload_name, result in results_of_endpoint.items():
             workload_version = benchmark_result.workload_version_by_name[workload_name]
+            workload_group = benchmark_result.workload_group_by_name[workload_name]
+
             for index, row in result.data.iterrows():
                 result_entries.append(
                     scalability_framework_result_storage.ScalabilityFrameworkResultEntry(
                         workload_name=workload_name,
+                        workload_group=workload_group,
                         workload_version=str(workload_version),
                         concurrency=row[df_totals_cols.CONCURRENCY],
                         count=row[df_totals_cols.COUNT],

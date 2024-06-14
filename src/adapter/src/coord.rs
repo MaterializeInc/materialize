@@ -67,6 +67,7 @@
 //!
 
 use chrono::{DateTime, Utc};
+use mz_sql::names::ResolvedIds;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -114,13 +115,13 @@ use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
+use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
-use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
@@ -277,6 +278,11 @@ pub enum Message<T = mz_repr::Timestamp> {
         span: Span,
         stage: SubscribeStage,
     },
+    SecretStageReady {
+        ctx: ExecuteContext,
+        span: Span,
+        stage: SecretStage,
+    },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
     CheckSchedulingPolicies,
@@ -334,6 +340,7 @@ impl Message {
                 "create_materialized_view_stage_ready"
             }
             Message::SubscribeStageReady { .. } => "subscribe_stage_ready",
+            Message::SecretStageReady { .. } => "secret_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
@@ -754,6 +761,46 @@ pub struct SubscribeFinish {
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
 }
 
+#[derive(Debug)]
+pub enum SecretStage {
+    CreateEnsure(CreateSecretEnsure),
+    CreateFinish(CreateSecretFinish),
+    RotateKeysEnsure(RotateKeysSecretEnsure),
+    RotateKeysFinish(RotateKeysSecretFinish),
+    Alter(AlterSecret),
+}
+
+#[derive(Debug)]
+pub struct CreateSecretEnsure {
+    validity: PlanValidity,
+    plan: plan::CreateSecretPlan,
+}
+
+#[derive(Debug)]
+pub struct CreateSecretFinish {
+    validity: PlanValidity,
+    id: GlobalId,
+    plan: plan::CreateSecretPlan,
+}
+
+#[derive(Debug)]
+pub struct RotateKeysSecretEnsure {
+    validity: PlanValidity,
+    id: GlobalId,
+}
+
+#[derive(Debug)]
+pub struct RotateKeysSecretFinish {
+    validity: PlanValidity,
+    ops: Vec<crate::catalog::Op>,
+}
+
+#[derive(Debug)]
+pub struct AlterSecret {
+    validity: PlanValidity,
+    plan: plan::AlterSecretPlan,
+}
+
 /// An enum describing which cluster to run a statement on.
 ///
 /// One example usage would be that if a query depends only on system tables, we might
@@ -853,6 +900,8 @@ impl PlanValidity {
 pub(crate) enum StageResult<T> {
     /// A task was spawned that will return the next stage.
     Handle(JoinHandle<Result<T, AdapterError>>),
+    /// A task was spawned that will return a response for the client.
+    HandleRetire(JoinHandle<Result<ExecuteResponse, AdapterError>>),
     /// The finaly stage was executed and is ready to respond to the client.
     Response(ExecuteResponse),
 }
@@ -1489,7 +1538,8 @@ pub struct Coordinator {
     /// reflect exactly the set of writes that precede them, and no writes that follow.
     global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
 
-    transient_id_counter: u64,
+    /// A generator for transient [`GlobalId`]s, shareable with other threads.
+    transient_id_gen: Arc<TransientIdGen>,
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
     active_conns: BTreeMap<ConnectionId, ConnMeta>,
@@ -2291,7 +2341,7 @@ impl Coordinator {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
                             .take(metainfo.optimizer_notices.len())
-                            .collect::<Result<Vec<_>, _>>()?;
+                            .collect::<Vec<_>>();
                         // Return a metainfo with rendered notices.
                         self.catalog()
                             .render_notices(metainfo, notice_ids, Some(entry.id()))
@@ -2311,7 +2361,7 @@ impl Coordinator {
                             self.instance_snapshot(mv.cluster_id)
                                 .expect("compute instance exists")
                         });
-                    let internal_view_id = self.allocate_transient_id()?;
+                    let internal_view_id = self.allocate_transient_id();
                     let debug_name = self
                         .catalog()
                         .resolve_full_name(entry.name(), None)
@@ -2343,7 +2393,7 @@ impl Coordinator {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
                             .take(metainfo.optimizer_notices.len())
-                            .collect::<Result<Vec<_>, _>>()?;
+                            .collect::<Vec<_>>();
                         // Return a metainfo with rendered notices.
                         self.catalog()
                             .render_notices(metainfo, notice_ids, Some(entry.id()))
@@ -3073,10 +3123,6 @@ impl Coordinator {
 
         let map = serde_json::Map::from_iter([
             (
-                "transient_id_counter".to_string(),
-                serde_json::to_value(self.transient_id_counter)?,
-            ),
-            (
                 "active_conns".to_string(),
                 serde_json::to_value(active_conns)?,
             ),
@@ -3352,11 +3398,13 @@ pub fn serve(
             .spawn(move || {
                 let span = info_span!(parent: parent_span, "coord::coordinator").entered();
 
+                let transient_id_gen = Arc::new(TransientIdGen::new());
                 let controller = handle
                     .block_on({
                         catalog.initialize_controller(
                             controller_config,
                             controller_envd_epoch,
+                            Arc::clone(&transient_id_gen),
                             builtin_migration_metadata,
                             controller_txn_wal_tables,
                         )
@@ -3374,7 +3422,7 @@ pub fn serve(
                     strict_serializable_reads_tx,
                     dropped_read_holds_tx,
                     global_timelines: timestamp_oracles,
-                    transient_id_counter: 1,
+                    transient_id_gen,
                     active_conns: BTreeMap::new(),
                     storage_read_capabilities: Default::default(),
                     compute_read_capabilities: Default::default(),

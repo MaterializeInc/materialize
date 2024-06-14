@@ -196,8 +196,7 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::CreateSecret(plan) => {
-                    let result = self.sequence_create_secret(ctx.session_mut(), plan).await;
-                    ctx.retire(result);
+                    self.sequence_create_secret(ctx, plan).await;
                 }
                 Plan::CreateSink(plan) => {
                     self.sequence_create_sink(ctx, plan, resolved_ids).await;
@@ -414,8 +413,7 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::AlterSecret(plan) => {
-                    let result = self.sequence_alter_secret(ctx.session(), plan).await;
-                    ctx.retire(result);
+                    self.sequence_alter_secret(ctx, plan).await;
                 }
                 Plan::AlterSink(plan) => {
                     self.sequence_alter_sink_prepare(ctx, plan).await;
@@ -698,13 +696,8 @@ impl Coordinator {
         .await
     }
 
-    pub(crate) fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {
-        let id = self.transient_id_counter;
-        if id == u64::MAX {
-            coord_bail!("id counter overflows i64");
-        }
-        self.transient_id_counter += 1;
-        Ok(GlobalId::Transient(id))
+    pub(crate) fn allocate_transient_id(&self) -> GlobalId {
+        self.transient_id_gen.allocate_id()
     }
 
     fn should_emit_rbac_notice(&self, session: &Session) -> Option<AdapterNotice> {

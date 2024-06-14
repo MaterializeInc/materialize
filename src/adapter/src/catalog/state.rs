@@ -1079,25 +1079,6 @@ impl CatalogState {
         owner_id: RoleId,
         privileges: PrivilegeMap,
     ) {
-        if !id.is_system() {
-            info!(
-                "create {} {} ({})",
-                item.typ(),
-                self.resolve_full_name(&name, None),
-                id
-            );
-        }
-
-        if !id.is_system() {
-            if let Some(cluster_id) = item.cluster_id() {
-                self.clusters_by_id
-                    .get_mut(&cluster_id)
-                    .expect("catalog out of sync")
-                    .bound_objects
-                    .insert(id);
-            };
-        }
-
         let entry = CatalogEntry {
             item,
             name,
@@ -1108,6 +1089,31 @@ impl CatalogState {
             owner_id,
             privileges,
         };
+
+        self.insert_entry(entry);
+    }
+
+    /// Associates a name, `GlobalId`, and entry.
+    pub(super) fn insert_entry(&mut self, entry: CatalogEntry) {
+        if !entry.id.is_system() {
+            info!(
+                "create {} {} ({})",
+                entry.item.typ(),
+                self.resolve_full_name(&entry.name, None),
+                entry.id
+            );
+        }
+
+        if !entry.id.is_system() {
+            if let Some(cluster_id) = entry.item.cluster_id() {
+                self.clusters_by_id
+                    .get_mut(&cluster_id)
+                    .expect("catalog out of sync")
+                    .bound_objects
+                    .insert(entry.id);
+            };
+        }
+
         for u in &entry.references().0 {
             match self.entry_by_id.get_mut(u) {
                 Some(metadata) => metadata.referenced_by.push(entry.id()),
@@ -1153,7 +1159,7 @@ impl CatalogState {
     }
 
     #[mz_ore::instrument(level = "trace")]
-    pub(super) fn drop_item(&mut self, id: GlobalId) {
+    pub(super) fn drop_item(&mut self, id: GlobalId) -> CatalogEntry {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
         info!(
             "drop {} {} ({})",
@@ -1206,6 +1212,8 @@ impl CatalogState {
                 );
             }
         }
+
+        metadata
     }
 
     pub(super) fn get_database(&self, database_id: &DatabaseId) -> &Database {

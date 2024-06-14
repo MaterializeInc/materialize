@@ -92,7 +92,8 @@ if is_truthy "${CI_HEAP_PROFILES:-}"; then
         faketty bin/ci-builder run stable bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
     done
     ) &
-else
+# We don't want any performance impact on benchmarks. Kafka-matrix goes OoM, might be close to its memory limit anyway.
+elif [[ "$BUILDKITE_STEP_KEY" != scalability-benchmark-* ]] && [[ "$BUILDKITE_STEP_KEY" != feature-benchmark-* ]] && [ "$BUILDKITE_STEP_KEY" != "kafka-matrix" ]; then
     (while true; do
         sleep 5
         # faketty because otherwise docker will complain about not being inside

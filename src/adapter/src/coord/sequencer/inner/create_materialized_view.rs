@@ -421,9 +421,9 @@ impl Coordinator {
         let sink_id = if let ExplainContext::None = explain_ctx {
             self.catalog_mut().allocate_user_id().await?
         } else {
-            self.allocate_transient_id()?
+            self.allocate_transient_id()
         };
-        let view_id = self.allocate_transient_id()?;
+        let view_id = self.allocate_transient_id();
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
@@ -629,7 +629,7 @@ impl Coordinator {
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
             .take(global_lir_plan.df_meta().optimizer_notices.len())
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Vec<_>>();
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {

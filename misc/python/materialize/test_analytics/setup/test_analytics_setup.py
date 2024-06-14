@@ -14,11 +14,16 @@ from pg8000 import Cursor
 from materialize import MZ_ROOT
 
 
-def setup_structures(cursor: Cursor) -> None:
+def setup_all_structures(cursor: Cursor) -> None:
+    setup_directory = f"{MZ_ROOT}/misc/python/materialize/test_analytics/setup/"
+    setup_structures(cursor, f"{setup_directory}/tables")
+    setup_structures(cursor, f"{setup_directory}/views")
+
+
+def setup_structures(cursor: Cursor, directory: str) -> None:
     if exist_structures(cursor):
         return
 
-    directory = f"{MZ_ROOT}/misc/python/materialize/test_analytics/setup/structures"
     setup_files = os.listdir(directory)
     setup_files.sort()
 

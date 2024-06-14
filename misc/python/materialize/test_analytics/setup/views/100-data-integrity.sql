@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-CREATE VIEW v_data_integrity (table_name, own_item_key, referenced_item_key, problem) AS
+CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_item_key, problem) AS
     -- violated references
     SELECT 'build_step', build_step_id, build_id, 'build step references missing build'
     FROM build_step
@@ -51,6 +51,7 @@ CREATE VIEW v_data_integrity (table_name, own_item_key, referenced_item_key, pro
     GROUP BY build_step_id
     HAVING count(*) > 1
     -- other
+    UNION
     SELECT 'build_step', build_step_id, NULL, 'build step id is not unique'
     FROM build_step
     GROUP BY build_step_id

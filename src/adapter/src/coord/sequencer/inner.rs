@@ -24,11 +24,10 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{
-    CollectionPlan, MapFilterProject, MirScalarExpr, OptimizedMirRelationExpr, ResultSpec,
-    RowSetFinishing,
+    CollectionPlan, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
 use mz_ore::collections::{CollectionExt, HashSet};
-use mz_ore::task::{self, spawn};
+use mz_ore::task::{self, spawn, JoinHandle};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_proto::RustType;
@@ -60,7 +59,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type,
+    CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, Type,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
@@ -111,7 +110,6 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
-use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
@@ -126,6 +124,7 @@ mod create_index;
 mod create_materialized_view;
 mod create_view;
 mod peek;
+mod secret;
 mod subscribe;
 
 /// Attempts to evaluate an expression. If an error is returned then the error is sent
@@ -171,28 +170,47 @@ impl Coordinator {
             .stage(self, &mut ctx)
             .instrument(parent_span.clone())
             .await;
-        let stage = return_if_err!(next, ctx);
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-        match stage {
+        let res = return_if_err!(next, ctx);
+        match res {
             StageResult::Handle(handle) => {
-                spawn(|| "sequence_staged", async move {
-                    let next = match handle.await {
-                        Ok(next) => return_if_err!(next, ctx),
-                        Err(err) => {
-                            tracing::error!("sequence_staged join error {err}");
-                            ctx.retire(Err(AdapterError::Internal(
-                                "sequence_staged join error".into(),
-                            )));
-                            return;
-                        }
-                    };
+                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                self.handle_spawn(ctx, handle, move |ctx, next| {
                     let _ = internal_cmd_tx.send(next.message(ctx, parent_span));
+                });
+            }
+            StageResult::HandleRetire(handle) => {
+                self.handle_spawn(ctx, handle, move |ctx, resp| {
+                    ctx.retire(Ok(resp));
                 });
             }
             StageResult::Response(resp) => {
                 ctx.retire(Ok(resp));
             }
         }
+    }
+
+    fn handle_spawn<T, F>(
+        &mut self,
+        ctx: ExecuteContext,
+        handle: JoinHandle<Result<T, AdapterError>>,
+        f: F,
+    ) where
+        T: Send + 'static,
+        F: FnOnce(ExecuteContext, T) + Send + 'static,
+    {
+        spawn(|| "sequence_staged", async move {
+            let next = match handle.await {
+                Ok(next) => return_if_err!(next, ctx),
+                Err(err) => {
+                    tracing::error!("sequence_staged join error {err}");
+                    ctx.retire(Err(AdapterError::Internal(
+                        "sequence_staged join error".into(),
+                    )));
+                    return;
+                }
+            };
+            f(ctx, next);
+        });
     }
 
     async fn create_source_inner(
@@ -871,58 +889,6 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedTable)
             }
             Err(err) => Err(err),
-        }
-    }
-
-    #[instrument]
-    pub(super) async fn sequence_create_secret(
-        &mut self,
-        session: &mut Session,
-        plan: plan::CreateSecretPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::CreateSecretPlan {
-            name,
-            mut secret,
-            if_not_exists,
-        } = plan;
-
-        let payload = self.extract_secret(session, &mut secret.secret_as)?;
-
-        let id = self.catalog_mut().allocate_user_id().await?;
-        let secret = Secret {
-            create_sql: secret.create_sql,
-        };
-
-        self.secrets_controller.ensure(id, &payload).await?;
-
-        let ops = vec![catalog::Op::CreateItem {
-            id,
-            name: name.clone(),
-            item: CatalogItem::Secret(secret.clone()),
-            owner_id: *session.current_role_id(),
-        }];
-
-        match self.catalog_transact(Some(session), ops).await {
-            Ok(()) => Ok(ExecuteResponse::CreatedSecret),
-            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
-            })) if if_not_exists => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: name.item,
-                    ty: "secret",
-                });
-                Ok(ExecuteResponse::CreatedSecret)
-            }
-            Err(err) => {
-                if let Err(e) = self.secrets_controller.delete(id).await {
-                    warn!(
-                        "Dropping newly created secrets has encountered an error: {}",
-                        e
-                    );
-                }
-                Err(err)
-            }
         }
     }
 
@@ -3251,21 +3217,6 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(super) async fn sequence_alter_secret(
-        &mut self,
-        session: &Session,
-        plan: plan::AlterSecretPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::AlterSecretPlan { id, mut secret_as } = plan;
-
-        let payload = self.extract_secret(session, &mut secret_as)?;
-
-        self.secrets_controller.ensure(id, &payload).await?;
-
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
-    }
-
-    #[instrument]
     pub(super) async fn sequence_alter_sink_prepare(
         &mut self,
         ctx: ExecuteContext,
@@ -3433,8 +3384,7 @@ impl Coordinator {
     ) {
         match action {
             AlterConnectionAction::RotateKeys => {
-                let r = self.sequence_rotate_keys(ctx.session(), id).await;
-                ctx.retire(r);
+                self.sequence_rotate_keys(ctx, id).await;
             }
             AlterConnectionAction::AlterOptions {
                 set_options,
@@ -3444,52 +3394,6 @@ impl Coordinator {
                 self.sequence_alter_connection_options(ctx, id, set_options, drop_options, validate)
                     .await
             }
-        }
-    }
-
-    #[instrument]
-    async fn sequence_rotate_keys(
-        &mut self,
-        session: &Session,
-        id: GlobalId,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let secret = self.secrets_controller.reader().read(id).await?;
-        let previous_key_set = SshKeyPairSet::from_bytes(&secret)?;
-        let new_key_set = previous_key_set.rotate()?;
-        self.secrets_controller
-            .ensure(id, &new_key_set.to_bytes())
-            .await?;
-
-        let builtin_table_retraction = self.catalog().state().pack_ssh_tunnel_connection_update(
-            id,
-            &previous_key_set.public_keys(),
-            -1,
-        );
-        let builtin_table_retraction = self
-            .catalog()
-            .state()
-            .resolve_builtin_table_update(builtin_table_retraction);
-        let builtin_table_addition = self.catalog().state().pack_ssh_tunnel_connection_update(
-            id,
-            &new_key_set.public_keys(),
-            1,
-        );
-        let builtin_table_addition = self
-            .catalog()
-            .state()
-            .resolve_builtin_table_update(builtin_table_addition);
-        let ops = vec![
-            catalog::Op::WeirdBuiltinTableUpdates {
-                builtin_table_update: builtin_table_retraction,
-            },
-            catalog::Op::WeirdBuiltinTableUpdates {
-                builtin_table_update: builtin_table_addition,
-            },
-        ];
-
-        match self.catalog_transact(Some(session), ops).await {
-            Ok(_) => Ok(ExecuteResponse::AlteredObject(ObjectType::Connection)),
-            Err(err) => Err(err),
         }
     }
 
@@ -4208,56 +4112,6 @@ impl Coordinator {
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
-    }
-
-    fn extract_secret(
-        &mut self,
-        session: &Session,
-        secret_as: &mut MirScalarExpr,
-    ) -> Result<Vec<u8>, AdapterError> {
-        let temp_storage = RowArena::new();
-        prep_scalar_expr(
-            secret_as,
-            ExprPrepStyle::OneShot {
-                logical_time: EvalTime::NotAvailable,
-                session,
-                catalog_state: self.catalog().state(),
-            },
-        )?;
-        let evaled = secret_as.eval(&[], &temp_storage)?;
-
-        if evaled == Datum::Null {
-            coord_bail!("secret value can not be null");
-        }
-
-        let payload = evaled.unwrap_bytes();
-
-        // Limit the size of a secret to 512 KiB
-        // This is the largest size of a single secret in Consul/Kubernetes
-        // We are enforcing this limit across all types of Secrets Controllers
-        // Most secrets are expected to be roughly 75B
-        if payload.len() > 1024 * 512 {
-            coord_bail!("secrets can not be bigger than 512KiB")
-        }
-
-        // Enforce that all secrets are valid UTF-8 for now. We expect to lift
-        // this restriction in the future, when we discover a connection type
-        // that requires binary secrets, but for now it is convenient to ensure
-        // here that `SecretsReader::read_string` can never fail due to invalid
-        // UTF-8.
-        //
-        // If you want to remove this line, verify that no caller of
-        // `SecretsReader::read_string` will panic if the secret contains
-        // invalid UTF-8.
-        if std::str::from_utf8(payload).is_err() {
-            // Intentionally produce a vague error message (rather than
-            // including the invalid bytes, for example), to avoid including
-            // secret material in the error message, which might end up in a log
-            // file somewhere.
-            coord_bail!("secret value must be valid UTF-8");
-        }
-
-        Ok(Vec::from(payload))
     }
 
     #[instrument]
