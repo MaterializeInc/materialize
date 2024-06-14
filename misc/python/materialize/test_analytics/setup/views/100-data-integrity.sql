@@ -56,4 +56,9 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     FROM build_step
     GROUP BY build_step_id
     HAVING count(distinct build_id) > 1
+    UNION
+    SELECT 'build_step', build_step_key, max(build_step_id), 'multiple build steps as latest retry'
+    FROM build_step
+    GROUP BY build_id, build_step_key, shard_index
+    HAVING sum(CASE WHEN is_latest_retry THEN 1 ELSE 0 END) > 1
 ;
