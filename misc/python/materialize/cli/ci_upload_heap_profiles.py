@@ -59,7 +59,8 @@ def main() -> int:
                     "--log-level",
                     "error",
                     filename,
-                ]
+                ],
+                capture_output=True,
             )
 
     services = json.loads(
