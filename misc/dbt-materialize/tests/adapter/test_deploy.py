@@ -16,9 +16,7 @@
 import pytest
 from dbt.tests.util import run_dbt
 from fixtures import (
-    test_materialized_view,
     test_materialized_view_index,
-    test_sink,
     test_source,
     test_view_index,
 )
@@ -336,35 +334,6 @@ class TestRunWithDeploy:
         run_dbt(["run-operation", "deploy_cleanup"])
 
 
-class TestSinkFail:
-    @pytest.fixture(scope="class")
-    def project_config_update(self):
-        return {
-            "vars": {
-                "deployment": {
-                    "default": {"clusters": ["quickstart"], "schemas": ["public"]}
-                }
-            }
-        }
-
-    @pytest.fixture(scope="class")
-    def models(self):
-        return {
-            "test_materialized_view.sql": test_materialized_view,
-            "test_sink.sql": test_sink,
-        }
-
-    @pytest.fixture(autouse=True)
-    def cleanup(self, project):
-        project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
-
-    def test_source_fails(self, project):
-        run_dbt(["run-operation", "deploy_init"])
-        run_dbt(["run", "--vars", "deploy: True"], expect_pass=False)
-        run_dbt(["run-operation", "deploy_cleanup"])
-
-
 class TestTargetDeploy:
     @pytest.fixture(scope="class")
     def project_config_update(self):
@@ -586,6 +555,15 @@ class TestRunWithSinkAlter:
                     "default": {
                         "clusters": ["prod"],
                         "schemas": ["prod"],
+                        "sinks": [
+                            {
+                                "name": "sink",
+                                "database": "materialize",
+                                "schema": "sinks",
+                                "upstream_relation": "prod_view",
+                                "upstream_schema": "prod",
+                            }
+                        ],
                     }
                 },
             }
@@ -598,6 +576,7 @@ class TestRunWithSinkAlter:
         project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS prod CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS sinks CASCADE")
         project.run_sql("DROP MATERIALIZED VIEW IF EXISTS prod.prod_view CASCADE")
         project.run_sql(
             "DROP MATERIALIZED VIEW IF EXISTS prod_dbt_deploy.prod_view CASCADE"
@@ -611,6 +590,7 @@ class TestRunWithSinkAlter:
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE SCHEMA sinks")
         project.run_sql("CREATE MATERIALIZED VIEW prod.prod_view AS SELECT 1")
         project.run_sql(
             "CREATE MATERIALIZED VIEW prod_dbt_deploy.prod_view AS SELECT 1"
@@ -619,7 +599,7 @@ class TestRunWithSinkAlter:
             "CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (BROKER 'redpanda:9092', SECURITY PROTOCOL PLAINTEXT)"
         )
         project.run_sql(
-            "CREATE SINK prod.sink IN CLUSTER sink FROM prod.prod_view INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink') FORMAT JSON ENVELOPE DEBEZIUM"
+            "CREATE SINK sinks.sink IN CLUSTER sink FROM prod.prod_view INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink') FORMAT JSON ENVELOPE DEBEZIUM"
         )
 
         # Get the IDs of the materialized views
@@ -648,7 +628,7 @@ class TestRunWithSinkAlter:
         )
 
         assert (
-            after_view_id in after_sink[2]
+            before_view_id in after_sink[2]
         ), "The sink should point to the same view ID after a dry_run"
 
         assert before_sink[0] == after_sink[0], "Sink name should be the same"

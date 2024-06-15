@@ -46,6 +46,7 @@
 
 {% set clusters = target_config.get('clusters', []) %}
 {% set schemas = target_config.get('schemas', []) %}
+{% set sinks = target_config.get('sinks', []) %}
 
 -- Check that all production schemas
 -- and clusters already exist
@@ -57,14 +58,6 @@
     {% if not schema_exists(deploy_schema) %}
         {{ exceptions.raise_compiler_error("Deployment schema " ~ deploy_schema ~ " does not exist") }}
     {% endif %}
-    {% if schema_contains_sinks(deploy_schema) %}
-        {{ exceptions.raise_compiler_error("""
-        Deployment schema " ~ deploy_schema ~ " contains sinks. This is not currently
-        supported by the deploy_promote macro.
-
-        If this feature is important to you, please reach out!
-        """) }}
-    {% endif %}
 {% endfor %}
 
 {% for cluster in clusters %}
@@ -75,33 +68,10 @@
     {% if not cluster_exists(deploy_cluster) %}
         {{ exceptions.raise_compiler_error("Deployment cluster " ~ deploy_cluster ~ " does not exist") }}
     {% endif %}
-    {% if cluster_contains_sinks(deploy_cluster) %}
-        {{ exceptions.raise_compiler_error("""
-        Deployment cluster " ~ deploy_cluster ~ " contains sinks. This is not currently
-        supported by the deploy_promote macro.
-
-        If this feature is important to you, please reach out!
-        """) }}
-    {% endif %}
 {% endfor %}
 
 {% if wait %}
     {{ deploy_await(poll_interval) }}
-{% endif %}
-
-{% if not dry_run %}
-    {% set alter_sink_statements = process_sinks(schemas, dry_run) %}
-    {% if alter_sink_statements %}
-        {% call statement('alter_sinks', fetch_result=True, auto_begin=True) %}
-            {% for stmt in alter_sink_statements %}
-                {{ stmt }}
-            {% endfor %}
-        {% endcall %}
-    {% else %}
-        {{ log("No ALTER SINK statements to execute", info=True) }}
-    {% endif %}
-{% else %}
-    {{ process_sinks(schemas, dry_run) }}
 {% endif %}
 
 {% if not dry_run %}
@@ -135,6 +105,21 @@
         {{ log("DRY RUN: ALTER CLUSTER " ~ adapter.quote(cluster) ~ " SWAP WITH " ~ adapter.quote(deploy_cluster), info=True) }}
     {% endfor %}
     {{ log("DRY RUN: No actual schema or cluster swaps performed.", info=True) }}
+{% endif %}
+
+{% if sinks %}
+    {% for sink in sinks %}
+        {% if not dry_run %}
+            {% call statement('alter_sink_' ~ loop.index, fetch_result=True, auto_begin=False) %}
+                {{ log("Running ALTER SINK " ~ adapter.quote(sink['database']) ~ "." ~ adapter.quote(sink['schema']) ~ "." ~ adapter.quote(sink['name']) ~ " SET FROM " ~ adapter.quote(get_current_database()) ~ "." ~ adapter.quote(sink['upstream_schema']) ~ "." ~ adapter.quote(sink['upstream_relation']), info=True) }}
+                ALTER SINK {{ adapter.quote(sink['database']) }}.{{ adapter.quote(sink['schema']) }}.{{ adapter.quote(sink['name']) }} SET FROM {{ adapter.quote(get_current_database()) }}.{{ adapter.quote(sink['upstream_schema']) }}.{{ adapter.quote(sink['upstream_relation']) }};
+            {% endcall %}
+        {% else %}
+            {{ log("DRY RUN: ALTER SINK " ~ adapter.quote(sink['database']) ~ "." ~ adapter.quote(sink['schema']) ~ "." ~ adapter.quote(sink['name']) ~ " SET FROM " ~ adapter.quote(get_current_database()) ~ "." ~ adapter.quote(sink['upstream_schema']) ~ "." ~ adapter.quote(sink['upstream_relation']), info=True) }}
+        {% endif %}
+    {% endfor %}
+{% else %}
+    {{ log("No sinks to process.", info=True) }}
 {% endif %}
 {% endmacro %}
 
@@ -176,64 +161,5 @@
         {{ return(current_database) }}
     {% else %}
         {{ return(None) }}
-    {% endif %}
-{% endmacro %}
-
-{% macro get_sinks_and_upstream_relations(schema) %}
-    {% set query %}
-    SELECT
-        mz_object_dependencies.object_id,
-        mz_object_dependencies.referenced_object_id,
-        mz_objects.name AS sink_name,
-        mz_schemas.name AS sink_schema_name,
-        mz_databases.name AS sink_database_name,
-        upstream_relations.name AS upstream_relation_name,
-        upstream_relation_schemas.name AS upstream_relation_schema,
-        upstream_relation_databases.name AS upstream_relation_database,
-        upstream_relations.type AS upstream_relation_type
-    FROM mz_internal.mz_object_dependencies
-    JOIN mz_objects ON mz_object_dependencies.object_id = mz_objects.id
-    JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
-    JOIN mz_databases ON mz_schemas.database_id = mz_databases.id
-    JOIN mz_objects AS upstream_relations ON mz_object_dependencies.referenced_object_id = upstream_relations.id
-    JOIN mz_schemas AS upstream_relation_schemas ON upstream_relations.schema_id = upstream_relation_schemas.id
-    JOIN mz_databases AS upstream_relation_databases ON upstream_relation_schemas.database_id = upstream_relation_databases.id
-    WHERE mz_objects.type = 'sink'
-        AND upstream_relations.type IN ('table', 'materialized-view', 'source')
-        AND upstream_relation_databases.name = current_database()
-        AND upstream_relation_schemas.name = {{ dbt.string_literal(schema) }};
-    {% endset %}
-    {% set results = run_query(query) %}
-    {{ log("Found " ~ results.rows|length ~ " sinks in schema: " ~ schema, info=True) }}
-    {{ return(results) }}
-{% endmacro %}
-
-{% macro process_sinks(schemas, dry_run) %}
-    {% set statements = [] %}
-    {% for schema in schemas %}
-        {% set sinks_and_upstream_relations = get_sinks_and_upstream_relations(schema) %}
-        {% if sinks_and_upstream_relations is not none and sinks_and_upstream_relations.rows %}
-            {% for sink in sinks_and_upstream_relations.rows %}
-                {% set sink_name = adapter.quote(sink[2]) %}
-                {% set sink_schema_name = adapter.quote(sink[3]) %}
-                {% set sink_database_name = adapter.quote(sink[4]) %}
-                {% set upstream_relation_name = adapter.quote(sink[5]) %}
-                {% set upstream_relation_schema = adapter.quote(sink[6]) %}
-                {% set deploy_schema = adapter.quote(sink[6] ~ "_dbt_deploy") %}
-                {% set new_upstream_relation = get_current_database() ~ '.' ~ deploy_schema ~ '.' ~ upstream_relation_name %}
-                {% if dry_run %}
-                    {{ log("DRY RUN: ALTER SINK " ~ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name ~ " SET FROM " ~ new_upstream_relation, info=True) }}
-                {% else %}
-                    {{ log("Altering sink " ~ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name ~ " to use new upstream relation " ~ new_upstream_relation, info=True) }}
-                    {% set stmt = "ALTER SINK " ~ sink_database_name ~ "." ~ sink_schema_name ~ "." ~ sink_name ~ " SET FROM " ~ new_upstream_relation %}
-                    {% do statements.append(stmt) %}
-                {% endif %}
-            {% endfor %}
-        {% else %}
-            {{ log("No sinks found in schema " ~ schema ~ ", skipping ALTER SINK operations for this schema", info=True) }}
-        {% endif %}
-    {% endfor %}
-    {% if not dry_run %}
-        {{ return(statements) }}
     {% endif %}
 {% endmacro %}
