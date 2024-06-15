@@ -18,43 +18,32 @@ it's possible to get a rough sense of Materialize's performance on macOS,
 there have been more than a few occasions where apparent performance defects
 have disappeared when running the workload on Linux.
 
-## Use lld
+## Use mold
 
-Using lld instead of the standard linker will result in an impressive
-linking speedup.
+On Linux using mold instead of the standard linker will result in an impressive
+linking speedup. On macOS make sure to have an up-to-date system with at least
+Xcode 15 to use the new system linker, which is similarly fast.
 
 ### Installation
 
 #### Linux
 
-On Debian-based distros, you can install lld from the standard package
+On Debian-based distros, you can install mold from the standard package
 repository:
 
 ```shell
-sudo apt install lld
+sudo apt install mold
 ```
 
 You'll need to hunt down the equivalent instructions for your distribution if
 you don't use a Debian-based distribution.
 
-#### macOS
-
-lld is available on Homebrew as part of the `llvm` package.
-
-```shell
-brew install llvm
-```
-
-The `llvm` package is keg-only, so you'll have to add its bin folder to your
-PATH manually. Refer to the "Caveats" section in the output of the above
-`brew install` command for instructions.
-
 ### Configuration
 
-To tell Rust to use lld, set the following environment variable:
+To tell Rust to use mold, set the following environment variable:
 
 ```shell
-export RUSTFLAGS="-C link-arg=-fuse-ld=lld"
+export RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 ```
 
 Alternatively, you can configure the linker through a
@@ -62,17 +51,17 @@ Alternatively, you can configure the linker through a
 
 ```toml
 [build]
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 ```
 
 [cargo-config]: https://doc.rust-lang.org/cargo/reference/config.html#configuration
 
 ## Disable debug info
 
-The fastest known way to compile is with lld and disabling debug info:
+The fastest known way to compile is with mold and disabling debug info:
 
 ```shell
-export RUSTFLAGS="-C link-arg=-fuse-ld=lld -C debuginfo=0"
+export RUSTFLAGS="-C link-arg=-fuse-ld=mold -C debuginfo=0"
 ```
 
 Ideally, set that in your `~/.bashrc` or equivalent so that it applies
