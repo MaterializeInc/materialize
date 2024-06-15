@@ -2596,21 +2596,6 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_cluster_replica_heartbeats",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::SOURCE_MZ_CLUSTER_REPLICA_HEARTBEATS_OID,
-    data_source: IntrospectionType::ComputeReplicaHeartbeats,
-    desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::String.nullable(false))
-        .with_column(
-            "last_heartbeat",
-            ScalarType::TimestampTz { precision: None }.nullable(false),
-        ),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-});
-
 pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_audit_events",
     schema: MZ_CATALOG_SCHEMA,
@@ -7504,7 +7489,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::View(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
-        Builtin::Source(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),

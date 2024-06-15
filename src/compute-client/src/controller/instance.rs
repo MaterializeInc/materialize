@@ -15,7 +15,6 @@ use std::num::NonZeroI64;
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::{DateTime, Duration, DurationRound, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
@@ -338,25 +337,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         }
 
         self.replicas.insert(id, replica);
-    }
-
-    fn remove_replica_state(&mut self, id: ReplicaId) -> Option<ReplicaState<T>> {
-        let Some(replica) = self.replicas.remove(&id) else {
-            return None;
-        };
-
-        if let Some(time) = replica.last_heartbeat {
-            let row = Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::TimestampTz(time.try_into().expect("must fit")),
-            ]);
-            self.deliver_introspection_updates(
-                IntrospectionType::ComputeReplicaHeartbeats,
-                vec![(row, -1)],
-            );
-        }
-
-        Some(replica)
     }
 
     fn acquire_storage_read_hold_at(
@@ -813,50 +793,10 @@ where
                 }
                 Some((replica_id, Some(response))) => {
                     // A replica has produced a response. Return it.
-                    self.register_replica_heartbeat(replica_id);
                     return (replica_id, response);
                 }
             }
         }
-    }
-
-    /// Register a heartbeat from the given replica.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the specified replica does not exist.
-    fn register_replica_heartbeat(&mut self, replica_id: ReplicaId) {
-        let replica = self
-            .replicas
-            .get_mut(&replica_id)
-            .expect("replica must exist");
-
-        let now = Utc::now()
-            .duration_trunc(Duration::try_seconds(60).unwrap())
-            .expect("cannot fail");
-
-        let mut updates = Vec::new();
-        if let Some(old) = replica.last_heartbeat {
-            if old == now {
-                return; // nothing new to report
-            }
-
-            let retraction = Row::pack_slice(&[
-                Datum::String(&replica_id.to_string()),
-                Datum::TimestampTz(old.try_into().expect("must fit")),
-            ]);
-            updates.push((retraction, -1));
-        }
-
-        replica.last_heartbeat = Some(now);
-
-        let insertion = Row::pack_slice(&[
-            Datum::String(&replica_id.to_string()),
-            Datum::TimestampTz(now.try_into().expect("must fit")),
-        ]);
-        updates.push((insertion, 1));
-
-        self.deliver_introspection_updates(IntrospectionType::ComputeReplicaHeartbeats, updates);
     }
 
     /// Assign a target replica to the identified subscribe.
@@ -946,7 +886,7 @@ where
 
     /// Remove an existing instance replica, by ID.
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
-        self.remove_replica_state(id).ok_or(ReplicaMissing(id))?;
+        self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
 
         // Remove frontier tracking for this replica.
         self.remove_replica_frontiers(id);
@@ -2194,8 +2134,6 @@ pub struct ReplicaState<T> {
     collections: BTreeMap<GlobalId, ReplicaCollectionState<T>>,
     /// Whether the replica has failed and requires rehydration.
     failed: bool,
-    /// The time of the last reported heartbeat.
-    last_heartbeat: Option<DateTime<Utc>>,
 }
 
 impl<T: Debug> ReplicaState<T> {
@@ -2214,7 +2152,6 @@ impl<T: Debug> ReplicaState<T> {
             introspection_tx,
             collections: Default::default(),
             failed: false,
-            last_heartbeat: None,
         }
     }
 
@@ -2277,7 +2214,6 @@ impl<T: Debug> ReplicaState<T> {
             introspection_tx: _,
             collections,
             failed,
-            last_heartbeat,
         } = self;
 
         fn field(
@@ -2297,7 +2233,6 @@ impl<T: Debug> ReplicaState<T> {
             field("id", id.to_string())?,
             field("collections", collections)?,
             field("failed", failed)?,
-            field("last_heartbeat", format!("{last_heartbeat:?}"))?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
