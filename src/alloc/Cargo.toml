@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 mz-ore = { path = "../ore", default-features = false }
-mz-prof = { path = "../prof", default-features = false, features = ["jemalloc"], optional = true }
 mz-prof-http = { path = "../prof-http", default-features = false }
 # According to jemalloc developers, `background_threads` should always be
 # enabled, except in "esoteric" situations that don't apply to Materialize
@@ -19,13 +18,10 @@ mz-prof-http = { path = "../prof-http", default-features = false }
 # whatever reason).
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
-tikv-jemallocator = { version = "0.5.0", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
 default = ["workspace-hack"]
-# Whether to use jemalloc instead of the system allocator.
-jemalloc = ["tikv-jemallocator", "mz-prof", "mz-prof-http/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]
 # The only reason we depend on mz-prof-http from this package is so that we can

@@ -41,8 +41,6 @@ default = ["workspace-hack"]
 # WARNING: For development use only! When enabled, may allow unrestricted read
 # access to the file system.
 dev-web = ["tracing"]
-# Whether to enable profiling features that depend on jemalloc.
-jemalloc = ["mz-prof/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]
 # "bytesize" not used on linux

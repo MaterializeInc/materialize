@@ -165,7 +165,6 @@ default = ["tokio-console", "mz-alloc-default"]
 # WARNING: For development use only! When enabled, may allow unrestricted read
 # access to the file system.
 dev-web = []
-jemalloc = ["mz-alloc/jemalloc"]
 test = [
     "postgres",
     "regex",

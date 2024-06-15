@@ -21,7 +21,6 @@ mz-proc = { path = "../proc", default-features = false }
 pprof = "0.11.1"
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 tempfile = "3.8.1"
-tikv-jemalloc-ctl = { version = "0.5.0", features = ["use_std"], optional = true }
 tracing = "0.1.37"
 tokio = { version = "1.32.0", features = ["time"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
@@ -33,8 +32,6 @@ prost-build = "0.11.2"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]
-# Whether to enable profiling features that depend on jemalloc.
-jemalloc = ["tikv-jemalloc-ctl"]
 
 [package.metadata.cargo-udeps.ignore]
 # "bytesize" not used on linux
