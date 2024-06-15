@@ -15,16 +15,14 @@
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use inner::return_if_err;
-use mz_controller_types::ClusterId;
-use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::explain::ExplainFormat;
-use mz_repr::{Diff, GlobalId, RowCollection, Timestamp};
+use mz_repr::{Diff, GlobalId, RowCollection};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
-    FetchPlan, MutationKind, Params, Plan, PlanKind, QueryWhen, RaisePlan,
+    FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -36,7 +34,6 @@ use tracing::{event, Instrument, Level, Span};
 
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse, Response};
-use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{catalog_serving, Coordinator, Message, TargetCluster};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -672,28 +669,6 @@ impl Coordinator {
         // not a user request, and the user name is still recorded in the plan, so we aren't losing
         // information.
         self.sequence_create_role(None, plan).await
-    }
-
-    pub(crate) async fn sequence_explain_timestamp_finish(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        format: ExplainFormat,
-        cluster_id: ClusterId,
-        optimized_plan: OptimizedMirRelationExpr,
-        id_bundle: CollectionIdBundle,
-        when: QueryWhen,
-        real_time_recency_ts: Option<Timestamp>,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_explain_timestamp_finish_inner(
-            ctx.session_mut(),
-            format,
-            cluster_id,
-            optimized_plan,
-            id_bundle,
-            when,
-            real_time_recency_ts,
-        )
-        .await
     }
 
     pub(crate) fn allocate_transient_id(&self) -> GlobalId {

@@ -199,6 +199,13 @@ impl Coordinator {
                 } => {
                     self.sequence_staged(ctx, span, stage).await;
                 }
+                Message::ExplainTimestampStageReady {
+                    ctx,
+                    span,
+                    stage,
+                } => {
+                    self.sequence_staged(ctx, span, stage).await;
+                }
                 Message::SecretStageReady {
                     ctx,
                     span,
@@ -950,27 +957,6 @@ impl Coordinator {
         }
 
         match real_time_recency_context {
-            RealTimeRecencyContext::ExplainTimestamp {
-                mut ctx,
-                format,
-                cluster_id,
-                optimized_plan,
-                id_bundle,
-                when,
-            } => {
-                let result = self
-                    .sequence_explain_timestamp_finish(
-                        &mut ctx,
-                        format,
-                        cluster_id,
-                        optimized_plan,
-                        id_bundle,
-                        when,
-                        Some(real_time_recency_ts),
-                    )
-                    .await;
-                ctx.retire(result);
-            }
             RealTimeRecencyContext::Peek {
                 ctx,
                 root_otel_ctx,

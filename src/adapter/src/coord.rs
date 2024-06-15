@@ -283,6 +283,11 @@ pub enum Message<T = mz_repr::Timestamp> {
         span: Span,
         stage: SecretStage,
     },
+    ExplainTimestampStageReady {
+        ctx: ExecuteContext,
+        span: Span,
+        stage: ExplainTimestampStage,
+    },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
     CheckSchedulingPolicies,
@@ -334,6 +339,7 @@ impl Message {
                 "execute_single_statement_transaction"
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
+            Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
             Message::CreateViewStageReady { .. } => "create_view_stage_ready",
             Message::CreateMaterializedViewStageReady { .. } => {
@@ -380,14 +386,6 @@ pub type AlterConnectionValidationReady = ValidationReady<Connection>;
 
 #[derive(Debug)]
 pub enum RealTimeRecencyContext {
-    ExplainTimestamp {
-        ctx: ExecuteContext,
-        format: ExplainFormat,
-        cluster_id: ClusterId,
-        optimized_plan: OptimizedMirRelationExpr,
-        id_bundle: CollectionIdBundle,
-        when: QueryWhen,
-    },
     Peek {
         ctx: ExecuteContext,
         plan: mz_sql::plan::SelectPlan,
@@ -404,8 +402,7 @@ pub enum RealTimeRecencyContext {
 impl RealTimeRecencyContext {
     pub(crate) fn take_context(self) -> ExecuteContext {
         match self {
-            RealTimeRecencyContext::ExplainTimestamp { ctx, .. }
-            | RealTimeRecencyContext::Peek { ctx, .. } => ctx,
+            RealTimeRecencyContext::Peek { ctx, .. } => ctx,
         }
     }
 }
@@ -644,6 +641,40 @@ pub struct CreateViewExplain {
     id: GlobalId,
     plan: plan::CreateViewPlan,
     explain_ctx: ExplainPlanContext,
+}
+
+#[derive(Debug)]
+pub enum ExplainTimestampStage {
+    Optimize(ExplainTimestampOptimize),
+    RealTimeRecency(ExplainTimestampRealTimeRecency),
+    Finish(ExplainTimestampFinish),
+}
+
+#[derive(Debug)]
+pub struct ExplainTimestampOptimize {
+    validity: PlanValidity,
+    plan: plan::ExplainTimestampPlan,
+    cluster_id: ClusterId,
+}
+
+#[derive(Debug)]
+pub struct ExplainTimestampRealTimeRecency {
+    validity: PlanValidity,
+    format: ExplainFormat,
+    optimized_plan: OptimizedMirRelationExpr,
+    cluster_id: ClusterId,
+    when: QueryWhen,
+}
+
+#[derive(Debug)]
+pub struct ExplainTimestampFinish {
+    validity: PlanValidity,
+    format: ExplainFormat,
+    optimized_plan: OptimizedMirRelationExpr,
+    cluster_id: ClusterId,
+    source_ids: BTreeSet<GlobalId>,
+    when: QueryWhen,
+    real_time_recency_ts: Option<Timestamp>,
 }
 
 #[derive(Debug)]
@@ -902,6 +933,8 @@ pub(crate) enum StageResult<T> {
     Handle(JoinHandle<Result<T, AdapterError>>),
     /// A task was spawned that will return a response for the client.
     HandleRetire(JoinHandle<Result<ExecuteResponse, AdapterError>>),
+    /// The next stage is immediately ready and will execute.
+    Immediate(T),
     /// The finaly stage was executed and is ready to respond to the client.
     Response(ExecuteResponse),
 }
