@@ -1203,10 +1203,11 @@ impl SystemVars {
             &UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP,
             &ENABLE_RBAC_CHECKS,
             &PG_SOURCE_CONNECT_TIMEOUT,
-            &PG_SOURCE_KEEPALIVES_IDLE,
-            &PG_SOURCE_KEEPALIVES_INTERVAL,
-            &PG_SOURCE_KEEPALIVES_RETRIES,
+            &PG_SOURCE_TCP_KEEPALIVES_IDLE,
+            &PG_SOURCE_TCP_KEEPALIVES_INTERVAL,
+            &PG_SOURCE_TCP_KEEPALIVES_RETRIES,
             &PG_SOURCE_TCP_USER_TIMEOUT,
+            &PG_SOURCE_TCP_CONFIGURE_SERVER,
             &PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT,
             &PG_SOURCE_WAL_SENDER_TIMEOUT,
             &PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT,
@@ -1757,24 +1758,29 @@ impl SystemVars {
         *self.expect_value(&PG_SOURCE_CONNECT_TIMEOUT)
     }
 
-    /// Returns the `pg_source_keepalives_retries` configuration parameter.
-    pub fn pg_source_keepalives_retries(&self) -> u32 {
-        *self.expect_value(&PG_SOURCE_KEEPALIVES_RETRIES)
+    /// Returns the `pg_source_tcp_keepalives_retries` configuration parameter.
+    pub fn pg_source_tcp_keepalives_retries(&self) -> u32 {
+        *self.expect_value(&PG_SOURCE_TCP_KEEPALIVES_RETRIES)
     }
 
-    /// Returns the `pg_source_keepalives_idle` configuration parameter.
-    pub fn pg_source_keepalives_idle(&self) -> Duration {
-        *self.expect_value(&PG_SOURCE_KEEPALIVES_IDLE)
+    /// Returns the `pg_source_tcp_keepalives_idle` configuration parameter.
+    pub fn pg_source_tcp_keepalives_idle(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_TCP_KEEPALIVES_IDLE)
     }
 
-    /// Returns the `pg_source_keepalives_interval` configuration parameter.
-    pub fn pg_source_keepalives_interval(&self) -> Duration {
-        *self.expect_value(&PG_SOURCE_KEEPALIVES_INTERVAL)
+    /// Returns the `pg_source_tcp_keepalives_interval` configuration parameter.
+    pub fn pg_source_tcp_keepalives_interval(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_TCP_KEEPALIVES_INTERVAL)
     }
 
     /// Returns the `pg_source_tcp_user_timeout` configuration parameter.
     pub fn pg_source_tcp_user_timeout(&self) -> Duration {
         *self.expect_value(&PG_SOURCE_TCP_USER_TIMEOUT)
+    }
+
+    /// Returns the `pg_source_tcp_configure_server` configuration parameter.
+    pub fn pg_source_tcp_configure_server(&self) -> bool {
+        *self.expect_value(&PG_SOURCE_TCP_CONFIGURE_SERVER)
     }
 
     /// Returns the `pg_source_snapshot_statement_timeout` configuration parameter.
@@ -2180,10 +2186,11 @@ impl SystemVars {
     /// Returns whether the named variable is a storage configuration parameter.
     pub fn is_storage_config_var(&self, name: &str) -> bool {
         name == PG_SOURCE_CONNECT_TIMEOUT.name()
-            || name == PG_SOURCE_KEEPALIVES_IDLE.name()
-            || name == PG_SOURCE_KEEPALIVES_INTERVAL.name()
-            || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
+            || name == PG_SOURCE_TCP_KEEPALIVES_IDLE.name()
+            || name == PG_SOURCE_TCP_KEEPALIVES_INTERVAL.name()
+            || name == PG_SOURCE_TCP_KEEPALIVES_RETRIES.name()
             || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
+            || name == PG_SOURCE_TCP_CONFIGURE_SERVER.name()
             || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
             || name == PG_SOURCE_WAL_SENDER_TIMEOUT.name()
             || name == PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT.name()

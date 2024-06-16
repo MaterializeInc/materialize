@@ -25,11 +25,7 @@ pub use schemas::{get_schemas, publication_info};
 #[cfg(feature = "tunnel")]
 pub mod tunnel;
 #[cfg(feature = "tunnel")]
-pub use tunnel::{
-    Config, TcpTimeoutConfig, TunnelConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_KEEPALIVE_IDLE,
-    DEFAULT_KEEPALIVE_INTERVAL, DEFAULT_KEEPALIVE_RETRIES, DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT,
-    DEFAULT_TCP_USER_TIMEOUT,
-};
+pub use tunnel::{Config, TunnelConfig, DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT};
 
 pub mod query;
 pub use query::simple_query_opt;

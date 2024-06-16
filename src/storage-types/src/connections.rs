@@ -1333,6 +1333,8 @@ impl PostgresConnection<InlinedConnection> {
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
     ) -> Result<mz_postgres_util::Config, anyhow::Error> {
+        let params = &storage_configuration.parameters;
+
         let mut config = tokio_postgres::Config::new();
         config
             .host(&self.host)
@@ -1361,16 +1363,52 @@ impl PostgresConnection<InlinedConnection> {
             config.ssl_cert(cert.as_bytes()).ssl_key(key.as_bytes());
         }
 
+        if let Some(connect_timeout) = params.pg_source_connect_timeout {
+            config.connect_timeout(connect_timeout);
+        }
+        if let Some(keepalives_retries) = params.pg_source_tcp_keepalives_retries {
+            config.keepalives_retries(keepalives_retries);
+        }
+        if let Some(keepalives_idle) = params.pg_source_tcp_keepalives_idle {
+            config.keepalives_idle(keepalives_idle);
+        }
+        if let Some(keepalives_interval) = params.pg_source_tcp_keepalives_interval {
+            config.keepalives_interval(keepalives_interval);
+        }
+        if let Some(tcp_user_timeout) = params.pg_source_tcp_user_timeout {
+            config.tcp_user_timeout(tcp_user_timeout);
+        }
+
         let mut options = vec![];
-        if let Some(wal_sender_timeout) = storage_configuration
-            .parameters
-            .pg_source_wal_sender_timeout
-        {
+        if let Some(wal_sender_timeout) = params.pg_source_wal_sender_timeout {
             options.push(format!(
                 "--wal_sender_timeout={}",
                 wal_sender_timeout.as_millis()
             ));
         };
+        if params.pg_source_tcp_configure_server {
+            if let Some(keepalives_retries) = params.pg_source_tcp_keepalives_retries {
+                options.push(format!("--tcp_keepalives_count={}", keepalives_retries));
+            }
+            if let Some(keepalives_idle) = params.pg_source_tcp_keepalives_idle {
+                options.push(format!(
+                    "--tcp_keepalives_idle={}",
+                    keepalives_idle.as_secs()
+                ));
+            }
+            if let Some(keepalives_interval) = params.pg_source_tcp_keepalives_interval {
+                options.push(format!(
+                    "--tcp_keepalives_interval={}",
+                    keepalives_interval.as_secs()
+                ));
+            }
+            if let Some(tcp_user_timeout) = params.pg_source_tcp_user_timeout {
+                options.push(format!(
+                    "--tcp_user_timeout={}",
+                    tcp_user_timeout.as_millis()
+                ));
+            }
+        }
         config.options(options.join(" ").as_str());
 
         let tunnel = match &self.tunnel {
@@ -1422,11 +1460,7 @@ impl PostgresConnection<InlinedConnection> {
         Ok(mz_postgres_util::Config::new(
             config,
             tunnel,
-            storage_configuration
-                .parameters
-                .pg_source_tcp_timeouts
-                .clone(),
-            storage_configuration.parameters.ssh_timeout_config,
+            params.ssh_timeout_config,
             in_task,
         )?)
     }
