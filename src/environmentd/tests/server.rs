@@ -2448,7 +2448,7 @@ async fn test_leader_promotion() {
         client.simple_query("SELECT 1").await.unwrap();
     }
     // propose a deploy generation for the first time.
-    let harness = harness.with_deploy_generation(Some(2));
+    let harness = harness.with_deploy_generation(2);
     {
         let listeners_2 = test_util::Listeners::new().await.unwrap();
         let internal_http_addr_2 = listeners_2.inner.internal_http_local_addr();
@@ -2506,7 +2506,7 @@ async fn test_leader_promotion() {
         client.simple_query("SELECT 1").await.unwrap();
     }
     // start with different deploy generation.
-    let harness = harness.with_deploy_generation(Some(3));
+    let harness = harness.with_deploy_generation(3);
     {
         let listeners_3 = test_util::Listeners::new().await.unwrap();
         let internal_http_addr_3 = listeners_3.inner.internal_http_local_addr();
@@ -2597,7 +2597,7 @@ async fn test_leader_promotion_always_using_deploy_generation() {
     let harness = test_util::TestHarness::default()
         .unsafe_mode()
         .data_directory(tmpdir.path())
-        .with_deploy_generation(Some(2));
+        .with_deploy_generation(2);
     {
         // propose a deploy generation for the first time
         let server = harness.clone().start().await;
@@ -2649,7 +2649,7 @@ async fn test_leader_promotion_mixed_code_version() {
     let harness = test_util::TestHarness::default()
         .unsafe_mode()
         .data_directory(tmpdir.path())
-        .with_deploy_generation(Some(1))
+        .with_deploy_generation(1)
         .with_code_version(this_version);
 
     // Query a server at the current version before we start a second server.
@@ -2662,7 +2662,7 @@ async fn test_leader_promotion_mixed_code_version() {
     let internal_http_addr_next = listeners_next.inner.internal_http_local_addr();
     let config_next = harness
         .clone()
-        .with_deploy_generation(Some(2))
+        .with_deploy_generation(2)
         .with_code_version(next_version.clone());
     let _server_next = mz_ore::task::spawn(|| "next version", async move {
         listeners_next.serve(config_next).await.unwrap()

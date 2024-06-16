@@ -102,7 +102,7 @@ pub struct TestHarness {
     // tracing.
     orchestrator_tracing_cli_args: TracingCliArgs,
     bootstrap_role: Option<String>,
-    deploy_generation: Option<u64>,
+    deploy_generation: u64,
     system_parameter_defaults: BTreeMap<String, String>,
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
@@ -131,7 +131,7 @@ impl Default for TestHarness {
             propagate_crashes: false,
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
-            deploy_generation: None,
+            deploy_generation: 0,
             // This and startup_log_filter below are both (?) needed to suppress clusterd messages.
             // If we need those in the future, we might need to change both.
             system_parameter_defaults: BTreeMap::from([(
@@ -278,7 +278,7 @@ impl TestHarness {
         self
     }
 
-    pub fn with_deploy_generation(mut self, deploy_generation: Option<u64>) -> Self {
+    pub fn with_deploy_generation(mut self, deploy_generation: u64) -> Self {
         self.deploy_generation = deploy_generation;
         self
     }

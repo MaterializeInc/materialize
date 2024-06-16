@@ -1074,7 +1074,7 @@ impl<'a> RunnerInner<'a> {
             config_sync_timeout: Duration::from_secs(30),
             config_sync_loop_interval: None,
             bootstrap_role: Some("materialize".into()),
-            deploy_generation: None,
+            deploy_generation: 0,
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
             txn_wal_tables_cli: Some(TxnWalTablesImpl::Lazy),

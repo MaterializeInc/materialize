@@ -903,8 +903,8 @@ impl UnopenedPersistCatalogState {
 
         let txn = if is_initialized {
             let mut txn = catalog.transaction().await?;
-            if let Some(deploy_generation) = deploy_generation {
-                txn.set_config(DEPLOY_GENERATION.into(), Some(deploy_generation))?;
+            if deploy_generation.is_some() {
+                txn.set_config(DEPLOY_GENERATION.into(), deploy_generation)?;
             }
             txn
         } else {
@@ -918,6 +918,9 @@ impl UnopenedPersistCatalogState {
                 "trace should not contain any updates for an uninitialized catalog: {:?}",
                 catalog.snapshot
             );
+            let Some(deploy_generation) = deploy_generation else {
+                return Err(CatalogError::Durable(DurableCatalogError::Uninitialized));
+            };
             let mut txn = catalog.transaction().await?;
             initialize::initialize(&mut txn, bootstrap_args, initial_ts, deploy_generation).await?;
             txn
@@ -978,14 +981,14 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        deploy_generation: Option<u64>,
+        deploy_generation: u64,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(
             Mode::Savepoint,
             initial_ts,
             bootstrap_args,
-            deploy_generation,
+            Some(deploy_generation),
             epoch_lower_bound,
         )
         .boxed()
@@ -1007,14 +1010,14 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        deploy_generation: Option<u64>,
+        deploy_generation: u64,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(
             Mode::Writable,
             initial_ts,
             bootstrap_args,
-            deploy_generation,
+            Some(deploy_generation),
             epoch_lower_bound,
         )
         .boxed()
@@ -1041,8 +1044,10 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     }
 
     #[mz_ore::instrument]
-    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
-        self.get_current_config(DEPLOY_GENERATION).await
+    async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError> {
+        self.get_current_config(DEPLOY_GENERATION)
+            .await?
+            .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
     }
 
     #[mz_ore::instrument]

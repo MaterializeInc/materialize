@@ -113,8 +113,14 @@ async fn test_is_initialized(
         "catalog has not been opened yet"
     );
 
+    let deploy_generation = 0;
     let state = openable_state1
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+        .open(
+            SYSTEM_TIME(),
+            &test_bootstrap_args(),
+            deploy_generation,
+            None,
+        )
         .await
         .unwrap();
     state.expire().await;
@@ -148,13 +154,16 @@ async fn test_get_deployment_generation(
     openable_state2: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
 ) {
     assert_eq!(
-        openable_state1.get_deployment_generation().await.unwrap(),
-        None,
-        "deployment generation has not been set"
+        openable_state1
+            .get_deployment_generation()
+            .await
+            .unwrap_err()
+            .to_string(),
+        CatalogError::Durable(DurableCatalogError::Uninitialized).to_string()
     );
 
     let state = openable_state1
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), Some(42), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), 42, None)
         .await
         .unwrap();
     state.expire().await;
@@ -162,13 +171,13 @@ async fn test_get_deployment_generation(
     let mut openable_state2 = openable_state2.await;
     assert_eq!(
         openable_state2.get_deployment_generation().await.unwrap(),
-        Some(42),
+        42,
         "deployment generation has been set to 42"
     );
     // Check twice because some implementations will cache a read-only connection.
     assert_eq!(
         openable_state2.get_deployment_generation().await.unwrap(),
-        Some(42),
+        42,
         "deployment generation has been set to 42"
     );
 }
@@ -201,10 +210,17 @@ async fn test_open_savepoint(
     openable_state3: Box<dyn OpenableDurableCatalogState>,
     openable_state4: Box<dyn OpenableDurableCatalogState>,
 ) {
+    let deploy_generation = 0;
+
     {
         // Can't open a savepoint catalog until it's been initialized.
         let err = openable_state1
-            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+            .open_savepoint(
+                SYSTEM_TIME(),
+                &test_bootstrap_args(),
+                deploy_generation,
+                None,
+            )
             .await
             .unwrap_err();
         match err {
@@ -216,7 +232,12 @@ async fn test_open_savepoint(
     // Initialize the catalog.
     {
         let state = openable_state2
-            .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+            .open(
+                SYSTEM_TIME(),
+                &test_bootstrap_args(),
+                deploy_generation,
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
@@ -225,8 +246,14 @@ async fn test_open_savepoint(
 
     {
         // Open catalog in savepoint mode.
+        let deploy_generation = 0;
         let mut state = openable_state3
-            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+            .open_savepoint(
+                SYSTEM_TIME(),
+                &test_bootstrap_args(),
+                deploy_generation,
+                None,
+            )
             .await
             .unwrap();
         // Savepoint catalogs do not increment the epoch.
@@ -306,7 +333,12 @@ async fn test_open_savepoint(
     {
         // Open catalog normally.
         let mut state = openable_state4
-            .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+            .open(
+                SYSTEM_TIME(),
+                &test_bootstrap_args(),
+                deploy_generation,
+                None,
+            )
             .await
             .unwrap();
         // Write should not have persisted.
@@ -346,6 +378,8 @@ async fn test_open_read_only(
     openable_state2: Box<dyn OpenableDurableCatalogState>,
     openable_state3: Box<dyn OpenableDurableCatalogState>,
 ) {
+    let deploy_generation = 0;
+
     // Can't open a read-only catalog until it's been initialized.
     let err = openable_state1
         .open_read_only(&test_bootstrap_args())
@@ -358,7 +392,12 @@ async fn test_open_read_only(
 
     // Initialize the catalog.
     let mut state = openable_state2
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+        .open(
+            SYSTEM_TIME(),
+            &test_bootstrap_args(),
+            deploy_generation,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
@@ -424,10 +463,12 @@ async fn test_open(
     openable_state2: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
     openable_state3: BoxFuture<'_, Box<dyn OpenableDurableCatalogState>>,
 ) {
+    let deploy_generation = 0;
+
     let (snapshot, audit_log) = {
         let mut state = openable_state1
             // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
             .await
             .unwrap();
 
@@ -449,7 +490,12 @@ async fn test_open(
     {
         let mut state = openable_state2
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+            .open(
+                SYSTEM_TIME(),
+                &test_bootstrap_args(),
+                deploy_generation,
+                None,
+            )
             .await
             .unwrap();
 
@@ -462,7 +508,12 @@ async fn test_open(
     {
         let mut state = openable_state3
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+            .open(
+                SYSTEM_TIME(),
+                &test_bootstrap_args(),
+                deploy_generation,
+                None,
+            )
             .await
             .unwrap();
 
@@ -506,7 +557,7 @@ async fn test_unopened_fencing(
             .open(
                 NOW_ZERO(),
                 &test_bootstrap_args(),
-                Some(deployment_generation),
+                deployment_generation,
                 None,
             )
             .await
@@ -516,7 +567,7 @@ async fn test_unopened_fencing(
 
     // Read config collection with unopened catalog.
     assert_eq!(
-        Some(deployment_generation),
+        deployment_generation,
         openable_state2.get_deployment_generation().await.unwrap()
     );
 
@@ -526,7 +577,7 @@ async fn test_unopened_fencing(
         .open(
             NOW_ZERO(),
             &test_bootstrap_args(),
-            Some(deployment_generation + 1),
+            deployment_generation + 1,
             None,
         )
         .await
@@ -553,6 +604,7 @@ async fn test_unopened_fencing(
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_fencing() {
     async fn testcase(catalog: &str, reader: &str, expected: Result<(), ()>) {
+        let deploy_generation = 0;
         let catalog_version = semver::Version::parse(catalog).unwrap();
         let reader_version = semver::Version::parse(reader).unwrap();
         let organization_id = Uuid::new_v4();
@@ -571,7 +623,7 @@ async fn test_persist_fencing() {
         .await
         .unwrap();
         let _persist_state = persist_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
             .await
             .unwrap();
 

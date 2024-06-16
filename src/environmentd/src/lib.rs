@@ -110,8 +110,11 @@ pub struct Config {
     /// If specified, this overrides the value stored in Launch Darkly (and
     /// mirrored to the catalog storage's "config" collection).
     pub txn_wal_tables_cli: Option<TxnWalTablesImpl>,
-    /// Generation we want deployed. Generally only present when doing a production deploy.
-    pub deploy_generation: Option<u64>,
+    /// A number representing the environment's generation.
+    ///
+    /// This is incremented to request that the new process perform a graceful
+    /// transition of power from the prior generation.
+    pub deploy_generation: u64,
 
     // === Storage options. ===
     /// The interval at which to collect storage usage information.
@@ -365,19 +368,16 @@ impl Listeners {
         .await?;
 
         'leader_promotion: {
-            let Some(deploy_generation) = config.deploy_generation else {
-                break 'leader_promotion;
-            };
+            let deploy_generation = config.deploy_generation;
             tracing::info!("Requested deploy generation {deploy_generation}");
 
             if !openable_adapter_storage.is_initialized().await? {
                 tracing::info!("Catalog storage doesn't exist so there's no current deploy generation. We won't wait to be leader");
                 break 'leader_promotion;
             }
-            // TODO: once all catalogs have a deploy_generation, don't need to handle the Option
             let catalog_generation = openable_adapter_storage.get_deployment_generation().await?;
             tracing::info!("Found catalog generation {catalog_generation:?}");
-            if catalog_generation < Some(deploy_generation) {
+            if catalog_generation < deploy_generation {
                 tracing::info!("Catalog generation {catalog_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
                 match openable_adapter_storage
                     .open_savepoint(
@@ -388,7 +388,7 @@ impl Listeners {
                                 .clone(),
                             bootstrap_role: config.bootstrap_role.clone(),
                         },
-                        None,
+                        deploy_generation,
                         None,
                     )
                     .await
@@ -439,7 +439,7 @@ impl Listeners {
                     Arc::clone(&config.catalog_config.metrics),
                 )
                 .await?;
-            } else if catalog_generation == Some(deploy_generation) {
+            } else if catalog_generation == deploy_generation {
                 tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
             } else {
                 mz_ore::halt!("Server started with requested generation {deploy_generation} but catalog was already at {catalog_generation:?}. Deploy generations must increase monotonically");

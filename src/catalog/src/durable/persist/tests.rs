@@ -21,6 +21,7 @@ async fn test_upgrade_shard() {
     let first_version = semver::Version::parse("0.10.0").expect("failed to parse version");
     let second_version = semver::Version::parse("0.11.0").expect("failed to parse version");
     let organization_id = Uuid::new_v4();
+    let deploy_generation = 0;
     let mut persist_cache = PersistClientCache::new_no_metrics();
     let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
 
@@ -43,7 +44,7 @@ async fn test_upgrade_shard() {
     .await
     .expect("failed to create persist catalog");
     let _persist_state = persist_openable_state
-        .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
+        .open(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
         .await
         .expect("failed to open persist catalog");
 
@@ -66,7 +67,7 @@ async fn test_upgrade_shard() {
     .await
     .expect("failed to create persist catalog");
     let _persist_state = persist_openable_state
-        .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None, None)
+        .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
         .await
         .expect("failed to open savepoint persist catalog");
 

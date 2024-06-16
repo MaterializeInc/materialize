@@ -357,8 +357,8 @@ pub struct Args {
     ///
     /// This is incremented to request that the new process perform a graceful
     /// transition of power from the prior generation.
-    #[clap(long, env = "DEPLOY_GENERATION")]
-    deploy_generation: Option<u64>,
+    #[clap(long, env = "DEPLOY_GENERATION", default_value = "0")]
+    deploy_generation: u64,
 
     // === Storage options. ===
     /// Where the persist library should store its blob data.
