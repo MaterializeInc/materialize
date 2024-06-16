@@ -1208,6 +1208,7 @@ impl SystemVars {
             &PG_SOURCE_KEEPALIVES_RETRIES,
             &PG_SOURCE_TCP_USER_TIMEOUT,
             &PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT,
+            &PG_SOURCE_WAL_SENDER_TIMEOUT,
             &PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT,
             &PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT,
             &PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT,
@@ -1781,6 +1782,11 @@ impl SystemVars {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
     }
 
+    /// Returns the `pg_source_wal_sender_timeout` configuration parameter.
+    pub fn pg_source_wal_sender_timeout(&self) -> Option<Duration> {
+        *self.expect_value(&PG_SOURCE_WAL_SENDER_TIMEOUT)
+    }
+
     /// Returns the `pg_source_snapshot_collect_strict_count` configuration parameter.
     pub fn pg_source_snapshot_collect_strict_count(&self) -> bool {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT)
@@ -2179,6 +2185,7 @@ impl SystemVars {
             || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
             || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
             || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
+            || name == PG_SOURCE_WAL_SENDER_TIMEOUT.name()
             || name == PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT.name()
             || name == PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT.name()
             || name == PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT.name()

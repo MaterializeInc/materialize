@@ -26,7 +26,9 @@ use mz_repr::optimize::OptimizerFeatures;
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ident;
 use mz_storage_types::controller::TxnWalTablesImpl;
-use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
+use mz_storage_types::parameters::{
+    DEFAULT_PG_SOURCE_WAL_SENDER_TIMEOUT, STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
+};
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use once_cell::sync::Lazy;
 use uncased::UncasedStr;
@@ -958,6 +960,15 @@ pub static PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: VarDefinition = VarDefinition::
     "pg_source_snapshot_statement_timeout",
     value!(Duration; mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT),
     "Sets the `statement_timeout` value to use during the snapshotting phase of PG sources (Materialize)",
+    true,
+);
+
+/// Sets the `wal_sender_timeout` value to use during the replication phase of
+/// PG sources.
+pub static PG_SOURCE_WAL_SENDER_TIMEOUT: VarDefinition = VarDefinition::new(
+    "pg_source_wal_sender_timeout",
+    value!(Option<Duration>; DEFAULT_PG_SOURCE_WAL_SENDER_TIMEOUT),
+    "Sets the `wal_sender_timeout` value to use during the replication phase of PG sources (Materialize)",
     true,
 );
 

@@ -1361,6 +1361,18 @@ impl PostgresConnection<InlinedConnection> {
             config.ssl_cert(cert.as_bytes()).ssl_key(key.as_bytes());
         }
 
+        let mut options = vec![];
+        if let Some(wal_sender_timeout) = storage_configuration
+            .parameters
+            .pg_source_wal_sender_timeout
+        {
+            options.push(format!(
+                "--wal_sender_timeout={}",
+                wal_sender_timeout.as_millis()
+            ));
+        };
+        config.options(options.join(" ").as_str());
+
         let tunnel = match &self.tunnel {
             Tunnel::Direct => {
                 // Ensure any host we connect to is resolved to an external address.

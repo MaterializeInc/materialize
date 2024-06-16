@@ -43,6 +43,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             tcp_user_timeout: Some(config.pg_source_tcp_user_timeout()),
         },
         pg_source_snapshot_statement_timeout: config.pg_source_snapshot_statement_timeout(),
+        pg_source_wal_sender_timeout: config.pg_source_wal_sender_timeout(),
         mysql_source_timeouts: mz_mysql_util::TimeoutConfig::build(
             config.mysql_source_snapshot_max_execution_time(),
             config.mysql_source_snapshot_lock_wait_timeout(),
