@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
-use futures::{future, FutureExt};
+use futures::{future, Future, FutureExt};
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
@@ -102,9 +102,9 @@ use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::{
     AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
-    CreateConnectionValidationReady, ExecuteContext, ExplainContext, Message, PeekStage,
-    PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
-    StageResult, Staged, TargetCluster, WatchSetResponse,
+    CreateConnectionValidationReady, ExecuteContext, ExplainContext, Message, PendingRead,
+    PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, StageResult, Staged,
+    TargetCluster, WatchSetResponse,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
@@ -2206,17 +2206,17 @@ impl Coordinator {
                 plan,
                 desc: _,
             }) => {
-                self.execute_peek_stage(
-                    ctx,
-                    OpenTelemetryContext::obtain(),
-                    PeekStage::Validate(PeekStageValidate {
+                let stage = return_if_err!(
+                    self.peek_validate(
+                        ctx.session(),
                         plan,
                         target_cluster,
-                        copy_to_ctx: None,
-                        explain_ctx: ExplainContext::Pushdown,
-                    }),
-                )
-                .await;
+                        None,
+                        ExplainContext::Pushdown,
+                    ),
+                    ctx
+                );
+                self.sequence_staged(ctx, Span::current(), stage).await;
             }
             Explainee::MaterializedView(gid) => {
                 self.explain_pushdown_materialized_view(ctx, gid).await;
@@ -2230,21 +2230,38 @@ impl Coordinator {
     }
 
     async fn render_explain_pushdown(
-        &mut self,
+        &self,
         ctx: ExecuteContext,
         as_of: Antichain<Timestamp>,
         mz_now: ResultSpec<'static>,
         read_holds: Option<ReadHolds<Timestamp>>,
-        imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)>,
+        imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)> + 'static,
     ) {
-        let explain_timeout = *ctx.session().vars().statement_timeout();
+        let fut = self
+            .render_explain_pushdown_prepare(ctx.session(), as_of, mz_now, imports)
+            .await;
+        task::spawn(|| "render explain pushdown", async move {
+            // Transfer the necessary read holds over to the background task
+            let _read_holds = read_holds;
+            let res = fut.await;
+            ctx.retire(res);
+        });
+    }
 
+    async fn render_explain_pushdown_prepare(
+        &self,
+        session: &Session,
+        as_of: Antichain<Timestamp>,
+        mz_now: ResultSpec<'static>,
+        imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)>,
+    ) -> impl Future<Output = Result<ExecuteResponse, AdapterError>> {
+        let explain_timeout = *session.vars().statement_timeout();
         let mut futures = FuturesOrdered::new();
         for (gid, mfp) in imports {
             let catalog_entry = self.catalog.get_entry(&gid);
             let full_name = self
                 .catalog
-                .for_session(&ctx.session)
+                .for_session(session)
                 .resolve_full_name(&catalog_entry.name);
             let name = format!("{}", full_name);
             let relation_desc = catalog_entry
@@ -2307,23 +2324,21 @@ impl Coordinator {
             });
         }
 
-        task::spawn(|| "explain filter pushdown", async move {
-            // Transfer the necessary read holds over to the background task
-            let _read_holds = read_holds;
-
-            use futures::TryStreamExt;
-            let res = match tokio::time::timeout(explain_timeout, futures.try_collect::<Vec<_>>())
-                .await
+        let fut = async move {
+            match tokio::time::timeout(
+                explain_timeout,
+                futures::TryStreamExt::try_collect::<Vec<_>>(futures),
+            )
+            .await
             {
                 Ok(Ok(rows)) => Ok(ExecuteResponse::SendingRowsImmediate {
                     rows: Box::new(rows.into_row_iter()),
                 }),
                 Ok(Err(err)) => Err(err.into()),
                 Err(_) => Err(AdapterError::StatementTimeout),
-            };
-
-            ctx.retire(res);
-        });
+            }
+        };
+        fut
     }
 
     #[instrument]

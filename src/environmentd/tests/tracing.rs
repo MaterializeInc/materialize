@@ -28,8 +28,8 @@ async fn test_expected_spans() {
         ("create_view_finish", "CREATE VIEW V AS SELECT 1"),
         ("create_index_finish", "CREATE DEFAULT INDEX i ON v"),
         ("subscribe_finish", "SUBSCRIBE (SELECT 1)"),
-        ("peek_stage_finish", "SELECT 1"),
-        ("peek_stage_explain_plan", "EXPLAIN SELECT 1"),
+        ("peek_finish", "SELECT 1"),
+        ("peek_explain_plan", "EXPLAIN SELECT 1"),
     ];
 
     let server = test_util::TestHarness::default()

@@ -132,7 +132,7 @@ use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourc
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::{StorageError, TxnWalTablesImpl};
+use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_storage_types::sinks::S3SinkFormat;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
@@ -235,11 +235,6 @@ pub enum Message<T = mz_repr::Timestamp> {
     StorageUsageSchedule,
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsageReferenced),
-    RealTimeRecencyTimestamp {
-        conn_id: ConnectionId,
-        real_time_recency_ts: Result<Timestamp, StorageError<T>>,
-        validity: PlanValidity,
-    },
 
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
@@ -256,7 +251,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     PeekStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: PeekStage,
     },
     CreateIndexStageReady {
@@ -334,7 +329,6 @@ impl Message {
             Message::StorageUsageSchedule => "storage_usage_schedule",
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
-            Message::RealTimeRecencyTimestamp { .. } => "real_time_recency_timestamp",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
@@ -386,32 +380,8 @@ pub type CreateConnectionValidationReady = ValidationReady<CreateConnectionPlan>
 pub type AlterConnectionValidationReady = ValidationReady<Connection>;
 
 #[derive(Debug)]
-pub enum RealTimeRecencyContext {
-    Peek {
-        ctx: ExecuteContext,
-        plan: mz_sql::plan::SelectPlan,
-        root_otel_ctx: OpenTelemetryContext,
-        target_replica: Option<ReplicaId>,
-        timeline_context: TimelineContext,
-        oracle_read_ts: Option<Timestamp>,
-        source_ids: BTreeSet<GlobalId>,
-        optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
-        explain_ctx: ExplainContext,
-    },
-}
-
-impl RealTimeRecencyContext {
-    pub(crate) fn take_context(self) -> ExecuteContext {
-        match self {
-            RealTimeRecencyContext::Peek { ctx, .. } => ctx,
-        }
-    }
-}
-
-#[derive(Debug)]
 pub enum PeekStage {
     /// Common stages across SELECT, EXPLAIN and COPY TO queries.
-    Validate(PeekStageValidate),
     LinearizeTimestamp(PeekStageLinearizeTimestamp),
     RealTimeRecency(PeekStageRealTimeRecency),
     TimestampReadHold(PeekStageTimestampReadHold),
@@ -423,24 +393,6 @@ pub enum PeekStage {
     ExplainPushdown(PeekStageExplainPushdown),
     /// Final stage for a copy to.
     CopyTo(PeekStageCopyTo),
-}
-
-impl PeekStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            PeekStage::Validate(_) => None,
-            PeekStage::LinearizeTimestamp(PeekStageLinearizeTimestamp { validity, .. })
-            | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
-            | PeekStage::TimestampReadHold(PeekStageTimestampReadHold { validity, .. })
-            | PeekStage::Optimize(PeekStageOptimize { validity, .. })
-            | PeekStage::Finish(PeekStageFinish { validity, .. })
-            | PeekStage::CopyTo(PeekStageCopyTo { validity, .. })
-            | PeekStage::ExplainPlan(PeekStageExplainPlan { validity, .. })
-            | PeekStage::ExplainPushdown(PeekStageExplainPushdown { validity, .. }) => {
-                Some(validity)
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -462,21 +414,6 @@ pub struct CopyToContext {
     /// This is only an option since it's not set when CopyToContext is instantiated
     /// but immediately after in the PeekStageValidate stage.
     pub output_batch_count: Option<u64>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageValidate {
-    plan: mz_sql::plan::SelectPlan,
-    target_cluster: TargetCluster,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing a COPY TO statement.
-    ///
-    /// Will result in creating and using [`optimize::copy_to::Optimizer`] in
-    /// the `optimizer` field of all subsequent stages.
-    copy_to_ctx: Option<CopyToContext>,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -1625,9 +1562,6 @@ pub struct Coordinator {
     pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client.
     client_pending_peeks: BTreeMap<ConnectionId, BTreeMap<Uuid, ClusterId>>,
-
-    /// A map from client connection ids to a pending real time recency timestamps.
-    pending_real_time_recency_timestamp: BTreeMap<ConnectionId, RealTimeRecencyContext>,
 
     /// A map from client connection ids to pending linearize read transaction.
     pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
@@ -3162,11 +3096,6 @@ impl Coordinator {
                 (id.to_string(), peek)
             })
             .collect();
-        let pending_real_time_recency_timestamp: BTreeMap<_, _> = self
-            .pending_real_time_recency_timestamp
-            .iter()
-            .map(|(id, timestamp)| (id.unhandled().to_string(), format!("{timestamp:?}")))
-            .collect();
         let pending_linearize_read_txns: BTreeMap<_, _> = self
             .pending_linearize_read_txns
             .iter()
@@ -3197,10 +3126,6 @@ impl Coordinator {
             (
                 "client_pending_peeks".to_string(),
                 serde_json::to_value(client_pending_peeks)?,
-            ),
-            (
-                "pending_real_time_recency_timestamp".to_string(),
-                serde_json::to_value(pending_real_time_recency_timestamp)?,
             ),
             (
                 "pending_linearize_read_txns".to_string(),
@@ -3481,7 +3406,6 @@ pub fn serve(
                     txn_read_holds: Default::default(),
                     pending_peeks: BTreeMap::new(),
                     client_pending_peeks: BTreeMap::new(),
-                    pending_real_time_recency_timestamp: BTreeMap::new(),
                     pending_linearize_read_txns: BTreeMap::new(),
                     active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),

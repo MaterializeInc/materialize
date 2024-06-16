@@ -24,12 +24,11 @@ use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, GlobalId, IntoRowIterator, Row, Timestamp};
 use mz_sql::plan::SubscribeOutput;
-use mz_sql::session::metadata::SessionMetadata;
 use timely::progress::Antichain;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::coord::peek::PeekResponseUnary;
-use crate::{AdapterError, ExecuteContext, ExecuteResponse};
+use crate::{AdapterError, ExecuteResponse};
 
 #[derive(Debug)]
 /// A description of an active compute sink from the coordinator's perspective.
@@ -53,7 +52,7 @@ impl ActiveComputeSink {
     pub fn connection_id(&self) -> &ConnectionId {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => &subscribe.conn_id,
-            ActiveComputeSink::CopyTo(copy_to) => copy_to.ctx.session().conn_id(),
+            ActiveComputeSink::CopyTo(copy_to) => &copy_to.conn_id,
         }
     }
 
@@ -391,9 +390,10 @@ impl ActiveSubscribe {
 /// A description of an active copy to sink from the coordinator's perspective.
 #[derive(Debug)]
 pub struct ActiveCopyTo {
-    /// The execution context for the `COPY ... TO` statement that created the
-    /// copy to sink.
-    pub ctx: ExecuteContext,
+    /// The ID of the connection which created the subscribe.
+    pub conn_id: ConnectionId,
+    /// The result channel for the `COPY ... TO` statement that created the copy to sink.
+    pub tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     /// The ID of the cluster on which the copy to is running.
     pub cluster_id: ClusterId,
     /// The IDs of the objects on which the copy to depends.
@@ -414,7 +414,7 @@ impl ActiveCopyTo {
             Ok(n) => Ok(ExecuteResponse::Copied(usize::cast_from(n))),
             Err(error) => Err(AdapterError::Unstructured(error)),
         };
-        let _ = self.ctx.retire(response);
+        let _ = self.tx.send(response);
     }
 
     /// Retires the copy to with the specified reason.
@@ -429,6 +429,6 @@ impl ActiveCopyTo {
                 anyhow!("copy has been terminated because underlying {d} was dropped"),
             )),
         };
-        let _ = self.ctx.retire(message);
+        let _ = self.tx.send(message);
     }
 }
