@@ -226,13 +226,55 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             )
             .await?;
 
+            // We're the only application that should be using this replication
+            // slot. The only way that there can be another connection using
+            // this slot under normal operation is if there's a stale TCP
+            // connection from a prior incarnation of the source holding on to
+            // the slot. We don't want to wait for the WAL sender timeout and/or
+            // TCP keepalives to time out that connection, because these values
+            // are generally under the control of the DBA and may not time out
+            // the connection for multiple minutes, or at all. Instead we just
+            // force kill the connection that's using the slot.
+            //
+            // Note that there's a small risk that *we're* the zombie cluster
+            // that should not be using the replication slot. Kubernetes cannot
+            // 100% guarantee that only one cluster is alive at a time. However,
+            // this situation should not last long, and the worst that can
+            // happen is a bit of transient thrashing over ownership of the
+            // replication slot.
             if let Some(active_pid) = slot_metadata.active_pid {
                 tracing::warn!(
                     %id, %active_pid,
-                    "replication slot already in use; \
-                    replication will likely fail to start; \
-                    this is typically caused by a zombie connection from a prior incarnation of the source"
+                    "replication slot already in use; will attempt to kill existing connection",
                 );
+
+                match metadata_client
+                    .execute("SELECT pg_terminate_backend($1)", &[&active_pid])
+                    .await
+                {
+                    Ok(_) => {
+                        tracing::info!(
+                            "successfully killed existing connection; \
+                            starting replication is likely to succeed"
+                        );
+                        // Note that `pg_terminate_backend` does not wait for
+                        // the termination of the targeted connection to
+                        // complete. We may try to start replication before the
+                        // targeted connection has cleaned up its state. That's
+                        // okay. If that happens we'll just try again from the
+                        // top via the suspend-and-restart flow.
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            %e,
+                            "failed to kill existing replication connection; \
+                            replication will likely fail to start"
+                        );
+                        // Continue on anyway, just in case the replication slot
+                        // is actually available. Maybe PostgreSQL has some
+                        // staleness when it reports `active_pid`, for example.
+                    }
+                }
             }
 
             let resume_upper = Antichain::from_iter(
