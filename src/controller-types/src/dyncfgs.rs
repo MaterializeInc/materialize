@@ -1,0 +1,26 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Dyncfgs used by the controller.
+
+use std::time::Duration;
+
+use mz_dyncfg::{Config, ConfigSet};
+
+/// The interval at which to retry cleaning replicas from past generatinos.
+pub const CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL: Config<Duration> = Config::new(
+    "controller_past_generation_replica_cleanup_retry_interval",
+    Duration::from_secs(300),
+    "The interval at which to attempt to retry cleaning up replicas from past generations.",
+);
+
+/// Adds the full set of all controller `Config`s.
+pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
+    configs.add(&CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL)
+}

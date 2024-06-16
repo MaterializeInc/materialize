@@ -31,5 +31,6 @@ pub fn all_dyncfgs() -> ConfigSet {
     configs = mz_compute_types::dyncfgs::all_dyncfgs(configs);
     configs = mz_adapter_types::dyncfgs::all_dyncfgs(configs);
     configs = mz_storage_types::dyncfgs::all_dyncfgs(configs);
+    configs = mz_controller_types::dyncfgs::all_dyncfgs(configs);
     configs
 }

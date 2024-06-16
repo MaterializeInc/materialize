@@ -31,5 +31,5 @@ def test_system_clusters(mz: MaterializeApplication) -> None:
     """Confirm that the system clusters have the expected labels and selectors"""
     mz.wait_replicas()
 
-    assert_pod_properties(mz, "cluster-s1-replica-s1-0")
-    assert_pod_properties(mz, "cluster-s2-replica-s2-0")
+    assert_pod_properties(mz, "cluster-s1-replica-s1-gen-0-0")
+    assert_pod_properties(mz, "cluster-s2-replica-s2-gen-0-0")

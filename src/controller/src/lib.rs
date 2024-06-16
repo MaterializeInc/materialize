@@ -90,6 +90,11 @@ pub struct ControllerConfig {
     pub clusterd_image: String,
     /// The init container image to use for clusterd.
     pub init_container_image: Option<String>,
+    /// A number representing the environment's generation.
+    ///
+    /// This is incremented to request that the new process perform a graceful
+    /// transition of power from the prior generation.
+    pub deploy_generation: u64,
     /// The now function to advance the controller's introspection collections.
     pub now: NowFn,
     /// The metrics registry.
@@ -151,6 +156,8 @@ pub struct Controller<T = mz_repr::Timestamp> {
     clusterd_image: String,
     /// The init container image to use for clusterd.
     init_container_image: Option<String>,
+    /// A number representing the environment's generation.
+    deploy_generation: u64,
     /// The cluster orchestrator.
     orchestrator: Arc<dyn NamespacedOrchestrator>,
     /// Tracks the readiness of the underlying controllers.
@@ -229,6 +236,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             compute,
             clusterd_image: _,
             init_container_image: _,
+            deploy_generation,
             orchestrator: _,
             readiness,
             metrics_tasks: _,
@@ -263,6 +271,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
 
         let map = serde_json::Map::from_iter([
             field("compute", compute.dump()?)?,
+            field("deploy_generation", deploy_generation)?,
             field("readiness", format!("{readiness:?}"))?,
             field("unfulfilled_watch_sets", unfulfilled_watch_sets)?,
             field("immediate_watch_sets", immediate_watch_sets)?,
@@ -295,9 +304,15 @@ where
     /// Allow this controller and instances controller by it to write to
     /// external systems.
     pub fn allow_writes(&mut self) {
+        if !self.compute.read_only() {
+            return;
+        }
+
         self.compute.allow_writes();
         // TODO: Storage does not yet understand the concept of read-only
         // instances.
+
+        self.remove_past_generation_replicas_in_background();
     }
 
     /// Returns `Some` if there is an immediately available
@@ -664,6 +679,7 @@ where
             compute: compute_controller,
             clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,
+            deploy_generation: config.deploy_generation,
             orchestrator: config.orchestrator.namespace("cluster"),
             readiness: Readiness::NotReady,
             metrics_tasks: BTreeMap::new(),

@@ -474,6 +474,7 @@ impl Listeners {
                     orchestrator,
                     clusterd_image: "clusterd".into(),
                     init_container_image: None,
+                    deploy_generation: config.deploy_generation,
                     persist_location: PersistLocation {
                         blob_uri: format!("file://{}/persist/blob", data_directory.display()),
                         consensus_uri,
@@ -524,7 +525,6 @@ impl Listeners {
                 config_sync_timeout: Duration::from_secs(30),
                 config_sync_loop_interval: None,
                 bootstrap_role: config.bootstrap_role,
-                deploy_generation: config.deploy_generation,
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 txn_wal_tables_cli: Some(TxnWalTablesImpl::Lazy),

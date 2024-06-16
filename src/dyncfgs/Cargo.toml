@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 mz-adapter-types = { path = "../adapter-types" }
 mz-compute-types = { path = "../compute-types" }
+mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-persist-client = { path = "../persist-client" }
 mz-storage-types = { path = "../storage-types" }

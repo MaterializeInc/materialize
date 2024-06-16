@@ -4598,6 +4598,7 @@ version = "0.0.0"
 dependencies = [
  "mz-cluster-client",
  "mz-compute-types",
+ "mz-dyncfg",
  "workspace-hack",
 ]
 
@@ -4625,6 +4626,7 @@ dependencies = [
  "mz-adapter-types",
  "mz-build-tools",
  "mz-compute-types",
+ "mz-controller-types",
  "mz-dyncfg",
  "mz-persist-client",
  "mz-storage-types",

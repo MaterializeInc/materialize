@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-types = { path = "../compute-types" }
+mz-dyncfg = { path = "../dyncfg" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

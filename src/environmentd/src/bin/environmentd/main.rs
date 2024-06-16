@@ -881,6 +881,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         persist_clients: Arc::clone(&persist_clients),
         clusterd_image: args.clusterd_image.expect("clap enforced"),
         init_container_image: args.orchestrator_kubernetes_init_container_image,
+        deploy_generation: args.deploy_generation,
         now: SYSTEM_TIME.clone(),
         metrics_registry: metrics_registry.clone(),
         persist_pubsub_url: args.persist_pubsub_url,
@@ -935,7 +936,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 secrets_controller,
                 cloud_resource_controller,
                 txn_wal_tables_cli: args.persist_txn_tables,
-                deploy_generation: args.deploy_generation,
                 // Storage options.
                 storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
                 storage_usage_retention_period: args.storage_usage_retention_period,

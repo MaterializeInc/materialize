@@ -110,11 +110,6 @@ pub struct Config {
     /// If specified, this overrides the value stored in Launch Darkly (and
     /// mirrored to the catalog storage's "config" collection).
     pub txn_wal_tables_cli: Option<TxnWalTablesImpl>,
-    /// A number representing the environment's generation.
-    ///
-    /// This is incremented to request that the new process perform a graceful
-    /// transition of power from the prior generation.
-    pub deploy_generation: u64,
 
     // === Storage options. ===
     /// The interval at which to collect storage usage information.
@@ -368,7 +363,7 @@ impl Listeners {
         .await?;
 
         'leader_promotion: {
-            let deploy_generation = config.deploy_generation;
+            let deploy_generation = config.controller.deploy_generation;
             tracing::info!("Requested deploy generation {deploy_generation}");
 
             if !openable_adapter_storage.is_initialized().await? {
@@ -452,7 +447,12 @@ impl Listeners {
         };
 
         let mut adapter_storage = openable_adapter_storage
-            .open(boot_ts, &bootstrap_args, config.deploy_generation, None)
+            .open(
+                boot_ts,
+                &bootstrap_args,
+                config.controller.deploy_generation,
+                None,
+            )
             .await?;
 
         let txn_wal_tables_current_ld =
