@@ -89,7 +89,6 @@ pub struct Args {
     /// in production but are appropriate for testing/local development.
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
-
     /// Enables all feature flags, meant only as a tool for local development;
     /// this should never be enabled in CI.
     #[clap(long, env = "ALL_FEATURES")]
@@ -191,8 +190,30 @@ pub struct Args {
     /// Wildcards in other positions (e.g., "https://*.foo.com" or "https://foo.*.com") have no effect.
     #[structopt(long, env = "CORS_ALLOWED_ORIGIN")]
     cors_allowed_origin: Vec<HeaderValue>,
+    /// Public IP addresses which the cloud environment has configured for
+    /// egress.
+    #[clap(
+        long,
+        env = "ANNOUNCE_EGRESS_IP",
+        multiple = true,
+        use_delimiter = true
+    )]
+    announce_egress_ip: Vec<Ipv4Addr>,
+    /// The external host name to connect to the HTTP server of this
+    /// environment.
+    ///
+    /// Presently used to render webhook URLs for end users in notices and the
+    /// system catalog. Not used to establish connections directly.
+    #[clap(long, env = "HTTP_HOST_NAME")]
+    http_host_name: Option<String>,
+    /// The URL of the Materialize console to proxy from the /internal-console
+    /// endpoint on the internal HTTP server.
+    #[clap(long, env = "INTERNAL_CONSOLE_REDIRECT_URL")]
+    internal_console_redirect_url: Option<String>,
+    /// TLS arguments.
     #[clap(flatten)]
     tls: TlsCliArgs,
+    /// Frontegg arguments.
     #[clap(flatten)]
     frontegg: FronteggCliArgs,
 
@@ -314,6 +335,16 @@ pub struct Args {
         default_value("kubernetes"), // This shouldn't be possible, but it makes clap happy.
     )]
     secrets_controller: SecretsControllerKind,
+    /// The list of tags to be set on AWS Secrets Manager secrets created by the
+    /// AWS secrets controller.
+    #[clap(
+        long,
+        env = "AWS_SECRETS_CONTROLLER_TAGS",
+        multiple = true,
+        value_delimiter = ';',
+        required_if_eq("secrets-controller", "aws-secrets-manager")
+    )]
+    aws_secrets_controller_tags: Vec<KeyValueArg<String, String>>,
     /// The clusterd image reference to use.
     #[structopt(
         long,
@@ -322,14 +353,12 @@ pub struct Args {
         default_value_if("orchestrator", Some("process"), Some("clusterd"))
     )]
     clusterd_image: Option<String>,
-    /// If set, a role with the provided name will be created with `CREATEDB` and `CREATECLUSTER`
-    /// attributes. It will also have `CREATE` privileges on the `materialize` database,
-    /// `materialize.public` schema, and `quickstart` cluster.
+    /// A number representing the environment's generation.
     ///
-    /// This option is meant for local development and testing to simplify the initial process of
-    /// granting attributes and privileges to some default role.
-    #[clap(long, env = "BOOTSTRAP_ROLE")]
-    bootstrap_role: Option<String>,
+    /// This is incremented to request that the new process perform a graceful
+    /// transition of power from the prior generation.
+    #[clap(long, env = "DEPLOY_GENERATION")]
+    deploy_generation: Option<u64>,
 
     // === Storage options. ===
     /// Where the persist library should store its blob data.
@@ -366,19 +395,24 @@ pub struct Args {
     /// of threads returned by [`num_cpus::get`].
     #[clap(long, env = "PERSIST_ISOLATED_RUNTIME_THREADS")]
     persist_isolated_runtime_threads: Option<isize>,
+    /// The interval in seconds at which to collect storage usage information.
+    #[clap(
+        long,
+        env = "STORAGE_USAGE_COLLECTION_INTERVAL",
+        parse(try_from_str = humantime::parse_duration),
+        default_value = "3600s"
+    )]
+    storage_usage_collection_interval_sec: Duration,
+    /// The period for which to retain usage records. Note that the retention
+    /// period is only evaluated at server start time, so rebooting the server
+    /// is required to discard old records.
+    #[clap(long, env = "STORAGE_USAGE_RETENTION_PERIOD", parse(try_from_str = humantime::parse_duration))]
+    storage_usage_retention_period: Option<Duration>,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
     #[clap(long, env = "TIMESTAMP_ORACLE_URL", value_name = "POSTGRES_URL")]
     timestamp_oracle_url: Option<String>,
-
-    // === Bootstrap options. ===
-    #[clap(
-        long,
-        env = "ENVIRONMENT_ID",
-        value_name = "<CLOUD>-<REGION>-<ORG-ID>-<ORDINAL>"
-    )]
-    environment_id: EnvironmentId,
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     #[clap(long, env = "AVAILABILITY_ZONE", use_value_delimiter = true)]
@@ -390,6 +424,66 @@ pub struct Args {
         requires = "bootstrap-default-cluster-replica-size"
     )]
     cluster_replica_sizes: Option<String>,
+    /// An API key for Segment. Enables export of audit events to Segment.
+    #[clap(long, env = "SEGMENT_API_KEY")]
+    segment_api_key: Option<String>,
+    /// An SDK key for LaunchDarkly.
+    ///
+    /// Setting this in combination with [`Self::config_sync_loop_interval`]
+    /// will enable synchronization of LaunchDarkly features with system
+    /// configuration parameters.
+    #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
+    launchdarkly_sdk_key: Option<String>,
+    /// A list of PARAM_NAME=KEY_NAME pairs from system parameter names to
+    /// LaunchDarkly feature keys.
+    ///
+    /// This is used (so far only for testing purposes) when propagating values
+    /// from the latter to the former. The identity map is assumed for absent
+    /// parameter names.
+    #[clap(
+        long,
+        env = "LAUNCHDARKLY_KEY_MAP",
+        multiple = true,
+        value_delimiter = ';'
+    )]
+    launchdarkly_key_map: Vec<KeyValueArg<String, String>>,
+    /// The duration at which the system parameter synchronization times out during startup.
+    #[clap(
+        long,
+        env = "CONFIG_SYNC_TIMEOUT",
+        parse(try_from_str = humantime::parse_duration),
+        default_value = "30s"
+    )]
+    config_sync_timeout: Duration,
+    /// The interval in seconds at which to synchronize system parameter values.
+    ///
+    /// If this is not explicitly set, the loop that synchronizes LaunchDarkly
+    /// features with system configuration parameters will not run _even if
+    /// [`Self::launchdarkly_sdk_key`] is present_.
+    #[clap(
+        long,
+        env = "CONFIG_SYNC_LOOP_INTERVAL",
+        parse(try_from_str = humantime::parse_duration),
+    )]
+    config_sync_loop_interval: Option<Duration>,
+
+    // === Bootstrap options. ===
+    #[clap(
+        long,
+        env = "ENVIRONMENT_ID",
+        value_name = "<CLOUD>-<REGION>-<ORG-ID>-<ORDINAL>"
+    )]
+    environment_id: EnvironmentId,
+    /// If set, a role with the provided name will be created with `CREATEDB`
+    /// and `CREATECLUSTER` attributes. It will also have `CREATE` privileges on
+    /// the `materialize` database, `materialize.public` schema, and
+    /// `quickstart` cluster.
+    ///
+    /// This option is meant for local development and testing to simplify the
+    /// initial process of granting attributes and privileges to some default
+    /// role.
+    #[clap(long, env = "BOOTSTRAP_ROLE")]
+    bootstrap_role: Option<String>,
     /// The size of the default cluster replica if bootstrapping.
     #[clap(
         long,
@@ -434,70 +528,6 @@ pub struct Args {
         value_delimiter = ';'
     )]
     system_parameter_default: Vec<KeyValueArg<String, String>>,
-    /// The interval in seconds at which to collect storage usage information.
-    #[clap(
-        long,
-        env = "STORAGE_USAGE_COLLECTION_INTERVAL",
-        parse(try_from_str = humantime::parse_duration),
-        default_value = "3600s"
-    )]
-    storage_usage_collection_interval_sec: Duration,
-    /// The period for which to retain usage records. Note that the retention
-    /// period is only evaluated at server start time, so rebooting the server
-    /// is required to discard old records.
-    #[clap(long, env = "STORAGE_USAGE_RETENTION_PERIOD", parse(try_from_str = humantime::parse_duration))]
-    storage_usage_retention_period: Option<Duration>,
-    /// An API key for Segment. Enables export of audit events to Segment.
-    #[clap(long, env = "SEGMENT_API_KEY")]
-    segment_api_key: Option<String>,
-    /// Public IP addresses which the cloud environment has configured for
-    /// egress
-    #[clap(
-        long,
-        env = "ANNOUNCE_EGRESS_IP",
-        multiple = true,
-        use_delimiter = true
-    )]
-    announce_egress_ip: Vec<Ipv4Addr>,
-    /// An SDK key for LaunchDarkly.
-    ///
-    /// Setting this in combination with [`Self::config_sync_loop_interval`]
-    /// will enable synchronization of LaunchDarkly features with system
-    /// configuration parameters.
-    #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
-    launchdarkly_sdk_key: Option<String>,
-    /// A list of PARAM_NAME=KEY_NAME pairs from system parameter names to
-    /// LaunchDarkly feature keys.
-    ///
-    /// This is used (so far only for testing purposes) when propagating values
-    /// from the latter to the former. The identity map is assumed for absent
-    /// parameter names.
-    #[clap(
-        long,
-        env = "LAUNCHDARKLY_KEY_MAP",
-        multiple = true,
-        value_delimiter = ';'
-    )]
-    launchdarkly_key_map: Vec<KeyValueArg<String, String>>,
-    /// The duration at which the system parameter synchronization times out during startup.
-    #[clap(
-        long,
-        env = "CONFIG_SYNC_TIMEOUT",
-        parse(try_from_str = humantime::parse_duration),
-        default_value = "30s"
-    )]
-    config_sync_timeout: Duration,
-    /// The interval in seconds at which to synchronize system parameter values.
-    ///
-    /// If this is not explicitly set, the loop that synchronizes LaunchDarkly
-    /// features with system configuration parameters will not run _even if
-    /// [`Self::launchdarkly_sdk_key`] is present_.
-    #[clap(
-        long,
-        env = "CONFIG_SYNC_LOOP_INTERVAL",
-        parse(try_from_str = humantime::parse_duration),
-    )]
-    config_sync_loop_interval: Option<Duration>,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -522,29 +552,6 @@ pub struct Args {
         use_delimiter = true
     )]
     aws_privatelink_availability_zones: Option<Vec<String>>,
-    /// The list of tags to be set on AWS Secrets Manager secrets created by the
-    /// AwsSecretsController.
-    #[clap(
-        long,
-        env = "AWS_SECRETS_CONTROLLER_TAGS",
-        multiple = true,
-        value_delimiter = ';',
-        required_if_eq("secrets-controller", "aws-secrets-manager")
-    )]
-    aws_secrets_controller_tags: Vec<KeyValueArg<String, String>>,
-
-    /// The external host name to connect to the HTTP server of this instance.
-    ///
-    /// Note: Primarily for user facing notices.
-    #[clap(long, env = "HTTP_HOST_NAME")]
-    http_host_name: Option<String>,
-
-    /// URL of the Web Console to proxy from the /internal-console endpoint on the InternalHTTPServer
-    #[clap(long, env = "INTERNAL_CONSOLE_REDIRECT_URL")]
-    internal_console_redirect_url: Option<String>,
-
-    #[clap(long, env = "DEPLOY_GENERATION")]
-    deploy_generation: Option<u64>,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -912,20 +919,43 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         };
         listeners
             .serve(mz_environmentd::Config {
+                // Special modes.
+                unsafe_mode: args.unsafe_mode,
+                all_features: args.all_features,
+                // Connection options.
                 tls,
+                tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
                 frontegg,
                 cors_allowed_origin,
-                catalog_config,
-                timestamp_oracle_url: args.timestamp_oracle_url,
+                egress_ips: args.announce_egress_ip,
+                http_host_name: args.http_host_name,
+                internal_console_redirect_url: args.internal_console_redirect_url,
+                // Controller options.
                 controller,
                 secrets_controller,
                 cloud_resource_controller,
-                unsafe_mode: args.unsafe_mode,
-                all_features: args.all_features,
-                metrics_registry,
-                now,
-                environment_id: args.environment_id,
+                txn_wal_tables_cli: args.persist_txn_tables,
+                deploy_generation: args.deploy_generation,
+                // Storage options.
+                storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
+                storage_usage_retention_period: args.storage_usage_retention_period,
+                // Adapter options.
+                catalog_config,
+                availability_zones: args.availability_zone,
                 cluster_replica_sizes,
+                timestamp_oracle_url: args.timestamp_oracle_url,
+                segment_api_key: args.segment_api_key,
+                launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+                launchdarkly_key_map: args
+                    .launchdarkly_key_map
+                    .into_iter()
+                    .map(|kv| (kv.key, kv.value))
+                    .collect(),
+                config_sync_timeout: args.config_sync_timeout,
+                config_sync_loop_interval: args.config_sync_loop_interval,
+                // Bootstrap options.
+                environment_id: args.environment_id,
+                bootstrap_role: args.bootstrap_role,
                 bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
                 bootstrap_builtin_system_cluster_replica_size: args
                     .bootstrap_builtin_system_cluster_replica_size,
@@ -940,28 +970,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .into_iter()
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
-                availability_zones: args.availability_zone,
-                tracing_handle,
-                storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
-                storage_usage_retention_period: args.storage_usage_retention_period,
-                segment_api_key: args.segment_api_key,
-                egress_ips: args.announce_egress_ip,
+                // AWS options.
                 aws_account_id: args.aws_account_id,
                 aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
-                launchdarkly_sdk_key: args.launchdarkly_sdk_key,
-                launchdarkly_key_map: args
-                    .launchdarkly_key_map
-                    .into_iter()
-                    .map(|kv| (kv.key, kv.value))
-                    .collect(),
-                config_sync_timeout: args.config_sync_timeout,
-                config_sync_loop_interval: args.config_sync_loop_interval,
-                bootstrap_role: args.bootstrap_role,
-                deploy_generation: args.deploy_generation,
-                http_host_name: args.http_host_name,
-                internal_console_redirect_url: args.internal_console_redirect_url,
-                txn_wal_tables_cli: args.persist_txn_tables,
-                reload_certs: mz_server_core::default_cert_reload_ticker(),
+                // Observability options.
+                metrics_registry,
+                tracing_handle,
+                // Testing options.
+                now,
                 read_only_controllers: args.read_only_controllers,
             })
             .await

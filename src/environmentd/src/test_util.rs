@@ -160,8 +160,8 @@ impl TestHarness {
     }
 
     /// Like [`TestHarness::start`] but can specify a cert reload trigger.
-    pub async fn start_with_trigger(self, reload_certs: ReloadTrigger) -> TestServer {
-        self.try_start_with_trigger(reload_certs)
+    pub async fn start_with_trigger(self, tls_reload_certs: ReloadTrigger) -> TestServer {
+        self.try_start_with_trigger(tls_reload_certs)
             .await
             .expect("Failed to start test Server")
     }
@@ -175,10 +175,10 @@ impl TestHarness {
     /// Like [`TestHarness::try_start`] but can specify a cert reload trigger.
     pub async fn try_start_with_trigger(
         self,
-        reload_certs: ReloadTrigger,
+        tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
         let listeners = Listeners::new().await?;
-        listeners.serve_with_trigger(self, reload_certs).await
+        listeners.serve_with_trigger(self, tls_reload_certs).await
     }
 
     /// Starts a runtime and returns a [`TestServerWithRuntime`].
@@ -330,7 +330,7 @@ impl Listeners {
     pub async fn serve_with_trigger(
         self,
         config: TestHarness,
-        reload_certs: ReloadTrigger,
+        tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
         let (data_directory, temp_dir) = match config.data_directory {
             None => {
@@ -528,7 +528,7 @@ impl Listeners {
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 txn_wal_tables_cli: Some(TxnWalTablesImpl::Lazy),
-                reload_certs,
+                tls_reload_certs,
                 read_only_controllers: false,
             })
             .await?;
