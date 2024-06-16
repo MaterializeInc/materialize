@@ -200,8 +200,8 @@ fn fmt_write_buffer_manager(
 ) -> Result<(), std::fmt::Error> {
     fmt.debug_struct("WriteBufferManager")
         .field("enabled", &buf.enabled())
-        .field("buffer_size", &buf.buffer_size())
-        .field("memory_usage", &buf.memory_usage())
+        .field("buffer_size", &buf.get_buffer_size())
+        .field("memory_usage", &buf.get_usage())
         .finish()
 }
 
@@ -361,7 +361,7 @@ pub(crate) fn get_write_buffer_manager(
         let write_buffer_manager_bytes = current_cluster_max_buffer_limit
             .or(*write_buffer_manager_memory_bytes)
             .unwrap();
-        Some(WriteBufferManager::new_with_allow_stall(
+        Some(WriteBufferManager::new_write_buffer_manager(
             write_buffer_manager_bytes,
             *write_buffer_manager_allow_stall,
         ))
@@ -413,7 +413,7 @@ mod test {
         let write_buffer_manager = write_buffer_manager.unwrap();
         assert!(write_buffer_manager.enabled());
         assert_eq!(
-            write_buffer_manager.buffer_size(),
+            write_buffer_manager.get_buffer_size(),
             config.write_buffer_manager_memory_bytes.unwrap()
         )
     }
@@ -433,6 +433,6 @@ mod test {
         let write_buffer_manager = write_buffer_manager.unwrap();
         assert!(write_buffer_manager.enabled());
         // the limit should be 50% of 2000 i.e. 1000
-        assert_eq!(write_buffer_manager.buffer_size(), 1000)
+        assert_eq!(write_buffer_manager.get_buffer_size(), 1000)
     }
 }

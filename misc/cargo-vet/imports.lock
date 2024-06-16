@@ -629,13 +629,6 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
-[[publisher.rustflags]]
-version = "0.1.4"
-when = "2023-07-15"
-user-id = 3618
-user-login = "dtolnay"
-user-name = "David Tolnay"
-
 [[publisher.rustix]]
 version = "0.37.15"
 when = "2023-04-26"

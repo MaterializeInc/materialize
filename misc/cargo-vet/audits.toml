@@ -121,6 +121,11 @@ who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.1.9"
 
+[[audits.bindgen]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.69.4"
+
 [[audits.bitmaps]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
@@ -343,6 +348,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.2.8"
 
+[[audits.librocksdb-sys]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.16.0+8.10.0"
+
 [[audits.memchr]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -357,6 +367,11 @@ version = "0.34.1"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.32.1"
+
+[[audits.mysql_common]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.32.4"
 
 [[audits.nested]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
@@ -578,6 +593,11 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "0.16.20 -> 0.17.7"
 
+[[audits.rocksdb]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.22.0"
+
 [[audits.rustls-pemfile]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
@@ -691,6 +711,11 @@ version = "0.12.0@git:0c26e5e4198085d6c90db11930f2dba52e9f32cc"
 [[audits.tokio-postgres]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
+version = "0.7.8@git:02336bebb28507665184c21566e5d1dc8de1dd7d"
+
+[[audits.tokio-postgres]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
 version = "0.7.8@git:02336bebb28507665184c21566e5d1dc8de1dd7d"
 
 [[audits.tokio-postgres]]
