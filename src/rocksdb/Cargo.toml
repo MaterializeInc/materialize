@@ -32,7 +32,7 @@ tracing = "0.1.37"
 # https://github.com/google/snappy/blob/main/COPYING
 # https://github.com/lz4/lz4/blob/dev/LICENSE
 # https://github.com/facebook/zstd
-rocksdb = { git = "https://github.com/MaterializeInc/rust-rocksdb", branch = "master", default-features = false, features = ["snappy", "zstd", "lz4"] }
+rocksdb = { version = "*", default-features = false, features = ["snappy", "zstd", "lz4"] }
 uncased = "0.9.7"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
