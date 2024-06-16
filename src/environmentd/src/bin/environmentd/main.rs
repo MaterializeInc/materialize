@@ -338,9 +338,6 @@ pub struct Args {
     /// Where the persist library should perform consensus.
     #[clap(long, env = "PERSIST_CONSENSUS_URL")]
     persist_consensus_url: Url,
-    /// The PostgreSQL URL for the storage stash.
-    #[clap(long, env = "STORAGE_STASH_URL", value_name = "POSTGRES_URL")]
-    storage_stash_url: String,
     /// The Persist PubSub URL.
     ///
     /// This URL is passed to `clusterd` for discovery of the Persist PubSub service.
@@ -879,7 +876,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             consensus_uri: args.persist_consensus_url.to_string(),
         },
         persist_clients: Arc::clone(&persist_clients),
-        storage_stash_url: args.storage_stash_url,
         clusterd_image: args.clusterd_image.expect("clap enforced"),
         init_container_image: args.orchestrator_kubernetes_init_container_image,
         now: SYSTEM_TIME.clone(),

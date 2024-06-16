@@ -86,8 +86,6 @@ pub struct ControllerConfig {
     /// PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
-    /// The stash URL for the storage controller.
-    pub storage_stash_url: String,
     /// The clusterd image to use when starting new cluster processes.
     pub clusterd_image: String,
     /// The init container image to use for clusterd.
