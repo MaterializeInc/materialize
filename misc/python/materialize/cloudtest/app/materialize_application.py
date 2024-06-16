@@ -26,6 +26,7 @@ from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdStatefulSet,
     MaterializedAliasService,
 )
+from materialize.cloudtest.k8s.fivetran import fivetran_resources
 from materialize.cloudtest.k8s.minio import Minio
 from materialize.cloudtest.k8s.mysql import mysql_resources
 from materialize.cloudtest.k8s.persist_pubsub import PersistPubSubService
@@ -74,6 +75,7 @@ class MaterializeApplication(CloudtestApplicationBase):
             *mysql_resources(apply_node_selectors=self.apply_node_selectors),
             *redpanda_resources(apply_node_selectors=self.apply_node_selectors),
             *debezium_resources(apply_node_selectors=self.apply_node_selectors),
+            *fivetran_resources(apply_node_selectors=self.apply_node_selectors),
             *ssh_resources(apply_node_selectors=self.apply_node_selectors),
             Minio(apply_node_selectors=self.apply_node_selectors),
             VpcEndpointsClusterRole(),

@@ -26,8 +26,4 @@ def test_full_testdrive(mz: MaterializeApplication) -> None:
     print(f"File pattern: {file_pattern}")
 
     mz.testdrive.copy("test/testdrive", "/workdir")
-
-    # TODO: #26392 (test requires fivetran running in cloudtest)
-    mz.testdrive.delete("/workdir/testdrive/fivetran-destination.td")
-
     mz.testdrive.run(f"testdrive/{file_pattern}")
