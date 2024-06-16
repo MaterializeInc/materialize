@@ -60,7 +60,7 @@ impl<'a> DataflowDescription<Plan> {
                     .unwrap_or_else(|| public_id.to_string());
                 let plan = AnnotatedPlan {
                     plan: &build_desc.plan,
-                    annotations: BTreeMap::default(),
+                    annotations: Default::default(),
                 };
                 (id, plan)
             })
@@ -128,7 +128,7 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
                     .unwrap_or_else(|| id.to_string());
                 let plan = AnnotatedPlan {
                     plan: build_desc.plan.as_inner(),
-                    annotations: BTreeMap::default(),
+                    annotations: Default::default(),
                 };
                 Ok((id, plan))
             })

@@ -41,7 +41,7 @@ pub use relation::func::{
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
     canonicalize, compare_columns, non_nullable_columns, AccessStrategy, AggregateExpr,
-    CollectionPlan, ColumnOrder, JoinImplementation, JoinInputCharacteristics, LetRecLimit,
+    CollectionPlan, ColumnOrder, JoinImplementation, JoinInputCharacteristics, LetRecLimit, MirId,
     MirRelationExpr, ProtoAggregateExpr, ProtoAggregateFunc, ProtoColumnOrder,
     ProtoRowSetFinishing, ProtoTableFunc, RowSetFinishing, WindowFrame, WindowFrameBound,
     WindowFrameUnits, RECURSION_LIMIT,

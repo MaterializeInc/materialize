@@ -46,7 +46,7 @@ where
 
         if let Some(finishing) = &self.context.finishing {
             if ctx.config.humanized_exprs {
-                let attrs = ctx.annotations.get(&self.plan.plan);
+                let attrs = ctx.annotations.get(self.plan.plan);
                 let cols = attrs.map(|attrs| attrs.column_names.clone()).flatten();
                 mode.expr(finishing, cols.as_ref()).fmt_text(f, &mut ctx)?;
             } else {

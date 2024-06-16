@@ -9,7 +9,6 @@
 
 //! `EXPLAIN` support for structures defined in this crate.
 
-use std::collections::BTreeMap;
 use std::fmt::Formatter;
 use std::time::Duration;
 
@@ -202,7 +201,7 @@ impl<'a> MirRelationExpr {
 
         let plan = AnnotatedPlan {
             plan: self,
-            annotations: BTreeMap::default(),
+            annotations: Default::default(),
         };
 
         Ok(ExplainSinglePlan { context, plan })

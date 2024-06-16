@@ -2979,7 +2979,7 @@ Explained Query:
         Join on=(#0 = #2{person1id}) type=differential // { arity: 4 }
           implementation
             %0:l8[#0]K » %1:l4[#0]K
-          ArrangeBy keys=[[#0{person2id}]] // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
             Get l8 // { arity: 2 }
           ArrangeBy keys=[[#0{person1id}]] // { arity: 2 }
             Project (#0{person1id}, #1{person2id}) // { arity: 2 }
@@ -3696,8 +3696,8 @@ Explained Query:
                 Join on=(#1 = #3{src}) type=differential // { arity: 6 }
                   implementation
                     %1:pathq19[#0]KA » %0:l0[#1]K
-                  ArrangeBy keys=[[#1{id}]] // { arity: 3 }
-                    Filter (#1{id}) IS NOT NULL // { arity: 3 }
+                  ArrangeBy keys=[[#1]] // { arity: 3 }
+                    Filter (#1) IS NOT NULL // { arity: 3 }
                       Get l0 // { arity: 3 }
                   ArrangeBy keys=[[#0{src}]] // { arity: 3 }
                     ReadIndex on=pathq19 pathq19_src=[differential join] // { arity: 3 }
@@ -3820,8 +3820,8 @@ Explained Query:
                     %0:l1 » %2:pathq19[#0]KA » %1[×]
                     %1 » %0:l1[×] » %2:pathq19[#0]KA
                     %2:pathq19 » %0:l1[#1]K » %1[×]
-                  ArrangeBy keys=[[], [#1{id}]] // { arity: 3 }
-                    Filter (#1{id}) IS NOT NULL // { arity: 3 }
+                  ArrangeBy keys=[[], [#1]] // { arity: 3 }
+                    Filter (#1) IS NOT NULL // { arity: 3 }
                       Get l1 // { arity: 3 }
                   ArrangeBy keys=[[]] // { arity: 1 }
                     Union // { arity: 1 }
@@ -3851,8 +3851,8 @@ Explained Query:
                     %0:l0 » %2:pathq19[#0]KA » %1[×]
                     %1 » %0:l0[×] » %2:pathq19[#0]KA
                     %2:pathq19 » %0:l0[#1]K » %1[×]
-                  ArrangeBy keys=[[], [#1{id}]] // { arity: 3 }
-                    Filter (#1{id}) IS NOT NULL // { arity: 3 }
+                  ArrangeBy keys=[[], [#1]] // { arity: 3 }
+                    Filter (#1) IS NOT NULL // { arity: 3 }
                       Get l0 // { arity: 3 }
                   ArrangeBy keys=[[]] // { arity: 1 }
                     Union // { arity: 1 }
@@ -4219,8 +4219,8 @@ Explained Query:
                       Join on=(#0 = #2{src}) type=differential // { arity: 5 }
                         implementation
                           %0:l0[#0]UK » %1:pathq20[#0]KA
-                        ArrangeBy keys=[[#0{dst}]] // { arity: 2 }
-                          Project (#1{min}, #2) // { arity: 2 }
+                        ArrangeBy keys=[[#0]] // { arity: 2 }
+                          Project (#1, #2) // { arity: 2 }
                             Get l0 // { arity: 3 }
                         ArrangeBy keys=[[#0{src}]] // { arity: 3 }
                           ReadIndex on=pathq20 pathq20_src=[differential join] // { arity: 3 }
@@ -4324,7 +4324,7 @@ Explained Query:
                   Join on=(#0 = #2{src}) type=differential // { arity: 5 }
                     implementation
                       %0:l0[#0]UK » %1:pathq20[#0]KA
-                    ArrangeBy keys=[[#0{dst}]] // { arity: 2 }
+                    ArrangeBy keys=[[#0]] // { arity: 2 }
                       Get l0 // { arity: 2 }
                     ArrangeBy keys=[[#0{src}]] // { arity: 3 }
                       ReadIndex on=pathq20 pathq20_src=[differential join] // { arity: 3 }
@@ -4437,8 +4437,8 @@ Explained Query:
                         Join on=(#0 = #3{src}) type=differential // { arity: 6 }
                           implementation
                             %1:pathq20[#0]KA » %0:l0[#0]K
-                          ArrangeBy keys=[[#0{dst}]] // { arity: 3 }
-                            Project (#1{min}..=#3) // { arity: 3 }
+                          ArrangeBy keys=[[#0]] // { arity: 3 }
+                            Project (#1..=#3) // { arity: 3 }
                               Get l0 // { arity: 4 }
                           ArrangeBy keys=[[#0{src}]] // { arity: 3 }
                             ReadIndex on=pathq20 pathq20_src=[differential join] // { arity: 3 }
@@ -4722,7 +4722,7 @@ Explained Query:
                   %0:l1 » %1:pathq20[#0]KA » %2[×]
                   %1:pathq20 » %0:l1[#0]UK » %2[×]
                   %2 » %0:l1[×] » %1:pathq20[#0]KA
-                ArrangeBy keys=[[], [#0{dst}]] // { arity: 1 }
+                ArrangeBy keys=[[], [#0]] // { arity: 1 }
                   Get l1 // { arity: 1 }
                 ArrangeBy keys=[[#0{src}]] // { arity: 3 }
                   ReadIndex on=pathq20 pathq20_src=[delta join lookup] // { arity: 3 }
@@ -4731,10 +4731,10 @@ Explained Query:
                     Negate // { arity: 0 }
                       Distinct project=[] // { arity: 0 }
                         Project () // { arity: 0 }
-                          Join on=(#0{dst} = #1{personid}) type=differential // { arity: 2 }
+                          Join on=(#0 = #1{personid}) type=differential // { arity: 2 }
                             implementation
                               %0:l1[#0]UK » %1:l0[#0]K
-                            ArrangeBy keys=[[#0{dst}]] // { arity: 1 }
+                            ArrangeBy keys=[[#0]] // { arity: 1 }
                               Get l1 // { arity: 1 }
                             ArrangeBy keys=[[#0{personid}]] // { arity: 1 }
                               Get l0 // { arity: 1 }

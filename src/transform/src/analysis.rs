@@ -19,6 +19,7 @@ pub use arity::Arity;
 pub use cardinality::Cardinality;
 pub use column_names::{ColumnName, ColumnNames};
 pub use explain::annotate_plan;
+pub use node_ids::NodeIds;
 pub use non_negative::NonNegative;
 pub use subtree::SubtreeSize;
 pub use types::RelationType;
@@ -510,6 +511,32 @@ pub mod common {
     }
 }
 
+/// Expression IDs in post-order.
+pub mod node_ids {
+
+    use super::{Analysis, Derived};
+    use mz_expr::{MirId, MirRelationExpr};
+    use mz_ore::cast::CastFrom;
+
+    /// Analysis that determines the size in child expressions of relation expressions.
+    #[derive(Debug)]
+    pub struct NodeIds;
+
+    impl Analysis for NodeIds {
+        type Value = MirId;
+
+        fn derive(
+            &self,
+            _expr: &MirRelationExpr,
+            index: usize,
+            _results: &[Self::Value],
+            _depends: &Derived,
+        ) -> Self::Value {
+            u64::cast_from(index)
+        }
+    }
+}
+
 /// Expression subtree sizes
 ///
 /// This analysis counts the number of expressions in each subtree, and is most useful
@@ -802,7 +829,7 @@ mod non_negative {
 mod column_names {
     use std::ops::Range;
 
-    use super::Analysis;
+    use super::{Analysis, Derived};
     use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
     use mz_repr::explain::ExprHumanizer;
     use mz_repr::GlobalId;
@@ -873,7 +900,7 @@ mod column_names {
             expr: &MirRelationExpr,
             index: usize,
             results: &[Self::Value],
-            depends: &crate::analysis::Derived,
+            depends: &Derived,
         ) -> Self::Value {
             use MirRelationExpr::*;
 
@@ -1064,10 +1091,9 @@ mod column_names {
 mod explain {
     //! Derived attributes framework and definitions.
 
-    use std::collections::BTreeMap;
-
     use mz_expr::explain::ExplainContext;
     use mz_expr::MirRelationExpr;
+    use mz_ore::address_map::AddressMap;
     use mz_ore::stack::RecursionLimitError;
     use mz_repr::explain::{AnnotatedPlan, Attributes};
 
@@ -1078,6 +1104,9 @@ mod explain {
     impl<'c> From<&ExplainContext<'c>> for DerivedBuilder<'c> {
         fn from(context: &ExplainContext<'c>) -> DerivedBuilder<'c> {
             let mut builder = DerivedBuilder::new(context.features);
+            if context.config.node_ids {
+                builder.require(super::NodeIds);
+            }
             if context.config.subtree_size {
                 builder.require(super::SubtreeSize);
             }
@@ -1109,7 +1138,7 @@ mod explain {
         plan: &'a MirRelationExpr,
         context: &'a ExplainContext,
     ) -> Result<AnnotatedPlan<'a, MirRelationExpr>, RecursionLimitError> {
-        let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
+        let mut annotations = AddressMap::<MirRelationExpr, Attributes>::default();
         let config = context.config;
 
         // We want to annotate the plan with attributes in the following cases:
@@ -1123,21 +1152,32 @@ mod explain {
             let builder = DerivedBuilder::from(context);
             let derived = builder.visit(plan);
 
+            if config.node_ids {
+                for (expr, mir_id) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<super::NodeIds>().unwrap().into_iter(),
+                ) {
+                    let attrs = annotations.entry_or_default(expr);
+                    attrs.mir_id = Some(*mir_id);
+                }
+            }
+
             if config.subtree_size {
                 for (expr, subtree_size) in std::iter::zip(
                     subtree_refs.iter(),
                     derived.results::<super::SubtreeSize>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     attrs.subtree_size = Some(*subtree_size);
                 }
             }
+
             if config.non_negative {
                 for (expr, non_negative) in std::iter::zip(
                     subtree_refs.iter(),
                     derived.results::<super::NonNegative>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     attrs.non_negative = Some(*non_negative);
                 }
             }
@@ -1147,7 +1187,7 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::Arity>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     attrs.arity = Some(*arity);
                 }
             }
@@ -1160,7 +1200,7 @@ mod explain {
                         .unwrap()
                         .into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     attrs.types = Some(types.clone());
                 }
             }
@@ -1170,7 +1210,7 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::UniqueKeys>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     attrs.keys = Some(keys.clone());
                 }
             }
@@ -1180,7 +1220,7 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::Cardinality>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     let value = HumanizedSymbolicExpression::new(card, context.humanizer);
                     attrs.cardinality = Some(value.to_string());
                 }
@@ -1191,7 +1231,7 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::ColumnNames>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let attrs = annotations.entry_or_default(expr);
                     let value = column_names
                         .iter()
                         .map(|column_name| column_name.humanize(context.humanizer))
