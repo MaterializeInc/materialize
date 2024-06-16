@@ -30,7 +30,9 @@ use mz_ore::instrument;
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogItemType, CatalogSchema, CatalogType, NameReference};
+use mz_sql::catalog::{
+    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType, NameReference,
+};
 use mz_sql::names::{
     ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier,
 };
@@ -897,24 +899,59 @@ impl CatalogState {
         match diff {
             StateDiff::Addition => {
                 let key = item.key();
-                let catalog_item = self
-                    .deserialize_item(&item.create_sql)
-                    .expect("invalid persisted SQL");
-                let schema = self.find_non_temp_schema(&item.schema_id);
+                let mz_catalog::durable::Item {
+                    id,
+                    oid,
+                    schema_id,
+                    name,
+                    create_sql,
+                    owner_id,
+                    privileges,
+                } = item;
+                let schema = self.find_non_temp_schema(&schema_id);
                 let name = QualifiedItemName {
                     qualifiers: ItemQualifiers {
                         database_spec: schema.database().clone(),
                         schema_spec: schema.id().clone(),
                     },
-                    item: item.name.clone(),
+                    item: name.clone(),
                 };
                 let entry = match retractions.items.remove(&key) {
                     Some(mut retraction) => {
                         assert_eq!(retraction.id, item.id);
-                        retraction.update_from((item, catalog_item, name));
+                        // We only reparse the SQL if it's changed. Otherwise, we use the existing
+                        // item. This is a performance optimization and not needed for correctness.
+                        // This makes it difficult to use the `UpdateFrom` trait, but the structure
+                        // is still the same as the trait.
+                        if retraction.create_sql() != create_sql {
+                            let item = self
+                                .deserialize_item(&create_sql)
+                                .expect("invalid persisted SQL");
+                            retraction.item = item;
+                        }
+                        retraction.id = id;
+                        retraction.oid = oid;
+                        retraction.name = name;
+                        retraction.owner_id = owner_id;
+                        retraction.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+
                         retraction
                     }
-                    None => (item, catalog_item, name).into(),
+                    None => {
+                        let catalog_item = self
+                            .deserialize_item(&create_sql)
+                            .expect("invalid persisted SQL");
+                        CatalogEntry {
+                            item: catalog_item,
+                            referenced_by: Vec::new(),
+                            used_by: Vec::new(),
+                            id,
+                            oid,
+                            name,
+                            owner_id,
+                            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+                        }
+                    }
                 };
                 self.insert_entry(entry);
             }
