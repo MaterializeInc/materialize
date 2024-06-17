@@ -516,7 +516,8 @@ impl DatumColumnEncoder {
                 let binary_array = binary_values.finish();
 
                 assert_eq!(approx_array.len(), binary_array.len());
-                assert_eq!(approx_array.logical_nulls(), binary_array.logical_nulls());
+                // This is O(n) so we only enable it for debug assertions.
+                debug_assert_eq!(approx_array.logical_nulls(), binary_array.logical_nulls());
 
                 let fields = Fields::from(vec![
                     Field::new("approx", approx_array.data_type().clone(), true),
