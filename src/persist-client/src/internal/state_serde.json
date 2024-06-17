@@ -441,5 +441,28 @@
       ]
     }
   },
-  "fueling_merges": {}
+  "merges": {
+    "0-4": {
+      "since": {
+        "elements": [
+          16259358130896200968
+        ]
+      },
+      "remaining_work": 0,
+      "active_compaction": {
+        "start_ms": 0
+      }
+    },
+    "4-5": {
+      "since": {
+        "elements": [
+          12593557411478721373
+        ]
+      },
+      "remaining_work": 0,
+      "active_compaction": {
+        "start_ms": 0
+      }
+    }
+  }
 }

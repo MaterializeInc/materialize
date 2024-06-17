@@ -249,7 +249,11 @@ where
     pub fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
-                state.collections.trace.all_fueled_merge_reqs()
+                state
+                    .collections
+                    .trace
+                    .fueled_merge_reqs_before_ms(u64::MAX)
+                    .collect()
             })
     }
 

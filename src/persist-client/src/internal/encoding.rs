@@ -41,18 +41,19 @@ use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
     proto_hollow_batch_part, BatchPart, CriticalReaderState, HandleDebugState, HollowBatch,
     HollowBatchPart, HollowRollup, IdempotencyToken, LeasedReaderState, OpaqueState,
-    ProtoCriticalReaderState, ProtoFuelingMerge, ProtoHandleDebugState, ProtoHollowBatch,
-    ProtoHollowBatchPart, ProtoHollowRollup, ProtoIdFuelingMerge, ProtoIdHollowBatch,
-    ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState,
-    ProtoRollup, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField,
-    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoVersionedData, ProtoWriterState, State, StateCollections, TypedState,
-    WriterState,
+    ProtoCompaction, ProtoCriticalReaderState, ProtoHandleDebugState, ProtoHollowBatch,
+    ProtoHollowBatchPart, ProtoHollowRollup, ProtoIdHollowBatch, ProtoIdMerge, ProtoIdSpineBatch,
+    ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge, ProtoRollup,
+    ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType,
+    ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoVersionedData,
+    ProtoWriterState, State, StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
 };
-use crate::internal::trace::{FlatTrace, FuelingMerge, SpineId, ThinSpineBatch, Trace};
+use crate::internal::trace::{
+    ActiveCompaction, FlatTrace, SpineId, ThinMerge, ThinSpineBatch, Trace,
+};
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::{cfg, PersistConfig, ShardId, WriterId};
 
@@ -311,7 +312,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             legacy_batches,
             hollow_batches,
             spine_batches,
-            fueling_merges,
+            merges,
         } = self;
 
         let proto = ProtoStateFieldDiffs::default();
@@ -333,7 +334,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
         field_diffs_into_proto(ProtoStateField::LegacyBatches, legacy_batches, &mut writer);
         field_diffs_into_proto(ProtoStateField::HollowBatches, hollow_batches, &mut writer);
         field_diffs_into_proto(ProtoStateField::SpineBatches, spine_batches, &mut writer);
-        field_diffs_into_proto(ProtoStateField::SpineMerges, fueling_merges, &mut writer);
+        field_diffs_into_proto(ProtoStateField::SpineMerges, merges, &mut writer);
 
         // After encoding all of our data, convert back into the proto.
         let field_diffs = writer.into_proto();
@@ -468,9 +469,9 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                         )?
                     }
                     ProtoStateField::SpineMerges => {
-                        field_diff_into_rust::<ProtoSpineId, ProtoFuelingMerge, _, _, _, _>(
+                        field_diff_into_rust::<ProtoSpineId, ProtoMerge, _, _, _, _>(
                             diff,
-                            &mut state_diff.fueling_merges,
+                            &mut state_diff.merges,
                             |k| k.into_rust(),
                             |v| v.into_rust(),
                         )?
@@ -1018,35 +1019,52 @@ impl<T: Timestamp + Codec64> ProtoMapEntry<SpineId, ThinSpineBatch<T>> for Proto
     }
 }
 
-impl<T: Timestamp + Codec64> RustType<ProtoFuelingMerge> for FuelingMerge<T> {
-    fn into_proto(&self) -> ProtoFuelingMerge {
-        ProtoFuelingMerge {
-            since: Some(self.since.into_proto()),
-            remaining_work: self.remaining_work.into_proto(),
+impl RustType<ProtoCompaction> for ActiveCompaction {
+    fn into_proto(&self) -> ProtoCompaction {
+        ProtoCompaction {
+            start_ms: self.start_ms,
         }
     }
 
-    fn from_proto(proto: ProtoFuelingMerge) -> Result<Self, TryFromProtoError> {
-        let since = proto.since.into_rust_if_some("ProtoFuelingMerge::since")?;
-        let remaining_work = proto.remaining_work.into_rust()?;
+    fn from_proto(proto: ProtoCompaction) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            since,
-            remaining_work,
+            start_ms: proto.start_ms,
         })
     }
 }
 
-impl<T: Timestamp + Codec64> ProtoMapEntry<SpineId, FuelingMerge<T>> for ProtoIdFuelingMerge {
-    fn from_rust<'a>((id, merge): (&'a SpineId, &'a FuelingMerge<T>)) -> Self {
-        ProtoIdFuelingMerge {
+impl<T: Timestamp + Codec64> RustType<ProtoMerge> for ThinMerge<T> {
+    fn into_proto(&self) -> ProtoMerge {
+        ProtoMerge {
+            since: Some(self.since.into_proto()),
+            remaining_work: self.remaining_work.into_proto(),
+            active_compaction: self.active_compaction.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoMerge) -> Result<Self, TryFromProtoError> {
+        let since = proto.since.into_rust_if_some("ProtoMerge::since")?;
+        let remaining_work = proto.remaining_work.into_rust()?;
+        let active_compaction = proto.active_compaction.into_rust()?;
+        Ok(Self {
+            since,
+            remaining_work,
+            active_compaction,
+        })
+    }
+}
+
+impl<T: Timestamp + Codec64> ProtoMapEntry<SpineId, ThinMerge<T>> for ProtoIdMerge {
+    fn from_rust<'a>((id, merge): (&'a SpineId, &'a ThinMerge<T>)) -> Self {
+        ProtoIdMerge {
             id: Some(id.into_proto()),
             merge: Some(merge.into_proto()),
         }
     }
 
-    fn into_rust(self) -> Result<(SpineId, FuelingMerge<T>), TryFromProtoError> {
-        let id = self.id.into_rust_if_some("ProtoIdFuelingMerge::id")?;
-        let merge = self.merge.into_rust_if_some("ProtoIdFuelingMerge::merge")?;
+    fn into_rust(self) -> Result<(SpineId, ThinMerge<T>), TryFromProtoError> {
+        let id = self.id.into_rust_if_some("ProtoIdMerge::id")?;
+        let merge = self.merge.into_rust_if_some("ProtoIdMerge::merge")?;
         Ok((id, merge))
     }
 }
@@ -1061,7 +1079,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoTrace> for FlatTrace<T> {
             .collect();
         let hollow_batches = self.hollow_batches.into_proto();
         let spine_batches = self.spine_batches.into_proto();
-        let merges = self.fueling_merges.into_proto();
+        let merges = self.merges.into_proto();
         ProtoTrace {
             since: Some(since),
             legacy_batches,
@@ -1086,7 +1104,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoTrace> for FlatTrace<T> {
             legacy_batches,
             hollow_batches,
             spine_batches,
-            fueling_merges: merges,
+            merges,
         })
     }
 }

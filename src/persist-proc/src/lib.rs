@@ -88,6 +88,13 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                     x.add_dynamic("persist_inline_writes_total_max_bytes", ::mz_dyncfg::ConfigVal::Usize(0));
                     x
                 },
+                {
+                    // Enable new compaction tracking / claiming
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_record_compactions", ::mz_dyncfg::ConfigVal::Bool(true));
+                    x.add_dynamic("persist_claim_unclaimed_compactions", ::mz_dyncfg::ConfigVal::Bool(true));
+                    x
+                },
             ];
 
             for (idx, dyncfgs) in dyncfgs.into_iter().enumerate() {
