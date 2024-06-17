@@ -2,6 +2,9 @@
     border-bottom: 1px solid var(--divider-light);
     background: var(--bg-nav);
     backdrop-filter: saturate(0.5) blur(5px);
+    position: fixed;
+    width: 100vw;
+    z-index: 101;
 
     .desktop {
         display: flex;
