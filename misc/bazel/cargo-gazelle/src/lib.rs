@@ -463,7 +463,7 @@ impl ToBazelDefinition for Glob {
 /// let features = [(PlatformVariant::Aarch64MacOS, features)];
 ///
 /// let select: Select<List<QuotedString>> = Select::new(features, List::empty());
-/// assert_eq!(select.to_bazel_definition(), "select({\n\t\"macos_arm\": [\"json\"],\n\t\"//conditions:default\": [],\n})");
+/// assert_eq!(select.to_bazel_definition(), "select({\n\t\"@//misc/bazel/platforms:macos_arm\": [\"json\"],\n\t\"//conditions:default\": [],\n})");
 /// ```
 #[derive(Debug)]
 pub struct Select<T> {
