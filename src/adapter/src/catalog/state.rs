@@ -16,7 +16,6 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::bail;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
@@ -766,88 +765,38 @@ impl CatalogState {
         Some(url)
     }
 
-    /// Parse a SQL string into a catalog view item with only a limited
-    /// context.
-    #[mz_ore::instrument]
-    pub fn parse_view_item(&self, create_sql: String) -> Result<CatalogItem, anyhow::Error> {
-        let mut session_catalog = self.for_system_session();
-
-        // Enable catalog features that might be required during planning in
-        // [Catalog::open]. Existing catalog items might have been created while
-        // a specific feature flag was turned on, so we need to ensure that this
-        // is also the case during catalog rehydration in order to avoid panics.
-        //
-        // WARNING / CONTRACT:
-        // 1. Features used in this method that related to parsing / planning
-        //    should be `enable_for_item_parsing` set to `true`.
-        // 2. After this step, feature flag configuration must not be
-        //    overridden.
-        session_catalog.system_vars_mut().enable_for_item_parsing();
-
-        let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
-        let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-        let plan = mz_sql::plan::plan(
-            None,
-            &session_catalog,
-            stmt,
-            &Params::empty(),
-            &resolved_ids,
-        )?;
-        Ok(match plan {
-            Plan::CreateView(CreateViewPlan { view, .. }) => {
-                // Collect optimizer parameters.
-                let optimizer_config =
-                    optimize::OptimizerConfig::from(session_catalog.system_vars());
-
-                // Build an optimizer for this VIEW.
-                let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
-
-                // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-                let raw_expr = view.expr;
-                let optimized_expr = optimizer.optimize(raw_expr.clone())?;
-
-                CatalogItem::View(View {
-                    create_sql: view.create_sql,
-                    raw_expr,
-                    desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
-                    optimized_expr,
-                    conn_id: None,
-                    resolved_ids,
-                })
-            }
-            _ => bail!("Expected valid CREATE VIEW statement"),
-        })
-    }
-
-    pub(crate) fn deserialize_plan(
-        &self,
+    /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds`].
+    ///
+    /// This function will temporarily enable all "enable_for_item_parsing" feature flags. See
+    /// [`CatalogState::with_enable_for_item_parsing`] for more details.
+    pub(crate) fn deserialize_plan_with_enable_for_item_parsing(
+        // DO NOT add any additional mutations to this method. It would be fairly surprising to the
+        // caller if this method changed the state of the catalog.
+        &mut self,
         create_sql: &str,
         force_if_exists_skip: bool,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        let pcx = PlanContext::zero().with_ignore_if_exists_errors(force_if_exists_skip);
-        let mut session_catalog = self.for_system_session();
-        Self::parse_plan(create_sql, Some(&pcx), &mut session_catalog)
+        self.with_enable_for_item_parsing(|state| {
+            let pcx = PlanContext::zero().with_ignore_if_exists_errors(force_if_exists_skip);
+            let pcx = Some(&pcx);
+            let session_catalog = state.for_system_session();
+
+            let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
+            let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
+            let plan =
+                mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
+
+            Ok((plan, resolved_ids))
+        })
     }
 
-    /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds)`.
+    /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds`].
     #[mz_ore::instrument]
     pub(crate) fn parse_plan(
         create_sql: &str,
         pcx: Option<&PlanContext>,
-        catalog: &mut ConnCatalog,
+        catalog: &ConnCatalog,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        // Enable catalog features that might be required during planning in
-        // [Catalog::open]. Existing catalog items might have been created while
-        // a specific feature flag was turned on, so we need to ensure that this
-        // is also the case during catalog rehydration in order to avoid panics.
-        //
-        // WARNING / CONTRACT:
-        // 1. Features used in this method that related to parsing / planning
-        //    should be `enable_for_item_parsing` set to `true`.
-        // 2. After this step, feature flag configuration must not be
-        //    overridden.
-        catalog.system_vars_mut().enable_for_item_parsing();
-
         let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
         let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
@@ -855,6 +804,7 @@ impl CatalogState {
         return Ok((plan, resolved_ids));
     }
 
+    /// Parses the given SQL string into a pair of [`CatalogItem`].
     pub(crate) fn deserialize_item(&self, create_sql: &str) -> Result<CatalogItem, AdapterError> {
         self.parse_item(create_sql, None, false, None)
     }
@@ -868,9 +818,9 @@ impl CatalogState {
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
     ) -> Result<CatalogItem, AdapterError> {
-        let mut session_catalog = self.for_system_session();
+        let session_catalog = self.for_system_session();
 
-        let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &mut session_catalog)?;
+        let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &session_catalog)?;
 
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
@@ -1046,6 +996,29 @@ impl CatalogState {
                 .into())
             }
         })
+    }
+
+    /// Execute function `f` on `self`, with all "enable_for_item_parsing" feature flags enabled.
+    /// Calling this method will not permanently modify any system configuration variables.
+    ///
+    /// WARNING:
+    /// Any modifications made to the system configuration variables in `f`, will be lost.
+    pub fn with_enable_for_item_parsing<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        // Enable catalog features that might be required during planning existing
+        // catalog items. Existing catalog items might have been created while
+        // a specific feature flag was turned on, so we need to ensure that this
+        // is also the case during catalog rehydration in order to avoid panics.
+        //
+        // WARNING / CONTRACT:
+        // 1. Features used in this method that related to parsing / planning
+        //    should be `enable_for_item_parsing` set to `true`.
+        // 2. After this step, feature flag configuration must not be
+        //    overridden.
+        let restore = self.system_configuration.clone();
+        self.system_configuration.enable_for_item_parsing();
+        let res = f(self);
+        self.system_configuration = restore;
+        res
     }
 
     /// Returns all indexes on the given object and cluster known in the

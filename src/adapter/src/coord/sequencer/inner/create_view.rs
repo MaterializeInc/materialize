@@ -145,8 +145,10 @@ impl Coordinator {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
 
-        let state = self.catalog().state();
-        let plan_result = state.deserialize_plan(&item.create_sql, true);
+        let create_sql = item.create_sql.clone();
+        let plan_result = self
+            .catalog_mut()
+            .deserialize_plan_with_enable_for_item_parsing(&create_sql, true);
         let (plan, resolved_ids) = return_if_err!(plan_result, ctx);
 
         let plan::Plan::CreateView(plan) = plan else {

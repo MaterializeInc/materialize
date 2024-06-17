@@ -403,7 +403,7 @@ impl Catalog {
     /// we must maintain a completed set otherwise races could result in orphaned views languishing
     /// in awaiting with nothing retriggering the attempt.
     #[instrument(name = "catalog::parse_views")]
-    pub(crate) async fn parse_views(
+    pub(crate) async fn parse_builtin_views(
         state: &mut CatalogState,
         builtin_views: Vec<(&Builtin<NameReference>, GlobalId)>,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
