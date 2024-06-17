@@ -1026,6 +1026,9 @@ impl Coordinator {
         self.cancel_pending_peeks(&conn_id);
         self.cancel_pending_watchsets(&conn_id);
         self.cancel_compute_sinks_for_conn(&conn_id).await;
+        if let Some((tx, _rx)) = self.staged_cancellation.get_mut(&conn_id) {
+            let _ = tx.send(true);
+        }
     }
 
     /// Handle termination of a client session.

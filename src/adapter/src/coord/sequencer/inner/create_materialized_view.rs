@@ -87,6 +87,10 @@ impl Staged for CreateMaterializedViewStage {
             stage: self,
         }
     }
+
+    fn cancel_enabled(&self) -> bool {
+        true
+    }
 }
 
 impl Coordinator {
