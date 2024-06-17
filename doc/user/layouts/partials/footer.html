@@ -33,9 +33,10 @@
       </svg>
     </button>
   </div>
+  {{ with .File }}
   <div>
     <a
-      href="//github.com/MaterializeInc/materialize/edit/main/doc/user/content/{{ .File.Path }}"
+      href="//github.com/MaterializeInc/materialize/edit/main/doc/user/content/{{ .Path }}"
       class="btn-ghost"
     >
       <svg
@@ -52,6 +53,7 @@
       Edit this page
     </a>
   </div>
+  {{ end }}
   <div class="footer-links">
     <a href="https://materialize.com">Home</a>
     <a href="https://status.materialize.com">Status</a>

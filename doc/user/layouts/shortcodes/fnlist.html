@@ -1,5 +1,5 @@
 {{/*  Converts data/sql_funcs.yml into table. */}}
-
+{{ $parentPath := partial "relative-link.html" . }}
 {{$releasedVersions := dict}}
 {{range (where $.Site.RegularPages "Section" "releases")}}
   {{$releasedVersions = merge $releasedVersions (dict .File.ContentBaseName .) }}
@@ -42,7 +42,7 @@
         {{ .description | $.Page.RenderString }}
 
         {{ if .url }}
-        <a href="{{ .url | relURL }}">(docs)</a>.
+        <a href="{{ $parentPath }}{{ .url | relURL }}">(docs)</a>.
         {{ end }}
 
       </p>
@@ -53,7 +53,7 @@
 
       {{ if .unmaterializable_unless_temporal_filter }}
         <p><b>Note:</b> This function is <a href="#unmaterializable-functions">unmaterializable</a>, but
-        can be used in limited contexts in materialized views as a <a href="{{ "/transform-data/patterns/temporal-filters/" | relURL }}">temporal filter</a>.</p>
+        can be used in limited contexts in materialized views as a <a href="{{ $parentPath }}{{ "/transform-data/patterns/temporal-filters/" | relURL }}">temporal filter</a>.</p>
       {{ end }}
 
       {{ if .known_time_zone_limitation_cast }}
@@ -70,7 +70,7 @@
         {{ if not $releasePage.Params.released }}
           <p>
             <b>Unreleased: </b> This function will be released in
-            <a href="{{ printf "/releases/%s" $versionAdded | relURL }}"><strong>{{$versionAdded}}</strong></a>.
+            <a href="{{ printf "%s/releases/%s" $parentPath $versionAdded | relURL }}"><strong>{{$versionAdded}}</strong></a>.
             It may not be available in your region yet.
             The release is scheduled to complete by <strong>{{dateFormat "January 2, 2006" $releasePage.Params.date}}</strong>.
           </p>

@@ -1,3 +1,4 @@
+{{- $parentPath := partial "relative-link.html" . -}}
 <div class="callout">
 
   <div>
@@ -5,12 +6,26 @@
 
     <p>
       {{ if and ($.Params) (isset $.Params "primary_text") }}
-      <a class="btn" {{ with .Get "primary_url" }} href="{{ . }}" {{ end }}>
+      <a class="btn" {{ with .Get "primary_url" }} href="
+        {{- $primaryURL := . | safeURL -}}
+          {{- if hasPrefix $primaryURL "/" -}}
+            {{- $parentPath }}{{ $primaryURL | relURL -}}
+          {{- else -}}
+            {{- $primaryURL -}}
+          {{- end -}}"
+        {{- end }}>
         {{ .Get "primary_text" }}
       </a>
       {{ end }}
       {{ if and ($.Params) (isset $.Params "secondary_text") }}
-      <a class="btn" {{ with .Get "secondary_url" }} href="{{ . }}" {{ end }}>
+      <a class="btn" {{ with .Get "secondary_url" }} href="
+        {{- $secondaryURL := . | safeURL -}}
+          {{- if hasPrefix $secondaryURL "/" -}}
+            {{- $parentPath }}{{ $secondaryURL | relURL -}}
+          {{- else -}}
+            {{- $secondaryURL -}}
+          {{- end -}}"
+        {{- end }}>
         {{ .Get "secondary_text" }}
       </a>
       {{ end }}

@@ -1,1 +1,10 @@
-<img src="{{ .Destination | safeURL | relURL }}" alt="{{ .Text }}" {{ with .Title}} title="{{ . }}"{{ end }}>
+{{- $url := .Destination | safeURL -}}
+{{- $parentPath := partial "relative-link.html" . -}}
+<img src="
+  {{- if hasPrefix $url "/" -}}
+    {{- $parentPath }}{{ $url | relURL -}}
+  {{- else -}}
+    {{- $url | relURL -}}
+  {{- end -}}
+" alt="{{ .Text }}" {{ with .Title}} title="{{ . }}"{{ end }}>
+{{- /* Chomp trailing newline. */ -}}
