@@ -257,7 +257,8 @@ pub async fn publish_kafka_schemas(
                     }
                     Ok(())
                 }
-                Err(GetSubjectConfigError::SubjectCompatibilityLevelNotSet) => ccsr
+                Err(GetSubjectConfigError::SubjectCompatibilityLevelNotSet)
+                | Err(GetSubjectConfigError::SubjectNotFound) => ccsr
                     .set_subject_compatibility_level(&key_subject, key_compatibility_level)
                     .await
                     .map_err(anyhow::Error::from),

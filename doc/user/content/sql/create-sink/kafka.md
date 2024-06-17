@@ -76,10 +76,12 @@ Field                               | Value  | Description
 
 Field                | Value  | Description
 ---------------------|--------|------------
-`AVRO KEY FULLNAME`  | `text` | Default: `row`. Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`.
-`AVRO VALUE FULLNAME`| `text` | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
-`NULL DEFAULTS`      | `bool` | Default: `false`. Whether to automatically default nullable fields to `null` in the generated schemas.
-`DOC ON`             | `text` | Add a documentation comment to the generated Avro schemas. See [`DOC ON` option syntax](#doc-on-option-syntax) below.
+`AVRO KEY FULLNAME`         | `text` | Default: `row`. Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`.
+`AVRO VALUE FULLNAME`       | `text` | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
+`NULL DEFAULTS`             | `bool` | Default: `false`. Whether to automatically default nullable fields to `null` in the generated schemas.
+`DOC ON`                    | `text` | Add a documentation comment to the generated Avro schemas. See [`DOC ON` option syntax](#doc-on-option-syntax) below.
+`KEY COMPATIBILITY LEVEL`   | `text` | {{< warn-if-unreleased-inline "v0.105" >}} If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated key schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
+`VALUE COMPATIBILITY LEVEL` | `text` | {{< warn-if-unreleased-inline "v0.105" >}} If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated value schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
 
 #### `DOC ON` option syntax
 
@@ -668,6 +670,22 @@ CREATE SINK custom_topic_sink
     TOPIC CONFIG MAP['cleanup.policy' => 'compact']
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  ENVELOPE UPSERT;
+```
+
+#### Schema compatibility levels
+
+```sql
+CREATE SINK compatibility_level_sink
+  IN CLUSTER my_io_cluster
+  FROM <source, table or mview>
+  INTO KAFKA CONNECTION kafka_connection (
+    TOPIC 'test_avro_topic',
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection (
+    KEY COMPATIBILITY LEVEL 'BACKWARD',
+    VALUE COMPATIBILITY LEVEL 'BACKWARD_TRANSITIVE'
+  )
   ENVELOPE UPSERT;
 ```
 
