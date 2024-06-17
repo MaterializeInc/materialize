@@ -46,6 +46,7 @@ once_cell = "1.16.0"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = [
     "bytes_",
+    "id_gen",
     "smallvec",
     "region",
     "stack",
