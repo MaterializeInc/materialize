@@ -240,7 +240,6 @@ def main() -> int:
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{mzdata}/persist/blob",
                 f"--timestamp-oracle-url={args.postgres}?options=--search_path=tsoracle",
-                f"--storage-stash-url={args.postgres}?options=--search_path=storage",
                 f"--environment-id={environment_id}",
                 "--bootstrap-role=materialize",
                 *args.args,

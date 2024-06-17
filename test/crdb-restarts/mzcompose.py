@@ -73,7 +73,6 @@ SERVICES = [
     Materialized(
         depends_on=[f"cockroach{id}" for id in range(CRDB_NODE_COUNT)],
         options=[
-            "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
             "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
             "--timestamp-oracle-url=postgres://root@cockroach:26257?options=--search_path=tsoracle",
         ],
