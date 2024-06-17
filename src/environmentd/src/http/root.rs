@@ -15,7 +15,7 @@ use axum::response::IntoResponse;
 use crate::BUILD_INFO;
 
 #[derive(Template)]
-#[template(path = "http/templates/home.html")]
+#[template(path = "home.html")]
 struct HomeTemplate<'a> {
     version: &'a str,
     build_time: &'a str,

@@ -13,7 +13,7 @@ use axum::response::IntoResponse;
 use crate::BUILD_INFO;
 
 #[derive(Template)]
-#[template(path = "http/templates/memory.html")]
+#[template(path = "memory.html")]
 struct MemoryTemplate<'a> {
     version: &'a str,
 }
@@ -25,7 +25,7 @@ pub async fn handle_memory() -> impl IntoResponse {
 }
 
 #[derive(Template)]
-#[template(path = "http/templates/hierarchical-memory.html")]
+#[template(path = "hierarchical-memory.html")]
 struct HierarchicalMemoryTemplate<'a> {
     version: &'a str,
 }
