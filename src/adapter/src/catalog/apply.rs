@@ -1130,7 +1130,7 @@ impl BootstrapApplyState {
     }
 
     async fn step(
-        mut self,
+        self,
         next: BootstrapApplyState,
         state: &mut CatalogState,
         retractions: &mut InProgressRetractions,

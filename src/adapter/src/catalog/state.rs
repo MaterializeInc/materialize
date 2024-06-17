@@ -767,16 +767,27 @@ impl CatalogState {
 
     /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds`].
     ///
-    /// This function will create a copy of the catalog, enable all "enable_for_item_parsing"
-    /// feature flags enabled in the copy, and use the copy for parsing.
+    /// This function will temporarily enable all "enable_for_item_parsing" feature flags. See
+    /// [`CatalogState::with_enable_for_item_parsing`] for more details.
     pub(crate) fn deserialize_plan_with_enable_for_item_parsing(
-        &self,
+        // DO NOT add any additional mutations to this method. It would be fairly surprising to the
+        // caller if this method changed the state of the catalog.
+        &mut self,
         create_sql: &str,
         force_if_exists_skip: bool,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        let pcx = PlanContext::zero().with_ignore_if_exists_errors(force_if_exists_skip);
-        let mut session_catalog = self.for_system_session();
-        Self::parse_plan_with_enable_for_item_parsing(create_sql, Some(&pcx), &mut session_catalog)
+        self.with_enable_for_item_parsing(|state| {
+            let pcx = PlanContext::zero().with_ignore_if_exists_errors(force_if_exists_skip);
+            let pcx = Some(&pcx);
+            let session_catalog = state.for_system_session();
+
+            let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
+            let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
+            let plan =
+                mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
+
+            Ok((plan, resolved_ids))
+        })
     }
 
     /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds`].
@@ -786,35 +797,6 @@ impl CatalogState {
         pcx: Option<&PlanContext>,
         catalog: &ConnCatalog,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
-        let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
-        let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
-
-        return Ok((plan, resolved_ids));
-    }
-
-    /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds`].
-    ///
-    /// This function will create a copy of the catalog, enable all "enable_for_item_parsing"
-    /// feature flags enabled in the copy, and use the copy for parsing.
-    #[mz_ore::instrument]
-    pub(crate) fn parse_plan_with_enable_for_item_parsing(
-        create_sql: &str,
-        pcx: Option<&PlanContext>,
-        catalog: &mut ConnCatalog,
-    ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        // Enable catalog features that might be required during planning in
-        // [Catalog::open]. Existing catalog items might have been created while
-        // a specific feature flag was turned on, so we need to ensure that this
-        // is also the case during catalog rehydration in order to avoid panics.
-        //
-        // WARNING / CONTRACT:
-        // 1. Features used in this method that related to parsing / planning
-        //    should be `enable_for_item_parsing` set to `true`.
-        // 2. After this step, feature flag configuration must not be
-        //    overridden.
-        catalog.system_vars_mut().enable_for_item_parsing();
-
         let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
         let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
