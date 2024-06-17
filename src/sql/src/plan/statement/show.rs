@@ -254,7 +254,7 @@ pub fn show_roles<'a>(
         FROM mz_catalog.mz_roles roles
         LEFT JOIN mz_internal.mz_comments comments
         ON roles.id = comments.id
-        WHERE roles.id NOT LIKE 's%' 
+        WHERE roles.id NOT LIKE 's%'
           AND roles.id NOT LIKE 'g%'
           AND (comments.object_type = 'role' OR comments.object_type IS NULL)"
     );
