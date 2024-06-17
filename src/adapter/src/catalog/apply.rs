@@ -1063,7 +1063,7 @@ impl CatalogState {
 
 /// Most updates are applied one at a time, but during bootstrap, certain types are applied
 /// separately in a batch for performance reasons. A constraint is that updates must be applied in
-/// order. This method is modeled as a state machine that batches then applies groups of updates.
+/// order. This process is modeled as a state machine that batches then applies groups of updates.
 enum BootstrapApplyState {
     /// Additions of builtin views.
     BuiltinViewAdditions(Vec<(&'static Builtin<NameReference>, GlobalId)>),
@@ -1103,6 +1103,11 @@ impl BootstrapApplyState {
         }
     }
 
+    /// Apply all updates that have been batched in `self`.
+    ///
+    /// We make sure to enable all "enable_for_item_parsing" feature flags when applying item
+    /// updates during bootstrap. See [`CatalogState::with_enable_for_item_parsing`] for more
+    /// details.
     async fn apply(
         &mut self,
         state: &mut CatalogState,
@@ -1110,10 +1115,6 @@ impl BootstrapApplyState {
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         match self {
             BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions) => {
-                // We enable all "enable_for_item_parsing" feature flags when applying item updates
-                // during bootstrap.
-                //
-                // See [`CatalogState::with_enable_for_item_parsing`] for more details.
                 let restore = state.system_configuration.clone();
                 state.system_configuration.enable_for_item_parsing();
                 let builtin_table_updates =
@@ -1122,8 +1123,6 @@ impl BootstrapApplyState {
                 state.system_configuration = restore;
                 builtin_table_updates
             }
-            // We enable all "enable_for_item_parsing" feature flags when applying item updates
-            // during bootstrap.
             BootstrapApplyState::Items(updates) => state.with_enable_for_item_parsing(|state| {
                 state.apply_updates(std::mem::take(updates), retractions)
             }),

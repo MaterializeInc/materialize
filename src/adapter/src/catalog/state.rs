@@ -826,9 +826,6 @@ impl CatalogState {
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
-    ///
-    /// If `with_enable_for_item_parsing` is true, then a copy of the catalog that has all
-    /// "enable_for_item_parsing" feature flags enabled is used.
     #[mz_ore::instrument]
     pub(crate) fn parse_item(
         &self,
