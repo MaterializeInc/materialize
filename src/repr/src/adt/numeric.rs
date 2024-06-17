@@ -852,6 +852,17 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn smoketest_packed_numeric_roundtrips() {
+        let og = PackedNumeric::from_value(Numeric::from(-42));
+        let bytes = og.as_bytes();
+        let rnd = PackedNumeric::from_bytes(&bytes).expect("valid");
+        assert_eq!(og, rnd);
+
+        // Returns an error if the size of the slice is invalid.
+        assert!(PackedNumeric::from_bytes(&[0, 0, 0, 0]).is_err());
+    }
+
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberCopyNegate` on OS `linux`
     fn proptest_packed_numeric_roundtrip() {
         fn test(og: Numeric) {
