@@ -1173,6 +1173,8 @@ fn encode_collection<G: Scope>(
                     key_schema,
                     value_schema,
                     csr_connection,
+                    key_compatibility_level,
+                    value_compatibility_level,
                 } => {
                     // Ensure that schemas are registered with the schema registry.
                     //
@@ -1187,8 +1189,10 @@ fn encode_collection<G: Scope>(
                             connection.topic.clone(),
                             key_schema,
                             Some(mz_ccsr::SchemaType::Avro),
-                            &value_schema,
+                            value_schema,
                             mz_ccsr::SchemaType::Avro,
+                            key_compatibility_level,
+                            value_compatibility_level,
                         )
                         .await
                         .context("error publishing kafka schemas for sink")?;

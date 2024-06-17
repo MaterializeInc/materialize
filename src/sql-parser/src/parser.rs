@@ -2057,22 +2057,36 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(DEFAULTS)?;
                 CsrConfigOptionName::NullDefaults
             }
-            KEY => {
-                self.expect_keywords(&[DOC, ON])?;
-                let doc_on_identifier = self.parse_avro_doc_on_option_name()?;
-                CsrConfigOptionName::AvroDocOn(AvroDocOn {
-                    identifier: doc_on_identifier,
-                    for_schema: DocOnSchema::KeyOnly,
-                })
-            }
-            VALUE => {
-                self.expect_keywords(&[DOC, ON])?;
-                let doc_on_identifier = self.parse_avro_doc_on_option_name()?;
-                CsrConfigOptionName::AvroDocOn(AvroDocOn {
-                    identifier: doc_on_identifier,
-                    for_schema: DocOnSchema::ValueOnly,
-                })
-            }
+            KEY => match self.expect_one_of_keywords(&[DOC, COMPATIBILITY])? {
+                DOC => {
+                    self.expect_keyword(ON)?;
+                    let doc_on_identifier = self.parse_avro_doc_on_option_name()?;
+                    CsrConfigOptionName::AvroDocOn(AvroDocOn {
+                        identifier: doc_on_identifier,
+                        for_schema: DocOnSchema::KeyOnly,
+                    })
+                }
+                COMPATIBILITY => {
+                    self.expect_keyword(LEVEL)?;
+                    CsrConfigOptionName::KeyCompatibilityLevel
+                }
+                _ => unreachable!(),
+            },
+            VALUE => match self.expect_one_of_keywords(&[DOC, COMPATIBILITY])? {
+                DOC => {
+                    self.expect_keyword(ON)?;
+                    let doc_on_identifier = self.parse_avro_doc_on_option_name()?;
+                    CsrConfigOptionName::AvroDocOn(AvroDocOn {
+                        identifier: doc_on_identifier,
+                        for_schema: DocOnSchema::ValueOnly,
+                    })
+                }
+                COMPATIBILITY => {
+                    self.expect_keyword(LEVEL)?;
+                    CsrConfigOptionName::ValueCompatibilityLevel
+                }
+                _ => unreachable!(),
+            },
             DOC => {
                 self.expect_keyword(ON)?;
                 let doc_on_identifier = self.parse_avro_doc_on_option_name()?;

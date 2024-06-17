@@ -734,6 +734,8 @@ pub enum KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
         key_schema: Option<String>,
         value_schema: String,
         csr_connection: C::Csr,
+        key_compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
+        value_compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
     },
     Json,
 }
@@ -757,11 +759,15 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                     key_schema,
                     value_schema,
                     csr_connection,
+                    key_compatibility_level: _,
+                    value_compatibility_level: _,
                 },
                 Self::Avro {
                     key_schema: other_key_schema,
                     value_schema: other_value_schema,
                     csr_connection: other_csr_connection,
+                    key_compatibility_level: _,
+                    value_compatibility_level: _,
                 },
             ) => {
                 let compatibility_checks = [
@@ -811,13 +817,53 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormat, R>
                 key_schema,
                 value_schema,
                 csr_connection,
+                key_compatibility_level,
+                value_compatibility_level,
             } => KafkaSinkFormat::Avro {
                 key_schema,
                 value_schema,
                 csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
+                key_compatibility_level,
+                value_compatibility_level,
             },
             Self::Json => KafkaSinkFormat::Json,
         }
+    }
+}
+
+fn csr_compat_level_to_proto(compatibility_level: &Option<mz_ccsr::CompatibilityLevel>) -> i32 {
+    use proto_kafka_sink_format::proto_kafka_sink_avro_format::CompatibilityLevel as ProtoCompatLevel;
+    match compatibility_level {
+        Some(level) => match level {
+            mz_ccsr::CompatibilityLevel::Backward => ProtoCompatLevel::Backward,
+            mz_ccsr::CompatibilityLevel::BackwardTransitive => ProtoCompatLevel::BackwardTransitive,
+            mz_ccsr::CompatibilityLevel::Forward => ProtoCompatLevel::Forward,
+            mz_ccsr::CompatibilityLevel::ForwardTransitive => ProtoCompatLevel::ForwardTransitive,
+            mz_ccsr::CompatibilityLevel::Full => ProtoCompatLevel::Full,
+            mz_ccsr::CompatibilityLevel::FullTransitive => ProtoCompatLevel::FullTransitive,
+            mz_ccsr::CompatibilityLevel::None => ProtoCompatLevel::None,
+        },
+        None => ProtoCompatLevel::Unset,
+    }
+    .into()
+}
+
+fn csr_compat_level_from_proto(val: i32) -> Option<mz_ccsr::CompatibilityLevel> {
+    use proto_kafka_sink_format::proto_kafka_sink_avro_format::CompatibilityLevel as ProtoCompatLevel;
+    match ProtoCompatLevel::from_i32(val) {
+        Some(ProtoCompatLevel::Backward) => Some(mz_ccsr::CompatibilityLevel::Backward),
+        Some(ProtoCompatLevel::BackwardTransitive) => {
+            Some(mz_ccsr::CompatibilityLevel::BackwardTransitive)
+        }
+        Some(ProtoCompatLevel::Forward) => Some(mz_ccsr::CompatibilityLevel::Forward),
+        Some(ProtoCompatLevel::ForwardTransitive) => {
+            Some(mz_ccsr::CompatibilityLevel::ForwardTransitive)
+        }
+        Some(ProtoCompatLevel::Full) => Some(mz_ccsr::CompatibilityLevel::Full),
+        Some(ProtoCompatLevel::FullTransitive) => Some(mz_ccsr::CompatibilityLevel::FullTransitive),
+        Some(ProtoCompatLevel::None) => Some(mz_ccsr::CompatibilityLevel::None),
+        Some(ProtoCompatLevel::Unset) => None,
+        None => None,
     }
 }
 
@@ -830,10 +876,14 @@ impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
                     key_schema,
                     value_schema,
                     csr_connection,
+                    key_compatibility_level,
+                    value_compatibility_level,
                 } => Kind::Avro(proto_kafka_sink_format::ProtoKafkaSinkAvroFormat {
                     key_schema: key_schema.clone(),
                     value_schema: value_schema.clone(),
                     csr_connection: Some(csr_connection.into_proto()),
+                    key_compatibility_level: csr_compat_level_to_proto(key_compatibility_level),
+                    value_compatibility_level: csr_compat_level_to_proto(value_compatibility_level),
                 }),
                 Self::Json => Kind::Json(()),
             }),
@@ -853,6 +903,10 @@ impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
                 csr_connection: proto
                     .csr_connection
                     .into_rust_if_some("ProtoKafkaSinkAvroFormat::csr_connection")?,
+                key_compatibility_level: csr_compat_level_from_proto(proto.key_compatibility_level),
+                value_compatibility_level: csr_compat_level_from_proto(
+                    proto.value_compatibility_level,
+                ),
             },
             Kind::Json(()) => Self::Json,
         })

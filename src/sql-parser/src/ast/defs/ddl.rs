@@ -188,6 +188,8 @@ pub enum CsrConfigOptionName<T: AstInfo> {
     AvroValueFullname,
     NullDefaults,
     AvroDocOn(AvroDocOn<T>),
+    KeyCompatibilityLevel,
+    ValueCompatibilityLevel,
 }
 
 impl<T: AstInfo> WithOptionName for CsrConfigOptionName<T> {
@@ -201,7 +203,9 @@ impl<T: AstInfo> WithOptionName for CsrConfigOptionName<T> {
             Self::AvroKeyFullname
             | Self::AvroValueFullname
             | Self::NullDefaults
-            | Self::AvroDocOn(_) => false,
+            | Self::AvroDocOn(_)
+            | Self::KeyCompatibilityLevel
+            | Self::ValueCompatibilityLevel => false,
         }
     }
 }
@@ -252,6 +256,10 @@ impl<T: AstInfo> AstDisplay for CsrConfigOptionName<T> {
             CsrConfigOptionName::AvroValueFullname => f.write_str("AVRO VALUE FULLNAME"),
             CsrConfigOptionName::NullDefaults => f.write_str("NULL DEFAULTS"),
             CsrConfigOptionName::AvroDocOn(doc_on) => f.write_node(doc_on),
+            CsrConfigOptionName::KeyCompatibilityLevel => f.write_str("KEY COMPATIBILITY LEVEL"),
+            CsrConfigOptionName::ValueCompatibilityLevel => {
+                f.write_str("VALUE COMPATIBILITY LEVEL")
+            }
         }
     }
 }

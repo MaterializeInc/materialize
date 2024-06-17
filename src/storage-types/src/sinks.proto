@@ -58,6 +58,22 @@ message ProtoKafkaSinkFormat {
         optional string key_schema = 1;
         string value_schema = 2;
         mz_storage_types.connections.ProtoCsrConnection csr_connection = 3;
+
+        enum CompatibilityLevel {
+            // Used when this value is Option::None
+            UNSET = 0;
+
+            BACKWARD = 1;
+            BACKWARD_TRANSITIVE = 2;
+            FORWARD = 3;
+            FORWARD_TRANSITIVE = 4;
+            FULL = 5;
+            FULL_TRANSITIVE = 6;
+            NONE = 7;
+        }
+
+        CompatibilityLevel key_compatibility_level = 4;
+        CompatibilityLevel value_compatibility_level = 5;
     }
 
     reserved 1, 3;

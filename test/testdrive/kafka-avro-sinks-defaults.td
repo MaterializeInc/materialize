@@ -165,7 +165,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink2-${testdrive.se
     NULL DEFAULTS = "some_value"
   )
   ENVELOPE UPSERT
-contains: invalid NULL DEFAULTS: cannot use value as boolean
+contains: invalid NULL DEFAULTS option value: cannot use value as boolean
 
 ! CREATE SINK bad_sink
   IN CLUSTER ${arg.single-replica-cluster}
@@ -189,7 +189,7 @@ contains: Expected option value, found identifier ""
     NULL DEFAULTS = NULL
   )
   ENVELOPE UPSERT
-contains: invalid NULL DEFAULTS: cannot use value as boolean
+contains: invalid NULL DEFAULTS option value: cannot use value as boolean
 
 ! CREATE SINK bad_sink
   IN CLUSTER ${arg.single-replica-cluster}

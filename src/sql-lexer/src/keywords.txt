@@ -84,6 +84,7 @@ Comment
 Commit
 Committed
 Compaction
+Compatibility
 Compression
 Compute
 Computectl

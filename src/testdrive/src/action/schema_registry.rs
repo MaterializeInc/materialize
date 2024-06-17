@@ -46,7 +46,7 @@ pub async fn run_publish(
     for reference in references_in {
         let subject = state
             .ccsr_client
-            .get_subject(&reference)
+            .get_subject_latest(&reference)
             .await
             .with_context(|| format!("fetching reference {}", reference))?;
         references.push(SchemaReference {
@@ -73,6 +73,7 @@ pub async fn run_verify(
         "avro" => (),
         f => bail!("unknown format: {}", f),
     };
+    let compatibility_level = cmd.args.opt_string("compatibility-level");
     cmd.args.done()?;
     let expected_schema = match &cmd.input[..] {
         [expected_schema] => {
@@ -111,6 +112,21 @@ pub async fn run_verify(
             expected_schema,
             actual_schema,
         );
+    }
+
+    if let Some(compatibility_level) = compatibility_level {
+        println!(
+            "Verifying compatibility level of subject {} in the schema registry...",
+            subject.quoted(),
+        );
+        let res = state.ccsr_client.get_subject_config(&subject).await?;
+        if compatibility_level != res.compatibility_level.to_string() {
+            bail!(
+                "compatibility level did not match\nexpected: {}\nactual: {}",
+                compatibility_level,
+                res.compatibility_level,
+            );
+        }
     }
     Ok(ControlFlow::Continue)
 }

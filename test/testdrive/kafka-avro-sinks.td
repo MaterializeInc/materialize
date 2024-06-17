@@ -198,6 +198,30 @@ $ schema-registry-verify schema-type=avro subject=testdrive-namespace-key-value-
 $ kafka-verify-data format=avro sink=materialize.public.namespace_key_value_sink sort-messages=true
 {"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}}
 
+# Test setting the compatibility level for both topics
+> CREATE MATERIALIZED VIEW compat_level_data (a, b) AS SELECT * FROM (VALUES (1, 2));
+
+> CREATE CLUSTER compat_level_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK compat_level_sink
+  IN CLUSTER compat_level_sink_cluster
+  FROM compat_level_data
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-compat-level-sink-${testdrive.seed}')
+  KEY (b)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (
+    KEY COMPATIBILITY LEVEL 'FULL_TRANSITIVE',
+    VALUE COMPATIBILITY LEVEL 'FORWARD_TRANSITIVE'
+  )
+  ENVELOPE DEBEZIUM
+
+$ schema-registry-verify schema-type=avro subject=testdrive-compat-level-sink-${testdrive.seed}-key compatibility-level=FULL_TRANSITIVE
+{"type":"record","name":"row","fields":[{"name":"b","type":"int"}]}
+
+$ schema-registry-verify schema-type=avro subject=testdrive-compat-level-sink-${testdrive.seed}-value compatibility-level=FORWARD_TRANSITIVE
+{"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"a","type":"int"},{"name":"b","type":"int"}]}]},{"name":"after","type":["null","row"]}]}
+
+$ kafka-verify-data format=avro sink=materialize.public.compat_level_sink sort-messages=true
+{"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}}
+
 # Test a sink over a view whose column names are not directly usable as
 # Avro schema names.
 

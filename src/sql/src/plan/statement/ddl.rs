@@ -2818,6 +2818,8 @@ pub struct CsrConfigOptionExtracted {
     pub(crate) null_defaults: bool,
     pub(crate) value_doc_options: BTreeMap<DocTarget, String>,
     pub(crate) key_doc_options: BTreeMap<DocTarget, String>,
+    pub(crate) key_compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
+    pub(crate) value_compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
 }
 
 impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtracted {
@@ -2833,8 +2835,20 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
             }
             let option_name = option.name.clone();
             let option_name_str = option_name.to_ast_string();
-            let better_error = |e: PlanError| {
-                PlanError::Unstructured(format!("invalid {}: {}", option_name.to_ast_string(), e))
+            let better_error = |e: PlanError| PlanError::InvalidOptionValue {
+                option_name: option_name.to_ast_string(),
+                err: e.into(),
+            };
+            let to_compatibility_level = |val: Option<WithOptionValue<Aug>>| {
+                val.map(|s| match s {
+                    WithOptionValue::Value(Value::String(s)) => {
+                        mz_ccsr::CompatibilityLevel::try_from(s.to_uppercase().as_str())
+                    }
+                    _ => Err("must be a string".to_string()),
+                })
+                .transpose()
+                .map_err(PlanError::Unstructured)
+                .map_err(better_error)
             };
             match option.name {
                 CsrConfigOptionName::AvroKeyFullname => {
@@ -2882,6 +2896,12 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
                             common_doc_comments.insert(key, value);
                         }
                     }
+                }
+                CsrConfigOptionName::KeyCompatibilityLevel => {
+                    extracted.key_compatibility_level = to_compatibility_level(option.value)?;
+                }
+                CsrConfigOptionName::ValueCompatibilityLevel => {
+                    extracted.value_compatibility_level = to_compatibility_level(option.value)?;
                 }
             }
         }
@@ -3014,7 +3034,9 @@ fn kafka_sink_builder(
                 null_defaults,
                 key_doc_options,
                 value_doc_options,
-                ..
+                key_compatibility_level,
+                value_compatibility_level,
+                seen: _,
             } = options.try_into()?;
 
             if key_desc_and_indices.is_none() && avro_key_fullname.is_some() {
@@ -3053,6 +3075,8 @@ fn kafka_sink_builder(
                 key_schema,
                 value_schema,
                 csr_connection,
+                key_compatibility_level,
+                value_compatibility_level,
             }
         }
         Some(Format::Json { array: false }) => KafkaSinkFormat::Json,
