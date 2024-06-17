@@ -91,6 +91,8 @@ pub struct Transaction<'a> {
     // in-memory cache.
     audit_log_updates: Vec<(AuditLogKey, Diff, Timestamp)>,
     storage_usage_updates: Vec<(StorageUsageKey, Diff, Timestamp)>,
+    /// The timestamp to commit this transaction at.
+    commit_ts: mz_repr::Timestamp,
     /// The ID of the current operation of this transaction.
     op_id: Timestamp,
 }
@@ -118,6 +120,7 @@ impl<'a> Transaction<'a> {
             unfinalized_shards,
             txn_wal_shard,
         }: Snapshot,
+        commit_ts: mz_repr::Timestamp,
     ) -> Result<Transaction, CatalogError> {
         Ok(Transaction {
             durable_catalog,
@@ -160,6 +163,7 @@ impl<'a> Transaction<'a> {
             txn_wal_shard: TableTransaction::new(txn_wal_shard, |_a, _b| false)?,
             audit_log_updates: Vec::new(),
             storage_usage_updates: Vec::new(),
+            commit_ts,
             op_id: 0,
         })
     }
@@ -1711,7 +1715,7 @@ impl<'a> Transaction<'a> {
     // TODO(jkosh44) This is a temporary placeholder so the in-memory catalog can pretend to be
     // collecting updates from the durable catalog.
     /// Returns the current value of all objects in the form of a positive [`StateUpdate`].
-    pub fn get_bootstrap_updates(&self) -> impl Iterator<Item = StateUpdate> {
+    pub fn get_bootstrap_updates(&self) -> impl Iterator<Item = StateUpdate> + '_ {
         fn get_collection_updates<T>(
             table_txn: &TableTransaction<T::Key, T::Value>,
             kind_fn: impl FnMut(T) -> StateUpdateKind,
@@ -1753,6 +1757,7 @@ impl<'a> Transaction<'a> {
             settings: _,
             txn_wal_shard: _,
             op_id: _,
+            commit_ts,
         } = &self;
 
         std::iter::empty()
@@ -1796,6 +1801,7 @@ impl<'a> Transaction<'a> {
             ))
             .map(|kind| StateUpdate {
                 kind,
+                ts: commit_ts.clone(),
                 diff: StateDiff::Addition,
             })
     }
@@ -1875,6 +1881,7 @@ impl<'a> Transaction<'a> {
             configs: _,
             settings: _,
             txn_wal_shard: _,
+            commit_ts,
             op_id: _,
         } = &self;
 
@@ -1959,7 +1966,15 @@ impl<'a> Transaction<'a> {
                 StateUpdateKind::StorageUsage,
                 self.op_id,
             ))
-            .map(|(kind, diff)| StateUpdate { kind, diff })
+            .map(|(kind, diff)| StateUpdate {
+                kind,
+                ts: commit_ts.clone(),
+                diff,
+            })
+    }
+
+    pub fn op_id(&self) -> Timestamp {
+        self.op_id
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
@@ -1995,6 +2010,7 @@ impl<'a> Transaction<'a> {
             txn_wal_shard: self.txn_wal_shard.pending(),
             audit_log_updates,
             storage_usage_updates,
+            commit_ts: self.commit_ts,
         };
         (txn_batch, self.durable_catalog)
     }
@@ -2035,6 +2051,7 @@ impl<'a> Transaction<'a> {
             txn_wal_shard,
             audit_log_updates,
             storage_usage_updates,
+            commit_ts: _,
         } = &mut txn_batch;
         // Consolidate in memory because it will likely be faster than consolidating after the
         // transaction has been made durable.
@@ -2217,11 +2234,55 @@ pub struct TransactionBatch {
     pub(crate) txn_wal_shard: Vec<((), proto::TxnWalShardValue, Diff)>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     pub(crate) storage_usage_updates: Vec<(proto::StorageUsageKey, (), Diff)>,
+    /// The timestamp to commit this transaction at.
+    pub(crate) commit_ts: mz_repr::Timestamp,
 }
 
 impl TransactionBatch {
     pub fn is_empty(&self) -> bool {
-        self == &Self::default()
+        let TransactionBatch {
+            databases,
+            schemas,
+            items,
+            comments,
+            roles,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            system_gid_mapping,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+            storage_collection_metadata,
+            unfinalized_shards,
+            txn_wal_shard,
+            audit_log_updates,
+            storage_usage_updates,
+            commit_ts: _,
+        } = self;
+        databases.is_empty()
+            && schemas.is_empty()
+            && items.is_empty()
+            && comments.is_empty()
+            && roles.is_empty()
+            && clusters.is_empty()
+            && cluster_replicas.is_empty()
+            && introspection_sources.is_empty()
+            && id_allocator.is_empty()
+            && configs.is_empty()
+            && settings.is_empty()
+            && system_gid_mapping.is_empty()
+            && system_configurations.is_empty()
+            && default_privileges.is_empty()
+            && system_privileges.is_empty()
+            && storage_collection_metadata.is_empty()
+            && unfinalized_shards.is_empty()
+            && txn_wal_shard.is_empty()
+            && audit_log_updates.is_empty()
+            && storage_usage_updates.is_empty()
     }
 }
 

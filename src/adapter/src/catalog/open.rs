@@ -350,7 +350,7 @@ impl Catalog {
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
                 // Throw the existing item updates away because they may have been re-written in
                 // the migration.
-                let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), diff: StateDiff::Addition}).collect();
+                let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), ts: config.boot_ts, diff: StateDiff::Addition}).collect();
                 let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
                 builtin_table_updates.extend(builtin_table_update);
             } else {
@@ -650,6 +650,7 @@ impl Catalog {
                     kind: StateUpdateKind::AuditLog(mz_catalog::durable::objects::AuditLog {
                         event,
                     }),
+                    ts: boot_ts,
                     diff: StateDiff::Addition,
                 })
                 .collect();
@@ -675,6 +676,7 @@ impl Catalog {
                     kind: StateUpdateKind::StorageUsage(
                         mz_catalog::durable::objects::StorageUsage { metric },
                     ),
+                    ts: boot_ts,
                     diff: StateDiff::Addition,
                 })
                 .collect();

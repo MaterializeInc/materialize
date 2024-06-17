@@ -496,6 +496,7 @@ impl Catalog {
                     .into_iter()
                     .map(|(item, diff)| StateUpdate {
                         kind: StateUpdateKind::TemporaryItem(item),
+                        ts: tx.op_id().into(),
                         diff,
                     });
 
