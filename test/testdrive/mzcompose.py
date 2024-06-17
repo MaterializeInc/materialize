@@ -95,6 +95,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         external_minio=True,
         fivetran_destination=True,
         fivetran_destination_files_path="/share/tmp",
+        entrypoint_extra=[f"--var=uses-redpanda={args.redpanda}"],
     )
 
     sysparams = args.system_param
