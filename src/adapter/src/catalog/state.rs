@@ -765,9 +765,10 @@ impl CatalogState {
         Some(url)
     }
 
-    /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds`],
-    /// using a copy of the catalog that has all "enable_for_item_parsing" feature
-    /// flags enabled.
+    /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds`].
+    ///
+    /// This function will create a copy of the catalog, enable all "enable_for_item_parsing"
+    /// feature flags enabled in the copy, and use the copy for parsing.
     pub(crate) fn deserialize_plan_with_enable_for_item_parsing(
         &self,
         create_sql: &str,
@@ -792,9 +793,10 @@ impl CatalogState {
         return Ok((plan, resolved_ids));
     }
 
-    /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds`],
-    /// using a copy of the catalog that has all "enable_for_item_parsing" feature
-    /// flags enabled.
+    /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds`].
+    ///
+    /// This function will create a copy of the catalog, enable all "enable_for_item_parsing"
+    /// feature flags enabled in the copy, and use the copy for parsing.
     #[mz_ore::instrument]
     pub(crate) fn parse_plan_with_enable_for_item_parsing(
         create_sql: &str,
