@@ -23,7 +23,7 @@ mz-ccsr = { path = "../ccsr" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore", features = ["async", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "process", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto", features = ["tokio-postgres"] }

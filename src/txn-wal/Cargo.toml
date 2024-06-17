@@ -15,7 +15,7 @@ bytes = { version = "1.3.0" }
 differential-dataflow = "0.12.0"
 futures = "0.3.25"
 itertools = { version = "0.10.5" }
-mz-ore = { path = "../ore" }
+mz-ore = { path = "../ore", features = ["process"] }
 mz-dyncfg = { path = "../dyncfg" }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }

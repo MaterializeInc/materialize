@@ -42,7 +42,7 @@ hex = "0.4.3"
 itertools = "0.10.5"
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
-mz-ore = { path = "../ore", features = ["bytes_", "test", "tracing_"] }
+mz-ore = { path = "../ore", features = ["bytes_", "process", "test", "tracing_"] }
 mz-persist = { path = "../persist" }
 mz-persist-proc = { path = "../persist-proc" }
 mz-persist-types = { path = "../persist-types" }
