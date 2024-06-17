@@ -238,9 +238,10 @@ impl CatalogState {
 
         for update in updates {
             let next_apply_state = BootstrapApplyState::new(update);
-            let builtin_table_update = apply_state
+            let (next_apply_state, builtin_table_update) = apply_state
                 .step(next_apply_state, self, &mut retractions)
                 .await;
+            apply_state = next_apply_state;
             builtin_table_updates.extend(builtin_table_update);
         }
 
@@ -1109,7 +1110,7 @@ impl BootstrapApplyState {
     /// updates during bootstrap. See [`CatalogState::with_enable_for_item_parsing`] for more
     /// details.
     async fn apply(
-        &mut self,
+        self,
         state: &mut CatalogState,
         retractions: &mut InProgressRetractions,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
@@ -1118,50 +1119,54 @@ impl BootstrapApplyState {
                 let restore = state.system_configuration.clone();
                 state.system_configuration.enable_for_item_parsing();
                 let builtin_table_updates =
-                    Catalog::parse_builtin_views(state, std::mem::take(builtin_view_additions))
-                        .await;
+                    Catalog::parse_builtin_views(state, builtin_view_additions).await;
                 state.system_configuration = restore;
                 builtin_table_updates
             }
-            BootstrapApplyState::Items(updates) => state.with_enable_for_item_parsing(|state| {
-                state.apply_updates(std::mem::take(updates), retractions)
-            }),
-            BootstrapApplyState::Updates(updates) => {
-                state.apply_updates(std::mem::take(updates), retractions)
-            }
+            BootstrapApplyState::Items(updates) => state
+                .with_enable_for_item_parsing(|state| state.apply_updates(updates, retractions)),
+            BootstrapApplyState::Updates(updates) => state.apply_updates(updates, retractions),
         }
     }
 
     async fn step(
-        &mut self,
+        mut self,
         next: BootstrapApplyState,
         state: &mut CatalogState,
         retractions: &mut InProgressRetractions,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+    ) -> (
+        BootstrapApplyState,
+        Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+    ) {
         match (self, next) {
             (
-                BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions),
+                BootstrapApplyState::BuiltinViewAdditions(mut builtin_view_additions),
                 BootstrapApplyState::BuiltinViewAdditions(next_builtin_view_additions),
             ) => {
                 // Continue batching builtin view additions.
                 builtin_view_additions.extend(next_builtin_view_additions);
-                Vec::new()
+                (
+                    BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions),
+                    Vec::new(),
+                )
             }
-            (BootstrapApplyState::Items(updates), BootstrapApplyState::Items(next_updates)) => {
+            (BootstrapApplyState::Items(mut updates), BootstrapApplyState::Items(next_updates)) => {
                 // Continue batching item updates.
                 updates.extend(next_updates);
-                Vec::new()
+                (BootstrapApplyState::Items(updates), Vec::new())
             }
-            (BootstrapApplyState::Updates(updates), BootstrapApplyState::Updates(next_updates)) => {
+            (
+                BootstrapApplyState::Updates(mut updates),
+                BootstrapApplyState::Updates(next_updates),
+            ) => {
                 // Continue batching updates.
                 updates.extend(next_updates);
-                Vec::new()
+                (BootstrapApplyState::Updates(updates), Vec::new())
             }
             (apply_state, next_apply_state) => {
                 // Apply the current batch and start batching new apply state.
                 let builtin_table_update = apply_state.apply(state, retractions).await;
-                *apply_state = next_apply_state;
-                builtin_table_update
+                (next_apply_state, builtin_table_update)
             }
         }
     }
