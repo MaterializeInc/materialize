@@ -15,13 +15,14 @@
 use std::any::Any;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+use timely::container::{ContainerBuilder, PushInto};
 
 use timely::dataflow::channels::pushers::buffer::Buffer as PushBuffer;
 use timely::dataflow::channels::pushers::Counter as PushCounter;
 use timely::dataflow::operators::capture::event::EventIterator;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::generic::builder_raw::OperatorBuilder;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamCore};
 use timely::progress::Timestamp;
 use timely::scheduling::ActivateOnDrop;
 use timely::Data;
@@ -29,39 +30,47 @@ use timely::Data;
 use crate::activator::ActivatorTrait;
 
 /// Replay a capture stream into a scope with the same timestamp.
-pub trait MzReplay<T: Timestamp, D: Data, A: ActivatorTrait>: Sized {
-    /// Replays `self` into the provided scope, as a `Stream<S, D>' and provides a cancelation token.
+pub trait MzReplay<T: Timestamp, D, A: ActivatorTrait>: Sized {
+    /// Replays `self` into the provided scope, as a `StreamCore<S, CB::Container>` and provides
+    /// a cancellation token. Uses the supplied container builder `CB` to form containers.
     ///
     /// The `period` argument allows the specification of a re-activation period, where the operator
     /// will re-activate itself every so often.
-    fn mz_replay<S: Scope<Timestamp = T>>(
-        self,
-        scope: &mut S,
-        name: &str,
-        period: Duration,
-        activator: A,
-    ) -> (Stream<S, D>, Rc<dyn Any>);
-}
-
-impl<T: Timestamp, D: Data, I, A: ActivatorTrait + 'static> MzReplay<T, D, A> for I
-where
-    I: IntoIterator,
-    <I as IntoIterator>::Item: EventIterator<T, Vec<D>> + 'static,
-{
-    /// Replay a collection of [EventIterator]s into a Timely stream.
     ///
     /// * `scope`: The [Scope] to replay into.
     /// * `name`: Human-readable debug name of the Timely operator.
     /// * `period`: Reschedule the operator once the period has elapsed.
     ///    Provide [Duration::MAX] to disable periodic scheduling.
     /// * `activator`: An activator to trigger the operator.
-    fn mz_replay<S: Scope<Timestamp = T>>(
+    fn mz_replay<S: Scope<Timestamp = T>, CB>(
         self,
         scope: &mut S,
         name: &str,
         period: Duration,
         activator: A,
-    ) -> (Stream<S, D>, Rc<dyn Any>) {
+    ) -> (StreamCore<S, CB::Container>, Rc<dyn Any>)
+    where
+        for<'a> CB: ContainerBuilder + PushInto<&'a D>;
+}
+
+impl<T, D, I, A> MzReplay<T, D, A> for I
+where
+    T: Timestamp,
+    D: Data,
+    I: IntoIterator,
+    I::Item: EventIterator<T, Vec<D>> + 'static,
+    A: ActivatorTrait + 'static,
+{
+    fn mz_replay<S: Scope<Timestamp = T>, CB>(
+        self,
+        scope: &mut S,
+        name: &str,
+        period: Duration,
+        activator: A,
+    ) -> (StreamCore<S, CB::Container>, Rc<dyn Any>)
+    where
+        for<'a> CB: ContainerBuilder + PushInto<&'a D>,
+    {
         let name = format!("Replay {}", name);
         let mut builder = OperatorBuilder::new(name, scope.clone());
 
@@ -70,7 +79,7 @@ where
 
         let (targets, stream) = builder.new_output();
 
-        let mut output = PushBuffer::new(PushCounter::new(targets));
+        let mut output: PushBuffer<_, CB, _> = PushBuffer::new(PushCounter::new(targets));
         let mut event_streams = self.into_iter().collect::<Vec<_>>();
         let mut started = false;
 
@@ -114,8 +123,6 @@ where
             }
 
             if weak_token.upgrade().is_some() {
-                let mut buffer = Vec::new();
-
                 for event_stream in event_streams.iter_mut() {
                     while let Some(event) = event_stream.next() {
                         match &event {
@@ -124,8 +131,7 @@ where
                                 progress_sofar.extend(vec.iter().cloned());
                             }
                             Event::Messages(time, data) => {
-                                buffer.extend_from_slice(data);
-                                output.session(time).give_container(&mut buffer);
+                                output.session_with_builder(time).give_iterator(data.iter());
                             }
                         }
                     }

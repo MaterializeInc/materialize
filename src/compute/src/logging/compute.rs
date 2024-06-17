@@ -181,7 +181,7 @@ pub(super) fn construct<A: Allocate + 'static>(
     let dataflow_index = worker.next_dataflow_index();
 
     worker.dataflow_named("Dataflow: compute logging", move |scope| {
-        let (mut logs, token) = Some(event_queue.link).mz_replay(
+        let (mut logs, token) = Some(event_queue.link).mz_replay::<_, CapacityContainerBuilder<_>>(
             scope,
             "compute logs",
             config.interval,

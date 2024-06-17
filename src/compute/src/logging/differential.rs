@@ -23,6 +23,7 @@ use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
@@ -54,7 +55,7 @@ pub(super) fn construct<A: Allocate>(
     let dataflow_index = worker.next_dataflow_index();
 
     worker.dataflow_named("Dataflow: differential logging", move |scope| {
-        let (mut logs, token) = Some(event_queue.link).mz_replay(
+        let (mut logs, token) = Some(event_queue.link).mz_replay::<_, CapacityContainerBuilder<_>>(
             scope,
             "differential logs",
             config.interval,

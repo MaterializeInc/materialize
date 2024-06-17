@@ -22,6 +22,7 @@ use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, RowArena, SharedRow, Timestamp};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Filter;
 
 use crate::extensions::arrange::MzArrange;
@@ -50,7 +51,7 @@ pub(super) fn construct<A: Allocate>(
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
-        let (mut logs, token) = Some(event_queue.link).mz_replay(
+        let (mut logs, token) = Some(event_queue.link).mz_replay::<_, CapacityContainerBuilder<_>>(
             scope,
             "reachability logs",
             config.interval,
