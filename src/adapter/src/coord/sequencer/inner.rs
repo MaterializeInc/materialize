@@ -22,7 +22,7 @@ use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
-use mz_controller_types::{ClusterId, ReplicaId};
+use mz_controller_types::ReplicaId;
 use mz_expr::{
     CollectionPlan, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
@@ -34,7 +34,7 @@ use mz_proto::RustType;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::json::json_string;
-use mz_repr::explain::{ExplainFormat, ExprHumanizer};
+use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, IntoRowIterator, Row, RowArena, RowIterator, Timestamp};
 use mz_sql::ast::{
@@ -100,13 +100,11 @@ use tracing::{warn, Instrument, Span};
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
-use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::timestamp_selection::{TimestampDetermination, TimestampSource};
 use crate::coord::{
     AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
     CreateConnectionValidationReady, ExecuteContext, ExplainContext, Message, PeekStage,
     PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
-    RealTimeRecencyContext, StageResult, Staged, TargetCluster, WatchSetResponse,
+    StageResult, Staged, TargetCluster, WatchSetResponse,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
@@ -115,14 +113,12 @@ use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
-use crate::{
-    guard_write_critical_section, PeekResponseUnary, ReadHolds, TimelineContext,
-    TimestampExplanation,
-};
+use crate::{guard_write_critical_section, PeekResponseUnary, ReadHolds};
 
 mod create_index;
 mod create_materialized_view;
 mod create_view;
+mod explain_timestamp;
 mod peek;
 mod secret;
 mod subscribe;
@@ -185,25 +181,32 @@ impl Coordinator {
             self.staged_cancellation.remove(ctx.session.conn_id());
         }
         return_if_err!(stage.validity().check(self.catalog()), ctx);
-        let next = stage
-            .stage(self, &mut ctx)
-            .instrument(parent_span.clone())
-            .await;
-        let res = return_if_err!(next, ctx);
-        match res {
-            StageResult::Handle(handle) => {
-                let internal_cmd_tx = self.internal_cmd_tx.clone();
-                self.handle_spawn(ctx, handle, cancel_enabled, move |ctx, next| {
-                    let _ = internal_cmd_tx.send(next.message(ctx, parent_span));
-                });
-            }
-            StageResult::HandleRetire(handle) => {
-                self.handle_spawn(ctx, handle, cancel_enabled, move |ctx, resp| {
+        loop {
+            let cancel_enabled = stage.cancel_enabled();
+            let next = stage
+                .stage(self, &mut ctx)
+                .instrument(parent_span.clone())
+                .await;
+            let res = return_if_err!(next, ctx);
+            stage = match res {
+                StageResult::Handle(handle) => {
+                    let internal_cmd_tx = self.internal_cmd_tx.clone();
+                    self.handle_spawn(ctx, handle, cancel_enabled, move |ctx, next| {
+                        let _ = internal_cmd_tx.send(next.message(ctx, parent_span));
+                    });
+                    return;
+                }
+                StageResult::HandleRetire(handle) => {
+                    self.handle_spawn(ctx, handle, cancel_enabled, move |ctx, resp| {
+                        ctx.retire(Ok(resp));
+                    });
+                    return;
+                }
+                StageResult::Response(resp) => {
                     ctx.retire(Ok(resp));
-                });
-            }
-            StageResult::Response(resp) => {
-                ctx.retire(Ok(resp));
+                    return;
+                }
+                StageResult::Immediate(stage) => *stage,
             }
         }
     }
@@ -2321,244 +2324,6 @@ impl Coordinator {
 
             ctx.retire(res);
         });
-    }
-
-    #[instrument]
-    pub async fn sequence_explain_timestamp(
-        &mut self,
-        mut ctx: ExecuteContext,
-        plan: plan::ExplainTimestampPlan,
-        target_cluster: TargetCluster,
-    ) {
-        let when = plan.when.clone();
-        let (format, source_ids, optimized_plan, cluster_id, id_bundle) = return_if_err!(
-            self.sequence_explain_timestamp_begin_inner(ctx.session(), plan, target_cluster),
-            ctx
-        );
-
-        let fut = match self
-            .determine_real_time_recent_timestamp(ctx.session(), source_ids.iter().cloned())
-            .await
-        {
-            Ok(f) => f,
-            Err(e) => {
-                ctx.retire(Err(e.into()));
-                return;
-            }
-        };
-
-        match fut {
-            Some(fut) => {
-                let validity = PlanValidity {
-                    transient_revision: self.catalog().transient_revision(),
-                    dependency_ids: source_ids,
-                    cluster_id: Some(cluster_id),
-                    replica_id: None,
-                    role_metadata: ctx.session().role_metadata().clone(),
-                };
-                let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = ctx.session().conn_id().clone();
-                self.pending_real_time_recency_timestamp.insert(
-                    conn_id.clone(),
-                    RealTimeRecencyContext::ExplainTimestamp {
-                        ctx,
-                        format,
-                        cluster_id,
-                        optimized_plan,
-                        when,
-                        id_bundle,
-                    },
-                );
-                task::spawn(|| "real_time_recency_explain_timestamp", async move {
-                    let real_time_recency_ts = fut.await;
-                    // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
-                    let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
-                        conn_id,
-                        real_time_recency_ts,
-                        validity,
-                    });
-                    if let Err(e) = result {
-                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                    }
-                });
-            }
-            None => {
-                let result = self
-                    .sequence_explain_timestamp_finish_inner(
-                        ctx.session_mut(),
-                        format,
-                        cluster_id,
-                        optimized_plan,
-                        id_bundle,
-                        when,
-                        None,
-                    )
-                    .await;
-                ctx.retire(result);
-            }
-        }
-    }
-
-    fn sequence_explain_timestamp_begin_inner(
-        &mut self,
-        session: &Session,
-        plan: plan::ExplainTimestampPlan,
-        target_cluster: TargetCluster,
-    ) -> Result<
-        (
-            ExplainFormat,
-            BTreeSet<GlobalId>,
-            OptimizedMirRelationExpr,
-            ClusterId,
-            CollectionIdBundle,
-        ),
-        AdapterError,
-    > {
-        let plan::ExplainTimestampPlan {
-            format,
-            raw_plan,
-            when: _,
-        } = plan;
-
-        // Collect optimizer parameters.
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
-
-        // Build an optimizer for this VIEW.
-        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
-
-        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-        let optimized_plan = optimizer.optimize(raw_plan)?;
-
-        let source_ids = optimized_plan.depends_on();
-        let cluster = self
-            .catalog()
-            .resolve_target_cluster(target_cluster, session)?;
-        let id_bundle = self
-            .index_oracle(cluster.id)
-            .sufficient_collections(&source_ids);
-        Ok((format, source_ids, optimized_plan, cluster.id(), id_bundle))
-    }
-
-    pub(crate) fn explain_timestamp(
-        &self,
-        session: &Session,
-        cluster_id: ClusterId,
-        id_bundle: &CollectionIdBundle,
-        determination: TimestampDetermination<mz_repr::Timestamp>,
-    ) -> TimestampExplanation<mz_repr::Timestamp> {
-        let mut sources = Vec::new();
-        {
-            let storage_ids = id_bundle.storage_ids.iter().cloned().collect_vec();
-            let frontiers = self
-                .controller
-                .storage
-                .collections_frontiers(storage_ids)
-                .expect("missing collection");
-
-            for (id, since, upper) in frontiers {
-                let name = self
-                    .catalog()
-                    .try_get_entry(&id)
-                    .map(|item| item.name())
-                    .map(|name| {
-                        self.catalog()
-                            .resolve_full_name(name, Some(session.conn_id()))
-                            .to_string()
-                    })
-                    .unwrap_or_else(|| id.to_string());
-                sources.push(TimestampSource {
-                    name: format!("{name} ({id}, storage)"),
-                    read_frontier: since.elements().to_vec(),
-                    write_frontier: upper.elements().to_vec(),
-                });
-            }
-        }
-        {
-            if let Some(compute_ids) = id_bundle.compute_ids.get(&cluster_id) {
-                let catalog = self.catalog();
-                for id in compute_ids {
-                    let state = self
-                        .controller
-                        .compute
-                        .collection(cluster_id, *id)
-                        .expect("id does not exist");
-                    let name = catalog
-                        .try_get_entry(id)
-                        .map(|item| item.name())
-                        .map(|name| {
-                            catalog
-                                .resolve_full_name(name, Some(session.conn_id()))
-                                .to_string()
-                        })
-                        .unwrap_or_else(|| id.to_string());
-                    sources.push(TimestampSource {
-                        name: format!("{name} ({id}, compute)"),
-                        read_frontier: state.read_capability().elements().to_vec(),
-                        write_frontier: state.write_frontier().to_vec(),
-                    });
-                }
-            }
-        }
-        let respond_immediately = determination.respond_immediately();
-        TimestampExplanation {
-            determination,
-            sources,
-            session_wall_time: session.pcx().wall_time,
-            respond_immediately,
-        }
-    }
-
-    #[instrument]
-    pub(super) async fn sequence_explain_timestamp_finish_inner(
-        &mut self,
-        session: &mut Session,
-        format: ExplainFormat,
-        cluster_id: ClusterId,
-        source: OptimizedMirRelationExpr,
-        id_bundle: CollectionIdBundle,
-        when: QueryWhen,
-        real_time_recency_ts: Option<Timestamp>,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let is_json = match format {
-            ExplainFormat::Text => false,
-            ExplainFormat::Json => true,
-            ExplainFormat::Dot => {
-                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
-            }
-        };
-        let source_ids = source.depends_on();
-        let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
-        if matches!(timeline_context, TimelineContext::TimestampIndependent)
-            && source.contains_temporal()
-        {
-            // If the source IDs are timestamp independent but the query contains temporal functions,
-            // then the timeline context needs to be upgraded to timestamp dependent. This is
-            // required because `source_ids` doesn't contain functions.
-            timeline_context = TimelineContext::TimestampDependent;
-        }
-
-        let oracle_read_ts = self.oracle_read_ts(session, &timeline_context, &when).await;
-
-        let determination = self.sequence_peek_timestamp(
-            session,
-            &when,
-            cluster_id,
-            timeline_context,
-            oracle_read_ts,
-            &id_bundle,
-            &source_ids,
-            real_time_recency_ts,
-            RequireLinearization::NotRequired,
-        )?;
-        let explanation = self.explain_timestamp(session, cluster_id, &id_bundle, determination);
-
-        let s = if is_json {
-            serde_json::to_string_pretty(&explanation).expect("failed to serialize explanation")
-        } else {
-            explanation.to_string()
-        };
-        let rows = vec![Row::pack_slice(&[Datum::from(s.as_str())])];
-        Ok(Self::send_immediate_rows(rows))
     }
 
     #[instrument]

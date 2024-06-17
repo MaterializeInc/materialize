@@ -54,10 +54,10 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{
     DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId, PartialItemName,
-    QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
-    SystemObjectId, PUBLIC_ROLE_NAME,
+    QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
+    SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
 };
-use mz_sql::plan::{PlanNotice, StatementDesc};
+use mz_sql::plan::{Plan, PlanNotice, StatementDesc};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
@@ -1220,6 +1220,16 @@ impl Catalog {
             }
         }
     }
+
+    /// See [`CatalogState::deserialize_plan_with_enable_for_item_parsing`].
+    pub(crate) fn deserialize_plan_with_enable_for_item_parsing(
+        &mut self,
+        create_sql: &str,
+        force_if_exists_skip: bool,
+    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        self.state
+            .deserialize_plan_with_enable_for_item_parsing(create_sql, force_if_exists_skip)
+    }
 }
 
 pub fn is_reserved_name(name: &str) -> bool {
@@ -2293,7 +2303,7 @@ mod tests {
             .expect("unable to open debug catalog");
             let item = catalog
                 .state()
-                .parse_view_item(create_sql)
+                .deserialize_item(&create_sql)
                 .expect("unable to parse view");
             catalog
                 .transact(
