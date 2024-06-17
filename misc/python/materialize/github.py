@@ -86,9 +86,9 @@ def get_known_issues_from_github() -> (
                 issues_with_invalid_regex.append(
                     GitHubIssueWithInvalidRegexp(
                         internal_error_type="GITHUB_INVALID_REGEXP",
-                        issue_url=issue.info["html_url"],
-                        issue_title=issue.info["title"],
-                        issue_number=issue.info["number"],
+                        issue_url=issue["html_url"],
+                        issue_title=issue["title"],
+                        issue_number=issue["number"],
                         regex_pattern=match.strip(),
                     )
                 )

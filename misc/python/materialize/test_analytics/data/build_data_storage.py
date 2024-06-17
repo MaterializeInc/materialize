@@ -53,7 +53,7 @@ def insert_build(cursor: Cursor) -> None:
           '{mz_version}',
           now(),
           '{build_url}',
-          '{TEST_ANALYTICS_DATA_VERSION}',
+          {TEST_ANALYTICS_DATA_VERSION},
           NULL
         WHERE NOT EXISTS
         (
@@ -129,7 +129,7 @@ def insert_build_step(
         f"""
         UPDATE build_step
         SET is_latest_retry = FALSE
-        WHERE build_idb = '{build_id}'
+        WHERE build_id = '{build_id}'
         AND build_step_key = '{step_key}'
         AND (shard_index = {shard_index} OR shard_index IS NULL)
         AND build_step_id <> '{step_id}'

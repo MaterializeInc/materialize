@@ -154,7 +154,6 @@ class Materialized(Service):
             address = "cockroach" if external_cockroach == True else external_cockroach
             depends_graph["cockroach"] = {"condition": "service_healthy"}
             command += [
-                f"--storage-stash-url=postgres://root@{address}:26257?options=--search_path=storage",
                 f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
             ]
             environment += [

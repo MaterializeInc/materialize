@@ -144,7 +144,6 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             fallback_to_strict_count: config.pg_source_snapshot_fallback_to_strict_count(),
             wait_for_count: config.pg_source_snapshot_wait_for_count(),
         },
-        enable_dependency_read_hold_asserts: config.enable_dependency_read_hold_asserts(),
         user_storage_managed_collections_batch_duration: config
             .user_storage_managed_collections_batch_duration(),
         dyncfg_updates: config.dyncfg_updates(),

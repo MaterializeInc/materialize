@@ -13,6 +13,7 @@
 
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::implementations::merge_batcher_col::ColumnationMerger;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
@@ -109,5 +110,10 @@ pub type KeyErrSpine<K, T, R> = ColValSpine<K, DataflowError, T, R>;
 pub type RowErrSpine<T, R> = RowValSpine<DataflowError, T, R>;
 
 // Batchers for consolidation
-pub type KeyBatcher<K, T, D> = MergeBatcher<ColumnationMerger<((K, ()), T, D)>, T>;
-pub type KeyValBatcher<K, V, T, D> = MergeBatcher<ColumnationMerger<((K, V), T, D)>, T>;
+pub type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
+pub type KeyValBatcher<K, V, T, D> = MergeBatcher<
+    Vec<((K, V), T, D)>,
+    ColumnationChunker<((K, V), T, D)>,
+    ColumnationMerger<((K, V), T, D)>,
+    T,
+>;

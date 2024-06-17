@@ -344,7 +344,7 @@ impl Listeners {
             Some(data_directory) => (data_directory, None),
         };
         let scratch_dir = tempfile::tempdir()?;
-        let (consensus_uri, storage_stash_url, timestamp_oracle_url) = {
+        let (consensus_uri, timestamp_oracle_url) = {
             let seed = config.seed;
             let cockroach_url = env::var("COCKROACH_URL")
                 .map_err(|_| anyhow!("COCKROACH_URL environment variable is not set"))?;
@@ -357,13 +357,11 @@ impl Listeners {
             client
                 .batch_execute(&format!(
                     "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
-                    CREATE SCHEMA IF NOT EXISTS storage_{seed};
                     CREATE SCHEMA IF NOT EXISTS tsoracle_{seed};"
                 ))
                 .await?;
             (
                 format!("{cockroach_url}?options=--search_path=consensus_{seed}"),
-                format!("{cockroach_url}?options=--search_path=storage_{seed}"),
                 format!("{cockroach_url}?options=--search_path=tsoracle_{seed}"),
             )
         };
@@ -481,7 +479,6 @@ impl Listeners {
                         consensus_uri,
                     },
                     persist_clients,
-                    storage_stash_url,
                     now: config.now.clone(),
                     metrics_registry: metrics_registry.clone(),
                     persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),

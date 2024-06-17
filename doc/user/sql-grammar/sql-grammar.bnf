@@ -31,6 +31,8 @@ alter_rename ::=
   'ALTER' ('CONNECTION' | 'CLUSTER' | 'CLUSTER REPLICA' | 'INDEX' | 'SCHEMA' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
 alter_swap ::=
   'ALTER' ('CLUSTER' | 'SCHEMA') name 'SWAP' 'WITH' target_name
+alter_sink ::=
+  'ALTER' 'SINK' name 'SET' 'FROM' item_name
 alter_table_set ::=
   'ALTER' 'TABLE' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
 alter_table_reset ::=

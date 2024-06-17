@@ -1964,7 +1964,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#05a27dafa809c7f561a5a445d623db68559a95b4"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#f051b828fc579efbf69c03ce669cb92fbe51a362"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -2020,7 +2020,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#05a27dafa809c7f561a5a445d623db68559a95b4"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#f051b828fc579efbf69c03ce669cb92fbe51a362"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7435,7 +7435,7 @@ checksum = "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0"
 [[package]]
 name = "postgres"
 version = "0.19.5"
-source = "git+https://github.com/MaterializeInc/rust-postgres#91522e47643ebb6d6a5e392957b2319e5bb522ad"
+source = "git+https://github.com/MaterializeInc/rust-postgres#02336bebb28507665184c21566e5d1dc8de1dd7d"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -7448,7 +7448,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres#91522e47643ebb6d6a5e392957b2319e5bb522ad"
+source = "git+https://github.com/MaterializeInc/rust-postgres#02336bebb28507665184c21566e5d1dc8de1dd7d"
 dependencies = [
  "openssl",
  "tokio",
@@ -7459,7 +7459,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.5"
-source = "git+https://github.com/MaterializeInc/rust-postgres#91522e47643ebb6d6a5e392957b2319e5bb522ad"
+source = "git+https://github.com/MaterializeInc/rust-postgres#02336bebb28507665184c21566e5d1dc8de1dd7d"
 dependencies = [
  "base64 0.21.5",
  "byteorder",
@@ -7476,7 +7476,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.5"
-source = "git+https://github.com/MaterializeInc/rust-postgres#91522e47643ebb6d6a5e392957b2319e5bb522ad"
+source = "git+https://github.com/MaterializeInc/rust-postgres#02336bebb28507665184c21566e5d1dc8de1dd7d"
 dependencies = [
  "bytes",
  "chrono",
@@ -9367,7 +9367,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#0c26e5e4198085d6c90db11930f2dba52e9f32cc"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -9384,12 +9384,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#0c26e5e4198085d6c90db11930f2dba52e9f32cc"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#0c26e5e4198085d6c90db11930f2dba52e9f32cc"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -9405,7 +9405,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#0c26e5e4198085d6c90db11930f2dba52e9f32cc"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -9415,7 +9415,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#0c26e5e4198085d6c90db11930f2dba52e9f32cc"
 
 [[package]]
 name = "tiny-keccak"
@@ -9548,7 +9548,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.8"
-source = "git+https://github.com/MaterializeInc/rust-postgres#91522e47643ebb6d6a5e392957b2319e5bb522ad"
+source = "git+https://github.com/MaterializeInc/rust-postgres#02336bebb28507665184c21566e5d1dc8de1dd7d"
 dependencies = [
  "async-trait",
  "byteorder",

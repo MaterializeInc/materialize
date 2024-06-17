@@ -240,7 +240,6 @@ def main() -> int:
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{mzdata}/persist/blob",
                 f"--timestamp-oracle-url={args.postgres}?options=--search_path=tsoracle",
-                f"--storage-stash-url={args.postgres}?options=--search_path=storage",
                 f"--environment-id={environment_id}",
                 "--bootstrap-role=materialize",
                 *args.args,
@@ -267,7 +266,7 @@ def main() -> int:
             command += ["--test", test]
         command += args.args
         command += ["--", "--nocapture"]
-        os.environ["COCKROACH_URL"] = args.postgres
+        env["COCKROACH_URL"] = args.postgres
     else:
         raise UIError(f"unknown program {args.program}")
 

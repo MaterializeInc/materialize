@@ -914,3 +914,78 @@ class SinkAutoCreatedTopicConfig(Check):
             """
             )
         )
+
+
+@externally_idempotent(False)
+class AlterSink(Check):
+    """Check ALTER SINK"""
+
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.103.0")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            schemas()
+            + dedent(
+                """
+                > CREATE TABLE table_alter1 (x int, y string)
+                > CREATE TABLE table_alter2 (x int, y string)
+                > CREATE TABLE table_alter3 (x int, y string)
+                > CREATE SINK sink_alter FROM table_alter1
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'alter-sink')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                > INSERT INTO table_alter1 VALUES (0, 'a')
+                > INSERT INTO table_alter2 VALUES (1, 'b')
+                > INSERT INTO table_alter3 VALUES (2, 'c')
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > ALTER SINK sink_alter SET FROM table_alter2;
+
+                # Wait for the actual restart to have occurred before inserting
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=4s
+
+                > INSERT INTO table_alter1 VALUES (10, 'aa')
+                > INSERT INTO table_alter2 VALUES (11, 'bb')
+                > INSERT INTO table_alter3 VALUES (12, 'cc')
+                """,
+                """
+                > ALTER SINK sink_alter SET FROM table_alter3;
+
+                # Wait for the actual restart to have occurred before inserting
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=4s
+
+                > INSERT INTO table_alter1 VALUES (100, 'aaa')
+                > INSERT INTO table_alter2 VALUES (101, 'bbb')
+                > INSERT INTO table_alter3 VALUES (102, 'ccc')
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                # We check the contents of the sink topics by re-ingesting them.
+
+                > CREATE SOURCE sink_alter_source
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'alter-sink')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                > SELECT before IS NULL, (after).x, (after).y FROM sink_alter_source
+                true 0 a
+                true 11 bb
+                true 102 ccc
+
+                > DROP SOURCE sink_alter_source CASCADE;
+            """
+            )
+        )

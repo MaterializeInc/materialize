@@ -11,15 +11,7 @@ pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{RowRowSpine, RowSpine, RowValSpine};
-use crate::row_spine::spines::{RowLayout, RowRowLayout, RowValLayout};
-use crate::typedefs::spines::MzStack;
-use differential_dataflow::difference::Semigroup;
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::cursor::IntoOwned;
-use differential_dataflow::trace::implementations::{BuilderInput, OffsetList};
-use mz_repr::Row;
-use timely::container::columnation::{Columnation, TimelyStack};
-use timely::progress::Timestamp;
+use differential_dataflow::trace::implementations::OffsetList;
 
 /// Spines specialized to contain `Row` types in keys and values.
 mod spines {
@@ -104,109 +96,6 @@ mod spines {
     }
 }
 
-impl<T, R> BuilderInput<RowLayout<((Row, ()), T, R)>> for TimelyStack<((Row, ()), T, R)>
-where
-    T: Timestamp + Lattice + Columnation + Clone + 'static,
-    R: Semigroup + Ord + Columnation + Clone + 'static,
-{
-    type Key<'a> = &'a Row;
-    type Val<'a> = &'a ();
-    type Time = T;
-    type Diff = R;
-
-    fn into_parts<'a>(
-        ((key, val), time, diff): Self::Item<'a>,
-    ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
-        (key, val, time.clone(), diff.clone())
-    }
-
-    fn key_eq(this: &&Row, other: DatumSeq<'_>) -> bool {
-        DatumSeq::borrow_as(this) == other
-    }
-
-    fn val_eq(this: &&(), other: &()) -> bool {
-        *this == other
-    }
-}
-
-impl<T, R> BuilderInput<RowRowLayout<((Row, Row), T, R)>> for TimelyStack<((Row, Row), T, R)>
-where
-    T: Timestamp + Lattice + Columnation + Clone + 'static,
-    R: Semigroup + Ord + Columnation + Clone + 'static,
-{
-    type Key<'a> = &'a Row;
-    type Val<'a> = &'a Row;
-    type Time = T;
-    type Diff = R;
-
-    fn into_parts<'a>(
-        ((key, val), time, diff): Self::Item<'a>,
-    ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
-        (key, val, time.clone(), diff.clone())
-    }
-
-    fn key_eq(this: &&Row, other: DatumSeq<'_>) -> bool {
-        DatumSeq::borrow_as(this) == other
-    }
-
-    fn val_eq(this: &&Row, other: DatumSeq<'_>) -> bool {
-        DatumSeq::borrow_as(this) == other
-    }
-}
-
-impl<V, T, R> BuilderInput<RowValLayout<((Row, V), T, R)>> for TimelyStack<((Row, V), T, R)>
-where
-    V: Columnation + Ord + Clone + 'static,
-    T: Timestamp + Lattice + Columnation + Clone + 'static,
-    R: Semigroup + Ord + Columnation + Clone + 'static,
-{
-    type Key<'a> = &'a Row;
-    type Val<'a> = &'a V;
-    type Time = T;
-    type Diff = R;
-
-    fn into_parts<'a>(
-        ((key, val), time, diff): Self::Item<'a>,
-    ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
-        (key, val, time.clone(), diff.clone())
-    }
-
-    fn key_eq(this: &&Row, other: DatumSeq<'_>) -> bool {
-        DatumSeq::borrow_as(this) == other
-    }
-
-    fn val_eq(this: &&V, other: &V) -> bool {
-        *this == other
-    }
-}
-
-impl<K, V, T, R> BuilderInput<MzStack<((K, V), T, R)>> for TimelyStack<((K, V), T, R)>
-where
-    K: Columnation + Ord + Clone + 'static,
-    V: Columnation + Ord + Clone + 'static,
-    T: Timestamp + Lattice + Columnation + Clone + 'static,
-    R: Semigroup + Ord + Columnation + Clone + 'static,
-{
-    type Key<'a> = &'a K;
-    type Val<'a> = &'a V;
-    type Time = T;
-    type Diff = R;
-
-    fn into_parts<'a>(
-        ((key, val), time, diff): Self::Item<'a>,
-    ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
-        (key, val, time.clone(), diff.clone())
-    }
-
-    fn key_eq(this: &&K, other: &K) -> bool {
-        *this == other
-    }
-
-    fn val_eq(this: &&V, other: &V) -> bool {
-        *this == other
-    }
-}
-
 /// A `Row`-specialized container using dictionary compression.
 mod container {
     use differential_dataflow::trace::cursor::IntoOwned;
@@ -241,20 +130,6 @@ mod container {
     impl BatchContainer for DatumContainer {
         type Owned = Row;
         type ReadItem<'a> = DatumSeq<'a>;
-
-        fn copy(&mut self, item: Self::ReadItem<'_>) {
-            if let Some(batch) = self.batches.last_mut() {
-                let success = batch.try_push(item.bytes);
-                if !success {
-                    // double the lengths from `batch`.
-                    let item_cap = 2 * batch.offsets.len();
-                    let byte_cap = std::cmp::max(2 * batch.storage.capacity(), item.bytes.len());
-                    let mut new_batch = DatumBatch::with_capacities(item_cap, byte_cap);
-                    assert!(new_batch.try_push(item.bytes));
-                    self.batches.push(new_batch);
-                }
-            }
-        }
 
         fn with_capacity(size: usize) -> Self {
             Self {
@@ -305,13 +180,30 @@ mod container {
 
     impl PushInto<Row> for DatumContainer {
         fn push_into(&mut self, item: Row) {
-            self.copy(IntoOwned::borrow_as(&item));
+            self.push_into(&item);
         }
     }
 
     impl PushInto<&Row> for DatumContainer {
         fn push_into(&mut self, item: &Row) {
-            self.copy(IntoOwned::borrow_as(item));
+            let item: DatumSeq<'_> = IntoOwned::borrow_as(item);
+            self.push_into(item);
+        }
+    }
+
+    impl PushInto<DatumSeq<'_>> for DatumContainer {
+        fn push_into(&mut self, item: DatumSeq<'_>) {
+            if let Some(batch) = self.batches.last_mut() {
+                let success = batch.try_push(item.bytes);
+                if !success {
+                    // double the lengths from `batch`.
+                    let item_cap = 2 * batch.offsets.len();
+                    let byte_cap = std::cmp::max(2 * batch.storage.capacity(), item.bytes.len());
+                    let mut new_batch = DatumBatch::with_capacities(item_cap, byte_cap);
+                    assert!(new_batch.try_push(item.bytes));
+                    self.batches.push(new_batch);
+                }
+            }
         }
     }
 
@@ -347,7 +239,7 @@ mod container {
         fn with_capacities(item_cap: usize, byte_cap: usize) -> Self {
             // TODO: be wary of `byte_cap` greater than 2^32.
             let mut offsets = crate::row_spine::OffsetOptimized::with_capacity(item_cap + 1);
-            offsets.copy(0);
+            offsets.push(0);
             Self {
                 offsets,
                 storage: Region::new_auto(byte_cap.next_power_of_two()),
@@ -377,6 +269,11 @@ mod container {
     impl<'a, 'b> PartialEq<DatumSeq<'a>> for DatumSeq<'b> {
         fn eq(&self, other: &DatumSeq<'a>) -> bool {
             self.bytes.eq(other.bytes)
+        }
+    }
+    impl<'a> PartialEq<&Row> for DatumSeq<'a> {
+        fn eq(&self, other: &&Row) -> bool {
+            self.bytes.eq(other.data())
         }
     }
     impl<'a> Eq for DatumSeq<'a> {}
@@ -593,17 +490,6 @@ mod offset_opt {
         type Owned = usize;
         type ReadItem<'a> = usize;
 
-        fn copy(&mut self, item: Self::ReadItem<'_>) {
-            if !self.spilled.is_empty() {
-                self.spilled.push(item);
-            } else {
-                let inserted = self.strided.push(item);
-                if !inserted {
-                    self.spilled.push(item);
-                }
-            }
-        }
-
         fn with_capacity(_size: usize) -> Self {
             Self {
                 strided: OffsetStride::Empty,
@@ -637,7 +523,14 @@ mod offset_opt {
 
     impl PushInto<usize> for OffsetOptimized {
         fn push_into(&mut self, item: usize) {
-            self.copy(item);
+            if !self.spilled.is_empty() {
+                self.spilled.push(item);
+            } else {
+                let inserted = self.strided.push(item);
+                if !inserted {
+                    self.spilled.push(item);
+                }
+            }
         }
     }
 

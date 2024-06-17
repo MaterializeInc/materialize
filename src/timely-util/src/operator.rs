@@ -20,7 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::container::columnation::{Columnation, TimelyStack};
-use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto, SizableContainer};
+use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
@@ -140,12 +140,8 @@ where
         mut logic: L,
     ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
     where
-        DCB: ContainerBuilder,
-        DCB::Container: SizableContainer,
-        ECB: ContainerBuilder,
-        ECB::Container: SizableContainer,
-        DCB::Container: PushInto<D2>,
-        ECB::Container: PushInto<E>,
+        DCB: ContainerBuilder + PushInto<D2>,
+        ECB: ContainerBuilder + PushInto<E>,
         L: FnMut(D1) -> Result<D2, E> + 'static,
     {
         self.flat_map_fallible::<DCB, ECB, _, _, _, _>(name, move |record| Some(logic(record)))
@@ -161,12 +157,8 @@ where
         logic: L,
     ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
     where
-        DCB: ContainerBuilder,
-        DCB::Container: SizableContainer,
-        ECB: ContainerBuilder,
-        ECB::Container: SizableContainer,
-        DCB::Container: PushInto<D2>,
-        ECB::Container: PushInto<E>,
+        DCB: ContainerBuilder + PushInto<D2>,
+        ECB: ContainerBuilder + PushInto<E>,
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
 
@@ -208,8 +200,10 @@ where
         mut logic: L,
     ) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
-        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>,
-        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>,
+        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>
+            + PushInto<(D2, G::Timestamp, R)>,
+        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>
+            + PushInto<(E, G::Timestamp, R)>,
         D2: Data,
         E: Data,
         L: FnMut(D1) -> Result<D2, E> + 'static,
@@ -227,8 +221,10 @@ where
         logic: L,
     ) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
-        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>,
-        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>,
+        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>
+            + PushInto<(D2, G::Timestamp, R)>,
+        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>
+            + PushInto<(E, G::Timestamp, R)>,
         D2: Data,
         E: Data,
         I: IntoIterator<Item = Result<D2, E>>,
@@ -438,12 +434,8 @@ where
         mut logic: L,
     ) -> (StreamCore<G, DCB::Container>, StreamCore<G, ECB::Container>)
     where
-        DCB: ContainerBuilder,
-        DCB::Container: SizableContainer,
-        ECB: ContainerBuilder,
-        ECB::Container: SizableContainer,
-        DCB::Container: PushInto<D2>,
-        ECB::Container: PushInto<E>,
+        DCB: ContainerBuilder + PushInto<D2>,
+        ECB: ContainerBuilder + PushInto<E>,
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static,
     {
@@ -456,8 +448,8 @@ where
                     data.swap(&mut storage);
                     for r in storage.drain(..).flat_map(|d1| logic(d1)) {
                         match r {
-                            Ok(d2) => ok_session.give(d2),
-                            Err(e) => err_session.give(e),
+                            Ok(d2) => ok_session.push_into(d2),
+                            Err(e) => err_session.push_into(e),
                         }
                     }
                 })
@@ -528,8 +520,10 @@ where
         mut logic: L,
     ) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
-        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>,
-        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>,
+        DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>
+            + PushInto<(D2, G::Timestamp, R)>,
+        ECB: ContainerBuilder<Container = Vec<(E, G::Timestamp, R)>>
+            + PushInto<(E, G::Timestamp, R)>,
         D2: Data,
         E: Data,
         I: IntoIterator<Item = Result<D2, E>>,

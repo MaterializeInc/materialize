@@ -1208,9 +1208,9 @@ where
     async fn alter_export(
         &mut self,
         id: GlobalId,
-        description: ExportDescription<Self::Timestamp>,
+        new_description: ExportDescription<Self::Timestamp>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        let from_id = description.sink.from;
+        let from_id = new_description.sink.from;
 
         // Acquire read holds at StorageCollections to ensure that the
         // sinked collection is not dropped while we're sinking it.
@@ -1235,9 +1235,15 @@ where
             return Err(StorageError::ReadBeforeSince(from_id));
         }
 
-        cur_export.description = description.clone();
+        let new_export = ExportState {
+            description: new_description.clone(),
+            read_hold,
+            read_policy: cur_export.read_policy.clone(),
+            write_frontier: cur_export.write_frontier.clone(),
+        };
+        *cur_export = new_export;
 
-        let status_id = match description.sink.status_id.clone() {
+        let status_id = match new_description.sink.status_id.clone() {
             Some(id) => Some(self.storage_collections.collection_metadata(id)?.data_shard),
             None => None,
         };
@@ -1246,23 +1252,23 @@ where
             id,
             description: StorageSinkDesc {
                 from: from_id,
-                from_desc: description.sink.from_desc,
-                connection: description.sink.connection,
-                envelope: description.sink.envelope,
-                as_of: description.sink.as_of,
-                version: description.sink.version,
+                from_desc: new_description.sink.from_desc,
+                connection: new_description.sink.connection,
+                envelope: new_description.sink.envelope,
+                as_of: new_description.sink.as_of,
+                version: new_description.sink.version,
                 status_id,
                 from_storage_metadata,
-                with_snapshot: description.sink.with_snapshot,
+                with_snapshot: new_description.sink.with_snapshot,
             },
         };
 
         // Fetch the client for this exports's cluster.
         let client = self
             .clients
-            .get_mut(&description.instance_id)
+            .get_mut(&new_description.instance_id)
             .ok_or_else(|| StorageError::ExportInstanceMissing {
-                storage_instance_id: description.instance_id,
+                storage_instance_id: new_description.instance_id,
                 export_id: id,
             })?;
 

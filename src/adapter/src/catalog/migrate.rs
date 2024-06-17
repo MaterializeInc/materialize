@@ -99,7 +99,7 @@ pub(crate) async fn migrate(
         catalog_version
     );
 
-    rewrite_ast_items(tx, |_tx, _id, stmt| {
+    rewrite_ast_items(tx, |_tx, _id, _stmt| {
         let _catalog_version = catalog_version.clone();
         Box::pin(async move {
             // Add per-item AST migrations below.
@@ -110,7 +110,6 @@ pub(crate) async fn migrate(
             //
             // Migration functions may also take `tx` as input to stage
             // arbitrary changes to the catalog.
-            ast_rewrite_create_source_loadgen_options_0_92_0(stmt)?;
             Ok(())
         })
     })
@@ -430,52 +429,6 @@ fn add_to_audit_log(
     let event =
         mz_audit_log::VersionedEvent::new(id, event_type, object_type, details, None, occurred_at);
     tx.insert_audit_log_event(event);
-    Ok(())
-}
-
-fn ast_rewrite_create_source_loadgen_options_0_92_0(
-    stmt: &mut Statement<Raw>,
-) -> Result<(), anyhow::Error> {
-    use mz_sql::ast::{
-        CreateSourceConnection, CreateSourceStatement, LoadGenerator, LoadGeneratorOptionName::*,
-    };
-
-    struct Rewriter;
-
-    impl<'ast> VisitMut<'ast, Raw> for Rewriter {
-        fn visit_create_source_statement_mut(
-            &mut self,
-            node: &'ast mut CreateSourceStatement<Raw>,
-        ) {
-            match &mut node.connection {
-                CreateSourceConnection::LoadGenerator { generator, options } => {
-                    let permitted_options: &[_] = match generator {
-                        LoadGenerator::Auction => &[TickInterval],
-                        LoadGenerator::Counter => &[TickInterval, MaxCardinality],
-                        LoadGenerator::Marketing => &[TickInterval],
-                        LoadGenerator::Datums => &[TickInterval],
-                        LoadGenerator::Tpch => &[TickInterval, ScaleFactor],
-                        LoadGenerator::KeyValue => &[
-                            TickInterval,
-                            Keys,
-                            SnapshotRounds,
-                            TransactionalSnapshot,
-                            ValueSize,
-                            Seed,
-                            Partitions,
-                            BatchSize,
-                        ],
-                    };
-
-                    options.retain(|o| permitted_options.contains(&o.name));
-                }
-                _ => {}
-            }
-        }
-    }
-
-    Rewriter.visit_statement_mut(stmt);
-
     Ok(())
 }
 

@@ -911,7 +911,7 @@ impl<'a> RunnerInner<'a> {
         let temp_dir = tempfile::tempdir()?;
         let scratch_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
-        let (consensus_uri, storage_stash_url, timestamp_oracle_url) = {
+        let (consensus_uri, timestamp_oracle_url) = {
             let postgres_url = &config.postgres_url;
             info!(%postgres_url, "starting server");
             let (client, conn) = Retry::default()
@@ -933,16 +933,13 @@ impl<'a> RunnerInner<'a> {
             });
             client
                 .batch_execute(
-                    "DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
-                     DROP SCHEMA IF EXISTS sqllogictest_tsoracle CASCADE;
+                    "DROP SCHEMA IF EXISTS sqllogictest_tsoracle CASCADE;
                      CREATE SCHEMA IF NOT EXISTS sqllogictest_consensus;
-                     CREATE SCHEMA sqllogictest_storage;
                      CREATE SCHEMA sqllogictest_tsoracle;",
                 )
                 .await?;
             (
                 format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),
-                format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
                 format!("{postgres_url}?options=--search_path=sqllogictest_tsoracle"),
             )
         };
@@ -1028,7 +1025,6 @@ impl<'a> RunnerInner<'a> {
                     consensus_uri,
                 },
                 persist_clients,
-                storage_stash_url,
                 now: SYSTEM_TIME.clone(),
                 metrics_registry: metrics_registry.clone(),
                 persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),

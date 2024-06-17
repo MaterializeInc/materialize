@@ -20,7 +20,7 @@
         {{ return(true) }}
     {% endif %}
     -- Hydration takes time. Be a good
-    -- citizen and don't overwhelm mz_introspection
+    -- citizen and don't overwhelm mz_catalog_server
     {{ adapter.sleep(poll_interval) }}
 {% endfor %}
 {{ exceptions.raise_compiler_error("Cluster " ~ deploy_cluster ~ " failed to hydrate within a reasonable amount of time") }}
