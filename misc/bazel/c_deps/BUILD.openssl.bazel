@@ -152,3 +152,14 @@ select_file(
     subpath = "include",
     visibility = ["//visibility:public"],
 )
+
+copy_to_directory(
+    name = "openssl_root",
+    srcs = [
+        ":libssl_copy",
+        ":libcrypto_copy",
+        ":openssl_include",
+    ],
+    root_paths = [".", "openssl"],
+    visibility = ["//visibility:public"],
+)
