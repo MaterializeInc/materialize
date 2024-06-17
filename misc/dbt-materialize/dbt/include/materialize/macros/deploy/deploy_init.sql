@@ -95,99 +95,36 @@
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
-    {% if cluster_exists(deploy_cluster) %}
-        {{ log("Deployment cluster " ~ deploy_cluster ~ " already exists", info=True) }}
-        {% set cluster_empty %}
-            WITH dataflows AS (
-                SELECT mz_indexes.id
-                FROM mz_indexes
-                JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
+  {# Fetch cluster configuration #}
+  {% set cluster_configuration %}
+    SELECT managed, size, replication_factor
+    FROM mz_clusters
+    WHERE name = {{ dbt.string_literal(cluster) }}
+  {% endset %}
 
-                UNION ALL
+  {% set cluster_config_results = run_query(cluster_configuration) %}
 
-                SELECT mz_materialized_views.id
-                FROM mz_materialized_views
-                JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
+  {% if execute %}
+    {% set results = cluster_config_results.rows[0] %}
 
-                UNION ALL
+    {% set managed = results[0] %}
+    {% set size = results[1] %}
+    {% set replication_factor = results[2] %}
 
-                SELECT mz_sources.id
-                FROM mz_sources
-                JOIN mz_clusters ON mz_clusters.id = mz_sources.cluster_id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
-
-                UNION ALL
-
-                SELECT mz_sinks.id
-                FROM mz_sinks
-                JOIN mz_clusters ON mz_clusters.id = mz_sinks.cluster_id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
-            )
-
-            SELECT count(*)
-            FROM dataflows
-            WHERE id LIKE 'u%'
-        {% endset %}
-
-
-        {% set cluster_object_count = run_query(cluster_empty) %}
-        {% if execute %}
-            {% if cluster_object_count and cluster_object_count.columns[0] and cluster_object_count.rows[0][0] > 0 %}
-                {% if check_cluster_ci_tag(deploy_cluster) %}
-                    {{ log("Cluster " ~ deploy_cluster ~ " was already created for this pull request", info=True) }}
-                {% elif ignore_existing_objects %}
-                    {{ log("[Warning] Deployment cluster " ~ deploy_cluster ~ " is not empty", info=True) }}
-                    {{ log("[Warning] Confirm the objects it contains are expected before deployment", info=True) }}
-                {% else %}
-                    {{ exceptions.raise_compiler_error("""
-                        Deployment cluster """ ~ deploy_cluster ~ """ already exists and is not empty.
-                        This is potentially dangerous as you may end up deploying objects to production you
-                        do not intend.
-
-                        If you are certain the objects in this cluster are supposed to exist, you can ignore this
-                        error by setting ignore_existing_objects to True.
-
-                        dbt run-operation create_deployment_environment --args '{ignore_existing_objects: True}'
-                    """) }}
-                {% endif %}
-            {% endif %}
-        {% endif %}
-
-    {% else %}
-        {{ log("Creating deployment cluster " ~ deploy_cluster ~ " like cluster " ~ cluster, info=True)}}
-        {% set cluster_configuration %}
-            SELECT managed, size, replication_factor
-            FROM mz_clusters
-            WHERE name = {{ dbt.string_literal(cluster) }}
-        {% endset %}
-
-        {% set cluster_config_results = run_query(cluster_configuration) %}
-
-        {% if execute %}
-            {% set results = cluster_config_results.rows[0] %}
-
-            {% set managed = results[0] %}
-            {% set size = results[1] %}
-            {% set replication_factor = results[2] %}
-
-            {% if not managed %}
-                {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " is not managed") }}
-            {% endif %}
-
-            {% set create_cluster %}
-                CREATE CLUSTER {{ deploy_cluster }} (
-                    SIZE = {{ dbt.string_literal(size) }},
-                    REPLICATION FACTOR = {{ replication_factor }}
-                );
-            {% endset %}
-            {{ run_query(create_cluster) }}
-            {{ set_cluster_ci_tag() }}
-            {{ internal_copy_cluster_grants(schema, deploy_schema) }}
-        {% endif %}
+    {% if not managed %}
+      {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " is not managed") }}
     {% endif %}
+
+    {{ create_cluster(
+      cluster_name=cluster,
+      size=size,
+      replication_factor=replication_factor,
+      ignore_existing_objects=ignore_existing_objects,
+      force_deploy_suffix=True
+    ) }}
+    {# Internal copy cluster grants #}
+    {{ internal_copy_cluster_grants(schema, deploy_schema) }}
+  {% endif %}
 {% endfor %}
 {% endmacro %}
 

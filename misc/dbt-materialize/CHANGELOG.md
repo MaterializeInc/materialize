@@ -1,5 +1,10 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Add `create_cluster` and `drop_cluster` macros to manage the creation and
+  deletion of clusters, respectively in CI/CD workflows.
+
 ## 1.8.1 - 2024-06-08
 
 * Add support for overriding the `generate_cluster_name` macro to customize the
