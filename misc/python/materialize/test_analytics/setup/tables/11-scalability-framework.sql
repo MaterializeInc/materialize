@@ -16,11 +16,11 @@
 
 -- result of individual workloads
 CREATE TABLE scalability_framework_result (
-   build_id TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
+   build_id TEXT NOT NULL,
    build_step_id TEXT NOT NULL,
    framework_version TEXT NOT NULL,
    workload_name TEXT NOT NULL,
-   workload_group TEXT, -- should eventually be changed to NOT NULL (but will break on versions that do not set it)
+   workload_group TEXT NOT NULL,
    workload_version TEXT NOT NULL,
    concurrency INT NOT NULL,
    count INT,
