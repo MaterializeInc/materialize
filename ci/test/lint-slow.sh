@@ -15,6 +15,8 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+echo "$RUSTFLAGS"
+
 try cargo clippy --all-targets -- -D warnings
 
 try bin/doc
