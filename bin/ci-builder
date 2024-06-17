@@ -89,7 +89,7 @@ esac
 # might miss.
 #
 # Sync: This list of features should be kept in sync with the one in xcompile and .cargo/config.
-x86_64_target_features="+aes"
+x86_64_target_features="+aes,+pclmulqdq"
 aaarch64_target_features="+aes,+sha2"
 
 rust_target_features=""

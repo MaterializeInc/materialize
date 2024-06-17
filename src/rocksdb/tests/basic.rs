@@ -343,7 +343,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
         // Arc will be dropped by the end of this scope
         let buf = shared_write_buffer_manager.get().unwrap();
         assert!(buf.enabled());
-        assert_eq!(write_buffer_memory_bytes, buf.buffer_size());
+        assert_eq!(write_buffer_memory_bytes, buf.get_buffer_size());
     }
 
     let updated_bytes = 20000;
@@ -371,7 +371,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
     {
         let buf = shared_write_buffer_manager.get().unwrap();
         assert!(buf.enabled());
-        assert_eq!(write_buffer_memory_bytes, buf.buffer_size());
+        assert_eq!(write_buffer_memory_bytes, buf.get_buffer_size());
     }
 
     instance2.close().await?;
@@ -398,7 +398,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
         let buf = shared_write_buffer_manager.get().unwrap();
         assert!(buf.enabled());
         // The new instance will now use the updated write buffer manager
-        assert_eq!(updated_bytes, buf.buffer_size());
+        assert_eq!(updated_bytes, buf.get_buffer_size());
     }
 
     instance3.close().await?;

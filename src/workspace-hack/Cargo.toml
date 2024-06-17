@@ -56,7 +56,8 @@ hashbrown = { version = "0.14.5", features = ["raw"] }
 hyper = { version = "0.14.27", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.33.0", features = ["json"] }
-itertools = { version = "0.10.5" }
+itertools-5ef9efb8ec2df382 = { package = "itertools", version = "0.12.1" }
+itertools-93f6ce9d446188ac = { package = "itertools", version = "0.10.5" }
 k8s-openapi = { version = "0.20.0", default-features = false, features = ["schemars", "v1_28"] }
 kube = { version = "0.87.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.87.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
@@ -69,7 +70,7 @@ mime_guess = { version = "2.0.3" }
 minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
 mio = { version = "0.8.11", features = ["net", "os-ext"] }
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
-mysql_common = { version = "0.32.1", default-features = false, features = ["binlog", "chrono"] }
+mysql_common = { version = "0.32.4", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
@@ -179,7 +180,8 @@ hashbrown = { version = "0.14.5", features = ["raw"] }
 hyper = { version = "0.14.27", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.33.0", features = ["json"] }
-itertools = { version = "0.10.5" }
+itertools-5ef9efb8ec2df382 = { package = "itertools", version = "0.12.1" }
+itertools-93f6ce9d446188ac = { package = "itertools", version = "0.10.5" }
 k8s-openapi = { version = "0.20.0", default-features = false, features = ["schemars", "v1_28"] }
 kube = { version = "0.87.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.87.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
@@ -192,7 +194,7 @@ mime_guess = { version = "2.0.3" }
 minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
 mio = { version = "0.8.11", features = ["net", "os-ext"] }
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
-mysql_common = { version = "0.32.1", default-features = false, features = ["binlog", "chrono"] }
+mysql_common = { version = "0.32.4", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
@@ -277,6 +279,7 @@ pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] 
 ring = { version = "0.17.7", features = ["std"] }
 
 [target.x86_64-apple-darwin.dependencies]
+bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
@@ -284,6 +287,7 @@ ring = { version = "0.17.7", features = ["std"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
+bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }

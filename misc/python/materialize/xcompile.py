@@ -78,7 +78,7 @@ def target_features(arch: Arch) -> list[str]:
     Sync: This list of features should be kept in sync with the one in ci-builder and .cargo/config.
     """
     if arch == Arch.X86_64:
-        return ["+aes"]
+        return ["+aes", "+pclmulqdq"]
     elif arch == Arch.AARCH64:
         return ["+aes", "+sha2"]
     else:

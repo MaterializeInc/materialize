@@ -277,6 +277,7 @@ RUN if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4e
 # Install Bazel.
 #
 # TODO(parkmycar): Run Bazel in Docker image that does not have access to clang/gcc or any other tools.
+# TODO(parkmycar): Should we use bazelisk and maintain a central Bazel version number?
 
 ARG BAZEL_VERSION="7.1.1"
 
