@@ -125,6 +125,13 @@ pub const PERSIST_SINK_OBEY_READ_ONLY: Config<bool> = Config::new(
     "Whether the compute persist_sink obeys read-only mode.",
 );
 
+/// Whether the compute controller should install introspection subscribes.
+pub const ENABLE_INTROSPECTION_SUBSCRIBES: Config<bool> = Config::new(
+    "enable_compute_introspection_subscribes",
+    false,
+    "Whether the compute controller should install introspection subscribes.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -142,4 +149,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO)
         .add(&COPY_TO_S3_MULTIPART_PART_SIZE_BYTES)
         .add(&PERSIST_SINK_OBEY_READ_ONLY)
+        .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
 }

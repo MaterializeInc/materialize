@@ -64,6 +64,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_columnation_lgalloc": "true",
     "enable_comment": "true",
     "enable_compute_chunked_stack": "true",
+    "enable_compute_introspection_subscribes": "true",
     "enable_connection_validation_syntax": "true",
     "enable_copy_to_expr": "true",
     "enable_disk_cluster_replicas": "true",

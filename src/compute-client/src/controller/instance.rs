@@ -21,6 +21,7 @@ use futures::{future, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
+use mz_compute_types::dyncfgs::ENABLE_INTROSPECTION_SUBSCRIBES;
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
@@ -997,6 +998,10 @@ where
     }
 
     fn install_introspection_subscribes(&mut self, replica_id: ReplicaId) {
+        if !ENABLE_INTROSPECTION_SUBSCRIBES.get(&self.dyncfg) {
+            return;
+        }
+
         let subscribes = self
             .unified_introspection
             .init_subscribes_for_replica(replica_id);
