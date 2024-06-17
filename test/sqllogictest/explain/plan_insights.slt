@@ -95,7 +95,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         },
         "type": "storage"
       }
-    }
+    },
+    "fast_path_clusters": []
   }
 }
 EOF
@@ -311,7 +312,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
         },
         "type": "storage"
       }
-    }
+    },
+    "fast_path_clusters": []
   }
 }
 EOF
@@ -429,7 +431,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         },
         "type": "compute"
       }
-    }
+    },
+    "fast_path_clusters": []
   }
 }
 EOF
@@ -647,7 +650,103 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
         },
         "type": "compute"
       }
+    },
+    "fast_path_clusters": []
+  }
+}
+EOF
+
+statement ok
+CREATE CLUSTER other SIZE '1'
+
+statement ok
+SET CLUSTER = other;
+
+# Ensure fast_path_clusters is set here.
+query T multiline
+EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
+----
+{
+  "plans": {
+    "raw": {
+      "text": "Get materialize.public.t\n\nTarget cluster: other\n",
+      "json": {
+        "Get": {
+          "id": {
+            "Global": {
+              "User": 1
+            }
+          },
+          "typ": {
+            "column_types": [
+              {
+                "scalar_type": "Int32",
+                "nullable": true
+              }
+            ],
+            "keys": []
+          }
+        }
+      }
+    },
+    "optimized": {
+      "global": {
+        "text": "Explained Query:\n  ReadStorage materialize.public.t\n\nSource materialize.public.t\n\nTarget cluster: other\n",
+        "json": {
+          "plans": [
+            {
+              "id": "Explained Query",
+              "plan": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
+                  },
+                  "typ": {
+                    "column_types": [
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      }
+                    ],
+                    "keys": []
+                  },
+                  "access_strategy": "Persist"
+                }
+              }
+            }
+          ],
+          "sources": [
+            {
+              "id": {
+                "User": 1
+              },
+              "op": null
+            }
+          ]
+        }
+      },
+      "fast_path": {
+        "text": "<unknown>",
+        "json": null
+      }
     }
+  },
+  "insights": {
+    "imports": {
+      "u1": {
+        "name": {
+          "database": "materialize",
+          "schema": "public",
+          "item": "t"
+        },
+        "type": "storage"
+      }
+    },
+    "fast_path_clusters": [
+      "quickstart"
+    ]
   }
 }
 EOF

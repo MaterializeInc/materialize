@@ -50,6 +50,7 @@ use crate::coord::{
     TargetCluster, WatchSetResponse,
 };
 use crate::error::AdapterError;
+use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
@@ -275,7 +276,7 @@ impl Coordinator {
                     return;
                 }
                 ExplainPlan(stage) => {
-                    let result = self.peek_stage_explain_plan(&mut ctx, stage);
+                    let result = self.peek_stage_explain_plan(&mut ctx, stage).await;
                     ctx.retire(result);
                     return;
                 }
@@ -569,6 +570,16 @@ impl Coordinator {
             .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
         let session = ctx.session().meta();
         let now = self.catalog().config().now.clone();
+        let catalog = self.owned_catalog();
+        let mut compute_instances = BTreeMap::new();
+        if explain_ctx.needs_plan_insights() {
+            // There's a chance for index skew (indexes were created/deleted between stages) from the
+            // original plan, but that seems acceptable for insights.
+            for cluster in self.catalog().user_clusters() {
+                let snapshot = self.instance_snapshot(cluster.id).expect("must exist");
+                compute_instances.insert(cluster.name.clone(), snapshot);
+            }
+        }
 
         mz_ore::task::spawn_blocking(
             || "optimize peek",
@@ -584,7 +595,7 @@ impl Coordinator {
                             // HIR ⇒ MIR lowering and MIR optimization (local)
                             let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                             // Attach resolved context required to continue the pipeline.
-                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, &session, stats);
+                            let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, stats);
                             // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
                             let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
@@ -595,7 +606,7 @@ impl Coordinator {
                             // HIR ⇒ MIR lowering and MIR optimization (local and global)
                             let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                             // Attach resolved context required to continue the pipeline.
-                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, &session, stats);
+                            let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, stats);
                             // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
                             let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
@@ -609,6 +620,29 @@ impl Coordinator {
                 let stage = match pipeline() {
                     Ok(Either::Left(global_lir_plan)) => {
                         let optimizer = optimizer.unwrap_left();
+                        // Enable fast path cluster calculation for slow path plans.
+                        let needs_plan_insights = explain_ctx.needs_plan_insights();
+                        // Disable anything that uses the optimizer if we only want the notice and
+                        // plan optimization took longer than the threshold. This is to prevent a
+                        // situation where optimizing takes a while and there a lots of clusters,
+                        // which would delay peek execution by the product of those.
+                        let opt_limit = mz_adapter_types::dyncfgs::PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION.get(catalog.system_config().dyncfgs());
+                        let enable_re_optimize =
+                            !(matches!(explain_ctx, ExplainContext::PlanInsightsNotice(_))
+                                && optimizer.duration() > opt_limit);
+                        let insights_ctx = needs_plan_insights.then(|| PlanInsightsContext {
+                            raw_expr: plan.source.clone(),
+                            catalog,
+                            compute_instances,
+                            metrics: optimizer.metrics().clone(),
+                            finishing: optimizer.finishing().clone(),
+                            optimizer_config: optimizer.config().clone(),
+                            session,
+                            timestamp_context,
+                            view_id: optimizer.select_id(),
+                            index_id: optimizer.index_id(),
+                            enable_re_optimize,
+                        });
                         match explain_ctx {
                             ExplainContext::Plan(explain_ctx) => {
                                 let (_, df_meta, _) = global_lir_plan.unapply();
@@ -617,6 +651,7 @@ impl Coordinator {
                                     optimizer,
                                     df_meta,
                                     explain_ctx,
+                                    insights_ctx,
                                 })
                             }
                             ExplainContext::PlanInsightsNotice(optimizer_trace) => {
@@ -631,6 +666,7 @@ impl Coordinator {
                                     plan_insights_optimizer_trace: Some(optimizer_trace),
                                     global_lir_plan,
                                     optimization_finished_at,
+                                    insights_ctx,
                                 })
                             }
                             ExplainContext::None => PeekStage::Finish(PeekStageFinish {
@@ -644,6 +680,7 @@ impl Coordinator {
                                 plan_insights_optimizer_trace: None,
                                 global_lir_plan,
                                 optimization_finished_at,
+                                insights_ctx,
                             }),
                             ExplainContext::Pushdown => {
                                 let (plan, _, _) = global_lir_plan.unapply();
@@ -699,6 +736,7 @@ impl Coordinator {
                                 optimizer,
                                 df_meta: Default::default(),
                                 explain_ctx,
+                                insights_ctx: None,
                             })
                         } else {
                             // In regular `EXPLAIN` contexts, immediately retire
@@ -809,6 +847,7 @@ impl Coordinator {
             plan_insights_optimizer_trace,
             global_lir_plan,
             optimization_finished_at,
+            insights_ctx,
         }: PeekStageFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
         if let Some(id) = ctx.extra.contents() {
@@ -833,13 +872,16 @@ impl Coordinator {
             .override_from(&target_cluster.config.features());
 
         if let Some(trace) = plan_insights_optimizer_trace {
-            let insights = trace.into_plan_insights(
-                &features,
-                &self.catalog().for_session(session),
-                Some(plan.finishing),
-                Some(target_cluster.name.as_str()),
-                df_meta,
-            )?;
+            let insights = trace
+                .into_plan_insights(
+                    &features,
+                    &self.catalog().for_session(session),
+                    Some(plan.finishing),
+                    Some(target_cluster.name.as_str()),
+                    df_meta,
+                    insights_ctx,
+                )
+                .await?;
             session.add_notice(AdapterNotice::PlanInsights(insights));
         }
 
@@ -977,11 +1019,12 @@ impl Coordinator {
     }
 
     #[instrument]
-    fn peek_stage_explain_plan(
+    async fn peek_stage_explain_plan(
         &mut self,
         ctx: &mut ExecuteContext,
         PeekStageExplainPlan {
             optimizer,
+            insights_ctx,
             df_meta,
             explain_ctx:
                 ExplainPlanContext {
@@ -1017,17 +1060,20 @@ impl Coordinator {
         let target_cluster = self.catalog().get_cluster(optimizer.cluster_id());
         let features = optimizer.config().features.clone();
 
-        let rows = optimizer_trace.into_rows(
-            format,
-            &config,
-            &features,
-            &expr_humanizer,
-            finishing,
-            Some(target_cluster.name.as_str()),
-            df_meta,
-            stage,
-            plan::ExplaineeStatementKind::Select,
-        )?;
+        let rows = optimizer_trace
+            .into_rows(
+                format,
+                &config,
+                &features,
+                &expr_humanizer,
+                finishing,
+                Some(target_cluster.name.as_str()),
+                df_meta,
+                stage,
+                plan::ExplaineeStatementKind::Select,
+                insights_ctx,
+            )
+            .await?;
 
         Ok(Self::send_immediate_rows(rows))
     }

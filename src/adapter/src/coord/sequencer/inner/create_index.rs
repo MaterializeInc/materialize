@@ -55,7 +55,9 @@ impl Staged for CreateIndexStage {
             CreateIndexStage::Finish(stage) => {
                 coord.create_index_finish(ctx.session_mut(), stage).await
             }
-            CreateIndexStage::Explain(stage) => coord.create_index_explain(ctx.session(), stage),
+            CreateIndexStage::Explain(stage) => {
+                coord.create_index_explain(ctx.session(), stage).await
+            }
         }
     }
 
@@ -535,7 +537,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    fn create_index_explain(
+    async fn create_index_explain(
         &mut self,
         session: &Session,
         CreateIndexExplain {
@@ -576,17 +578,20 @@ impl Coordinator {
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
 
-        let rows = optimizer_trace.into_rows(
-            format,
-            &config,
-            &features,
-            &expr_humanizer,
-            None,
-            Some(target_cluster.name.as_str()),
-            df_meta,
-            stage,
-            plan::ExplaineeStatementKind::CreateIndex,
-        )?;
+        let rows = optimizer_trace
+            .into_rows(
+                format,
+                &config,
+                &features,
+                &expr_humanizer,
+                None,
+                Some(target_cluster.name.as_str()),
+                df_meta,
+                stage,
+                plan::ExplaineeStatementKind::CreateIndex,
+                None,
+            )
+            .await?;
 
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
     }

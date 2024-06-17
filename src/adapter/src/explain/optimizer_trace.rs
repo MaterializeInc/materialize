@@ -32,7 +32,7 @@ use tracing::dispatcher;
 use tracing_subscriber::prelude::*;
 
 use crate::coord::peek::FastPathPlan;
-use crate::explain::insights;
+use crate::explain::insights::{self, PlanInsightsContext};
 use crate::explain::Explainable;
 use crate::AdapterError;
 
@@ -126,7 +126,7 @@ impl OptimizerTrace {
 
     /// Convert the optimizer trace into a vector or rows that can be returned
     /// to the client.
-    pub fn into_rows(
+    pub async fn into_rows(
         self,
         format: ExplainFormat,
         config: &ExplainConfig,
@@ -137,6 +137,7 @@ impl OptimizerTrace {
         dataflow_metainfo: DataflowMetainfo,
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
+        insights_ctx: Option<PlanInsightsContext>,
     ) -> Result<Vec<Row>, AdapterError> {
         let collect_all = |format| {
             self.collect_all(
@@ -200,6 +201,17 @@ impl OptimizerTrace {
                     })
                 };
 
+                let is_fast_path = fast_path_plan.is_some();
+                let mut plan_insights =
+                    insights::plan_insights(humanizer, global_plan, fast_path_plan);
+                if let (Some(plan_insights), Some(insights_ctx), false) =
+                    (plan_insights.as_mut(), insights_ctx, is_fast_path)
+                {
+                    if insights_ctx.enable_re_optimize {
+                        plan_insights.compute_fast_path_clusters(insights_ctx).await;
+                    }
+                }
+
                 let output = serde_json::json!({
                     "plans": {
                         "raw": get_plan(NamedPlan::Raw),
@@ -208,7 +220,7 @@ impl OptimizerTrace {
                             "fast_path": get_plan(NamedPlan::FastPath),
                         }
                     },
-                    "insights": insights::plan_insights(humanizer, global_plan, fast_path_plan),
+                    "insights": plan_insights,
                 });
                 let output = serde_json::to_string_pretty(&output).expect("JSON string");
                 vec![Row::pack_slice(&[Datum::from(output.as_str())])]
@@ -270,25 +282,29 @@ impl OptimizerTrace {
 
     /// Collect a [`insights::PlanInsights`] with insights about the the
     /// optimized plans rendered as a JSON `String`.
-    pub fn into_plan_insights(
+    pub async fn into_plan_insights(
         self,
         features: &OptimizerFeatures,
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
         target_cluster: Option<&str>,
         dataflow_metainfo: DataflowMetainfo,
+        insights_ctx: Option<PlanInsightsContext>,
     ) -> Result<String, AdapterError> {
-        let rows = self.into_rows(
-            ExplainFormat::Json,
-            &ExplainConfig::default(),
-            features,
-            humanizer,
-            row_set_finishing,
-            target_cluster,
-            dataflow_metainfo,
-            ExplainStage::PlanInsights,
-            plan::ExplaineeStatementKind::Select,
-        )?;
+        let rows = self
+            .into_rows(
+                ExplainFormat::Json,
+                &ExplainConfig::default(),
+                features,
+                humanizer,
+                row_set_finishing,
+                target_cluster,
+                dataflow_metainfo,
+                ExplainStage::PlanInsights,
+                plan::ExplaineeStatementKind::Select,
+                insights_ctx,
+            )
+            .await?;
 
         // When using `ExplainStage::PlanInsights`, we're guaranteed that the
         // output is a single row containing a single column containing the plan

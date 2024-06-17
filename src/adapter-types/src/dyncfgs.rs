@@ -9,6 +9,8 @@
 
 //! Dyncfgs used by the adapter layer.
 
+use std::time::Duration;
+
 use mz_dyncfg::{Config, ConfigSet};
 
 pub const ALLOW_USER_SESSIONS: Config<bool> = Config::new(
@@ -24,9 +26,22 @@ pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.",
 );
 
+/// The plan insights notice will not investigate fast path clusters if plan optimization took longer than this.
+pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Duration> = Config::new(
+    "plan_insights_notice fast_path_clusters_optimize_duration",
+    // Looking at production values of the mz_optimizer_e2e_optimization_time_seconds metric, most
+    // optimizations run faster than 10ms, so this should still work well for most queries. We want
+    // to avoid the case where an optimization took just under this value and there are lots of
+    // clusters, so the extra delay to produce the plan insights notice will take the optimization
+    // time * the number of clusters longer.
+    Duration::from_millis(10),
+    "Enable plan insights fast path clusters calculation if the optimize step took less than this duration.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
+        .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
 }
