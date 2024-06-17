@@ -31,11 +31,43 @@ cmake(
     lib_source = ":all_srcs",
     build_args = ["-j8"],
     generate_args = [
+        # Features enabled by the Rust `rdkafka-sys` crate.
         "-DRDKAFKA_BUILD_STATIC=1",
         "-DRDKAFKA_BUILD_TESTS=0",
         "-DRDKAFKA_BUILD_EXAMPLES=0",
         "-DCMAKE_INSTALL_LIBDIR=lib",
+        "-DWITH_ZLIB=1",
+        "-DWITH_ZSTD=1",
+        "-DWITH_SSL=1",
+        "-DWITH_SASL_SCRAM=1",
+        "-DWITH_SASL_OAUTHBEARER=1",
+        # Additional features of librdkafka that we disable.
+        "-DWITH_CURL=0",
+        "-DWITH_SASL=0",
+        "-DENABLE_LZ4_EXT=0",
+        # `cmake` tries _very_ hard to find libraries to link against, and it
+        # generally prefers dynamic libraries in the sysroot, which is exactly
+        # what we don't want because it breaks hermeticity.
+        #
+        # We set a number of options here to limit what `cmake` will search for
+        # so we link against our static libraries.
+        "-DCMAKE_POLICY_DEFAULT_CMP0074=NEW",
+        "-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=0",
+        "-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=0",
+        "-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=0",
+        # Uncomment this if you ever need to debug what library cmake is resolving.
+        # "-DCMAKE_FIND_DEBUG_MODE=TRUE",
     ],
+    env = {
+        # Note: casing here is important.
+        "OpenSSL_ROOT": "$(execpath @openssl//:openssl_root)",
+    },
+    deps = [
+        "@zlib//:zlib",
+        "@openssl//:openssl",
+        "@zstd//:zstd",
+    ],
+    build_data = ["@openssl//:openssl_root"],
     out_static_libs = ["librdkafka.a"],
 )
 

@@ -129,25 +129,31 @@ cmake(
         "-DWITH_SNAPPY=1",
         "-DWITH_LZ4=1",
         "-DWITH_ZSTD=1",
-        "-DWITH_ZLIB=1",
-        "-DWITH_BZIP2=1",
         "-DWITH_GFLAGS=OFF",
         "-DWITH_ALL_TESTS=OFF",
         "-DWITH_TESTS=OFF",
         "-DWITH_TOOLS=OFF",
         "-DUSE_RTTI=1",
         "-DROCKSDB_BUILD_SHARED=OFF",
+        # `cmake` tries _very_ hard to find libraries to link against, and it
+        # generally prefers dynamic libraries in the sysroot, which is exactly
+        # what we don't want because it breaks hermeticity.
+        #
+        # We set a number of options here to limit what `cmake` will search for
+        # so we link against our static libraries.
+        "-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=0",
+        "-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=0",
+        "-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=0",
+        # Uncomment this if you ever need to debug what library cmake is resolving.
+        # "-DCMAKE_FIND_DEBUG_MODE=TRUE",
     ],
     lib_source = ":rocksdb_srcs",
     targets = ["rocksdb"],
     out_static_libs = ["librocksdb.a"],
     deps = [
         ":snappy",
-        "@jemalloc//:jemalloc",
         "@lz4//:lz4",
         "@zstd//:zstd",
-        "@zlib//:zlib",
-        "@bzip2//:bzip2",
     ],
     visibility = ["//visibility:public"],
 )
