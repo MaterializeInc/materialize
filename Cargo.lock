@@ -2378,9 +2378,9 @@ dependencies = [
 
 [[package]]
 name = "flatcontainer"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48bf7552d4ab459c1fc6894d9895b5d21485fddf9885190c6ae690cbfca24a79"
+checksum = "bcaca60d6093f2c5328fe97b9dfafa16a3968577bc5df75ebd6b23ea79b0a0a4"
 dependencies = [
  "cfg-if",
  "paste",
@@ -5758,6 +5758,7 @@ dependencies = [
  "enum-kinds",
  "enum_dispatch",
  "fast-float",
+ "flatcontainer",
  "hex",
  "insta",
  "itertools 0.10.5",

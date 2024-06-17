@@ -387,3 +387,85 @@ where
         })
     }
 }
+
+mod flatcontainer {
+    use differential_dataflow::difference::Semigroup;
+    use differential_dataflow::lattice::Lattice;
+    use differential_dataflow::operators::arrange::Arranged;
+    use differential_dataflow::trace::TraceReader;
+    use differential_dataflow::Data;
+    use std::fmt::Debug;
+    use timely::container::flatcontainer::{Containerized, IntoOwned, Push, Region, ReserveItems};
+    use timely::dataflow::Scope;
+    use timely::progress::Timestamp;
+    use timely::PartialOrder;
+
+    use crate::extensions::arrange::{log_arrangement_size_inner, ArrangementSize};
+    use crate::typedefs::{FlatKeyValAgent, FlatKeyValSpine};
+
+    impl<G, K, V, T, R, C> ArrangementSize for Arranged<G, FlatKeyValAgent<K, V, T, R, C>>
+    where
+        Self: Clone,
+        G: Scope<Timestamp = T>,
+        G::Timestamp: Lattice + Ord + Containerized,
+        K: Data + Containerized,
+        K::Region: Clone
+            + Region<Owned = K>
+            + Push<K>
+            + for<'a> Push<<K::Region as Region>::ReadItem<'a>>
+            + for<'a> ReserveItems<<K::Region as Region>::ReadItem<'a>>,
+        for<'a> <K::Region as Region>::ReadItem<'a>: Copy + Debug + Ord,
+        V: Data + Containerized,
+        V::Region: Clone
+            + Push<V>
+            + for<'a> Push<<V::Region as Region>::ReadItem<'a>>
+            + Region<Owned = V>
+            + for<'a> ReserveItems<<V::Region as Region>::ReadItem<'a>>,
+        for<'a> <V::Region as Region>::ReadItem<'a>: Copy + Debug + Ord,
+        T: Containerized
+            + Lattice
+            + for<'a> PartialOrder<<T::Region as Region>::ReadItem<'a>>
+            + Timestamp,
+        T::Region: Clone
+            + Push<T>
+            + for<'a> Push<<T::Region as Region>::ReadItem<'a>>
+            + Region<Owned = T>
+            + for<'a> ReserveItems<<T::Region as Region>::ReadItem<'a>>,
+        for<'a> <T::Region as Region>::ReadItem<'a>:
+            Copy + Debug + IntoOwned<'a, Owned = T> + Ord + PartialOrder<T>,
+        R: Containerized
+            + Default
+            + Ord
+            + Semigroup
+            + for<'a> Semigroup<<R::Region as Region>::ReadItem<'a>>
+            + 'static,
+        R::Region: Clone
+            + Push<R>
+            + for<'a> Push<&'a R>
+            + for<'a> Push<<R::Region as Region>::ReadItem<'a>>
+            + Region<Owned = R>
+            + for<'a> ReserveItems<<R::Region as Region>::ReadItem<'a>>,
+        for<'a> <R::Region as Region>::ReadItem<'a>: Copy + Debug + IntoOwned<'a, Owned = R> + Ord,
+        C: 'static,
+    {
+        fn log_arrangement_size(self) -> Self {
+            log_arrangement_size_inner::<_, FlatKeyValSpine<K, V, T, R, C>, _>(self, |trace| {
+                let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+                let mut callback = |siz, cap| {
+                    size += siz;
+                    capacity += cap;
+                    allocations += usize::from(cap > 0);
+                };
+                trace.map_batches(|batch| {
+                    batch.storage.keys.heap_size(&mut callback);
+                    batch.storage.keys_offs.heap_size(&mut callback);
+                    batch.storage.vals.heap_size(&mut callback);
+                    batch.storage.vals_offs.heap_size(&mut callback);
+                    batch.storage.times.heap_size(&mut callback);
+                    batch.storage.diffs.heap_size(&mut callback);
+                });
+                (size, capacity, allocations)
+            })
+        }
+    }
+}

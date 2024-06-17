@@ -12,9 +12,9 @@
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::rc::Rc;
+use std::time::Duration;
 
-use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use differential_dataflow::AsCollection;
+use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
@@ -22,12 +22,13 @@ use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, RowArena, SharedRow, Timestamp};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
+use timely::container::flatcontainer::{Containerized, FlatStack};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::Filter;
+use timely::dataflow::operators::core::Filter;
 
-use crate::extensions::arrange::MzArrange;
+use crate::extensions::arrange::{ArrangementSize, MzArrange};
 use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog};
-use crate::typedefs::{KeyValSpine, RowRowSpine};
+use crate::typedefs::{FlatKeyValSpine, RowRowSpine};
 
 pub(super) type ReachabilityEvent = (
     Vec<usize>,
@@ -51,12 +52,15 @@ pub(super) fn construct<A: Allocate>(
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
-        let (mut logs, token) = Some(event_queue.link).mz_replay::<_, CapacityContainerBuilder<_>>(
+        let (logs, token) = Some(event_queue.link).mz_replay::<_, CapacityContainerBuilder<_>>(
             scope,
             "reachability logs",
             config.interval,
             event_queue.activator,
         );
+
+        type RLogs = <(Duration, usize, ReachabilityEvent) as Containerized>::Region;
+        let mut logs = logs.container::<FlatStack<RLogs>>();
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.
@@ -77,23 +81,29 @@ pub(super) fn construct<A: Allocate>(
         use timely::dataflow::channels::pact::Pipeline;
         let mut input = flatten.new_input(&logs, Pipeline);
 
-        let (mut updates_out, updates) = flatten.new_output::<ConsolidatingContainerBuilder<_>>();
+        type RUpdates = <(
+            ((bool, Vec<usize>, usize, usize, Option<Timestamp>), ()),
+            Timestamp,
+            Diff,
+        ) as Containerized>::Region;
 
-        let mut buffer = Vec::new();
+        let (mut updates_out, updates) =
+            flatten.new_output::<CapacityContainerBuilder<FlatStack<RUpdates>>>();
+
         flatten.build(move |_capability| {
             move |_frontiers| {
                 let mut updates = updates_out.activate();
 
                 input.for_each(|cap, data| {
                     let mut updates_session = updates.session_with_builder(&cap);
-                    data.swap(&mut buffer);
-
-                    for (time, _worker, (addr, massaged)) in buffer.drain(..) {
-                        let time_ms = (((time.as_millis() / interval_ms) + 1) * interval_ms)
+                    for (time, _worker, (addr, massaged)) in data.iter() {
+                        let time: Duration = time;
+                        let time_ms: Timestamp = (((time.as_millis() / interval_ms) + 1)
+                            * interval_ms)
                             .try_into()
                             .expect("must fit");
                         for (source, port, update_type, ts, diff) in massaged {
-                            let datum = (update_type, addr.clone(), source, port, ts);
+                            let datum = (update_type, addr, source, port, ts);
                             updates_session.give(((datum, ()), time_ms, diff));
                         }
                     }
@@ -101,12 +111,14 @@ pub(super) fn construct<A: Allocate>(
             }
         });
 
-        let updates = updates
-            .as_collection()
-            .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(
-                Pipeline,
-                "PreArrange Timely reachability",
-            );
+        type K = (bool, Vec<usize>, usize, usize, Option<Timestamp>);
+        #[allow(clippy::disallowed_methods)]
+        let updates = arrange_core::<_, _, FlatKeyValSpine<K, (), Timestamp, Diff, _>>(
+            &updates,
+            Pipeline,
+            "PreArrange Timely reachability",
+        )
+        .log_arrangement_size();
 
         let mut result = BTreeMap::new();
         for variant in logs_active {
@@ -123,17 +135,17 @@ pub(super) fn construct<A: Allocate>(
                 let updates =
                     updates.as_collection(move |(update_type, addr, source, port, ts), _| {
                         let row_arena = RowArena::default();
-                        let update_type = if *update_type { "source" } else { "target" };
+                        let update_type = if update_type { "source" } else { "target" };
                         let binding = SharedRow::get();
                         let mut row_builder = binding.borrow_mut();
                         row_builder.packer().push_list(
                             addr.iter()
                                 .chain_one(source)
-                                .map(|id| Datum::UInt64(u64::cast_from(*id))),
+                                .map(|id| Datum::UInt64(u64::cast_from(id))),
                         );
                         let datums = &[
                             row_arena.push_unary_row(row_builder.clone()),
-                            Datum::UInt64(u64::cast_from(*port)),
+                            Datum::UInt64(u64::cast_from(port)),
                             Datum::UInt64(u64::cast_from(worker_index)),
                             Datum::String(update_type),
                             Datum::from(ts.clone()),
