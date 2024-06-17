@@ -233,17 +233,6 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.                                                                                                                              |
 | `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation.                                                                                                                             |
 
-### `mz_cluster_replica_heartbeats`
-
-The `mz_cluster_replica_heartbeats` table gives the last known heartbeat of all
-extant cluster replicas.
-
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_heartbeats -->
-| Field             | Type                           | Meaning                                   |
-| ----------------- | ------------------------------ | --------                                  |
-| `replica_id`      | [`text`]                       | The ID of a cluster replica.              |
-| `last_heartbeat`  | [`timestamp with time zone`]   | The time of the replica's last heartbeat. |
-
 ### `mz_cluster_replica_history`
 
 The `mz_cluster_replica_history` view contains information about the timespan of

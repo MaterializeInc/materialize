@@ -2903,18 +2903,6 @@ fn test_auto_run_on_introspection_feature_enabled() {
         .unwrap();
     assert_catalog_server_notice(true);
 
-    // We add a retry here since it might take a moment to get a replica heartbeat.
-    let _row = Retry::default()
-        .max_tries(5)
-        .retry(|_state| {
-            client.query_one(
-                "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
-                &[],
-            )
-        })
-        .unwrap();
-    assert_catalog_server_notice(true);
-
     // Start our subscribe.
     client
         .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_functions);")
@@ -3000,18 +2988,6 @@ fn test_auto_run_on_introspection_feature_disabled() {
 
     let _row = client
         .query_one("SELECT * FROM pg_attribute LIMIT 1", &[])
-        .unwrap();
-    assert_notice(None);
-
-    // We add a retry here since it might take a moment to get a replica heartbeat.
-    let _row = Retry::default()
-        .max_tries(5)
-        .retry(|_state| {
-            client.query_one(
-                "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
-                &[],
-            )
-        })
         .unwrap();
     assert_notice(None);
 

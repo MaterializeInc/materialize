@@ -11,10 +11,13 @@
 
 > CREATE CLUSTER c REPLICAS (r (SIZE '2-2'))
 
-# Note: We rely on testdrive's retry behavior here, as it takes some time for
-# the first replica heartbeat to arrive.
+$ set-from-sql var=now
+SELECT mz_now()::text
 
-> SELECT count(*)
-  FROM mz_cluster_replicas r, mz_internal.mz_cluster_replica_heartbeats h
-  WHERE r.id = h.replica_id AND r.name = 'r'
-1
+# Note: We rely on testdrive's retry behavior here, as it takes some time for
+# the first frontiers message to arrive.
+
+> SELECT bool_and(f.write_frontier > ${now})
+  FROM mz_cluster_replicas r, mz_internal.mz_cluster_replica_frontiers f
+  WHERE r.id = f.replica_id AND r.name = 'r'
+true

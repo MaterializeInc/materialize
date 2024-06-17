@@ -549,7 +549,6 @@ mz_arrangement_records_raw                   log   <null>   <null>
 mz_arrangement_sharing_raw                   log   <null>   <null>
 mz_aws_privatelink_connection_status_history source <null>  <null>
 mz_cluster_replica_frontiers                 source <null>  <null>
-mz_cluster_replica_heartbeats                source <null>  <null>
 mz_compute_dependencies                      source <null>  <null>
 mz_compute_error_counts_raw                  log   <null>   <null>
 mz_compute_exports_per_worker                log   <null>   <null>

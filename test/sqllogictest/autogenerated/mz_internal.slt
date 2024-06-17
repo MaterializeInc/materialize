@@ -134,12 +134,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  disk_percent  double␠precision
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_heartbeats' ORDER BY position
-----
-1  replica_id  text
-2  last_heartbeat  timestamp␠with␠time␠zone
-
-query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_history' ORDER BY position
 ----
 1  replica_id  text
@@ -767,7 +761,6 @@ mz_aws_connections
 mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
 mz_cluster_replica_frontiers
-mz_cluster_replica_heartbeats
 mz_cluster_replica_history
 mz_cluster_replica_metrics
 mz_cluster_replica_statuses
