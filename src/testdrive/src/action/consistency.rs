@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::io::Write as _;
 use std::str::FromStr;
@@ -145,8 +145,14 @@ async fn check_coordinator(state: &State) -> Result<(), anyhow::Error> {
 /// Checks that the in-memory catalog matches what we have persisted on disk.
 async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
     #[derive(Debug, Deserialize)]
+    struct StorageMetadata {
+        unfinalized_shards: Option<BTreeSet<String>>,
+    }
+
+    #[derive(Debug, Deserialize)]
     struct CatalogDump {
         system_parameter_defaults: Option<BTreeMap<String, String>>,
+        storage_metadata: Option<StorageMetadata>,
     }
 
     // Dump the in-memory catalog state of the Materialize environment that we're
@@ -174,12 +180,26 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
         return Ok(());
     };
 
+    let unfinalized_shards = dump
+        .storage_metadata
+        .and_then(|storage_metadata| storage_metadata.unfinalized_shards);
+
     // Load the on-disk catalog and dump its state.
     let maybe_disk_catalog = state
         .with_catalog_copy(system_parameter_defaults, |catalog| catalog.state().clone())
         .await
         .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?
-        .map(|catalog| catalog.dump().expect("state must be dumpable"));
+        .map(|catalog| {
+            catalog
+                // The set of unfinalized shards in the catalog are updated asynchronously by
+                // background processes. As a result, the value may legitimately change after
+                // fetching the memory catalog but before fetching the disk catalog, causing the
+                // comparison to fail. This is a gross hack that always sets the disk catalog's
+                // unfinalized shards equal to the memory catalog's unfinalized shards to ignore
+                // false negatives. Unfortunately, we also end up ignoring true negatives.
+                .dump(unfinalized_shards)
+                .expect("state must be dumpable")
+        });
     let Some(disk_catalog) = maybe_disk_catalog else {
         // TODO(parkmycar, def-): Ideally this could be an error, but a lot of test suites fail. We
         // should explicitly disable consistency check in these test suites.
