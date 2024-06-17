@@ -10,12 +10,14 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Debug, Write};
 
+use crate::platforms::PlatformVariant;
 use crate::targets::RustTarget;
 
 pub mod args;
 pub mod config;
 pub mod context;
 pub mod header;
+pub mod platforms;
 pub mod rules;
 pub mod targets;
 
@@ -238,6 +240,16 @@ impl<T> List<T> {
     }
 }
 
+impl<A, B, T> From<T> for List<A>
+where
+    B: Into<A>,
+    T: IntoIterator<Item = B>,
+{
+    fn from(value: T) -> Self {
+        List::from_iter(value.into_iter().map(|x| x.into()))
+    }
+}
+
 impl<A> FromIterator<A> for List<A> {
     fn from_iter<T: IntoIterator<Item = A>>(iter: T) -> Self {
         List {
@@ -431,6 +443,69 @@ impl ToBazelDefinition for Glob {
         write!(writer, "glob(")?;
         self.includes.format(writer)?;
         write!(writer, ")")?;
+
+        Ok(())
+    }
+}
+
+/// Helper for formatting a [`select({ ... })`](https://bazel.build/reference/be/functions#select) function.
+///
+/// ```
+/// use cargo_gazelle::{
+///     List,
+///     QuotedString,
+///     Select,
+///     ToBazelDefinition,
+/// };
+/// use cargo_gazelle::platforms::PlatformVariant;
+///
+/// let features = List::new(["json"]);
+/// let features = [(PlatformVariant::Aarch64MacOS, features)];
+///
+/// let select: Select<List<QuotedString>> = Select::new(features, List::empty());
+/// assert_eq!(select.to_bazel_definition(), "select({\n\t\"macos_arm\": [\"json\"],\n\t\"//conditions:default\": [],\n})");
+/// ```
+#[derive(Debug)]
+pub struct Select<T> {
+    entries: BTreeMap<PlatformVariant, T>,
+    default: T,
+}
+
+impl<T> Select<T> {
+    pub fn new<E, I>(entires: I, default: E) -> Select<T>
+    where
+        E: Into<T>,
+        I: IntoIterator<Item = (PlatformVariant, E)>,
+    {
+        Select {
+            entries: entires
+                .into_iter()
+                .map(|(variant, entry)| (variant, entry.into()))
+                .collect(),
+            default: default.into(),
+        }
+    }
+}
+
+impl<T: ToBazelDefinition> ToBazelDefinition for Select<T> {
+    fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
+        let mut w = AutoIndentingWriter::new(writer);
+
+        writeln!(w, "select({{")?;
+        {
+            let mut w = w.indent();
+            for (variant, entry) in &self.entries {
+                variant.format(&mut w)?;
+                write!(w, ": ")?;
+                entry.format(&mut w)?;
+                writeln!(w, ",")?;
+            }
+
+            write!(w, "\"//conditions:default\": ")?;
+            self.default.format(&mut w)?;
+            writeln!(w, ",")?;
+        }
+        write!(w, "}})")?;
 
         Ok(())
     }

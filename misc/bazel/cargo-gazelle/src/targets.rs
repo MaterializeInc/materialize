@@ -10,19 +10,23 @@
 //! Definitions for the "rules_rust" Bazel targets.
 
 use convert_case::{Case, Casing};
-use guppy::graph::feature::FeatureLabel;
-use guppy::graph::{BuildTarget, BuildTargetId, BuildTargetKind, PackageMetadata};
+use guppy::graph::feature::{FeatureLabel, FeatureSet, StandardFeatures};
+use guppy::graph::{
+    BuildTarget, BuildTargetId, BuildTargetKind, DependencyDirection, PackageMetadata,
+};
+use guppy::platform::EnabledTernary;
 use guppy::DependencyKind;
 
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
 use std::str::FromStr;
 
 use crate::config::{CrateConfig, GlobalConfig};
 use crate::context::CrateContext;
+use crate::platforms::PlatformVariant;
 use crate::rules::Rule;
-use crate::{Dict, Field, FileGroup, Glob, List, QuotedString};
+use crate::{Dict, Field, FileGroup, Glob, List, QuotedString, Select};
 
 use super::{AutoIndentingWriter, ToBazelDefinition};
 
@@ -94,28 +98,42 @@ impl RustLibrary {
         let features: List<_> = if let Some(x) = crate_config.lib().features_override() {
             x.into_iter().map(QuotedString::from).collect()
         } else {
-            crate_features(config, metadata)?
-                .map(QuotedString::from)
-                .collect()
+            let (common, extras) = crate_features(config, metadata)?;
+            let mut features = List::new(common);
+
+            if !extras.is_empty() {
+                let select: Select<List<QuotedString>> = Select::new(extras, vec![]);
+                features = features.concat_other(select);
+            }
+
+            features
         };
 
         // Collect all dependencies.
         let all_deps = WorkspaceDependencies::new(config, metadata);
-        let mut deps = all_deps
-            .iter(DependencyKind::Normal, false)
-            .map(QuotedString::new)
-            .collect::<List<_>>()
-            .concat_other(AllCrateDeps::default().normal());
-        let mut proc_macro_deps = all_deps
-            .iter(DependencyKind::Normal, true)
-            .map(QuotedString::new)
-            .collect::<List<_>>()
-            .concat_other(AllCrateDeps::default().proc_macro());
+        let (deps, extra_deps) = all_deps.iter(DependencyKind::Normal, false);
+        let mut deps = List::new(deps).concat_other(AllCrateDeps::default().normal());
 
         // Add the build script as a dependency, if we have one.
         if let Some(build_script) = build_script {
             let build_script_target = format!(":{}", build_script.name.value.unquoted());
             deps.push_front(QuotedString::new(build_script_target));
+        }
+        // Add extra platform deps if there are any.
+        if !extra_deps.is_empty() {
+            let select: Select<List<QuotedString>> = Select::new(extra_deps, vec![]);
+            deps = deps.concat_other(select);
+        }
+
+        // Collect all proc macro dependencies.
+        let (proc_macro_deps, extra_proc_macro_deps) = all_deps.iter(DependencyKind::Normal, true);
+        let mut proc_macro_deps =
+            List::new(proc_macro_deps).concat_other(AllCrateDeps::default().proc_macro());
+
+        // Add extra platform deps if there are any.
+        if !extra_proc_macro_deps.is_empty() {
+            let select: Select<List<QuotedString>> = Select::new(extra_proc_macro_deps, vec![]);
+            proc_macro_deps = proc_macro_deps.concat_other(select);
         }
 
         // For every library we also generate the tests targets.
@@ -244,16 +262,24 @@ impl RustBinary {
 
         // Collect all dependencies.
         let all_deps = WorkspaceDependencies::new(config, metadata);
-        let mut deps = all_deps
-            .iter(DependencyKind::Normal, false)
-            .map(QuotedString::new)
-            .collect::<List<_>>()
-            .concat_other(AllCrateDeps::default().normal());
-        let mut proc_macro_deps = all_deps
-            .iter(DependencyKind::Normal, true)
-            .map(QuotedString::new)
-            .collect::<List<_>>()
-            .concat_other(AllCrateDeps::default().proc_macro());
+        let (deps, extra_deps) = all_deps.iter(DependencyKind::Normal, false);
+        let (proc_macro_deps, extra_proc_macro_deps) = all_deps.iter(DependencyKind::Normal, true);
+
+        let mut deps: List<QuotedString> =
+            List::new(deps).concat_other(AllCrateDeps::default().normal());
+        // Add extra platform deps if there are any.
+        if !extra_deps.is_empty() {
+            let select: Select<List<QuotedString>> = Select::new(extra_deps, vec![]);
+            deps = deps.concat_other(select);
+        }
+
+        let mut proc_macro_deps: List<QuotedString> =
+            List::new(proc_macro_deps).concat_other(AllCrateDeps::default().proc_macro());
+        // Add extra platform deps if there are any.
+        if !extra_proc_macro_deps.is_empty() {
+            let select: Select<List<QuotedString>> = Select::new(extra_proc_macro_deps, vec![]);
+            proc_macro_deps = proc_macro_deps.concat_other(select);
+        }
 
         // Add the library crate as a dep if it isn't already.
         let crate_has_lib = metadata
@@ -373,13 +399,27 @@ impl RustTest {
         let crate_name = metadata.name().to_case(Case::Snake);
         let name = QuotedString::new(format!("{crate_name}_{}_tests", name));
 
+        // Collect all dependencies.
         let all_deps = WorkspaceDependencies::new(config, metadata);
+        let (deps, extra_deps) = all_deps.iter(DependencyKind::Development, false);
+        let (proc_macro_deps, extra_proc_macro_deps) =
+            all_deps.iter(DependencyKind::Development, true);
+
         let mut deps: List<QuotedString> =
-            List::new(all_deps.iter(DependencyKind::Development, false))
-                .concat_other(AllCrateDeps::default().normal().normal_dev());
-        let mut proc_macro_deps: List<QuotedString> =
-            List::new(all_deps.iter(DependencyKind::Development, true))
-                .concat_other(AllCrateDeps::default().proc_macro().proc_macro_dev());
+            List::new(deps).concat_other(AllCrateDeps::default().normal().normal_dev());
+        // Add extra platform deps if there are any.
+        if !extra_deps.is_empty() {
+            let select: Select<List<QuotedString>> = Select::new(extra_deps, vec![]);
+            deps = deps.concat_other(select);
+        }
+
+        let mut proc_macro_deps: List<QuotedString> = List::new(proc_macro_deps)
+            .concat_other(AllCrateDeps::default().proc_macro().proc_macro_dev());
+        // Add extra platform deps if there are any.
+        if !extra_proc_macro_deps.is_empty() {
+            let select: Select<List<QuotedString>> = Select::new(extra_proc_macro_deps, vec![]);
+            proc_macro_deps = proc_macro_deps.concat_other(select);
+        }
 
         if matches!(kind, RustTestKind::Integration(_)) {
             let dep = format!(":{crate_name}");
@@ -606,12 +646,17 @@ impl RustDocTest {
         let name = QuotedString::new(format!("{crate_name}_doc_test"));
         let crate_ = QuotedString::new(format!(":{crate_name}"));
 
+        // Collect all dependencies.
         let all_deps = WorkspaceDependencies::new(config, metadata);
-        let deps = all_deps
-            .iter(DependencyKind::Development, false)
-            .map(QuotedString::new)
-            .collect::<List<_>>()
-            .concat_other(AllCrateDeps::default().normal().normal_dev());
+        let (deps, extra_deps) = all_deps.iter(DependencyKind::Development, false);
+        let mut deps: List<QuotedString> =
+            List::new(deps).concat_other(AllCrateDeps::default().normal().normal_dev());
+
+        // Add extra platform deps if there are any.
+        if !extra_deps.is_empty() {
+            let select: Select<List<QuotedString>> = Select::new(extra_deps, vec![]);
+            deps = deps.concat_other(select);
+        }
 
         Ok(Some(RustDocTest {
             name: Field::new("name", name),
@@ -689,18 +734,27 @@ impl CargoBuildScript {
             List::new(vec![QuotedString::new(script_src.to_string())]),
         );
 
-        // Determine the dependencies for this build script.
+        // Collect all dependencies.
         let all_deps = WorkspaceDependencies::new(config, metadata);
-        let deps = all_deps
-            .iter(DependencyKind::Build, false)
-            .map(QuotedString::new)
-            .collect::<List<QuotedString>>()
-            .concat_other(AllCrateDeps::default().normal().build());
-        let proc_macro_deps = all_deps
-            .iter(DependencyKind::Build, true)
-            .map(QuotedString::new)
-            .collect::<List<QuotedString>>()
+        let (deps, extra_deps) = all_deps.iter(DependencyKind::Build, false);
+        let (proc_macro_deps, extra_proc_macro_deps) =
+            all_deps.iter(DependencyKind::Development, true);
+
+        let mut deps: List<QuotedString> =
+            List::new(deps).concat_other(AllCrateDeps::default().normal().build());
+        // Add extra platform deps if there are any.
+        if !extra_deps.is_empty() {
+            let select: Select<List<QuotedString>> = Select::new(extra_deps, vec![]);
+            deps = deps.concat_other(select);
+        }
+
+        let mut proc_macro_deps: List<QuotedString> = List::new(proc_macro_deps)
             .concat_other(AllCrateDeps::default().proc_macro().build_proc_macro());
+        // Add extra platform deps if there are any.
+        if !extra_proc_macro_deps.is_empty() {
+            let select: Select<List<QuotedString>> = Select::new(extra_proc_macro_deps, vec![]);
+            proc_macro_deps = proc_macro_deps.concat_other(select);
+        }
 
         // Generate any extra targets that we need.
         let mut extras: Vec<Box<dyn ToBazelDefinition>> = Vec::new();
@@ -946,53 +1000,166 @@ impl<'a> WorkspaceDependencies<'a> {
         WorkspaceDependencies { config, package }
     }
 
+    /// Returns a set of dependencies that are common to all platforms, and
+    /// then any additional dependencies that need to be enabled for a specific
+    /// platform.
     pub fn iter(
         &self,
         kind: DependencyKind,
         proc_macro: bool,
-    ) -> impl Iterator<Item = String> + 'a {
-        self.package
-            .direct_links()
-            // Tests and build scipts can rely on normal dependencies, so always make sure they're
-            // included.
-            .filter(move |link| link.normal().is_present() || link.req_for_kind(kind).is_present())
-            .map(|link| link.to())
-            // Ignore deps filtered out by the global config.
-            .filter(|meta| self.config.include_dep(meta.name()))
-            // Filter proc_macro deps.
-            .filter(move |meta| meta.is_proc_macro() == proc_macro)
-            // Filter map down to only deps in the workspace, and their path.
-            .filter_map(|meta| meta.source().workspace_path().map(|p| (p, meta)))
-            .map(|(path, meta)| {
-                let crate_name = meta.name().to_case(Case::Snake);
-                format!("//{}:{}", path, crate_name)
+    ) -> (BTreeSet<String>, BTreeMap<PlatformVariant, Vec<String>>) {
+        let feature_set = platform_feature_sets(self.package);
+
+        let dependencies: BTreeMap<_, _> = feature_set
+            .into_iter()
+            .map(|(platform, feature_set)| {
+                // Convert the feature set to the set of packages it enables.
+                let deps: BTreeSet<_> = feature_set
+                    .to_package_set()
+                    .links(DependencyDirection::Reverse)
+                    // Filter down to only direct dependencies.
+                    .filter(|link| link.from().id() == self.package.id())
+                    // Tests and build scipts can rely on normal dependencies, so always make sure they're
+                    // included.
+                    .filter(move |link| {
+                        link.normal().is_present() || link.req_for_kind(kind).is_present()
+                    })
+                    .map(|link| link.to())
+                    // Ignore deps filtered out by the global config.
+                    .filter(|meta| self.config.include_dep(meta.name()))
+                    // Filter proc_macro deps.
+                    .filter(move |meta| meta.is_proc_macro() == proc_macro)
+                    // Filter map down to only deps in the workspace, and their path.
+                    .filter_map(|meta| meta.source().workspace_path().map(|p| (p, meta)))
+                    .map(|(path, meta)| {
+                        let crate_name = meta.name().to_case(Case::Snake);
+                        format!("//{}:{}", path, crate_name)
+                    })
+                    .collect();
+
+                (platform, deps)
             })
+            .collect();
+
+        // Dependencies that are common to all platforms.
+        let common = dependencies
+            .iter()
+            .fold(None, |common, (_variant, set)| match common {
+                None => Some(set.clone()),
+                Some(common) => Some(common.intersection(set).cloned().collect()),
+            })
+            .unwrap_or_default();
+
+        // Extra features for each platform that need to be enabled.
+        let extras: BTreeMap<_, _> = dependencies
+            .into_iter()
+            .filter_map(|(variant, features)| {
+                let extra: Vec<_> = features.difference(&common).cloned().collect();
+                if extra.is_empty() {
+                    None
+                } else {
+                    Some((variant, extra))
+                }
+            })
+            .collect();
+
+        (common, extras)
     }
 }
 
+/// Returns a set of Cargo features that are common to all platforms, and then
+/// any additional features that need to be enabled for a specific platform.
 pub fn crate_features<'a>(
     config: &'a GlobalConfig,
     package: &'a PackageMetadata<'a>,
-) -> Result<impl Iterator<Item = String>, anyhow::Error> {
-    let features = package
-        .graph()
-        .feature_graph()
-        .all_features_for(package.id())?;
+) -> Result<(BTreeSet<String>, BTreeMap<PlatformVariant, Vec<String>>), anyhow::Error> {
+    // Resolve feature sets for all of the platforms we care about.
+    let feature_sets = platform_feature_sets(package);
 
-    // Collect into a set to de-dupe.
-    let features: BTreeSet<_> = features
+    // Filter down to just the feature labels for this crate.
+    let features: BTreeMap<_, _> = feature_sets
         .into_iter()
-        .filter_map(|feature| match feature.label() {
-            FeatureLabel::Base => None,
-            FeatureLabel::Named(f) => Some(f),
-            FeatureLabel::OptionalDependency(f) => Some(f),
+        .map(|(platform, feature_set)| {
+            // Filter down to the features for just this crate.
+            let features: BTreeSet<_> = feature_set
+                .features_for(package.id())
+                .expect("package id should be known")
+                .expect("package id should be in the feature set")
+                .into_iter()
+                .filter_map(|feature| match feature.label() {
+                    FeatureLabel::Base => None,
+                    FeatureLabel::Named(f) => Some(f),
+                    FeatureLabel::OptionalDependency(f) => Some(f),
+                })
+                // TODO(parkmycar): We shouldn't ignore features based on name, but if
+                // enabling that feature would result in us depending on a crate we
+                // want to ignore.
+                .filter(|name| config.include_dep(name))
+                .map(|s| s.to_string())
+                .collect();
+
+            (platform, features)
         })
-        // TODO(parkmycar): We shouldn't ignore features based on name, but if
-        // enabling that feature would result in us depending on a crate we
-        // want to ignore.
-        .filter(|name| config.include_dep(name))
-        .map(|name| name.to_string())
         .collect();
 
-    Ok(features.into_iter())
+    // Features that are common to all platforms.
+    let common = features
+        .iter()
+        .fold(None, |common, (_variant, set)| match common {
+            None => Some(set.clone()),
+            Some(common) => Some(common.intersection(set).cloned().collect()),
+        })
+        .unwrap_or_default();
+
+    // Extra features for each platform that need to be enabled.
+    let extras: BTreeMap<_, _> = features
+        .into_iter()
+        .filter_map(|(variant, features)| {
+            let extra: Vec<_> = features.difference(&common).cloned().collect();
+            if extra.is_empty() {
+                None
+            } else {
+                Some((variant, extra))
+            }
+        })
+        .collect();
+
+    Ok((common, extras))
+}
+
+/// Returns a [`FeatureSet`] of reverse dependencies (in other words, all
+/// crates that depend on) for the provided package, for every platform that we
+/// support.
+///
+/// TODO(parkmycar): Make the list of platforms configurable.
+pub fn platform_feature_sets<'a>(
+    package: &'a PackageMetadata<'a>,
+) -> BTreeMap<PlatformVariant, FeatureSet> {
+    // Resolve a feature graph for all crates that depend on this one.
+    let dependents = package
+        .to_package_query(DependencyDirection::Reverse)
+        .resolve()
+        .to_feature_set(StandardFeatures::Default);
+
+    PlatformVariant::all()
+        .iter()
+        .map(|p| {
+            // Resolve all features enabled for the specified platform.
+            let feature_set = dependents
+                .to_feature_query(DependencyDirection::Forward)
+                .resolve_with_fn(|_query, cond_link| {
+                    // Note: We don't currently generate different targets for
+                    // dev or build dependencies, but possibly could if need be.
+                    let normal_enabled = cond_link.normal().enabled_on(p.spec());
+                    let dev_enabled = cond_link.dev().enabled_on(p.spec());
+                    let build_enabled = cond_link.build().enabled_on(p.spec());
+
+                    matches!(normal_enabled, EnabledTernary::Enabled)
+                        || matches!(dev_enabled, EnabledTernary::Enabled)
+                        || matches!(build_enabled, EnabledTernary::Enabled)
+                });
+
+            (*p, feature_set)
+        })
+        .collect()
 }
