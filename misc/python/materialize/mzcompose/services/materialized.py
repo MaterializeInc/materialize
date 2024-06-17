@@ -147,7 +147,6 @@ class Materialized(Service):
             # clusters, so we leave the builtin cluster replica size as is.
             # f"--bootstrap-builtin-cluster-replica-size={self.default_replica_size}",
             f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
-            f"--default-storage-host-size={self.default_storage_size}",
         ]
 
         if external_cockroach:

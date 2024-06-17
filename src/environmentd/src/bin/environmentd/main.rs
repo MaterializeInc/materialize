@@ -435,9 +435,6 @@ pub struct Args {
         value_delimiter = ';'
     )]
     system_parameter_default: Vec<KeyValueArg<String, String>>,
-    /// Default storage host size
-    #[clap(long, env = "DEFAULT_STORAGE_HOST_SIZE")]
-    default_storage_host_size: Option<String>,
     /// The interval in seconds at which to collect storage usage information.
     #[clap(
         long,
