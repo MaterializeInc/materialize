@@ -13,7 +13,8 @@ use hyper::server::conn::AddrIncoming;
 use hyper::{service, Body, Response, Server, StatusCode};
 use mz_ccsr::tls::Identity;
 use mz_ccsr::{
-    Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaReference, SchemaType,
+    Client, CompatibilityLevel, DeleteError, GetByIdError, GetBySubjectError,
+    GetSubjectConfigError, PublishError, SchemaReference, SchemaType,
 };
 use once_cell::sync::Lazy;
 
@@ -51,18 +52,15 @@ async fn test_client() -> Result<(), anyhow::Error> {
 
     assert_eq!(count_schemas(&client, "ccsr-test-").await?, 0);
 
+    let test_subject = "ccsr-test-schema";
+
     let schema_v1_id = client
-        .publish_schema("ccsr-test-schema", schema_v1, SchemaType::Avro, &[])
+        .publish_schema(test_subject, schema_v1, SchemaType::Avro, &[])
         .await?;
     assert!(schema_v1_id > 0);
 
     match client
-        .publish_schema(
-            "ccsr-test-schema",
-            schema_v2_incompat,
-            SchemaType::Avro,
-            &[],
-        )
+        .publish_schema(test_subject, schema_v2_incompat, SchemaType::Avro, &[])
         .await
     {
         Err(PublishError::IncompatibleSchema) => (),
@@ -70,13 +68,13 @@ async fn test_client() -> Result<(), anyhow::Error> {
     }
 
     {
-        let res = client.get_schema_by_subject("ccsr-test-schema").await?;
+        let res = client.get_schema_by_subject(test_subject).await?;
         assert_eq!(schema_v1_id, res.id);
         assert_raw_schemas_eq(schema_v1, &res.raw);
     }
 
     let schema_v2_id = client
-        .publish_schema("ccsr-test-schema", schema_v2, SchemaType::Avro, &[])
+        .publish_schema(test_subject, schema_v2, SchemaType::Avro, &[])
         .await?;
     assert!(schema_v2_id > 0);
     assert!(schema_v2_id > schema_v1_id);
@@ -84,7 +82,7 @@ async fn test_client() -> Result<(), anyhow::Error> {
     assert_eq!(
         schema_v1_id,
         client
-            .publish_schema("ccsr-test-schema", schema_v1, SchemaType::Avro, &[])
+            .publish_schema(test_subject, schema_v1, SchemaType::Avro, &[])
             .await?
     );
 
@@ -98,7 +96,7 @@ async fn test_client() -> Result<(), anyhow::Error> {
     }
 
     {
-        let res = client.get_schema_by_subject("ccsr-test-schema").await?;
+        let res = client.get_schema_by_subject(test_subject).await?;
         assert_eq!(schema_v2_id, res.id);
         assert_raw_schemas_eq(schema_v2, &res.raw);
     }
@@ -127,6 +125,21 @@ async fn test_client() -> Result<(), anyhow::Error> {
         assert_eq!(schema_test_id, res.schema.id);
         assert_raw_schemas_eq(schema_v1, &res.schema.raw);
     }
+
+    // Validate that we can retrieve and change the compatibilty level for a subject
+    let initial_res = client.get_subject_config(test_subject).await;
+    assert!(matches!(
+        initial_res,
+        Err(GetSubjectConfigError::SubjectCompatibilityLevelNotSet)
+    ));
+    client
+        .set_subject_compatibility_level(test_subject, CompatibilityLevel::Full)
+        .await?;
+    let new_compatibility = client
+        .get_subject_config(test_subject)
+        .await?
+        .compatibility_level;
+    assert_eq!(new_compatibility, CompatibilityLevel::Full);
 
     Ok(())
 }

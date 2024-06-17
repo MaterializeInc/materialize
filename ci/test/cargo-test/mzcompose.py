@@ -265,7 +265,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "cargo",
                         "nextest",
                         "run",
-                        "--workspace",
+                        # "--workspace",
                         "--all-features",
                         "--profile=ci",
                         "--cargo-profile=ci",

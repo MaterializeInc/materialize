@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use proptest_derive::Arbitrary;
-use reqwest::{Method, Url};
+use reqwest::{Method, Response, Url};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -83,7 +83,7 @@ impl Client {
     /// Gets the schema with the associated ID.
     pub async fn get_schema_by_id(&self, id: i32) -> Result<Schema, GetByIdError> {
         let req = self.make_request(Method::GET, &["schemas", "ids", &id.to_string()]);
-        let res: GetByIdResponse = send_request(req).await?.expect("json response");
+        let res: GetByIdResponse = send_request(req).await?;
         Ok(Schema {
             id,
             raw: res.schema,
@@ -98,7 +98,7 @@ impl Client {
     /// Gets the latest version of the specified subject.
     pub async fn get_subject_latest(&self, subject: &str) -> Result<Subject, GetBySubjectError> {
         let req = self.make_request(Method::GET, &["subjects", subject, "versions", "latest"]);
-        let res: GetBySubjectResponse = send_request(req).await?.expect("json response");
+        let res: GetBySubjectResponse = send_request(req).await?;
         Ok(Subject {
             schema: Schema {
                 id: res.id,
@@ -109,12 +109,13 @@ impl Client {
         })
     }
 
+    /// Gets the config set for the specified subject
     pub async fn get_subject_config(
         &self,
         subject: &str,
     ) -> Result<SubjectConfig, GetSubjectConfigError> {
         let req = self.make_request(Method::GET, &["config", subject]);
-        let res: SubjectConfig = send_request(req).await?.expect("json response");
+        let res: SubjectConfig = send_request(req).await?;
         Ok(res)
     }
 
@@ -143,7 +144,7 @@ impl Client {
         let mut subjects_queue = vec![(subject.to_owned(), version)];
         while let Some((subject, version)) = subjects_queue.pop() {
             let req = self.make_request(Method::GET, &["subjects", &subject, "versions", &version]);
-            let res: GetBySubjectResponse = send_request(req).await?.expect("json response");
+            let res: GetBySubjectResponse = send_request(req).await?;
             subjects.push(Subject {
                 schema: Schema {
                     id: res.id,
@@ -186,7 +187,7 @@ impl Client {
             schema_type,
             references,
         });
-        let res: PublishResponse = send_request(req).await?.expect("json response");
+        let res: PublishResponse = send_request(req).await?;
         Ok(res.id)
     }
 
@@ -194,20 +195,20 @@ impl Client {
     pub async fn set_subject_compatibility_level(
         &self,
         subject: &str,
-        compatibility_level: &CompatibilityLevel,
+        compatibility_level: CompatibilityLevel,
     ) -> Result<(), SetCompatibilityLevelError> {
         let req = self.make_request(Method::PUT, &["config", subject]);
         let req = req.json(&CompatibilityLevelRequest {
-            compatibility: *compatibility_level,
+            compatibility: compatibility_level,
         });
-        send_request::<serde_json::Value>(req).await?;
+        send_request_raw(req).await?;
         Ok(())
     }
 
     /// Lists the names of all subjects that the schema registry is aware of.
     pub async fn list_subjects(&self) -> Result<Vec<String>, ListError> {
         let req = self.make_request(Method::GET, &["subjects"]);
-        Ok(send_request(req).await?.expect("json response"))
+        Ok(send_request(req).await?)
     }
 
     /// Deletes all schema versions associated with the specified subject.
@@ -218,7 +219,7 @@ impl Client {
     /// to be reused.
     pub async fn delete_subject(&self, subject: &str) -> Result<(), DeleteError> {
         let req = self.make_request(Method::DELETE, &["subjects", subject]);
-        let _res: Vec<i32> = send_request(req).await?.expect("json response");
+        send_request_raw(req).await?;
         Ok(())
     }
 
@@ -234,7 +235,7 @@ impl Client {
             Method::GET,
             &["schemas", "ids", &id.to_string(), "versions"],
         );
-        let res: Vec<SubjectVersion> = send_request(req).await?.expect("json response");
+        let res: Vec<SubjectVersion> = send_request(req).await?;
 
         // NOTE NOTE NOTE
         // We take the FIRST subject that matches this schema id. This could be DIFFERENT
@@ -260,22 +261,19 @@ impl Client {
     }
 }
 
-async fn send_request<T>(req: reqwest::RequestBuilder) -> Result<Option<T>, UnhandledError>
+async fn send_request<T>(req: reqwest::RequestBuilder) -> Result<T, UnhandledError>
 where
     T: DeserializeOwned,
 {
+    let res = send_request_raw(req).await?;
+    Ok(res.json().await?)
+}
+
+async fn send_request_raw(req: reqwest::RequestBuilder) -> Result<Response, UnhandledError> {
     let res = req.send().await?;
     let status = res.status();
     if status.is_success() {
-        if res
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .is_some_and(|f| f.to_str().ok().map_or(false, |s| s.contains("json")))
-        {
-            Ok(res.json().await?)
-        } else {
-            Ok(None)
-        }
+        Ok(res)
     } else {
         match res.json::<ErrorResponse>().await {
             Ok(err_res) => Err(UnhandledError::Api {
@@ -409,6 +407,8 @@ pub struct SubjectConfig {
 pub enum GetSubjectConfigError {
     /// The requested subject does not exist.
     SubjectNotFound,
+    /// The compatibility level for the subject has not been set.
+    SubjectCompatibilityLevelNotSet,
     /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
     /// An internal server error occurred.
@@ -418,16 +418,12 @@ pub enum GetSubjectConfigError {
 impl From<UnhandledError> for GetSubjectConfigError {
     fn from(err: UnhandledError) -> GetSubjectConfigError {
         match err {
-            UnhandledError::Transport(err) => {
-                if err.status() == Some(reqwest::StatusCode::NOT_FOUND) {
-                    GetSubjectConfigError::SubjectNotFound
-                } else {
-                    GetSubjectConfigError::Transport(err)
-                }
-            }
-            UnhandledError::Api { code, message } => {
-                GetSubjectConfigError::Server { code, message }
-            }
+            UnhandledError::Transport(err) => GetSubjectConfigError::Transport(err),
+            UnhandledError::Api { code, message } => match code {
+                404 => GetSubjectConfigError::SubjectNotFound,
+                40408 => GetSubjectConfigError::SubjectCompatibilityLevelNotSet,
+                _ => GetSubjectConfigError::Server { code, message },
+            },
         }
     }
 }
@@ -435,7 +431,9 @@ impl From<UnhandledError> for GetSubjectConfigError {
 impl Error for GetSubjectConfigError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            GetSubjectConfigError::SubjectNotFound | GetSubjectConfigError::Server { .. } => None,
+            GetSubjectConfigError::SubjectNotFound
+            | GetSubjectConfigError::SubjectCompatibilityLevelNotSet
+            | GetSubjectConfigError::Server { .. } => None,
             GetSubjectConfigError::Transport(err) => Some(err),
         }
     }
@@ -445,6 +443,9 @@ impl fmt::Display for GetSubjectConfigError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             GetSubjectConfigError::SubjectNotFound => write!(f, "subject not found"),
+            GetSubjectConfigError::SubjectCompatibilityLevelNotSet => {
+                write!(f, "subject level compatibility not set")
+            }
             GetSubjectConfigError::Transport(err) => write!(f, "transport: {}", err),
             GetSubjectConfigError::Server { code, message } => {
                 write!(f, "server error {}: {}", code, message)

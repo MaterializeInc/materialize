@@ -2835,8 +2835,9 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
             }
             let option_name = option.name.clone();
             let option_name_str = option_name.to_ast_string();
-            let better_error = |e: PlanError| {
-                PlanError::Unstructured(format!("invalid {}: {}", option_name.to_ast_string(), e))
+            let better_error = |e: PlanError| PlanError::InvalidOptionValue {
+                option_name: option_name.to_ast_string(),
+                err: e.into(),
             };
             let to_compatibility_level = |val: Option<WithOptionValue<Aug>>| {
                 val.map(|s| match s {

@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use mz_ccsr::GetSubjectConfigError;
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::CollectionExt;
 use mz_ore::future::{InTask, OreFutureExt};
@@ -244,8 +245,24 @@ pub async fn publish_kafka_schemas(
         let ccsr = ccsr.clone();
         let key_subject = key_subject.clone();
         async move {
-            ccsr.set_subject_compatibility_level(&key_subject, &key_compatibility_level)
-                .await
+            // Only update the compatibility level if it's not already set to something.
+            match ccsr.get_subject_config(&key_subject).await {
+                Ok(config) => {
+                    if config.compatibility_level != key_compatibility_level {
+                        tracing::debug!(
+                            "key compatibility level '{}' does not match intended '{}'",
+                            config.compatibility_level,
+                            key_compatibility_level
+                        );
+                    }
+                    Ok(())
+                }
+                Err(GetSubjectConfigError::SubjectCompatibilityLevelNotSet) => ccsr
+                    .set_subject_compatibility_level(&key_subject, key_compatibility_level)
+                    .await
+                    .map_err(anyhow::Error::from),
+                Err(e) => Err(e.into()),
+            }
         }
         .run_in_task(|| "set_key_compatibility_level".to_string())
         .await
@@ -256,8 +273,25 @@ pub async fn publish_kafka_schemas(
         let ccsr = ccsr.clone();
         let value_subject = value_subject.clone();
         async move {
-            ccsr.set_subject_compatibility_level(&value_subject, &value_compatibility_level)
-                .await
+            // Only update the compatibility level if it's not already set to something.
+            match ccsr.get_subject_config(&value_subject).await {
+                Ok(config) => {
+                    if config.compatibility_level != value_compatibility_level {
+                        tracing::debug!(
+                            "value compatibility level '{}' does not match intended '{}'",
+                            config.compatibility_level,
+                            value_compatibility_level
+                        );
+                    }
+                    Ok(())
+                }
+                Err(GetSubjectConfigError::SubjectCompatibilityLevelNotSet)
+                | Err(GetSubjectConfigError::SubjectNotFound) => ccsr
+                    .set_subject_compatibility_level(&value_subject, value_compatibility_level)
+                    .await
+                    .map_err(anyhow::Error::from),
+                Err(e) => Err(e.into()),
+            }
         }
         .run_in_task(|| "set_value_compatibility_level".to_string())
         .await
