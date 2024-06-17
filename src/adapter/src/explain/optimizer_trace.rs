@@ -207,7 +207,9 @@ impl OptimizerTrace {
                 if let (Some(plan_insights), Some(insights_ctx), false) =
                     (plan_insights.as_mut(), insights_ctx, is_fast_path)
                 {
-                    plan_insights.compute_fast_path_clusters(insights_ctx).await;
+                    if insights_ctx.enable_re_optimize {
+                        plan_insights.compute_fast_path_clusters(insights_ctx).await;
+                    }
                 }
 
                 let output = serde_json::json!({

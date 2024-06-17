@@ -47,6 +47,7 @@ pub struct PlanInsightsContext {
     pub timestamp_context: TimestampContext<Timestamp>,
     pub view_id: GlobalId,
     pub index_id: GlobalId,
+    pub enable_re_optimize: bool,
 }
 
 /// Insights about an optimized plan.

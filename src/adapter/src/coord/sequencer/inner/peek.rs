@@ -621,17 +621,15 @@ impl Coordinator {
                     Ok(Either::Left(global_lir_plan)) => {
                         let optimizer = optimizer.unwrap_left();
                         // Enable fast path cluster calculation for slow path plans.
-                        let mut needs_plan_insights = explain_ctx.needs_plan_insights();
+                        let needs_plan_insights = explain_ctx.needs_plan_insights();
+                        // Disable anything that uses the optimizer if we only want the notice and
+                        // plan optimization took longer than the threshold. This is to prevent a
+                        // situation where optimizing takes a while and there a lots of clusters,
+                        // which would delay peek execution by the product of those.
                         let opt_limit = mz_adapter_types::dyncfgs::PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION.get(catalog.system_config().dyncfgs());
-                        // However, disable this if we only want the notice and plan optimization
-                        // took longer than the threshold. This is to prevent a situation where
-                        // optimizing takes a while and there a lots of clusters, which would delay
-                        // peek execution by the product of those.
-                        if matches!(explain_ctx, ExplainContext::PlanInsightsNotice(_))
-                            && optimizer.duration() > opt_limit
-                        {
-                            needs_plan_insights = false;
-                        }
+                        let enable_re_optimize =
+                            !(matches!(explain_ctx, ExplainContext::PlanInsightsNotice(_))
+                                && optimizer.duration() > opt_limit);
                         let insights_ctx = needs_plan_insights.then(|| PlanInsightsContext {
                             raw_expr: plan.source.clone(),
                             catalog,
@@ -643,6 +641,7 @@ impl Coordinator {
                             timestamp_context,
                             view_id: optimizer.select_id(),
                             index_id: optimizer.index_id(),
+                            enable_re_optimize,
                         });
                         match explain_ctx {
                             ExplainContext::Plan(explain_ctx) => {
