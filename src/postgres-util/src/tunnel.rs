@@ -17,7 +17,6 @@ use mz_ore::task;
 use mz_repr::GlobalId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
-use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode};
 use tokio_postgres::tls::MakeTlsConnect;
@@ -59,40 +58,6 @@ pub enum TunnelConfig {
     },
 }
 
-// Some of these defaults were recommended by @ph14
-// https://github.com/MaterializeInc/materialize/pull/18644#discussion_r1160071692
-pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
-pub const DEFAULT_KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
-pub const DEFAULT_KEEPALIVE_RETRIES: u32 = 5;
-// This is meant to be DEFAULT_KEEPALIVE_IDLE
-// + DEFAULT_KEEPALIVE_RETRIES * DEFAULT_KEEPALIVE_INTERVAL
-pub const DEFAULT_TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Configurable timeouts for Postgres connections.
-///
-/// Currently only apply to non-ssh/privatelink connections.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TcpTimeoutConfig {
-    pub connect_timeout: Option<Duration>,
-    pub keepalives_retries: Option<u32>,
-    pub keepalives_idle: Option<Duration>,
-    pub keepalives_interval: Option<Duration>,
-    pub tcp_user_timeout: Option<Duration>,
-}
-
-impl Default for TcpTimeoutConfig {
-    fn default() -> Self {
-        TcpTimeoutConfig {
-            connect_timeout: Some(DEFAULT_CONNECT_TIMEOUT),
-            keepalives_retries: Some(DEFAULT_KEEPALIVE_RETRIES),
-            keepalives_idle: Some(DEFAULT_KEEPALIVE_IDLE),
-            keepalives_interval: Some(DEFAULT_KEEPALIVE_INTERVAL),
-            tcp_user_timeout: Some(DEFAULT_TCP_USER_TIMEOUT),
-        }
-    }
-}
-
 pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 
 /// Configuration for PostgreSQL connections.
@@ -111,7 +76,6 @@ impl Config {
     pub fn new(
         inner: tokio_postgres::Config,
         tunnel: TunnelConfig,
-        tcp_timeouts: TcpTimeoutConfig,
         ssh_timeout_config: SshTimeoutConfig,
         in_task: InTask,
     ) -> Result<Self, PostgresError> {
@@ -120,33 +84,13 @@ impl Config {
             tunnel,
             in_task,
             ssh_timeout_config,
-        }
-        .tcp_timeouts(tcp_timeouts);
+        };
 
         // Early validate that the configuration contains only a single TCP
         // server.
         config.address()?;
 
         Ok(config)
-    }
-
-    fn tcp_timeouts(mut self, tcp_timeouts: TcpTimeoutConfig) -> Config {
-        if let Some(connect_timeout) = tcp_timeouts.connect_timeout {
-            self.inner.connect_timeout(connect_timeout);
-        }
-        if let Some(keepalives_retries) = tcp_timeouts.keepalives_retries {
-            self.inner.keepalives_retries(keepalives_retries);
-        }
-        if let Some(keepalives_idle) = tcp_timeouts.keepalives_idle {
-            self.inner.keepalives_idle(keepalives_idle);
-        }
-        if let Some(keepalives_interval) = tcp_timeouts.keepalives_interval {
-            self.inner.keepalives_interval(keepalives_interval);
-        }
-        if let Some(tcp_user_timeout) = tcp_timeouts.tcp_user_timeout {
-            self.inner.tcp_user_timeout(tcp_user_timeout);
-        }
-        self
     }
 
     /// Connects to the configured PostgreSQL database.

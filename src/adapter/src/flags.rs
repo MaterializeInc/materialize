@@ -35,14 +35,14 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
 /// Return the current storage configuration, derived from the system configuration.
 pub fn storage_config(config: &SystemVars) -> StorageParameters {
     StorageParameters {
-        pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig {
-            connect_timeout: Some(config.pg_source_connect_timeout()),
-            keepalives_retries: Some(config.pg_source_keepalives_retries()),
-            keepalives_idle: Some(config.pg_source_keepalives_idle()),
-            keepalives_interval: Some(config.pg_source_keepalives_interval()),
-            tcp_user_timeout: Some(config.pg_source_tcp_user_timeout()),
-        },
+        pg_source_connect_timeout: Some(config.pg_source_connect_timeout()),
+        pg_source_tcp_keepalives_retries: Some(config.pg_source_tcp_keepalives_retries()),
+        pg_source_tcp_keepalives_idle: Some(config.pg_source_tcp_keepalives_idle()),
+        pg_source_tcp_keepalives_interval: Some(config.pg_source_tcp_keepalives_interval()),
+        pg_source_tcp_user_timeout: Some(config.pg_source_tcp_user_timeout()),
+        pg_source_tcp_configure_server: config.pg_source_tcp_configure_server(),
         pg_source_snapshot_statement_timeout: config.pg_source_snapshot_statement_timeout(),
+        pg_source_wal_sender_timeout: config.pg_source_wal_sender_timeout(),
         mysql_source_timeouts: mz_mysql_util::TimeoutConfig::build(
             config.mysql_source_snapshot_max_execution_time(),
             config.mysql_source_snapshot_lock_wait_timeout(),

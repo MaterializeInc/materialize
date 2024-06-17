@@ -26,7 +26,12 @@ use mz_repr::optimize::OptimizerFeatures;
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ident;
 use mz_storage_types::controller::TxnWalTablesImpl;
-use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
+use mz_storage_types::parameters::{
+    DEFAULT_PG_SOURCE_CONNECT_TIMEOUT, DEFAULT_PG_SOURCE_TCP_CONFIGURE_SERVER,
+    DEFAULT_PG_SOURCE_TCP_KEEPALIVES_IDLE, DEFAULT_PG_SOURCE_TCP_KEEPALIVES_INTERVAL,
+    DEFAULT_PG_SOURCE_TCP_KEEPALIVES_RETRIES, DEFAULT_PG_SOURCE_TCP_USER_TIMEOUT,
+    DEFAULT_PG_SOURCE_WAL_SENDER_TIMEOUT, STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
+};
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use once_cell::sync::Lazy;
 use uncased::UncasedStr;
@@ -909,46 +914,55 @@ pub static COORD_SLOW_MESSAGE_WARN_THRESHOLD: VarDefinition = VarDefinition::new
 /// Controls the connect_timeout setting when connecting to PG via `mz_postgres_util`.
 pub static PG_SOURCE_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
     "pg_source_connect_timeout",
-    value!(Duration; mz_postgres_util::DEFAULT_CONNECT_TIMEOUT),
+    value!(Duration; DEFAULT_PG_SOURCE_CONNECT_TIMEOUT),
     "Sets the timeout applied to socket-level connection attempts for PG \
-    replication connections. (Materialize)",
+    replication connections (Materialize).",
     true,
 );
 
 /// Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection
 /// when connecting to PG via `mz_postgres_util`.
-pub static PG_SOURCE_KEEPALIVES_RETRIES: VarDefinition = VarDefinition::new(
-    "pg_source_keepalives_retries",
-    value!(u32; mz_postgres_util::DEFAULT_KEEPALIVE_RETRIES),
+pub static PG_SOURCE_TCP_KEEPALIVES_RETRIES: VarDefinition = VarDefinition::new(
+    "pg_source_tcp_keepalives_retries",
+    value!(u32; DEFAULT_PG_SOURCE_TCP_KEEPALIVES_RETRIES),
     "Sets the maximum number of TCP keepalive probes that will be sent before dropping \
-    a connection when connecting to PG via `mz_postgres_util`. (Materialize)",
+    a connection when connecting to PG via `mz_postgres_util` (Materialize).",
     true,
 );
 
 /// Sets the amount of idle time before a keepalive packet is sent on the connection when connecting
 /// to PG via `mz_postgres_util`.
-pub static PG_SOURCE_KEEPALIVES_IDLE: VarDefinition = VarDefinition::new(
-    "pg_source_keepalives_idle",
-    value!(Duration; mz_postgres_util::DEFAULT_KEEPALIVE_IDLE),
+pub static PG_SOURCE_TCP_KEEPALIVES_IDLE: VarDefinition = VarDefinition::new(
+    "pg_source_tcp_keepalives_idle",
+    value!(Duration; DEFAULT_PG_SOURCE_TCP_KEEPALIVES_IDLE),
     "Sets the amount of idle time before a keepalive packet is sent on the connection \
-        when connecting to PG via `mz_postgres_util`. (Materialize)",
+        when connecting to PG via `mz_postgres_util` (Materialize).",
     true,
 );
 
 /// Sets the time interval between TCP keepalive probes when connecting to PG via `mz_postgres_util`.
-pub static PG_SOURCE_KEEPALIVES_INTERVAL: VarDefinition = VarDefinition::new(
-    "pg_source_keepalives_interval",
-    value!(Duration; mz_postgres_util::DEFAULT_KEEPALIVE_INTERVAL),
+pub static PG_SOURCE_TCP_KEEPALIVES_INTERVAL: VarDefinition = VarDefinition::new(
+    "pg_source_tcp_keepalives_interval",
+    value!(Duration; DEFAULT_PG_SOURCE_TCP_KEEPALIVES_INTERVAL),
     "Sets the time interval between TCP keepalive probes when connecting to PG via \
-        replication. (Materialize)",
+        replication (Materialize).",
     true,
 );
 
 /// Sets the TCP user timeout when connecting to PG via `mz_postgres_util`.
 pub static PG_SOURCE_TCP_USER_TIMEOUT: VarDefinition = VarDefinition::new(
     "pg_source_tcp_user_timeout",
-    value!(Duration; mz_postgres_util::DEFAULT_TCP_USER_TIMEOUT),
-    "Sets the TCP user timeout when connecting to PG via `mz_postgres_util`. (Materialize)",
+    value!(Duration; DEFAULT_PG_SOURCE_TCP_USER_TIMEOUT),
+    "Sets the TCP user timeout when connecting to PG via `mz_postgres_util` (Materialize).",
+    true,
+);
+
+/// Sets whether to apply the TCP configuration parameters on the server when
+/// connecting to PG via `mz_postgres_util`.
+pub static PG_SOURCE_TCP_CONFIGURE_SERVER: VarDefinition = VarDefinition::new(
+    "pg_source_tcp_configure_server",
+    value!(bool; DEFAULT_PG_SOURCE_TCP_CONFIGURE_SERVER),
+    "Sets whether to apply the TCP configuration parameters on the server when connecting to PG via `mz_postgres_util` (Materialize).",
     true,
 );
 
@@ -958,6 +972,15 @@ pub static PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: VarDefinition = VarDefinition::
     "pg_source_snapshot_statement_timeout",
     value!(Duration; mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT),
     "Sets the `statement_timeout` value to use during the snapshotting phase of PG sources (Materialize)",
+    true,
+);
+
+/// Sets the `wal_sender_timeout` value to use during the replication phase of
+/// PG sources.
+pub static PG_SOURCE_WAL_SENDER_TIMEOUT: VarDefinition = VarDefinition::new(
+    "pg_source_wal_sender_timeout",
+    value!(Option<Duration>; DEFAULT_PG_SOURCE_WAL_SENDER_TIMEOUT),
+    "Sets the `wal_sender_timeout` value to use during the replication phase of PG sources (Materialize)",
     true,
 );
 

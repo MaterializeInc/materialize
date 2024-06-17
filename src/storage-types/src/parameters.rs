@@ -20,14 +20,47 @@ use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.parameters.rs"));
 
+// Some of these defaults were recommended by @ph14
+// https://github.com/MaterializeInc/materialize/pull/18644#discussion_r1160071692
+pub const DEFAULT_PG_SOURCE_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_PG_SOURCE_TCP_KEEPALIVES_INTERVAL: Duration = Duration::from_secs(10);
+pub const DEFAULT_PG_SOURCE_TCP_KEEPALIVES_IDLE: Duration = Duration::from_secs(10);
+pub const DEFAULT_PG_SOURCE_TCP_KEEPALIVES_RETRIES: u32 = 5;
+// This is meant to be DEFAULT_KEEPALIVE_IDLE
+// + DEFAULT_KEEPALIVE_RETRIES * DEFAULT_KEEPALIVE_INTERVAL
+pub const DEFAULT_PG_SOURCE_TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Whether to apply TCP settings to the server as well as the client.
+///
+/// These option are generally considered something that the upstream DBA should
+/// configure, so we don't override them by default.
+pub const DEFAULT_PG_SOURCE_TCP_CONFIGURE_SERVER: bool = false;
+
+// The default value for the `wal_sender_timeout` option for PostgreSQL sources.
+//
+// See: <https://www.postgresql.org/docs/current/runtime-config-replication.html>
+//
+// This option is generally considered something that the upstream DBA should
+// configure, so we don't override it by default.
+pub const DEFAULT_PG_SOURCE_WAL_SENDER_TIMEOUT: Option<Duration> = None;
+
 /// Storage instance configuration parameters.
 ///
 /// Parameters can be set (`Some`) or unset (`None`).
 /// Unset parameters should be interpreted to mean "use the previous value".
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct StorageParameters {
-    pub pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
+    pub pg_source_connect_timeout: Option<Duration>,
+    pub pg_source_tcp_keepalives_retries: Option<u32>,
+    pub pg_source_tcp_keepalives_idle: Option<Duration>,
+    pub pg_source_tcp_keepalives_interval: Option<Duration>,
+    pub pg_source_tcp_user_timeout: Option<Duration>,
+    /// Whether to apply the configuration on the server as well.
+    ///
+    /// By default, the timeouts are only applied on the client.
+    pub pg_source_tcp_configure_server: bool,
     pub pg_source_snapshot_statement_timeout: Duration,
+    pub pg_source_wal_sender_timeout: Option<Duration>,
     pub mysql_source_timeouts: mz_mysql_util::TimeoutConfig,
     pub keep_n_source_status_history_entries: usize,
     pub keep_n_sink_status_history_entries: usize,
@@ -84,8 +117,15 @@ pub const STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT: Duration = Duratio
 impl Default for StorageParameters {
     fn default() -> Self {
         Self {
-            pg_source_tcp_timeouts: Default::default(),
-            pg_source_snapshot_statement_timeout: Default::default(),
+            pg_source_connect_timeout: Some(DEFAULT_PG_SOURCE_CONNECT_TIMEOUT),
+            pg_source_tcp_keepalives_retries: Some(DEFAULT_PG_SOURCE_TCP_KEEPALIVES_RETRIES),
+            pg_source_tcp_keepalives_idle: Some(DEFAULT_PG_SOURCE_TCP_KEEPALIVES_IDLE),
+            pg_source_tcp_keepalives_interval: Some(DEFAULT_PG_SOURCE_TCP_KEEPALIVES_INTERVAL),
+            pg_source_tcp_user_timeout: Some(DEFAULT_PG_SOURCE_TCP_USER_TIMEOUT),
+            pg_source_snapshot_statement_timeout:
+                mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT,
+            pg_source_wal_sender_timeout: DEFAULT_PG_SOURCE_WAL_SENDER_TIMEOUT,
+            pg_source_tcp_configure_server: DEFAULT_PG_SOURCE_TCP_CONFIGURE_SERVER,
             mysql_source_timeouts: Default::default(),
             keep_n_source_status_history_entries: Default::default(),
             keep_n_sink_status_history_entries: Default::default(),
@@ -182,8 +222,14 @@ impl StorageParameters {
     pub fn update(
         &mut self,
         StorageParameters {
-            pg_source_tcp_timeouts,
+            pg_source_connect_timeout,
+            pg_source_tcp_keepalives_retries,
+            pg_source_tcp_keepalives_idle,
+            pg_source_tcp_keepalives_interval,
+            pg_source_tcp_user_timeout,
+            pg_source_tcp_configure_server,
             pg_source_snapshot_statement_timeout,
+            pg_source_wal_sender_timeout,
             mysql_source_timeouts,
             keep_n_source_status_history_entries,
             keep_n_sink_status_history_entries,
@@ -205,8 +251,14 @@ impl StorageParameters {
             dyncfg_updates,
         }: StorageParameters,
     ) {
-        self.pg_source_tcp_timeouts = pg_source_tcp_timeouts;
+        self.pg_source_connect_timeout = pg_source_connect_timeout;
+        self.pg_source_tcp_keepalives_retries = pg_source_tcp_keepalives_retries;
+        self.pg_source_tcp_keepalives_idle = pg_source_tcp_keepalives_idle;
+        self.pg_source_tcp_keepalives_interval = pg_source_tcp_keepalives_interval;
+        self.pg_source_tcp_user_timeout = pg_source_tcp_user_timeout;
+        self.pg_source_tcp_configure_server = pg_source_tcp_configure_server;
         self.pg_source_snapshot_statement_timeout = pg_source_snapshot_statement_timeout;
+        self.pg_source_wal_sender_timeout = pg_source_wal_sender_timeout;
         self.mysql_source_timeouts = mysql_source_timeouts;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
@@ -236,10 +288,16 @@ impl StorageParameters {
 impl RustType<ProtoStorageParameters> for StorageParameters {
     fn into_proto(&self) -> ProtoStorageParameters {
         ProtoStorageParameters {
-            pg_source_tcp_timeouts: Some(self.pg_source_tcp_timeouts.into_proto()),
+            pg_source_connect_timeout: self.pg_source_connect_timeout.into_proto(),
+            pg_source_tcp_keepalives_retries: self.pg_source_tcp_keepalives_retries,
+            pg_source_tcp_keepalives_idle: self.pg_source_tcp_keepalives_idle.into_proto(),
+            pg_source_tcp_keepalives_interval: self.pg_source_tcp_keepalives_interval.into_proto(),
+            pg_source_tcp_user_timeout: self.pg_source_tcp_user_timeout.into_proto(),
             pg_source_snapshot_statement_timeout: Some(
                 self.pg_source_snapshot_statement_timeout.into_proto(),
             ),
+            pg_source_tcp_configure_server: self.pg_source_tcp_configure_server,
+            pg_source_wal_sender_timeout: self.pg_source_wal_sender_timeout.into_proto(),
             mysql_source_timeouts: Some(self.mysql_source_timeouts.into_proto()),
             keep_n_source_status_history_entries: u64::cast_from(
                 self.keep_n_source_status_history_entries,
@@ -277,14 +335,20 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
 
     fn from_proto(proto: ProtoStorageParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            pg_source_tcp_timeouts: proto
-                .pg_source_tcp_timeouts
-                .into_rust_if_some("ProtoStorageParameters::pg_source_tcp_timeouts")?,
+            pg_source_connect_timeout: proto.pg_source_connect_timeout.into_rust()?,
+            pg_source_tcp_keepalives_retries: proto.pg_source_tcp_keepalives_retries,
+            pg_source_tcp_keepalives_idle: proto.pg_source_tcp_keepalives_idle.into_rust()?,
+            pg_source_tcp_keepalives_interval: proto
+                .pg_source_tcp_keepalives_interval
+                .into_rust()?,
+            pg_source_tcp_user_timeout: proto.pg_source_tcp_user_timeout.into_rust()?,
+            pg_source_tcp_configure_server: proto.pg_source_tcp_configure_server,
             pg_source_snapshot_statement_timeout: proto
                 .pg_source_snapshot_statement_timeout
                 .into_rust_if_some(
                     "ProtoStorageParameters::pg_source_snapshot_statement_timeout",
                 )?,
+            pg_source_wal_sender_timeout: proto.pg_source_wal_sender_timeout.into_rust()?,
             mysql_source_timeouts: proto
                 .mysql_source_timeouts
                 .into_rust_if_some("ProtoStorageParameters::mysql_source_timeouts")?,
@@ -342,28 +406,6 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             dyncfg_updates: proto.dyncfg_updates.ok_or_else(|| {
                 TryFromProtoError::missing_field("ProtoStorageParameters::dyncfg_updates")
             })?,
-        })
-    }
-}
-
-impl RustType<ProtoPgSourceTcpTimeouts> for mz_postgres_util::TcpTimeoutConfig {
-    fn into_proto(&self) -> ProtoPgSourceTcpTimeouts {
-        ProtoPgSourceTcpTimeouts {
-            connect_timeout: self.connect_timeout.into_proto(),
-            keepalives_retries: self.keepalives_retries,
-            keepalives_idle: self.keepalives_idle.into_proto(),
-            keepalives_interval: self.keepalives_interval.into_proto(),
-            tcp_user_timeout: self.tcp_user_timeout.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoPgSourceTcpTimeouts) -> Result<Self, TryFromProtoError> {
-        Ok(mz_postgres_util::TcpTimeoutConfig {
-            connect_timeout: proto.connect_timeout.into_rust()?,
-            keepalives_retries: proto.keepalives_retries,
-            keepalives_idle: proto.keepalives_idle.into_rust()?,
-            keepalives_interval: proto.keepalives_interval.into_rust()?,
-            tcp_user_timeout: proto.tcp_user_timeout.into_rust()?,
         })
     }
 }
