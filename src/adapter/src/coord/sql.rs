@@ -58,7 +58,7 @@ impl Coordinator {
         });
     }
 
-    fn declare_inner(
+    pub(crate) fn declare_inner(
         session: &mut Session,
         catalog: &Catalog,
         name: String,

@@ -28,9 +28,10 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    CteBlock, ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement,
-    ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
-    IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
+    CteBlock, ExplainAnalyzeStatement, ExplainPlanOption, ExplainPlanOptionName,
+    ExplainPushdownStatement, ExplainSinkSchemaFor, ExplainSinkSchemaStatement,
+    ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput,
+    UnresolvedItemName,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
@@ -53,8 +54,8 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::{self, TryFromValue};
 use crate::plan::{
-    self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan,
-    ExplainSinkSchemaPlan, ExplainTimestampPlan,
+    self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainAnalyzePlan,
+    ExplainPushdownPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
@@ -336,6 +337,20 @@ pub fn describe_explain_schema(
     Ok(StatementDesc::new(Some(relation_desc)))
 }
 
+pub fn describe_explain_analyze(
+    scx: &StatementContext,
+    explain: ExplainAnalyzeStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    let relation_desc =
+        RelationDesc::empty().with_column("analysis", ScalarType::String.nullable(false));
+    Ok(
+        StatementDesc::new(Some(relation_desc)).with_params(match explain.explainee {
+            Explainee::Select(select, _) => describe_select(scx, *select)?.param_types,
+            _ => vec![],
+        }),
+    )
+}
+
 generate_extracted_config!(
     ExplainPlanOption,
     (Arity, bool, Default(false)),
@@ -561,6 +576,23 @@ pub fn plan_explain_plan(
         stage,
         format,
         config,
+        explainee,
+    }))
+}
+
+pub fn plan_explain_analyze(
+    scx: &StatementContext,
+    explain: ExplainAnalyzeStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    let format = match explain.format() {
+        mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
+        format => bail_unsupported!(format!("format {format}")),
+    };
+    let explainee = plan_explainee(scx, explain.explainee, params)?;
+    Ok(Plan::ExplainAnalyze(ExplainAnalyzePlan {
+        format,
         explainee,
     }))
 }

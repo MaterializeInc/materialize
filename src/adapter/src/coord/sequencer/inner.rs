@@ -27,6 +27,7 @@ use mz_expr::{
     CollectionPlan, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
 use mz_ore::collections::{CollectionExt, HashSet};
+use mz_ore::now::EpochMillis;
 use mz_ore::task::{self, spawn, JoinHandle};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
@@ -38,7 +39,7 @@ use mz_repr::explain::{ExplainFormat, ExprHumanizer};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, IntoRowIterator, Row, RowArena, RowIterator, Timestamp};
 use mz_sql::ast::{
-    CreateSubsourceStatement, Ident, MySqlConfigOptionName, UnresolvedItemName, Value,
+    CreateSubsourceStatement, ExplainStage, Ident, MySqlConfigOptionName, UnresolvedItemName, Value,
 };
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
@@ -104,11 +105,12 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timestamp_selection::{TimestampDetermination, TimestampSource};
 use crate::coord::{
     AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
-    CreateConnectionValidationReady, ExecuteContext, ExplainContext, Message, PeekStage,
-    PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
-    RealTimeRecencyContext, StageResult, Staged, TargetCluster, WatchSetResponse,
+    CreateConnectionValidationReady, ExecuteContext, ExplainContext, ExplainPlanContext, Message,
+    PeekStage, PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse,
+    PlanValidity, RealTimeRecencyContext, StageResult, Staged, TargetCluster, WatchSetResponse,
 };
 use crate::error::AdapterError;
+use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::{self, Optimize};
 use crate::session::{
@@ -2151,6 +2153,399 @@ impl Coordinator {
                 self.explain_replan_index(ctx, plan).await;
             }
         };
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_explain_analyze(
+        &mut self,
+        mut ctx: ExecuteContext,
+        plan: plan::ExplainAnalyzePlan,
+        // TODO: What is this used for? Should we use it for anything? PLAN INSIGHTS seems maybe
+        // correct? But the others could be a no because we always want the introspection queries to
+        // use the auto route cluster?
+        target_cluster: TargetCluster,
+    ) {
+        // TODO: Not convinced this is correct. Can we use `ctx.session().pcx()`?
+        let now = self.now();
+        let catalog = self.owned_catalog();
+        let cluster_id = return_if_err!(
+            catalog.resolve_target_cluster(target_cluster, ctx.session()),
+            ctx
+        )
+        .id;
+        // TODO: Should this be passed to sequence_explain_analyze instead?
+        let otel_ctx = OpenTelemetryContext::obtain();
+        mz_ore::task::spawn(|| "sequence_explain_analyze", async move {
+            // EXPLAIN ANALYZE must be run as a single statement (see handle_execute where that is
+            // enforced). But we want all of the inner queries to be at the same timestamp with the
+            // correct timedomain, so explicitly start the session transaction.
+            return_if_err!(
+                ctx.session_mut().start_transaction(
+                    mz_ore::now::to_datetime(now),
+                    // Hard code these so that any session settings don't mess with them.
+                    Some(mz_sql::ast::TransactionAccessMode::ReadOnly),
+                    // TODO: Actually, should this be `None` so it picks up the current session var?
+                    // Need to think through what would happen to the various query results and if
+                    // that's what the user would want.
+                    Some(mz_sql::ast::TransactionIsolationLevel::StrictSerializable),
+                ),
+                ctx
+            );
+
+            let depends = match &plan.explainee {
+                Explainee::View(id)
+                | Explainee::MaterializedView(id)
+                | Explainee::Index(id)
+                | Explainee::ReplanView(id)
+                | Explainee::ReplanMaterializedView(id)
+                | Explainee::ReplanIndex(id) => btreeset! {*id},
+                Explainee::Statement(stmt) => stmt.depends_on(),
+            };
+            // TODO: Support all of them.
+            let (broken, plan, desc) = match plan.explainee {
+                plan::Explainee::Statement(plan::ExplaineeStatement::Select {
+                    broken,
+                    plan,
+                    desc,
+                }) => (broken, plan, desc),
+                _ => {
+                    ctx.retire(Err(AdapterError::Unsupported(
+                        "EXPLAIN ANALYZE with this explainee",
+                    )));
+                    return;
+                }
+            };
+            // GlobalIds stringify without risk of SQL injection.
+            let dependencies_in = depends.iter().map(|i| format!("'{i}'")).join(", ");
+
+            #[derive(Debug)]
+            enum AnalyzeQuery {
+                Sql(String),
+                Peek(PeekStage),
+            }
+
+            // Array of queries to execute and a function that receives the result rows.
+            let queries: [(
+                AnalyzeQuery,
+                Box<dyn Fn(&mut Vec<String>, Box<dyn RowIterator>) + Send>,
+            ); 4] = [
+                // Hitting persist w/o any filter pushdown. Use `EXPLAIN PLAN INSIGHTS` to find
+                // `sources` with no `op`.
+                (
+                    {
+                        let stage = ExplainStage::PlanInsights;
+                        AnalyzeQuery::Peek(PeekStage::Validate(PeekStageValidate {
+                            plan,
+                            // TODO: Is this the right cluster?
+                            target_cluster,
+                            copy_to_ctx: None,
+                            explain_ctx: ExplainContext::Plan(ExplainPlanContext {
+                                broken,
+                                config: Default::default(),
+                                format: ExplainFormat::Json,
+                                stage,
+                                replan: None,
+                                desc: Some(desc),
+                                optimizer_trace: OptimizerTrace::new(stage.paths()),
+                            }),
+                        }))
+                    },
+                    Box::new(|problems, mut rows| {
+                        while let Some(row) = rows.next() {
+                            let row = row.unpack();
+                            // TODO: Add a paranoia check here that checks this is a str.
+                            let Ok(v) =
+                                serde_json::from_str::<serde_json::Value>(row[0].unwrap_str())
+                            else {
+                                dbg!(&row[0]);
+                                continue;
+                            };
+                            let sources = &v["plans"]["optimized"]["global"]["json"]["sources"];
+                            for source in sources.as_array().into_iter().flatten() {
+                                if source["op"].is_null() {
+                                    problems.push(format!(
+                                        "persist without filter pushdown on {}",
+                                        serde_json::to_string(&source["id"])
+                                            .expect("must serialize")
+                                    ));
+                                }
+                            }
+                        }
+                    }),
+                ),
+                // Source lagging or stalled.
+                (
+                    AnalyzeQuery::Sql(format!(
+                        "
+                        SELECT name, status
+                        FROM mz_internal.mz_source_statuses
+                        WHERE id IN ({dependencies_in}) AND status != 'running'
+                    "
+                    )),
+                    Box::new(|problems, mut rows| {
+                        while let Some(row) = rows.next() {
+                            let row = row.unpack();
+                            problems.push(format!(
+                                "source not ready: {} is in state {}",
+                                row[0], row[1],
+                            ));
+                        }
+                    }),
+                ),
+                // Dependent mat view or index lagging.
+                //
+                // TODO: This query can take 15s on the cross join example. The timestamp
+                // determination says the upper is 0. The since is some number ~1s less than the
+                // chosen timestamp (oracle read ts), so we're waiting for the upper to close.
+                (
+                    // See https://github.com/MaterializeInc/console/blob/main/src/api/materialize/cluster/materializationLag.ts
+                    AnalyzeQuery::Sql(format!(
+                        r#"
+                        WITH
+                            "materializationLag" AS
+                            (
+                                SELECT
+                                    objects.id AS "targetObjectId",
+                                    objects.type,
+                                    hs.hydrated,
+                                    GREATEST(
+                                            to_timestamp(mz_now()::text::float8 / 1000)
+                                            - to_timestamp(frontiers.write_frontier::text::float8 / 1000),
+                                            INTERVAL '0'
+                                        )
+                                        AS "lagFromMzNow",
+                                    GREATEST(
+                                            to_timestamp(mz_now()::text::float8 / 1000)
+                                            - (
+                                                    to_timestamp(frontiers.write_frontier::text::float8 / 1000)
+                                                    + ml.local_lag
+                                                ),
+                                            INTERVAL '0'
+                                        )
+                                        AS "greatestLagFromMzNowOfLocalInputs",
+                                    ml.global_lag AS "globalLag",
+                                    ml.slowest_global_input_id AS "slowestRootObjectId",
+                                    ml.slowest_local_input_id AS "slowestLocalObjectId",
+                                    ml.local_lag AS "localLag"
+                                FROM
+                                    (SELECT * FROM mz_catalog.mz_objects WHERE id IN ({dependencies_in})) AS objects
+                                        JOIN
+                                            (SELECT * FROM mz_internal.mz_frontiers) AS frontiers
+                                            ON frontiers.object_id = objects.id
+                                        JOIN
+                                            (SELECT * FROM mz_internal.mz_hydration_statuses) AS hs
+                                            ON hs.object_id = objects.id
+                                        LEFT JOIN
+                                            (SELECT * FROM mz_internal.mz_materialization_lag) AS ml
+                                            ON ml.object_id = objects.id
+                            )
+                        SELECT
+                            "targetObjectId",
+                            "lagFromMzNow",
+                            "greatestLagFromMzNowOfLocalInputs"
+                        FROM "materializationLag"
+                        WHERE
+                            "lagFromMzNow" >= INTERVAL '10 seconds' OR
+                            "greatestLagFromMzNowOfLocalInputs" >= INTERVAL '10 seconds'
+                    "#
+                    )),
+                    Box::new(|problems, mut rows| {
+                        while let Some(row) = rows.next() {
+                            let row = row.unpack();
+                            problems.push(format!(
+                                "object {} is lagging: global lag: {}, local lag: {}",
+                                row[0], row[1], row[2]
+                            ));
+                        }
+                    }),
+                ),
+                // High cluster CPU.
+                (
+                    AnalyzeQuery::Sql(format!(
+                        // Look for the lowest CPU use of any replica in the cluster. We don't care
+                        // if there's one healthy replica and one unhealthy replica, because that
+                        // might not slow down the query results.
+                        r#"
+                        SELECT min(cru.cpu_percent)
+                        FROM mz_internal.mz_cluster_replica_utilization cru
+                        LEFT JOIN mz_catalog.mz_cluster_replicas cr ON cru.replica_id = cr.id
+                        LEFT JOIN mz_catalog.mz_clusters c ON cr.cluster_id = c.id
+                        WHERE c.id = '{cluster_id}'
+                    "#
+                    )),
+                    Box::new(|problems, mut rows| {
+                        while let Some(row) = rows.next() {
+                            let row = row.unpack();
+                            if row[0].is_null() {
+                                continue;
+                            }
+                            let cpu = row[0].unwrap_float64();
+                            const HIGH_CPU_LIMIT: f64 = 0.75;
+                            if cpu > HIGH_CPU_LIMIT {
+                                problems.push(format!(
+                                    "cluster replica has high CPU: {:.0}%",
+                                    cpu * 100.0
+                                ));
+                            }
+                        }
+                    }),
+                ),
+            ];
+            let mut problems: Vec<String> = Vec::new();
+            let (tx, internal_cmd_tx, mut session, extra) = ctx.into_parts();
+            for (query, f) in queries {
+                let start = Instant::now();
+                let handle = match query {
+                    AnalyzeQuery::Sql(sql) => Self::execute_session_statement(
+                        session,
+                        sql,
+                        internal_cmd_tx.clone(),
+                        Arc::clone(&catalog),
+                        now,
+                    ),
+                    AnalyzeQuery::Peek(stage) => Self::execute_session_peek(
+                        session,
+                        stage,
+                        // TODO: Is this safe to clone?
+                        otel_ctx.clone(),
+                        internal_cmd_tx.clone(),
+                    ),
+                };
+                let res = handle.await.expect("join error").into_rows().await;
+                session = res.session;
+                match res.result {
+                    Ok(PeekResponseUnary::Rows(rows)) => {
+                        f(&mut problems, rows);
+                    }
+                    Ok(PeekResponseUnary::Error(err)) => {
+                        problems.push(format!("peek err: {err}"));
+                    }
+                    Ok(PeekResponseUnary::Canceled) => {
+                        problems.push(format!("canceled"));
+                    }
+                    Err(err) => {
+                        problems.push(format!("response err: {err:?}"));
+                    }
+                }
+                println!("elapsed {:?}\n", start.elapsed());
+            }
+
+            // Commit the transaction. TODO: This destroys the response portal on the original
+            // statement, so we can't do this. Need to change the session api to allow starting an
+            // implicit from started.
+            /*
+            let (commit_tx, commit_rx) = oneshot::channel();
+            let _ = internal_cmd_tx.send(Message::Command(
+                otel_ctx,
+                crate::command::Command::Commit {
+                    action: EndTransactionAction::Commit,
+                    session,
+                    tx: commit_tx,
+                },
+            ));
+            // TODO: propagate failures here.
+            let commit_resp = commit_rx.await.expect("must recv");
+            let session = commit_resp.session;
+            */
+
+            let ctx = ExecuteContext::from_parts(tx, internal_cmd_tx, session, extra);
+            let rows = problems
+                .into_iter()
+                .map(|i| Row::pack_slice(&[Datum::String(&i)]))
+                .collect::<Vec<_>>();
+            ctx.retire(Ok(Self::send_immediate_rows(rows)));
+        });
+    }
+
+    fn execute_session_peek(
+        session: Session,
+        stage: PeekStage,
+        otel_ctx: OpenTelemetryContext,
+        internal_cmd_tx: tokio::sync::mpsc::UnboundedSender<Message>,
+    ) -> task::JoinHandle<Response<ExecuteResponse>> {
+        let (tx, rx) = oneshot::channel();
+        let client_tx = ClientTransmitter::new(tx, internal_cmd_tx.clone());
+        task::spawn(|| format!("execute_session_peek"), async move {
+            let ctx = ExecuteContext::from_parts(
+                client_tx,
+                internal_cmd_tx.clone(),
+                session,
+                Default::default(),
+            );
+            let _ = internal_cmd_tx.send(Message::PeekStageReady {
+                ctx,
+                otel_ctx,
+                stage,
+            });
+            // TODO: Is the .expect ok?
+            rx.await.expect("must receive")
+        })
+    }
+
+    /// Executes `sql` in the `session`.
+    ///
+    /// Panics if sql is not a valid single statement.
+    fn execute_session_statement(
+        mut session: Session,
+        sql: String,
+        internal_cmd_tx: tokio::sync::mpsc::UnboundedSender<Message>,
+        catalog: Arc<Catalog>,
+        now: EpochMillis,
+        // TODO: otelctx param?
+    ) -> task::JoinHandle<Response<ExecuteResponse>> {
+        println!("executing:\n{sql}");
+        mz_ore::task::spawn(|| "execute_session_query", async move {
+            let portal_name: Result<String, AdapterError> = (|session: &mut Session| {
+                // TODO: This should probably use a lower level thing like handle_execute or
+                // plan_statement instead of munging with session stmts and portals. ReadThenWrite
+                // does this: it directly calls sequence_peek with a plan. Do something similar
+                // here.
+                let stmt = mz_sql_parser::parser::parse_statements(&sql)?.into_element();
+                let desc =
+                    Coordinator::describe(&catalog, session, Some(stmt.ast.clone()), Vec::new())?;
+                // TODO: Do something to verify this doesn't exist. It is used as both portal and
+                // statement names, both must be checked.
+                let name = "execute_session_query";
+
+                // Make a prepared statement so we can get a logging context for it.
+                // TODO: Can/should we make logging optional?
+                session.set_prepared_statement(
+                    name.into(),
+                    Some(stmt.ast.clone()),
+                    stmt.sql.into(),
+                    desc.clone(),
+                    catalog.transient_revision(),
+                    now,
+                );
+
+                let ps = session
+                    .get_prepared_statement_unverified(name)
+                    .expect("must exist");
+                let logging = Arc::clone(ps.logging());
+
+                let portal_name = session.create_new_portal(
+                    Some(stmt.ast),
+                    logging,
+                    desc,
+                    Params::empty(),
+                    Vec::new(),
+                    catalog.transient_revision(),
+                )?;
+                Ok(portal_name)
+            })(&mut session);
+            let portal_name = portal_name.expect("TODO");
+            let (tx, rx) = oneshot::channel();
+            let _ = internal_cmd_tx.send(Message::Command(
+                OpenTelemetryContext::empty(),
+                crate::command::Command::Execute {
+                    portal_name,
+                    session,
+                    tx,
+                    outer_ctx_extra: None,
+                },
+            ));
+            rx.await.expect("TODO")
+        })
     }
 
     pub(super) async fn sequence_explain_pushdown(

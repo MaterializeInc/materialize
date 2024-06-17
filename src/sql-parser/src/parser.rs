@@ -7551,6 +7551,9 @@ impl<'a> Parser<'a> {
         } else if self.peek_keyword(KEY) || self.peek_keyword(VALUE) {
             self.parse_explain_schema()
                 .map_parser_err(StatementKind::ExplainSinkSchema)
+        } else if self.peek_keyword(ANALYZE) {
+            self.parse_explain_analyze()
+                .map_parser_err(StatementKind::ExplainAnalyze)
         } else {
             self.parse_explain_plan()
                 .map_parser_err(StatementKind::ExplainPlan)
@@ -7791,6 +7794,28 @@ impl<'a> Parser<'a> {
         } else {
             unreachable!("only create sink can be returned here");
         }
+    }
+
+    /// Parse an `EXPLAIN ANALYZE` statement, assuming that the `EXPLAIN` token
+    /// has already been consumed.
+    fn parse_explain_analyze(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(ANALYZE)?;
+        let format = if self.parse_keyword(AS) {
+            match self.parse_one_of_keywords(&[TEXT, JSON]) {
+                Some(TEXT) => Some(ExplainFormat::Text),
+                Some(JSON) => Some(ExplainFormat::Json),
+                None => return Err(ParserError::new(self.index, "expected a format")),
+                _ => unreachable!(),
+            }
+        } else {
+            None
+        };
+        self.expect_keyword(FOR)?;
+        let explainee = self.parse_explainee()?;
+        Ok(Statement::ExplainAnalyze(ExplainAnalyzeStatement {
+            format,
+            explainee,
+        }))
     }
 
     /// Parse a `DECLARE` statement, assuming that the `DECLARE` token

@@ -22,7 +22,8 @@ use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{
-    ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan, SubscribeFrom,
+    ExplainAnalyzePlan, ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan,
+    SubscribeFrom,
 };
 use smallvec::SmallVec;
 
@@ -57,6 +58,13 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
             },
         ),
         Plan::ExplainPlan(ExplainPlanPlan {
+            explainee: Explainee::Statement(ExplaineeStatement::Select { plan, .. }),
+            ..
+        }) => (
+            plan.source.depends_on(),
+            plan.source.could_run_expensive_function(),
+        ),
+        Plan::ExplainAnalyze(ExplainAnalyzePlan {
             explainee: Explainee::Statement(ExplaineeStatement::Select { plan, .. }),
             ..
         }) => (
@@ -103,6 +111,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::ExplainPlan(_)
         | Plan::ExplainPushdown(_)
         | Plan::ExplainSinkSchema(_)
+        | Plan::ExplainAnalyze(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterClusterRename(_)

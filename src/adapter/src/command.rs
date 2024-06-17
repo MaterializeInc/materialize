@@ -178,6 +178,29 @@ pub struct Response<T> {
     pub otel_ctx: OpenTelemetryContext,
 }
 
+impl Response<ExecuteResponse> {
+    /// Converts the inner ExecuteResponse into rows. Errors if it is not a rows-returning
+    /// ExecuteResponse.
+    pub async fn into_rows(self) -> Response<PeekResponseUnary> {
+        let Response {
+            result,
+            session,
+            otel_ctx,
+        } = self;
+        let result = match result {
+            Ok(ExecuteResponse::SendingRows { future, .. }) => Ok(future.await),
+            Ok(ExecuteResponse::SendingRowsImmediate { rows }) => Ok(PeekResponseUnary::Rows(rows)),
+            Ok(_) => Err(AdapterError::Internal("unexpected ExecuteResponse".into())),
+            Err(e) => Err(e),
+        };
+        Response {
+            result,
+            session,
+            otel_ctx,
+        }
+    }
+}
+
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 
 /// The response to [`Client::startup`](crate::Client::startup).
@@ -636,7 +659,8 @@ impl ExecuteResponse {
             DropOwned => &[DroppedOwned],
             PlanKind::EmptyQuery => &[ExecuteResponseKind::EmptyQuery],
             ExplainPlan | ExplainPushdown | ExplainTimestamp | Select | ShowAllVariables
-            | ShowCreate | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema => &[
+            | ShowCreate | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema
+            | ExplainAnalyze => &[
                 ExecuteResponseKind::CopyTo,
                 SendingRows,
                 SendingRowsImmediate,

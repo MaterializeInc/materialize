@@ -556,7 +556,9 @@ impl Coordinator {
             ),
         ];
 
-        if system_schemas.iter().any(|s| schemas.contains(s)) {
+        // TODO: Remove the || true, but need to do something to include all system schemas in the
+        // timedomain.
+        if system_schemas.iter().any(|s| schemas.contains(s)) || true {
             // If any of the system schemas is specified, add the rest of the
             // system schemas.
             schemas.extend(system_schemas);

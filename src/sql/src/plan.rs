@@ -149,6 +149,7 @@ pub enum Plan {
     ExplainPushdown(ExplainPushdownPlan),
     ExplainTimestamp(ExplainTimestampPlan),
     ExplainSinkSchema(ExplainSinkSchemaPlan),
+    ExplainAnalyze(ExplainAnalyzePlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
     AlterClusterSwap(AlterClusterSwapPlan),
@@ -261,6 +262,7 @@ impl Plan {
             StatementKind::ExplainPushdown => &[PlanKind::ExplainPushdown],
             StatementKind::ExplainTimestamp => &[PlanKind::ExplainTimestamp],
             StatementKind::ExplainSinkSchema => &[PlanKind::ExplainSinkSchema],
+            StatementKind::ExplainAnalyze => &[PlanKind::ExplainAnalyze],
             StatementKind::Fetch => &[PlanKind::Fetch],
             StatementKind::GrantPrivileges => &[PlanKind::GrantPrivileges],
             StatementKind::GrantRole => &[PlanKind::GrantRole],
@@ -350,6 +352,7 @@ impl Plan {
             Plan::ExplainPushdown(_) => "EXPLAIN FILTER PUSHDOWN",
             Plan::ExplainTimestamp(_) => "explain timestamp",
             Plan::ExplainSinkSchema(_) => "explain schema",
+            Plan::ExplainAnalyze(_) => "explain analyze",
             Plan::Insert(_) => "insert",
             Plan::AlterNoop(plan) => match plan.object_type {
                 ObjectType::Table => "alter table",
@@ -941,6 +944,12 @@ pub struct ExplainTimestampPlan {
 pub struct ExplainSinkSchemaPlan {
     pub sink_from: GlobalId,
     pub json_schema: String,
+}
+
+#[derive(Debug)]
+pub struct ExplainAnalyzePlan {
+    pub format: ExplainFormat,
+    pub explainee: Explainee,
 }
 
 #[derive(Debug)]

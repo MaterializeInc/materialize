@@ -92,6 +92,7 @@ pub enum Statement<T: AstInfo> {
     ExplainPushdown(ExplainPushdownStatement<T>),
     ExplainTimestamp(ExplainTimestampStatement<T>),
     ExplainSinkSchema(ExplainSinkSchemaStatement<T>),
+    ExplainAnalyze(ExplainAnalyzeStatement<T>),
     Declare(DeclareStatement<T>),
     Fetch(FetchStatement<T>),
     Close(CloseStatement),
@@ -163,6 +164,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::ExplainPushdown(stmt) => f.write_node(stmt),
             Statement::ExplainTimestamp(stmt) => f.write_node(stmt),
             Statement::ExplainSinkSchema(stmt) => f.write_node(stmt),
+            Statement::ExplainAnalyze(stmt) => f.write_node(stmt),
             Statement::Declare(stmt) => f.write_node(stmt),
             Statement::Close(stmt) => f.write_node(stmt),
             Statement::Fetch(stmt) => f.write_node(stmt),
@@ -237,6 +239,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::ExplainPushdown => "explain_pushdown",
         StatementKind::ExplainTimestamp => "explain_timestamp",
         StatementKind::ExplainSinkSchema => "explain_sink_schema",
+        StatementKind::ExplainAnalyze => "explain_analyze",
         StatementKind::Declare => "declare",
         StatementKind::Fetch => "fetch",
         StatementKind::Close => "close",
@@ -3365,6 +3368,31 @@ impl<T: AstInfo> AstDisplay for ExplainSinkSchemaStatement<T> {
     }
 }
 impl_display_t!(ExplainSinkSchemaStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainAnalyzeStatement<T: AstInfo> {
+    pub format: Option<ExplainFormat>,
+    pub explainee: Explainee<T>,
+}
+
+impl<T: AstInfo> ExplainAnalyzeStatement<T> {
+    pub fn format(&self) -> ExplainFormat {
+        self.format.unwrap_or(ExplainFormat::Text)
+    }
+}
+
+impl<T: AstInfo> AstDisplay for ExplainAnalyzeStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXPLAIN ANALYZE");
+        if let Some(format) = &self.format {
+            f.write_str(" AS ");
+            f.write_node(format);
+        }
+        f.write_str(" FOR ");
+        f.write_node(&self.explainee);
+    }
+}
+impl_display_t!(ExplainAnalyzeStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainPushdownStatement<T: AstInfo> {

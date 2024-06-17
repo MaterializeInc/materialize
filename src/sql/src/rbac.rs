@@ -828,6 +828,10 @@ fn generate_rbac_requirements(
             config: _,
             explainee,
         })
+        | Plan::ExplainAnalyze(plan::ExplainAnalyzePlan {
+            format: _,
+            explainee,
+        })
         | Plan::ExplainPushdown(plan::ExplainPushdownPlan { explainee }) => RbacRequirements {
             privileges: match explainee {
                 Explainee::View(id)

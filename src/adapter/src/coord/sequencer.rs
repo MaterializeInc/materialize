@@ -341,6 +341,10 @@ impl Coordinator {
                     self.sequence_explain_timestamp(ctx, plan, target_cluster)
                         .await;
                 }
+                Plan::ExplainAnalyze(plan) => {
+                    self.sequence_explain_analyze(ctx, plan, target_cluster)
+                        .await;
+                }
                 Plan::Insert(plan) => {
                     self.sequence_insert(ctx, plan).await;
                 }
