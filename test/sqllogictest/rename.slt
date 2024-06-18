@@ -620,3 +620,24 @@ ALTER SOURCE users RENAME TO userz
 
 statement ok
 SELECT * FROM userz LIMIT 0
+
+statement ok
+CREATE TABLE non_temp_base(a INT);
+
+statement ok
+CREATE TEMPORARY VIEW temp_view AS SELECT * FROM non_temp_base;
+
+query TT
+SHOW CREATE VIEW temp_view;
+----
+materialize.public.temp_view
+CREATE VIEW "mz_temp"."temp_view" AS SELECT * FROM "materialize"."public"."non_temp_base"
+
+statement ok
+ALTER TABLE non_temp_base RENAME TO non_temp_table;
+
+query TT
+SHOW CREATE VIEW temp_view;
+----
+materialize.public.temp_view
+CREATE VIEW "mz_temp"."temp_view" AS SELECT * FROM "materialize"."public"."non_temp_table"

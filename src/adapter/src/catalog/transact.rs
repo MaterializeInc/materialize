@@ -1796,7 +1796,7 @@ impl Catalog {
                             }))
                         })?;
 
-                    if !new_entry.item().is_temporary() {
+                    if !to_entry.item().is_temporary() {
                         tx.update_item(*id, to_entry.clone().into())?;
                     }
                     builtin_table_updates.extend(
