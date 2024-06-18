@@ -34,7 +34,7 @@ use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::option::FallibleMapExt;
 use mz_ore::result::ResultExt as _;
 use mz_ore::soft_panic_or_log;
@@ -496,14 +496,14 @@ impl Catalog {
     /// This function must not be called in production contexts. Use
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
-    pub async fn with_debug<F, Fut, T>(now: NowFn, f: F) -> T
+    pub async fn with_debug<F, Fut, T>(f: F) -> T
     where
         F: FnOnce(Catalog) -> Fut,
         Fut: Future<Output = T>,
     {
         let persist_client = PersistClient::new_for_tests().await;
         let environmentd_id = Uuid::new_v4();
-        let catalog = match Self::open_debug_catalog(persist_client, environmentd_id, now).await {
+        let catalog = match Self::open_debug_catalog(persist_client, environmentd_id).await {
             Ok(catalog) => catalog,
             Err(err) => {
                 panic!("unable to open debug stash: {err}");
@@ -518,8 +518,8 @@ impl Catalog {
     pub async fn open_debug_catalog(
         persist_client: PersistClient,
         organization_id: Uuid,
-        now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
+        let now = SYSTEM_TIME.clone();
         let deploy_generation = 0;
         let epoch_lower_bound = None;
         let environment_id = None;
@@ -1956,7 +1956,7 @@ mod tests {
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
-    use mz_ore::now::{to_datetime, NOW_ZERO, SYSTEM_TIME};
+    use mz_ore::now::{to_datetime, SYSTEM_TIME};
     use mz_ore::task;
     use mz_persist_client::PersistClient;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
@@ -1989,7 +1989,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_minimal_qualification() {
-        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             struct TestCase {
                 input: QualifiedItemName,
                 system_output: PartialItemName,
@@ -2066,13 +2066,10 @@ mod tests {
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
         {
-            let mut catalog = Catalog::open_debug_catalog(
-                persist_client.clone(),
-                organization_id.clone(),
-                NOW_ZERO.clone(),
-            )
-            .await
-            .expect("unable to open debug catalog");
+            let mut catalog =
+                Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
+                    .await
+                    .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
             catalog
                 .transact(
@@ -2090,10 +2087,9 @@ mod tests {
             catalog.expire().await;
         }
         {
-            let catalog =
-                Catalog::open_debug_catalog(persist_client, organization_id, NOW_ZERO.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let catalog = Catalog::open_debug_catalog(persist_client, organization_id)
+                .await
+                .expect("unable to open debug catalog");
             // Re-opening the same catalog resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
@@ -2103,7 +2099,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_effective_search_path() {
-        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             let mz_catalog_schema = (
                 ResolvedDatabaseSpecifier::Ambient,
                 SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
@@ -2251,7 +2247,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_normalized_create() {
         use mz_ore::collections::CollectionExt;
-        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
             let scx = &mut StatementContext::new(None, &conn_catalog);
 
@@ -2294,13 +2290,10 @@ mod tests {
         let organization_id = Uuid::new_v4();
         let id = GlobalId::User(1);
         {
-            let mut catalog = Catalog::open_debug_catalog(
-                persist_client.clone(),
-                organization_id.clone(),
-                SYSTEM_TIME.clone(),
-            )
-            .await
-            .expect("unable to open debug catalog");
+            let mut catalog =
+                Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
+                    .await
+                    .expect("unable to open debug catalog");
             let item = catalog
                 .state()
                 .deserialize_item(&create_sql)
@@ -2328,10 +2321,9 @@ mod tests {
             catalog.expire().await;
         }
         {
-            let catalog =
-                Catalog::open_debug_catalog(persist_client, organization_id, SYSTEM_TIME.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let catalog = Catalog::open_debug_catalog(persist_client, organization_id)
+                .await
+                .expect("unable to open debug catalog");
             let view = catalog.get_entry(&id);
             assert_eq!("v", view.name.item);
             match &view.item {
@@ -2345,7 +2337,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_object_type() {
-        Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
 
             assert_eq!(
@@ -2367,7 +2359,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_get_privileges() {
-        Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
 
             assert_eq!(
@@ -2782,7 +2774,7 @@ mod tests {
             catalog.expire().await;
         }
 
-        Catalog::with_debug(NOW_ZERO.clone(), inner).await
+        Catalog::with_debug(inner).await
     }
 
     // Execute all builtin functions with all combinations of arguments from interesting datums.
@@ -2923,8 +2915,7 @@ mod tests {
             handles
         }
 
-        let handles =
-            Catalog::with_debug(NOW_ZERO.clone(), |catalog| async { inner(catalog) }).await;
+        let handles = Catalog::with_debug(|catalog| async { inner(catalog) }).await;
         for handle in handles {
             handle.await.expect("must succeed");
         }
@@ -3069,7 +3060,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_pg_views_forbidden_types() {
-        Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
 
             for view in BUILTINS::views().filter(|view| {
@@ -3141,13 +3132,10 @@ mod tests {
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
         let id = {
-            let catalog = Catalog::open_debug_catalog(
-                persist_client.clone(),
-                organization_id.clone(),
-                NOW_ZERO.clone(),
-            )
-            .await
-            .expect("unable to open debug catalog");
+            let catalog =
+                Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
+                    .await
+                    .expect("unable to open debug catalog");
             let id = catalog
                 .entries()
                 .find(|entry| &entry.name.item == "mz_objects" && entry.is_view())
@@ -3165,10 +3153,9 @@ mod tests {
             *guard = Some("\n".to_string());
         }
         {
-            let catalog =
-                Catalog::open_debug_catalog(persist_client, organization_id, NOW_ZERO.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let catalog = Catalog::open_debug_catalog(persist_client, organization_id)
+                .await
+                .expect("unable to open debug catalog");
 
             let new_id = catalog
                 .entries()

@@ -9,7 +9,6 @@
 
 use mz_adapter::catalog::Catalog;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::NOW_ZERO;
 use mz_repr::ScalarType;
 use mz_sql::plan::PlanContext;
 
@@ -107,7 +106,7 @@ async fn test_parameter_type_inference() {
         ),
     ];
 
-    Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+    Catalog::with_debug(|catalog| async move {
         let conn_catalog = catalog.for_system_session();
         for (sql, types) in test_cases {
             let stmt = mz_sql::parse::parse(sql).unwrap().into_element().ast;
