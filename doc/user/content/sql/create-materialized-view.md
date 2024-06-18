@@ -19,10 +19,6 @@ resources used for view maintenance from the resources used for query serving.
 
 {{< diagram "create-materialized-view.svg" >}}
 
-### `with_options`
-
-{{< diagram "with-options-materialized-view.svg" >}}
-
 Field | Use
 ------|-----
 **OR REPLACE** | If a materialized view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views or sinks depend on, nor can you replace a non-view object with a view.
@@ -31,8 +27,13 @@ _view&lowbar;name_ | A name for the materialized view.
 **(** _col_ident_... **)** | Rename the `SELECT` statement's columns to the list of identifiers, both of which must be the same length. Note that this is required for statements that return multiple columns with the same identifier.
 _cluster&lowbar;name_ | The cluster to maintain this materialized view. If not specified, defaults to the active cluster.
 _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose results you want to maintain incrementally updated.
-**(** **ASSERT NOT NULL** _col_ident_... **)** | This option has known performance or stability issues and is under active development.* A list of columns for which to create [non-null assertions](#non-null-assertions).
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](https://materialize.com/docs/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+
+### `WITH` options
+
+| Field      | Value     | Description                                                                                                                                                       |
+| ---------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ASSERT NOT NULL** _col_ident_ | `text` | The column identifier for which to create a [non-null assertion](#non-null-assertions). To specify multiple columns, repeat the option multiple times. |
+| **RETAIN HISTORY FOR** _retention_period_ | `interval` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
 
 ## Details
 
@@ -86,6 +87,9 @@ clause is used erroneously, and a `NULL` value is in fact produced in
 a column for which `ASSERT NOT NULL` was specified, querying the
 materialized view will produce an error until the offending row is deleted.
 
+[//]: # "TODO(morsapaes) Add section linking to refresh strategies docs
+in #27521."
+
 ## Examples
 
 ### Creating a materialized view
@@ -115,6 +119,8 @@ SELECT
   ...
 FROM users FULL OUTER JOIN orders ON users.id = orders.user_id
 ```
+
+[//]: # "TODO(morsapaes) Add example for setting a refresh strategy in #27521."
 
 [//]: # "TODO(morsapaes) Add more elaborate examples with \timing that show
 things like querying materialized views from different clusters, indexed vs.
