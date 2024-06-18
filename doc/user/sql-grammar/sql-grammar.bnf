@@ -603,7 +603,7 @@ cte_binding ::=
 recursive_cte_binding ::=
   cte_ident '(' col_ident col_type ( ',' col_ident col_type )* ')' 'AS' '(' select_stmt ')'
 with_options ::=
-  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  ('WITH' '(' ( field '='? val ) ( ( ',' field '='? val ) )* ')')?
 with_options_aws ::= 'WITH' '('
     (
       static_credentials
