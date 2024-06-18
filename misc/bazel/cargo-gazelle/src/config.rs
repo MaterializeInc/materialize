@@ -175,6 +175,9 @@ pub struct BuildConfig {
     /// Environment variables to set for the build script.
     #[serde(default)]
     build_script_env: BTreeMap<String, String>,
+    /// Skip the automatic search for protobuf files.
+    #[serde(default)]
+    skip_proto_search: bool,
 }
 
 impl BuildConfig {
@@ -184,6 +187,10 @@ impl BuildConfig {
 
     pub fn build_script_env(&self) -> &BTreeMap<String, String> {
         &self.build_script_env
+    }
+
+    pub fn skip_proto_search(&self) -> bool {
+        self.skip_proto_search
     }
 }
 

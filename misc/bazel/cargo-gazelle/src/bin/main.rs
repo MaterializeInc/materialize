@@ -49,16 +49,19 @@ fn main() -> Result<(), anyhow::Error> {
 
     for package in packages {
         let crate_config = CrateConfig::new(&package);
-        let additive_content = crate_config.additive_content();
+        tracing::debug!(?crate_config, "found config");
         if crate_config.skip_generating() {
             tracing::info!(path = ?package.manifest_path(), "skipping, because crate config");
             continue;
         }
 
+        let additive_content = crate_config.additive_content();
+
         tracing::info!(path = ?package.manifest_path(), "generating");
 
         let error_context = format!("generating {}", package.name());
-        let crate_context = CrateContext::generate(&config, &package).context(error_context)?;
+        let crate_context =
+            CrateContext::generate(&config, &crate_config, &package).context(error_context)?;
 
         let build_script =
             CargoBuildScript::generate(&config, &crate_context, &crate_config, &package)?;
