@@ -172,7 +172,7 @@ impl Peek {
 pub(super) fn construct<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
-    event_queue: EventQueue<ComputeEvent>,
+    event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
@@ -181,12 +181,14 @@ pub(super) fn construct<A: Allocate + 'static>(
     let dataflow_index = worker.next_dataflow_index();
 
     worker.dataflow_named("Dataflow: compute logging", move |scope| {
-        let (mut logs, token) = Some(event_queue.link).mz_replay::<_, CapacityContainerBuilder<_>>(
-            scope,
-            "compute logs",
-            config.interval,
-            event_queue.activator,
-        );
+        let (mut logs, token) = Some(event_queue.link)
+            .mz_replay::<_, CapacityContainerBuilder<_>, _>(
+                scope,
+                "compute logs",
+                config.interval,
+                event_queue.activator,
+                |mut session, data| session.give_iterator(data.iter()),
+            );
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.

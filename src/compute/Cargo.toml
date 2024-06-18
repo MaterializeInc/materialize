@@ -30,7 +30,7 @@ mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
-mz-ore = { path = "../ore", features = ["async", "process", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "flatcontainer", "process", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }

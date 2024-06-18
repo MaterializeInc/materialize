@@ -30,7 +30,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Filter;
 use timely::logging::{
     ChannelsEvent, MessagesEvent, OperatesEvent, ParkEvent, ScheduleEvent, ShutdownEvent,
-    TimelyEvent,
+    TimelyEvent, WorkerIdentifier,
 };
 use tracing::error;
 
@@ -49,7 +49,7 @@ use crate::typedefs::{KeyValSpine, RowRowSpine};
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    event_queue: EventQueue<TimelyEvent>,
+    event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, TimelyEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
@@ -58,12 +58,14 @@ pub(super) fn construct<A: Allocate>(
     let dataflow_index = worker.next_dataflow_index();
 
     worker.dataflow_named("Dataflow: timely logging", move |scope| {
-        let (mut logs, token) = Some(event_queue.link).mz_replay::<_, CapacityContainerBuilder<_>>(
-            scope,
-            "timely logs",
-            config.interval,
-            event_queue.activator,
-        );
+        let (mut logs, token) = Some(event_queue.link)
+            .mz_replay::<_, CapacityContainerBuilder<_>, _>(
+                scope,
+                "timely logs",
+                config.interval,
+                event_queue.activator,
+                |mut session, data| session.give_iterator(data.iter()),
+            );
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.
