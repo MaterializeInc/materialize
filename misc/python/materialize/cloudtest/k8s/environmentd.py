@@ -246,6 +246,10 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             args += [
                 f"--timestamp-oracle-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=tsoracle"
             ]
+        if not self._meets_minimum_version("0.105.0-dev"):
+            args += [
+                f"--storage-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=storage"
+            ]
 
         return args + self.extra_args
 
