@@ -50,5 +50,20 @@ macro_rules! halt {
 ///
 /// This function exists to avoid that all callers of `halt!` have to explicitly depend on `libc`.
 pub fn halt() -> ! {
+    // Using `std::process::exit` here would be unsound as that function invokes libc's `exit`
+    // function, which is not thread-safe [1]. There are two viable work arounds for this:
+    //
+    //  * Calling libc's `_exit` function instead, which is thread-safe by virtue of not performing
+    //    any cleanup work.
+    //  * Introducing a global lock to ensure only a single thread gets to call `exit` at a time.
+    //
+    // We chose the former approach because it's simpler and has the additional benefit of
+    // protecting us from third-party code that installs thread-unsafe exit handlers.
+    //
+    // Note that we are fine with not running any cleanup code here. This behaves just like an
+    // abort we'd do in response to a panic. Any code that relies on cleanup code to run before
+    // process termination is already unsound in the face of panics and hardware failure.
+    //
+    // [1]: https://github.com/rust-lang/rust/issues/126600
     unsafe { libc::_exit(2) };
 }
