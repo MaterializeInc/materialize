@@ -1,5 +1,5 @@
 {
-  "checksum": "f7007632491f93fe771c46bb8d676a064651be80e3497ef45572ae4df6161523",
+  "checksum": "c9fa81abc1f62e4fef0594d81e30fe3598f07be3691d3189239771fedc1cc364",
   "crates": {
     "abomonation 0.7.3": {
       "name": "abomonation",
@@ -5248,14 +5248,14 @@
       ],
       "license_file": "LICENSE.md"
     },
-    "bindgen 0.65.1": {
+    "bindgen 0.69.4": {
       "name": "bindgen",
-      "version": "0.65.1",
+      "version": "0.69.4",
       "package_url": "https://github.com/rust-lang/rust-bindgen",
       "repository": {
         "Http": {
-          "url": "https://static.crates.io/crates/bindgen/0.65.1/download",
-          "sha256": "cfdf7b466f9a4903edc73f95d6d2bcd5baf8ae620638762244d3f60143643cc5"
+          "url": "https://static.crates.io/crates/bindgen/0.69.4/download",
+          "sha256": "a00dc851838a2120612785d195287475a3ac45514741da670b735818822129a0"
         }
       },
       "targets": [
@@ -5298,11 +5298,11 @@
         "deps": {
           "common": [
             {
-              "id": "bindgen 0.65.1",
+              "id": "bindgen 0.69.4",
               "target": "build_script_build"
             },
             {
-              "id": "bitflags 1.3.2",
+              "id": "bitflags 2.4.1",
               "target": "bitflags"
             },
             {
@@ -5314,20 +5314,16 @@
               "target": "clang_sys"
             },
             {
+              "id": "itertools 0.12.1",
+              "target": "itertools"
+            },
+            {
               "id": "lazy_static 1.4.0",
               "target": "lazy_static"
             },
             {
               "id": "lazycell 1.3.0",
               "target": "lazycell"
-            },
-            {
-              "id": "peeking_take_while 0.1.2",
-              "target": "peeking_take_while"
-            },
-            {
-              "id": "prettyplease 0.2.4",
-              "target": "prettyplease"
             },
             {
               "id": "proc-macro2 1.0.82",
@@ -5357,7 +5353,7 @@
           "selects": {}
         },
         "edition": "2018",
-        "version": "0.65.1"
+        "version": "0.69.4"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -5368,10 +5364,6 @@
             {
               "id": "clang-sys 1.3.0",
               "target": "clang_sys"
-            },
-            {
-              "id": "prettyplease 0.2.4",
-              "target": "prettyplease"
             }
           ],
           "selects": {}
@@ -11278,7 +11270,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/differential-dataflow.git",
           "commitish": {
-            "Rev": "05a27dafa809c7f561a5a445d623db68559a95b4"
+            "Rev": "f051b828fc579efbf69c03ce669cb92fbe51a362"
           }
         }
       },
@@ -11639,7 +11631,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/differential-dataflow.git",
           "commitish": {
-            "Rev": "05a27dafa809c7f561a5a445d623db68559a95b4"
+            "Rev": "f051b828fc579efbf69c03ce669cb92fbe51a362"
           },
           "strip_prefix": "dogsdogsdogs"
         }
@@ -20584,17 +20576,14 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
-    "librocksdb-sys 0.11.0+8.3.2": {
+    "librocksdb-sys 0.16.0+8.10.0": {
       "name": "librocksdb-sys",
-      "version": "0.11.0+8.3.2",
+      "version": "0.16.0+8.10.0",
       "package_url": "https://github.com/rust-rocksdb/rust-rocksdb",
       "repository": {
-        "Git": {
-          "remote": "https://github.com/MaterializeInc/rust-rocksdb",
-          "commitish": {
-            "Rev": "ab3684f999a5586d7a5e94bd65defd78af15d40f"
-          },
-          "strip_prefix": "librocksdb-sys"
+        "Http": {
+          "url": "https://static.crates.io/crates/librocksdb-sys/0.16.0+8.10.0/download",
+          "sha256": "ce3d60bc059831dc1c83903fb45c103f75db65c5a7bf22272764d9cc683e348c"
         }
       },
       "targets": [
@@ -20653,7 +20642,7 @@
               "target": "libc"
             },
             {
-              "id": "librocksdb-sys 0.11.0+8.3.2",
+              "id": "librocksdb-sys 0.16.0+8.10.0",
               "target": "build_script_build"
             },
             {
@@ -20668,7 +20657,7 @@
           "selects": {}
         },
         "edition": "2018",
-        "version": "0.11.0+8.3.2"
+        "version": "0.16.0+8.10.0"
       },
       "build_script_attrs": {
         "data": {
@@ -20684,7 +20673,7 @@
         "deps": {
           "common": [
             {
-              "id": "bindgen 0.65.1",
+              "id": "bindgen 0.69.4",
               "target": "bindgen"
             },
             {
@@ -20694,10 +20683,6 @@
             {
               "id": "glob 0.3.1",
               "target": "glob"
-            },
-            {
-              "id": "rustflags 0.1.4",
-              "target": "rustflags"
             }
           ],
           "selects": {}
@@ -20732,7 +20717,7 @@
         "MIT"
       ],
       "license_file": null,
-      "additive_build_file_content": "# Copyright Materialize, Inc. and contributors. All rights reserved.\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License in the LICENSE file at the\n# root of this repository, or online at\n#\n#     http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n\nload(\"@rules_foreign_cc//foreign_cc:defs.bzl\", \"cmake\")\n\nload(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\nload(\"@aspect_bazel_lib//lib:copy_file.bzl\", \"copy_file\")\nload(\"@bazel_skylib//rules:select_file.bzl\", \"select_file\")\n\n\"\"\"Additive BUILD file for the librocksdb-sys Rust crate.\"\"\"\n\n# Copied from https://github.com/tensorflow/tensorflow/blob/bdd8bf316e4ab7d699127d192d30eb614a158462/third_party/snappy.BUILD\n\ncc_library(\n    name = \"snappy\",\n    srcs = [\n        \"snappy/snappy.cc\",\n        \"snappy/snappy.h\",\n        \"snappy/snappy-internal.h\",\n        \"snappy/snappy-sinksource.cc\",\n        \"snappy/snappy-sinksource.h\",\n        \"snappy/snappy-stubs-internal.cc\",\n        \"snappy/snappy-stubs-internal.h\",\n        \":config_h\",\n        \":snappy_stubs_public_h\",\n    ],\n    hdrs = [\n        \"snappy/snappy.h\"\n    ],\n    includes = [\"snappy/.\"],\n    copts = [\n        \"-DHAVE_CONFIG_H\",\n        \"-fno-exceptions\",\n        \"-Wno-sign-compare\",\n        \"-Wno-shift-negative-value\",\n        \"-Wno-implicit-function-declaration\",\n    ],\n    defines = [\"HAVE_SYS_UIO_H\"],\n)\n\ngenrule(\n    name = \"config_h\",\n    outs = [\"snappy/config.h\"],\n    cmd = \"\\n\".join([\n        \"cat <<'EOF' >$@\",\n        \"#define HAVE_STDDEF_H 1\",\n        \"#define HAVE_STDINT_H 1\",\n        \"\",\n        \"#ifdef __has_builtin\",\n        \"#  if !defined(HAVE_BUILTIN_EXPECT) && __has_builtin(__builtin_expect)\",\n        \"#    define HAVE_BUILTIN_EXPECT 1\",\n        \"#  endif\",\n        \"#  if !defined(HAVE_BUILTIN_CTZ) && __has_builtin(__builtin_ctzll)\",\n        \"#    define HAVE_BUILTIN_CTZ 1\",\n        \"#  endif\",\n        \"#elif defined(__GNUC__) && (__GNUC__ > 3 || __GNUC__ == 3 && __GNUC_MINOR__ >= 4)\",\n        \"#  ifndef HAVE_BUILTIN_EXPECT\",\n        \"#    define HAVE_BUILTIN_EXPECT 1\",\n        \"#  endif\",\n        \"#  ifndef HAVE_BUILTIN_CTZ\",\n        \"#    define HAVE_BUILTIN_CTZ 1\",\n        \"#  endif\",\n        \"#endif\",\n        \"\",\n        \"#ifdef __has_include\",\n        \"#  if !defined(HAVE_BYTESWAP_H) && __has_include(<byteswap.h>)\",\n        \"#    define HAVE_BYTESWAP_H 1\",\n        \"#  endif\",\n        \"#  if !defined(HAVE_UNISTD_H) && __has_include(<unistd.h>)\",\n        \"#    define HAVE_UNISTD_H 1\",\n        \"#  endif\",\n        \"#  if !defined(HAVE_SYS_ENDIAN_H) && __has_include(<sys/endian.h>)\",\n        \"#    define HAVE_SYS_ENDIAN_H 1\",\n        \"#  endif\",\n        \"#  if !defined(HAVE_SYS_MMAN_H) && __has_include(<sys/mman.h>)\",\n        \"#    define HAVE_SYS_MMAN_H 1\",\n        \"#  endif\",\n        \"#  if !defined(HAVE_SYS_UIO_H) && __has_include(<sys/uio.h>)\",\n        \"#    define HAVE_SYS_UIO_H 1\",\n        \"#  endif\",\n        \"#endif\",\n        \"\",\n        \"#ifndef SNAPPY_IS_BIG_ENDIAN\",\n        \"#  ifdef __s390x__\",\n        \"#    define SNAPPY_IS_BIG_ENDIAN 1\",\n        \"#  elif defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__\",\n        \"#    define SNAPPY_IS_BIG_ENDIAN 1\",\n        \"#  endif\",\n        \"#endif\",\n        \"EOF\",\n    ]),\n)\n\ngenrule(\n    name = \"snappy_stubs_public_h\",\n    srcs = [\"snappy/snappy-stubs-public.h.in\"],\n    outs = [\"snappy/snappy-stubs-public.h\"],\n    cmd = (\"sed \" +\n           \"-e 's/$${\\\\(.*\\\\)_01}/\\\\1/g' \" +\n           \"-e 's/$${SNAPPY_MAJOR}/1/g' \" +\n           \"-e 's/$${SNAPPY_MINOR}/1/g' \" +\n           \"-e 's/$${SNAPPY_PATCHLEVEL}/4/g' \" +\n           \"$< >$@\"),\n)\n\nfilegroup(\n    name = \"rocksdb_srcs\",\n    srcs = glob([\"**\"]),\n    visibility = [\"//visibility:public\"],\n)\n\ncmake(\n    name = \"rocksdb\",\n    working_directory = \"rocksdb/\",\n    build_args = [\"-j8\"],\n    generate_args = [\n        \"-DWITH_SNAPPY=1\",\n        \"-DWITH_LZ4=1\",\n        \"-DWITH_ZSTD=1\",\n        \"-DWITH_ZLIB=1\",\n        \"-DWITH_BZIP2=1\",\n        \"-DWITH_GFLAGS=OFF\",\n        \"-DWITH_ALL_TESTS=OFF\",\n        \"-DWITH_TESTS=OFF\",\n        \"-DWITH_TOOLS=OFF\",\n        \"-DUSE_RTTI=1\",\n        \"-DROCKSDB_BUILD_SHARED=OFF\",\n    ],\n    lib_source = \":rocksdb_srcs\",\n    targets = [\"rocksdb\"],\n    out_static_libs = [\"librocksdb.a\"],\n    deps = [\n        \":snappy\",\n        \"@jemalloc//:jemalloc\",\n        \"@lz4//:lz4\",\n        \"@zstd//:zstd\",\n        \"@zlib//:zlib\",\n        \"@bzip2//:bzip2\",\n    ],\n    visibility = [\"//visibility:public\"],\n)\n\nfilegroup(\n    name = \"out_dir\",\n    srcs = [\":rocksdb\"],\n    visibility = [\"//visibility:public\"],\n)\n\nselect_file(\n    name = \"librocksdb\",\n    srcs = \":out_dir\",\n    subpath = \"librocksdb.a\",\n)\ncopy_file(\n    name = \"librocksdb_copy\",\n    src = \":librocksdb\",\n    out = \"librocksdb.a\",\n    allow_symlink = False,\n)\n\ncopy_to_directory(\n    name = \"rocksdb_lib\",\n    srcs = [\":librocksdb_copy\"],\n    visibility = [\"//visibility:public\"],\n)\n\n# Select the include folder so we can specify `ROCKSDB_INCLUDE_DIR`\nselect_file(\n    name = \"rocksdb_include\",\n    srcs = \":out_dir\",\n    subpath = \"include\",\n    visibility = [\"//visibility:public\"],\n)\n\n# Licensed to the Apache Software Foundation (ASF) under one or more\n# contributor license agreements.  See the NOTICE file distributed with\n# this work for additional information regarding copyright ownership.\n# The ASF licenses this file to You under the Apache License, Version 2.0\n# (the \"License\"); you may not use this file except in compliance with\n# the License.  You may obtain a copy of the License at\n#\n#    http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n#\n# Copyright 2015 The TensorFlow Authors. All Rights Reserved.\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License at\n#\n#     http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n"
+      "additive_build_file_content": "# Copyright Materialize, Inc. and contributors. All rights reserved.\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License in the LICENSE file at the\n# root of this repository, or online at\n#\n#     http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n\nload(\"@rules_foreign_cc//foreign_cc:defs.bzl\", \"cmake\")\n\nload(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\nload(\"@aspect_bazel_lib//lib:copy_file.bzl\", \"copy_file\")\nload(\"@bazel_skylib//rules:select_file.bzl\", \"select_file\")\n\n\"\"\"Additive BUILD file for the librocksdb-sys Rust crate.\"\"\"\n\n# Copied from https://github.com/tensorflow/tensorflow/blob/bdd8bf316e4ab7d699127d192d30eb614a158462/third_party/snappy.BUILD\n\ncc_library(\n    name = \"snappy\",\n    srcs = [\n        \"snappy/snappy.cc\",\n        \"snappy/snappy.h\",\n        \"snappy/snappy-internal.h\",\n        \"snappy/snappy-sinksource.cc\",\n        \"snappy/snappy-sinksource.h\",\n        \"snappy/snappy-stubs-internal.cc\",\n        \"snappy/snappy-stubs-internal.h\",\n        \":config_h\",\n        \":snappy_stubs_public_h\",\n    ],\n    hdrs = [\n        \"snappy/snappy.h\"\n    ],\n    includes = [\"snappy/.\"],\n    copts = [\n        \"-DHAVE_CONFIG_H\",\n        \"-fno-exceptions\",\n        \"-Wno-sign-compare\",\n        \"-Wno-shift-negative-value\",\n        \"-Wno-implicit-function-declaration\",\n    ],\n    defines = [\"HAVE_SYS_UIO_H\"],\n)\n\ngenrule(\n    name = \"config_h\",\n    outs = [\"snappy/config.h\"],\n    cmd = \"\\n\".join([\n        \"cat <<'EOF' >$@\",\n        \"#define HAVE_STDDEF_H 1\",\n        \"#define HAVE_STDINT_H 1\",\n        \"\",\n        \"#ifdef __has_builtin\",\n        \"#  if !defined(HAVE_BUILTIN_EXPECT) && __has_builtin(__builtin_expect)\",\n        \"#    define HAVE_BUILTIN_EXPECT 1\",\n        \"#  endif\",\n        \"#  if !defined(HAVE_BUILTIN_CTZ) && __has_builtin(__builtin_ctzll)\",\n        \"#    define HAVE_BUILTIN_CTZ 1\",\n        \"#  endif\",\n        \"#elif defined(__GNUC__) && (__GNUC__ > 3 || __GNUC__ == 3 && __GNUC_MINOR__ >= 4)\",\n        \"#  ifndef HAVE_BUILTIN_EXPECT\",\n        \"#    define HAVE_BUILTIN_EXPECT 1\",\n        \"#  endif\",\n        \"#  ifndef HAVE_BUILTIN_CTZ\",\n        \"#    define HAVE_BUILTIN_CTZ 1\",\n        \"#  endif\",\n        \"#endif\",\n        \"\",\n        \"#ifdef __has_include\",\n        \"#  if !defined(HAVE_BYTESWAP_H) && __has_include(<byteswap.h>)\",\n        \"#    define HAVE_BYTESWAP_H 1\",\n        \"#  endif\",\n        \"#  if !defined(HAVE_UNISTD_H) && __has_include(<unistd.h>)\",\n        \"#    define HAVE_UNISTD_H 1\",\n        \"#  endif\",\n        \"#  if !defined(HAVE_SYS_ENDIAN_H) && __has_include(<sys/endian.h>)\",\n        \"#    define HAVE_SYS_ENDIAN_H 1\",\n        \"#  endif\",\n        \"#  if !defined(HAVE_SYS_MMAN_H) && __has_include(<sys/mman.h>)\",\n        \"#    define HAVE_SYS_MMAN_H 1\",\n        \"#  endif\",\n        \"#  if !defined(HAVE_SYS_UIO_H) && __has_include(<sys/uio.h>)\",\n        \"#    define HAVE_SYS_UIO_H 1\",\n        \"#  endif\",\n        \"#endif\",\n        \"\",\n        \"#ifndef SNAPPY_IS_BIG_ENDIAN\",\n        \"#  ifdef __s390x__\",\n        \"#    define SNAPPY_IS_BIG_ENDIAN 1\",\n        \"#  elif defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__\",\n        \"#    define SNAPPY_IS_BIG_ENDIAN 1\",\n        \"#  endif\",\n        \"#endif\",\n        \"EOF\",\n    ]),\n)\n\ngenrule(\n    name = \"snappy_stubs_public_h\",\n    srcs = [\"snappy/snappy-stubs-public.h.in\"],\n    outs = [\"snappy/snappy-stubs-public.h\"],\n    cmd = (\"sed \" +\n           \"-e 's/$${\\\\(.*\\\\)_01}/\\\\1/g' \" +\n           \"-e 's/$${SNAPPY_MAJOR}/1/g' \" +\n           \"-e 's/$${SNAPPY_MINOR}/1/g' \" +\n           \"-e 's/$${SNAPPY_PATCHLEVEL}/4/g' \" +\n           \"$< >$@\"),\n)\n\nfilegroup(\n    name = \"rocksdb_srcs\",\n    srcs = glob([\"**\"]),\n    visibility = [\"//visibility:public\"],\n)\n\ncmake(\n    name = \"rocksdb\",\n    working_directory = \"rocksdb/\",\n    build_args = [\"-j8\"],\n    generate_args = [\n        \"-DWITH_SNAPPY=1\",\n        \"-DWITH_LZ4=1\",\n        \"-DWITH_ZSTD=1\",\n        \"-DWITH_GFLAGS=OFF\",\n        \"-DWITH_ALL_TESTS=OFF\",\n        \"-DWITH_TESTS=OFF\",\n        \"-DWITH_TOOLS=OFF\",\n        \"-DUSE_RTTI=1\",\n        \"-DROCKSDB_BUILD_SHARED=OFF\",\n        # `cmake` tries _very_ hard to find libraries to link against, and it\n        # generally prefers dynamic libraries in the sysroot, which is exactly\n        # what we don't want because it breaks hermeticity.\n        #\n        # We set a number of options here to limit what `cmake` will search for\n        # so we link against our static libraries.\n        \"-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=0\",\n        \"-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=0\",\n        \"-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=0\",\n        # Uncomment this if you ever need to debug what library cmake is resolving.\n        # \"-DCMAKE_FIND_DEBUG_MODE=TRUE\",\n    ],\n    lib_source = \":rocksdb_srcs\",\n    targets = [\"rocksdb\"],\n    out_static_libs = [\"librocksdb.a\"],\n    deps = [\n        \":snappy\",\n        \"@lz4//:lz4\",\n        \"@zstd//:zstd\",\n    ],\n    visibility = [\"//visibility:public\"],\n)\n\nfilegroup(\n    name = \"out_dir\",\n    srcs = [\":rocksdb\"],\n    visibility = [\"//visibility:public\"],\n)\n\nselect_file(\n    name = \"librocksdb\",\n    srcs = \":out_dir\",\n    subpath = \"librocksdb.a\",\n)\ncopy_file(\n    name = \"librocksdb_copy\",\n    src = \":librocksdb\",\n    out = \"librocksdb.a\",\n    allow_symlink = False,\n)\n\ncopy_to_directory(\n    name = \"rocksdb_lib\",\n    srcs = [\":librocksdb_copy\"],\n    visibility = [\"//visibility:public\"],\n)\n\n# Select the include folder so we can specify `ROCKSDB_INCLUDE_DIR`\nselect_file(\n    name = \"rocksdb_include\",\n    srcs = \":out_dir\",\n    subpath = \"include\",\n    visibility = [\"//visibility:public\"],\n)\n\n# Licensed to the Apache Software Foundation (ASF) under one or more\n# contributor license agreements.  See the NOTICE file distributed with\n# this work for additional information regarding copyright ownership.\n# The ASF licenses this file to You under the Apache License, Version 2.0\n# (the \"License\"); you may not use this file except in compliance with\n# the License.  You may obtain a copy of the License at\n#\n#    http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n#\n# Copyright 2015 The TensorFlow Authors. All Rights Reserved.\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License at\n#\n#     http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n"
     },
     "libz-sys 1.1.8": {
       "name": "libz-sys",
@@ -22545,7 +22530,7 @@
               "target": "mio"
             },
             {
-              "id": "mysql_common 0.32.1",
+              "id": "mysql_common 0.32.4",
               "target": "mysql_common"
             },
             {
@@ -22625,14 +22610,14 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
-    "mysql_common 0.32.1": {
+    "mysql_common 0.32.4": {
       "name": "mysql_common",
-      "version": "0.32.1",
+      "version": "0.32.4",
       "package_url": "https://github.com/blackbeam/rust_mysql_common",
       "repository": {
         "Http": {
-          "url": "https://static.crates.io/crates/mysql_common/0.32.1/download",
-          "sha256": "8a60cb978c0a1d654edcc1460f8d6092dacf21346ed6017d81fb76a23ef5a8de"
+          "url": "https://static.crates.io/crates/mysql_common/0.32.4/download",
+          "sha256": "478b0ff3f7d67b79da2b96f56f334431aef65e15ba4b29dd74a4236e29582bdc"
         }
       },
       "targets": [
@@ -22717,7 +22702,7 @@
               "target": "lazy_static"
             },
             {
-              "id": "mysql_common 0.32.1",
+              "id": "mysql_common 0.32.4",
               "target": "build_script_build"
             },
             {
@@ -22776,7 +22761,7 @@
           "selects": {}
         },
         "edition": "2018",
-        "version": "0.32.1"
+        "version": "0.32.4"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -22785,7 +22770,7 @@
         "deps": {
           "common": [
             {
-              "id": "bindgen 0.65.1",
+              "id": "bindgen 0.69.4",
               "target": "bindgen"
             },
             {
@@ -24100,9 +24085,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-balancerd 0.104.0-dev": {
+    "mz-balancerd 0.105.0-dev": {
       "name": "mz-balancerd",
-      "version": "0.104.0-dev",
+      "version": "0.105.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -24236,7 +24221,7 @@
           ],
           "selects": {}
         },
-        "version": "0.104.0-dev"
+        "version": "0.105.0-dev"
       },
       "license": null,
       "license_ids": [],
@@ -24606,9 +24591,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-catalog-debug 0.104.0-dev": {
+    "mz-catalog-debug 0.105.0-dev": {
       "name": "mz-catalog-debug",
-      "version": "0.104.0-dev",
+      "version": "0.105.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [],
@@ -24663,7 +24648,7 @@
           "selects": {}
         },
         "edition": "2021",
-        "version": "0.104.0-dev"
+        "version": "0.105.0-dev"
       },
       "license": null,
       "license_ids": [],
@@ -24714,6 +24699,10 @@
               "target": "openssl"
             },
             {
+              "id": "proptest 1.0.0",
+              "target": "proptest"
+            },
+            {
               "id": "reqwest 0.11.24",
               "target": "reqwest"
             },
@@ -24754,6 +24743,15 @@
           "selects": {}
         },
         "edition": "2021",
+        "proc_macro_deps": {
+          "common": [
+            {
+              "id": "proptest-derive 0.3.0",
+              "target": "proptest_derive"
+            }
+          ],
+          "selects": {}
+        },
         "version": "0.0.0"
       },
       "license": null,
@@ -24976,7 +24974,7 @@
               "target": "regex"
             },
             {
-              "id": "rocksdb 0.21.0",
+              "id": "rocksdb 0.22.0",
               "target": "rocksdb"
             },
             {
@@ -25187,9 +25185,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-clusterd 0.104.0-dev": {
+    "mz-clusterd 0.105.0-dev": {
       "name": "mz-clusterd",
-      "version": "0.104.0-dev",
+      "version": "0.105.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [],
@@ -25248,7 +25246,7 @@
           "selects": {}
         },
         "edition": "2021",
-        "version": "0.104.0-dev"
+        "version": "0.105.0-dev"
       },
       "license": null,
       "license_ids": [],
@@ -25954,9 +25952,9 @@
       ],
       "license_file": null
     },
-    "mz-environmentd 0.104.0-dev": {
+    "mz-environmentd 0.105.0-dev": {
       "name": "mz-environmentd",
-      "version": "0.104.0-dev",
+      "version": "0.105.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -26096,7 +26094,7 @@
               "target": "mime"
             },
             {
-              "id": "mz-environmentd 0.104.0-dev",
+              "id": "mz-environmentd 0.105.0-dev",
               "target": "build_script_build"
             },
             {
@@ -26321,7 +26319,7 @@
           ],
           "selects": {}
         },
-        "version": "0.104.0-dev"
+        "version": "0.105.0-dev"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -27905,7 +27903,7 @@
               "target": "mysql_async"
             },
             {
-              "id": "mysql_common 0.32.1",
+              "id": "mysql_common 0.32.4",
               "target": "mysql_common"
             },
             {
@@ -29045,9 +29043,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-persist-client 0.104.0-dev": {
+    "mz-persist-client 0.105.0-dev": {
       "name": "mz-persist-client",
-      "version": "0.104.0-dev",
+      "version": "0.105.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -29134,7 +29132,7 @@
               "target": "itertools"
             },
             {
-              "id": "mz-persist-client 0.104.0-dev",
+              "id": "mz-persist-client 0.105.0-dev",
               "target": "build_script_build"
             },
             {
@@ -29243,7 +29241,7 @@
           ],
           "selects": {}
         },
-        "version": "0.104.0-dev"
+        "version": "0.105.0-dev"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -31566,7 +31564,7 @@
               "target": "prost"
             },
             {
-              "id": "rocksdb 0.21.0",
+              "id": "rocksdb 0.22.0",
               "target": "rocksdb"
             },
             {
@@ -32275,10 +32273,6 @@
             {
               "id": "once_cell 1.19.0",
               "target": "once_cell"
-            },
-            {
-              "id": "postgres_array 0.11.0",
-              "target": "postgres_array"
             },
             {
               "id": "proptest 1.0.0",
@@ -33028,7 +33022,7 @@
               "target": "mysql_async"
             },
             {
-              "id": "mysql_common 0.32.1",
+              "id": "mysql_common 0.32.4",
               "target": "mysql_common"
             },
             {
@@ -33060,7 +33054,7 @@
               "target": "regex"
             },
             {
-              "id": "rocksdb 0.21.0",
+              "id": "rocksdb 0.22.0",
               "target": "rocksdb"
             },
             {
@@ -33606,6 +33600,10 @@
               "target": "anyhow"
             },
             {
+              "id": "arrow 51.0.0",
+              "target": "arrow"
+            },
+            {
               "id": "aws-config 1.2.0",
               "target": "aws_config"
             },
@@ -33851,9 +33849,9 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-testdrive 0.104.0-dev": {
+    "mz-testdrive 0.105.0-dev": {
       "name": "mz-testdrive",
-      "version": "0.104.0-dev",
+      "version": "0.105.0-dev",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -33988,7 +33986,7 @@
               "target": "mysql_async"
             },
             {
-              "id": "mz-testdrive 0.104.0-dev",
+              "id": "mz-testdrive 0.105.0-dev",
               "target": "build_script_build"
             },
             {
@@ -34116,7 +34114,7 @@
           ],
           "selects": {}
         },
-        "version": "0.104.0-dev"
+        "version": "0.105.0-dev"
       },
       "build_script_attrs": {
         "data_glob": [
@@ -38313,45 +38311,6 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
-    "peeking_take_while 0.1.2": {
-      "name": "peeking_take_while",
-      "version": "0.1.2",
-      "package_url": "https://github.com/fitzgen/peeking_take_while",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/peeking_take_while/0.1.2/download",
-          "sha256": "19b17cddbe7ec3f8bc800887bab5e717348c95ea2ca0b1bf0837fb964dc67099"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "peeking_take_while",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "peeking_take_while",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "edition": "2015",
-        "version": "0.1.2"
-      },
-      "license": "Apache-2.0/MIT",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-APACHE"
-    },
     "pem 3.0.2": {
       "name": "pem",
       "version": "3.0.2",
@@ -39413,7 +39372,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/rust-postgres",
           "commitish": {
-            "Rev": "91522e47643ebb6d6a5e392957b2319e5bb522ad"
+            "Rev": "02336bebb28507665184c21566e5d1dc8de1dd7d"
           },
           "strip_prefix": "postgres"
         }
@@ -39490,7 +39449,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/rust-postgres",
           "commitish": {
-            "Rev": "91522e47643ebb6d6a5e392957b2319e5bb522ad"
+            "Rev": "02336bebb28507665184c21566e5d1dc8de1dd7d"
           },
           "strip_prefix": "postgres-openssl"
         }
@@ -39560,7 +39519,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/rust-postgres",
           "commitish": {
-            "Rev": "91522e47643ebb6d6a5e392957b2319e5bb522ad"
+            "Rev": "02336bebb28507665184c21566e5d1dc8de1dd7d"
           },
           "strip_prefix": "postgres-protocol"
         }
@@ -39647,7 +39606,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/rust-postgres",
           "commitish": {
-            "Rev": "91522e47643ebb6d6a5e392957b2319e5bb522ad"
+            "Rev": "02336bebb28507665184c21566e5d1dc8de1dd7d"
           },
           "strip_prefix": "postgres-types"
         }
@@ -40291,80 +40250,6 @@
           "**"
         ],
         "links": "prettyplease01"
-      },
-      "license": "MIT OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-APACHE"
-    },
-    "prettyplease 0.2.4": {
-      "name": "prettyplease",
-      "version": "0.2.4",
-      "package_url": "https://github.com/dtolnay/prettyplease",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/prettyplease/0.2.4/download",
-          "sha256": "1ceca8aaf45b5c46ec7ed39fff75f57290368c1846d33d24a122ca81416ab058"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "prettyplease",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        },
-        {
-          "BuildScript": {
-            "crate_name": "build_script_build",
-            "crate_root": "build.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "prettyplease",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "prettyplease 0.2.4",
-              "target": "build_script_build"
-            },
-            {
-              "id": "proc-macro2 1.0.82",
-              "target": "proc_macro2"
-            },
-            {
-              "id": "syn 2.0.63",
-              "target": "syn"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "0.2.4"
-      },
-      "build_script_attrs": {
-        "data_glob": [
-          "**"
-        ],
-        "links": "prettyplease02"
       },
       "license": "MIT OR Apache-2.0",
       "license_ids": [
@@ -42904,7 +42789,7 @@
         "MIT"
       ],
       "license_file": null,
-      "additive_build_file_content": "# Copyright Materialize, Inc. and contributors. All rights reserved.\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License in the LICENSE file at the\n# root of this repository, or online at\n#\n#     http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n\n\"\"\"Additive BUILD file for the librdkafka-sys Rust crate.\"\"\"\n\nload(\"@rules_foreign_cc//foreign_cc:defs.bzl\", \"cmake\")\n\nload(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\nload(\"@aspect_bazel_lib//lib:copy_file.bzl\", \"copy_file\")\nload(\"@bazel_skylib//rules:select_file.bzl\", \"select_file\")\n\nfilegroup(\n    name = \"all_srcs\",\n    srcs = glob([\"librdkafka/**\"]),\n)\n\ncmake(\n    name = \"librdkafka\",\n    lib_source = \":all_srcs\",\n    build_args = [\"-j8\"],\n    generate_args = [\n        \"-DRDKAFKA_BUILD_STATIC=1\",\n        \"-DRDKAFKA_BUILD_TESTS=0\",\n        \"-DRDKAFKA_BUILD_EXAMPLES=0\",\n        \"-DCMAKE_INSTALL_LIBDIR=lib\",\n    ],\n    out_static_libs = [\"librdkafka.a\"],\n)\n\nselect_file(\n    name = \"librdkafka_a\",\n    srcs = \":librdkafka\",\n    subpath = \"librdkafka.a\",\n)\ncopy_file(\n    name = \"librdkafka_copy\",\n    src = \":librdkafka_a\",\n    out = \"librdkafka.a\",\n    allow_symlink = False,\n)\ncopy_to_directory(\n    name = \"rdkafka_lib\",\n    srcs = [\":librdkafka_copy\"],\n    visibility = [\"//visibility:public\"],\n)\n"
+      "additive_build_file_content": "# Copyright Materialize, Inc. and contributors. All rights reserved.\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License in the LICENSE file at the\n# root of this repository, or online at\n#\n#     http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n\n\"\"\"Additive BUILD file for the librdkafka-sys Rust crate.\"\"\"\n\nload(\"@rules_foreign_cc//foreign_cc:defs.bzl\", \"cmake\")\n\nload(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\nload(\"@aspect_bazel_lib//lib:copy_file.bzl\", \"copy_file\")\nload(\"@bazel_skylib//rules:select_file.bzl\", \"select_file\")\n\nfilegroup(\n    name = \"all_srcs\",\n    srcs = glob([\"librdkafka/**\"]),\n)\n\ncmake(\n    name = \"librdkafka\",\n    lib_source = \":all_srcs\",\n    build_args = [\"-j8\"],\n    generate_args = [\n        # Features enabled by the Rust `rdkafka-sys` crate.\n        \"-DRDKAFKA_BUILD_STATIC=1\",\n        \"-DRDKAFKA_BUILD_TESTS=0\",\n        \"-DRDKAFKA_BUILD_EXAMPLES=0\",\n        \"-DCMAKE_INSTALL_LIBDIR=lib\",\n        \"-DWITH_ZLIB=1\",\n        \"-DWITH_ZSTD=1\",\n        \"-DWITH_SSL=1\",\n        \"-DWITH_SASL_SCRAM=1\",\n        \"-DWITH_SASL_OAUTHBEARER=1\",\n        # Additional features of librdkafka that we disable.\n        \"-DWITH_CURL=0\",\n        \"-DWITH_SASL=0\",\n        \"-DENABLE_LZ4_EXT=0\",\n        # `cmake` tries _very_ hard to find libraries to link against, and it\n        # generally prefers dynamic libraries in the sysroot, which is exactly\n        # what we don't want because it breaks hermeticity.\n        #\n        # We set a number of options here to limit what `cmake` will search for\n        # so we link against our static libraries.\n        \"-DCMAKE_POLICY_DEFAULT_CMP0074=NEW\",\n        \"-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=0\",\n        \"-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=0\",\n        \"-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=0\",\n        # Uncomment this if you ever need to debug what library cmake is resolving.\n        # \"-DCMAKE_FIND_DEBUG_MODE=TRUE\",\n    ],\n    env = {\n        # Note: casing here is important.\n        \"OpenSSL_ROOT\": \"$(execpath @openssl//:openssl_root)\",\n    },\n    deps = [\n        \"@zlib//:zlib\",\n        \"@openssl//:openssl\",\n        \"@zstd//:zstd\",\n    ],\n    build_data = [\"@openssl//:openssl_root\"],\n    out_static_libs = [\"librdkafka.a\"],\n)\n\nselect_file(\n    name = \"librdkafka_a\",\n    srcs = \":librdkafka\",\n    subpath = \"librdkafka.a\",\n)\ncopy_file(\n    name = \"librdkafka_copy\",\n    src = \":librdkafka_a\",\n    out = \"librdkafka.a\",\n    allow_symlink = False,\n)\ncopy_to_directory(\n    name = \"rdkafka_lib\",\n    srcs = [\":librdkafka_copy\"],\n    visibility = [\"//visibility:public\"],\n)\n"
     },
     "redox_syscall 0.2.10": {
       "name": "redox_syscall",
@@ -44031,16 +43916,14 @@
       ],
       "license_file": "LICENSE"
     },
-    "rocksdb 0.21.0": {
+    "rocksdb 0.22.0": {
       "name": "rocksdb",
-      "version": "0.21.0",
+      "version": "0.22.0",
       "package_url": "https://github.com/rust-rocksdb/rust-rocksdb",
       "repository": {
-        "Git": {
-          "remote": "https://github.com/MaterializeInc/rust-rocksdb",
-          "commitish": {
-            "Rev": "ab3684f999a5586d7a5e94bd65defd78af15d40f"
-          }
+        "Http": {
+          "url": "https://static.crates.io/crates/rocksdb/0.22.0/download",
+          "sha256": "6bd13e55d6d7b8cd0ea569161127567cd587676c99f4472f779a0279aa60a7a7"
         }
       },
       "targets": [
@@ -44077,14 +43960,14 @@
               "target": "libc"
             },
             {
-              "id": "librocksdb-sys 0.11.0+8.3.2",
+              "id": "librocksdb-sys 0.16.0+8.10.0",
               "target": "librocksdb_sys"
             }
           ],
           "selects": {}
         },
         "edition": "2018",
-        "version": "0.21.0"
+        "version": "0.22.0"
       },
       "license": "Apache-2.0",
       "license_ids": [
@@ -44394,45 +44277,6 @@
         "version": "0.4.0"
       },
       "license": "MIT/Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-APACHE"
-    },
-    "rustflags 0.1.4": {
-      "name": "rustflags",
-      "version": "0.1.4",
-      "package_url": "https://github.com/dtolnay/rustflags",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/rustflags/0.1.4/download",
-          "sha256": "e74f1ec0cda1aea3a3a6c0df066cd67acac62e24064532b871e8eafb0ec6c126"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "rustflags",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "rustflags",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "edition": "2021",
-        "version": "0.1.4"
-      },
-      "license": "MIT OR Apache-2.0",
       "license_ids": [
         "Apache-2.0",
         "MIT"
@@ -51263,7 +51107,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/timely-dataflow.git",
           "commitish": {
-            "Rev": "14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+            "Rev": "0c26e5e4198085d6c90db11930f2dba52e9f32cc"
           },
           "strip_prefix": "timely"
         }
@@ -51363,7 +51207,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/timely-dataflow.git",
           "commitish": {
-            "Rev": "14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+            "Rev": "0c26e5e4198085d6c90db11930f2dba52e9f32cc"
           },
           "strip_prefix": "bytes"
         }
@@ -51404,7 +51248,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/timely-dataflow.git",
           "commitish": {
-            "Rev": "14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+            "Rev": "0c26e5e4198085d6c90db11930f2dba52e9f32cc"
           },
           "strip_prefix": "communication"
         }
@@ -51498,7 +51342,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/timely-dataflow.git",
           "commitish": {
-            "Rev": "14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+            "Rev": "0c26e5e4198085d6c90db11930f2dba52e9f32cc"
           },
           "strip_prefix": "container"
         }
@@ -51556,7 +51400,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/timely-dataflow.git",
           "commitish": {
-            "Rev": "14384a00feedc4aa9c96edf7ff569ba1b1de2eca"
+            "Rev": "0c26e5e4198085d6c90db11930f2dba52e9f32cc"
           },
           "strip_prefix": "logging"
         }
@@ -52383,7 +52227,7 @@
         "Git": {
           "remote": "https://github.com/MaterializeInc/rust-postgres",
           "commitish": {
-            "Rev": "91522e47643ebb6d6a5e392957b2319e5bb522ad"
+            "Rev": "02336bebb28507665184c21566e5d1dc8de1dd7d"
           },
           "strip_prefix": "tokio-postgres"
         }
@@ -59313,7 +59157,13 @@
             },
             {
               "id": "itertools 0.10.5",
-              "target": "itertools"
+              "target": "itertools",
+              "alias": "itertools_93f6ce9d446188ac"
+            },
+            {
+              "id": "itertools 0.12.1",
+              "target": "itertools",
+              "alias": "itertools_5ef9efb8ec2df382"
             },
             {
               "id": "k8s-openapi 0.20.0",
@@ -59364,7 +59214,7 @@
               "target": "mysql_async"
             },
             {
-              "id": "mysql_common 0.32.1",
+              "id": "mysql_common 0.32.4",
               "target": "mysql_common"
             },
             {
@@ -59635,6 +59485,10 @@
           "selects": {
             "x86_64-apple-darwin": [
               {
+                "id": "bitflags 2.4.1",
+                "target": "bitflags"
+              },
+              {
                 "id": "camino 1.1.7",
                 "target": "camino"
               },
@@ -59858,7 +59712,13 @@
             },
             {
               "id": "itertools 0.10.5",
-              "target": "itertools"
+              "target": "itertools",
+              "alias": "itertools_93f6ce9d446188ac"
+            },
+            {
+              "id": "itertools 0.12.1",
+              "target": "itertools",
+              "alias": "itertools_5ef9efb8ec2df382"
             },
             {
               "id": "k8s-openapi 0.20.0",
@@ -59909,7 +59769,7 @@
               "target": "mysql_async"
             },
             {
-              "id": "mysql_common 0.32.1",
+              "id": "mysql_common 0.32.4",
               "target": "mysql_common"
             },
             {
@@ -60176,6 +60036,10 @@
           "selects": {
             "x86_64-apple-darwin": [
               {
+                "id": "bitflags 2.4.1",
+                "target": "bitflags"
+              },
+              {
                 "id": "camino 1.1.7",
                 "target": "camino"
               },
@@ -60256,6 +60120,10 @@
         },
         "proc_macro_deps": {
           "common": [
+            {
+              "id": "proptest-derive 0.3.0",
+              "target": "proptest_derive"
+            },
             {
               "id": "time-macros 0.2.6",
               "target": "time_macros"
@@ -60918,17 +60786,17 @@
     "mz-avro 0.7.0": "src/avro",
     "mz-aws-secrets-controller 0.1.0": "src/aws-secrets-controller",
     "mz-aws-util 0.0.0": "src/aws-util",
-    "mz-balancerd 0.104.0-dev": "src/balancerd",
+    "mz-balancerd 0.105.0-dev": "src/balancerd",
     "mz-build-info 0.0.0": "src/build-info",
     "mz-build-tools 0.0.0": "src/build-tools",
     "mz-catalog 0.0.0": "src/catalog",
-    "mz-catalog-debug 0.104.0-dev": "src/catalog-debug",
+    "mz-catalog-debug 0.105.0-dev": "src/catalog-debug",
     "mz-ccsr 0.0.0": "src/ccsr",
     "mz-cloud-api 0.0.0": "src/cloud-api",
     "mz-cloud-resources 0.0.0": "src/cloud-resources",
     "mz-cluster 0.0.0": "src/cluster",
     "mz-cluster-client 0.0.0": "src/cluster-client",
-    "mz-clusterd 0.104.0-dev": "src/clusterd",
+    "mz-clusterd 0.105.0-dev": "src/clusterd",
     "mz-compute 0.0.0": "src/compute",
     "mz-compute-client 0.0.0": "src/compute-client",
     "mz-compute-types 0.0.0": "src/compute-types",
@@ -60936,7 +60804,7 @@
     "mz-controller-types 0.0.0": "src/controller-types",
     "mz-dyncfg 0.0.0": "src/dyncfg",
     "mz-dyncfgs 0.0.0": "src/dyncfgs",
-    "mz-environmentd 0.104.0-dev": "src/environmentd",
+    "mz-environmentd 0.105.0-dev": "src/environmentd",
     "mz-expr 0.0.0": "src/expr",
     "mz-expr-parser 0.0.0": "src/expr-parser",
     "mz-expr-test-util 0.0.0": "src/expr-test-util",
@@ -60962,7 +60830,7 @@
     "mz-ore 0.1.0": "src/ore",
     "mz-ore-proc 0.1.0": "src/ore-proc",
     "mz-persist 0.0.0": "src/persist",
-    "mz-persist-client 0.104.0-dev": "src/persist-client",
+    "mz-persist-client 0.105.0-dev": "src/persist-client",
     "mz-persist-proc 0.1.0": "src/persist-proc",
     "mz-persist-types 0.0.0": "src/persist-types",
     "mz-pgcopy 0.0.0": "src/pgcopy",
@@ -61001,7 +60869,7 @@
     "mz-storage-operators 0.0.0": "src/storage-operators",
     "mz-storage-types 0.0.0": "src/storage-types",
     "mz-test-util 0.0.0": "test/test-util",
-    "mz-testdrive 0.104.0-dev": "src/testdrive",
+    "mz-testdrive 0.105.0-dev": "src/testdrive",
     "mz-timely-util 0.0.0": "src/timely-util",
     "mz-timestamp-oracle 0.0.0": "src/timestamp-oracle",
     "mz-tls-util 0.0.0": "src/tls-util",
@@ -61881,6 +61749,7 @@
     "indicatif 0.17.2",
     "insta 1.33.0",
     "itertools 0.10.5",
+    "itertools 0.12.1",
     "jsonwebtoken 9.2.0",
     "junit-report 0.8.3",
     "k8s-openapi 0.20.0",
@@ -61901,7 +61770,7 @@
     "minimal-lexical 0.2.1",
     "mio 0.8.11",
     "mysql_async 0.34.1",
-    "mysql_common 0.32.1",
+    "mysql_common 0.32.4",
     "native-tls 0.2.11",
     "nix 0.26.1",
     "nom 7.1.2",
@@ -61964,7 +61833,7 @@
     "reqwest-retry 0.2.2",
     "ring 0.17.7",
     "rlimit 0.8.3",
-    "rocksdb 0.21.0",
+    "rocksdb 0.22.0",
     "ropey 1.6.0",
     "rpassword 7.2.0",
     "ryu 1.0.17",

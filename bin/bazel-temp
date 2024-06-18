@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Script that generates BUILD.bazel files and builds a few binaries.
+#
+# This script is only temporary, eventually we'll have developers run the
+# re-gen and re-pin workflows locally.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+. misc/shlib/shlib.bash
+
+# 1. Run cargo-gazelle so to generate BUILD files.
+try cargo run --release --no-default-features --manifest-path=misc/bazel/cargo-gazelle/Cargo.toml -- --path Cargo.toml
+
+# 2. Re-pin Bazel's notion of our external dependencies.
+export CARGO_BAZEL_REPIN=1
+try bazel sync --only=crates_io
+
+# 3. Build `environmentd`, `clusterd`, and `balancerd` with optimizations.
+try bazel build //src/environmentd:environmentd //src/clusterd:clusterd //src/balancerd:mz_balancerd_bin -c opt --remote_cache=https://bazel-remote.dev.materialize.com
