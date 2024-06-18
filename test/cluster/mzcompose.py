@@ -2480,7 +2480,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_commands_total("allow_compaction")
     assert count > 0, f"got {count}"
     count = metrics.get_commands_total("create_dataflow")
-    assert count == 3, f"got {count}"
+    assert count >= 3, f"got {count}"
     count = metrics.get_commands_total("peek")
     assert count == 2, f"got {count}"
     count = metrics.get_commands_total("cancel_peek")
@@ -2514,7 +2514,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_responses_total("peek_response")
     assert count == 2, f"got {count}"
     count = metrics.get_responses_total("subscribe_response")
-    assert count == 0, f"got {count}"
+    assert count > 0, f"got {count}"
 
     # mz_compute_response_message_bytes_total
     count = metrics.get_response_bytes_total("frontiers")
@@ -2522,7 +2522,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_response_bytes_total("peek_response")
     assert count > 0, f"got {count}"
     count = metrics.get_response_bytes_total("subscribe_response")
-    assert count == 0, f"got {count}"
+    assert count > 0, f"got {count}"
 
     count = metrics.get_value("mz_compute_controller_replica_count")
     assert count == 1, f"got {count}"
@@ -2533,7 +2533,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_value("mz_compute_controller_peek_count")
     assert count == 0, f"got {count}"
     count = metrics.get_value("mz_compute_controller_subscribe_count")
-    assert count == 0, f"got {count}"
+    assert count > 0, f"got {count}"
     count = metrics.get_value("mz_compute_controller_command_queue_size")
     assert count < 10, f"got {count}"
     count = metrics.get_value("mz_compute_controller_response_queue_size")

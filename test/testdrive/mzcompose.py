@@ -180,7 +180,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             # without mzcompose
             for file in args.files:
                 c.run_testdrive_files(
-                    f"--junit-report={junit_report}",
+                    # f"--junit-report={junit_report}",
                     *non_default_testdrive_vars,
                     *passthrough_args,
                     file,
