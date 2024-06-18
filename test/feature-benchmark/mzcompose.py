@@ -685,7 +685,7 @@ def upload_results_to_test_analytics(
 
     try:
         test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
-        test_analytics.builds.insert_build_step(was_successful=was_successful)
+        test_analytics.builds.insert_build_job(was_successful=was_successful)
 
         result_entries = []
 

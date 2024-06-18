@@ -41,7 +41,10 @@ class BuildkiteEnvVar(Enum):
     BUILDKITE_PARALLEL_JOB = auto()
     BUILDKITE_PARALLEL_JOB_COUNT = auto()
     BUILDKITE_STEP_KEY = auto()
+    # will be the same for sharded and retried build steps
     BUILDKITE_STEP_ID = auto()
+    # assumed to be unique
+    BUILDKITE_JOB_ID = auto()
     BUILDKITE_LABEL = auto()
     BUILDKITE_RETRY_COUNT = auto()
 

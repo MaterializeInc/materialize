@@ -68,7 +68,7 @@ class BuildDataStorage(BaseDataStorage):
 
         self.database_connector.execute_updates(sql_statements)
 
-    def insert_build_step(
+    def insert_build_job(
         self,
         was_successful: bool,
         include_insert_build: bool = True,
@@ -78,6 +78,7 @@ class BuildDataStorage(BaseDataStorage):
 
         build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
         build_url = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_URL)
+        job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
         step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
         step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
         # TODO: remove NULL casting when #27429 is resolved
@@ -85,7 +86,7 @@ class BuildDataStorage(BaseDataStorage):
             BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB, "NULL::INT"
         )
         retry_count = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_RETRY_COUNT)
-        build_step_url = f"{build_url}#{step_id}"
+        build_step_url = f"{build_url}#{job_id}"
         aws_instance_type = buildkite.get_var(
             BuildkiteEnvVar.BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE
         )
@@ -93,8 +94,9 @@ class BuildDataStorage(BaseDataStorage):
         sql_statements = []
         sql_statements.append(
             f"""
-            INSERT INTO build_step
+            INSERT INTO build_job
             (
+                build_job_id,
                 build_step_id,
                 build_id,
                 build_step_key,
@@ -108,6 +110,7 @@ class BuildDataStorage(BaseDataStorage):
                 remarks
             )
             SELECT
+              '{job_id}',
               '{step_id}',
               '{build_id}',
               '{step_key}',
@@ -122,38 +125,37 @@ class BuildDataStorage(BaseDataStorage):
             WHERE NOT EXISTS
             (
                 SELECT 1
-                FROM build_step
-                WHERE build_step_id = '{step_id}'
+                FROM build_job
+                WHERE build_job_id = '{job_id}'
             );
             """
         )
 
         sql_statements.append(
             f"""
-            UPDATE build_step
+            UPDATE build_job
             SET is_latest_retry = FALSE
-            WHERE build_id = '{build_id}'
-            AND build_step_key = '{step_key}'
+            WHERE build_step_id = '{step_id}'
             AND (shard_index = {shard_index} OR shard_index IS NULL)
-            AND build_step_id <> '{step_id}'
+            AND build_job_id <> '{job_id}'
             ;
             """
         )
 
         self.database_connector.execute_updates(sql_statements)
 
-    def update_build_step_success(
+    def update_build_job_success(
         self,
         was_successful: bool,
     ) -> None:
-        step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
+        job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
 
         sql_statements = []
         sql_statements.append(
             f"""
-            UPDATE build_step
+            UPDATE build_job
             SET success = {was_successful}
-            WHERE build_step_id = '{step_id}';
+            WHERE build_job_id = '{job_id}';
             """
         )
 
