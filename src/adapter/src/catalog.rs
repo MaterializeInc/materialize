@@ -1013,7 +1013,7 @@ impl Catalog {
     /// that the serialized state for two identical catalogs will compare
     /// identically.
     pub fn dump(&self) -> Result<CatalogDump, Error> {
-        Ok(CatalogDump::new(self.state.dump()?))
+        Ok(CatalogDump::new(self.state.dump(None)?))
     }
 
     /// Checks the [`Catalog`]s internal consistency.

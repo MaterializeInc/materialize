@@ -2000,7 +2000,11 @@ impl CatalogState {
     /// There are no guarantees about the format of the serialized state, except
     /// that the serialized state for two identical catalogs will compare
     /// identically.
-    pub fn dump(&self) -> Result<String, Error> {
+    ///
+    /// Some consumers would like the ability to overwrite the `unfinalized_shards` catalog field,
+    /// which they can accomplish by passing in a value of `Some` for the `unfinalized_shards`
+    /// argument.
+    pub fn dump(&self, unfinalized_shards: Option<BTreeSet<String>>) -> Result<String, Error> {
         // Dump the base catalog.
         let mut dump = serde_json::to_value(&self).map_err(|e| {
             Error::new(ErrorKind::Unstructured(format!(
@@ -2011,13 +2015,24 @@ impl CatalogState {
             )))
         })?;
 
+        let dump_obj = dump.as_object_mut().expect("state must have been dumped");
         // Stitch in system parameter defaults.
-        dump.as_object_mut()
-            .expect("state must have been dumped")
-            .insert(
-                "system_parameter_defaults".into(),
-                serde_json::json!(self.system_config().defaults()),
-            );
+        dump_obj.insert(
+            "system_parameter_defaults".into(),
+            serde_json::json!(self.system_config().defaults()),
+        );
+        // Potentially overwrite unfinalized shards.
+        if let Some(unfinalized_shards) = unfinalized_shards {
+            dump_obj
+                .get_mut("storage_metadata")
+                .expect("known to exist")
+                .as_object_mut()
+                .expect("storage_metadata is an object")
+                .insert(
+                    "unfinalized_shards".into(),
+                    serde_json::json!(unfinalized_shards),
+                );
+        }
 
         // Emit as pretty-printed JSON.
         Ok(serde_json::to_string_pretty(&dump).expect("cannot fail on serde_json::Value"))
