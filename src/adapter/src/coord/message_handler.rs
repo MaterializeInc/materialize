@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use maplit::btreemap;
-use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
@@ -26,10 +25,9 @@ use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
-use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
-use mz_storage_types::controller::{CollectionMetadata, StorageError};
+use mz_storage_types::controller::CollectionMetadata;
 use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
 use serde_json::json;
@@ -41,8 +39,7 @@ use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::{
     AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
-    CreateConnectionValidationReady, Message, PeekStage, PeekStageTimestampReadHold, PlanValidity,
-    PurifiedStatementReady, RealTimeRecencyContext, WatchSetResponse,
+    CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
 use crate::session::Session;
 use crate::telemetry::{EventDetails, SegmentClientExt};
@@ -133,18 +130,6 @@ impl Coordinator {
                 Message::StorageUsageUpdate(sizes) => {
                     self.storage_usage_update(sizes).await;
                 }
-                Message::RealTimeRecencyTimestamp {
-                    conn_id,
-                    real_time_recency_ts,
-                    validity,
-                } => {
-                    self.message_real_time_recency_timestamp(
-                        conn_id,
-                        real_time_recency_ts,
-                        validity,
-                    )
-                    .await;
-                }
                 Message::RetireExecute {
                     otel_ctx,
                     data,
@@ -165,11 +150,10 @@ impl Coordinator {
                 }
                 Message::PeekStageReady {
                     ctx,
-                    otel_ctx,
+                    span,
                     stage,
                 } => {
-                    otel_ctx.attach_as_parent();
-                    self.execute_peek_stage(ctx, otel_ctx, stage).await;
+                    self.sequence_staged(ctx, span, stage).await;
                 }
                 Message::CreateIndexStageReady {
                     ctx,
@@ -899,92 +883,6 @@ impl Coordinator {
                     warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                 }
             });
-        }
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    /// Finishes sequencing a command that was waiting on a real time recency timestamp.
-    async fn message_real_time_recency_timestamp(
-        &mut self,
-        conn_id: ConnectionId,
-        real_time_recency_ts: Result<mz_repr::Timestamp, StorageError<mz_repr::Timestamp>>,
-        mut validity: PlanValidity,
-    ) {
-        let real_time_recency_context =
-            match self.pending_real_time_recency_timestamp.remove(&conn_id) {
-                Some(real_time_recency_context) => real_time_recency_context,
-                // Query was cancelled while waiting.
-                None => return,
-            };
-
-        let real_time_recency_ts = match real_time_recency_ts {
-            Ok(rtr) => rtr,
-            Err(e) => {
-                let ctx = real_time_recency_context.take_context();
-                let e = match e {
-                    // TODO: we should be able to generalize this conversion
-                    // from `GlobalId` to minimally qualified name string.
-                    StorageError::RtrTimeout(id) => {
-                        let session = ctx.session();
-                        let conn_catalog = self.catalog().for_session(session);
-                        let name = conn_catalog
-                            .minimal_qualification(conn_catalog.get_item(&id).name())
-                            .to_string();
-                        crate::AdapterError::RtrTimeout(name)
-                    }
-                    // TODO: we should be able to generalize this conversion
-                    // from `GlobalId` to minimally qualified name string.
-                    StorageError::RtrDropFailure(id) => {
-                        let session = ctx.session();
-                        let conn_catalog = self.catalog().for_session(session);
-                        let name = conn_catalog
-                            .minimal_qualification(conn_catalog.get_item(&id).name())
-                            .to_string();
-                        crate::AdapterError::RtrDropFailure(name)
-                    }
-                    e => e.into(),
-                };
-
-                ctx.retire(Err(e));
-                return;
-            }
-        };
-
-        if let Err(err) = validity.check(self.catalog()) {
-            let ctx = real_time_recency_context.take_context();
-            ctx.retire(Err(err));
-            return;
-        }
-
-        match real_time_recency_context {
-            RealTimeRecencyContext::Peek {
-                ctx,
-                root_otel_ctx,
-                plan,
-                target_replica,
-                timeline_context,
-                oracle_read_ts,
-                source_ids,
-                optimizer,
-                explain_ctx,
-            } => {
-                self.execute_peek_stage(
-                    ctx,
-                    root_otel_ctx,
-                    PeekStage::TimestampReadHold(PeekStageTimestampReadHold {
-                        validity,
-                        plan,
-                        target_replica,
-                        timeline_context,
-                        oracle_read_ts,
-                        source_ids,
-                        real_time_recency_ts: Some(real_time_recency_ts),
-                        optimizer,
-                        explain_ctx,
-                    }),
-                )
-                .await;
-            }
         }
     }
 }

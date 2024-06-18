@@ -1004,14 +1004,6 @@ impl Coordinator {
             }
         }
 
-        // Cancel commands waiting on a real time recency timestamp. There is at most one  per session.
-        if let Some(real_time_recency_context) =
-            self.pending_real_time_recency_timestamp.remove(&conn_id)
-        {
-            let ctx = real_time_recency_context.take_context();
-            maybe_ctx = Some(ctx);
-        }
-
         // Cancel reads waiting on being linearized. There is at most one linearized read per
         // session.
         if let Some(pending_read_txn) = self.pending_linearize_read_txns.remove(&conn_id) {
