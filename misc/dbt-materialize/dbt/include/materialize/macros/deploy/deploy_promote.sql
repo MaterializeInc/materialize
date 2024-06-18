@@ -46,7 +46,6 @@
 
 {% set clusters = target_config.get('clusters', []) %}
 {% set schemas = target_config.get('schemas', []) %}
-{% set sinks = target_config.get('sinks', []) %}
 
 -- Check that all production schemas
 -- and clusters already exist
@@ -107,20 +106,9 @@
     {{ log("DRY RUN: No actual schema or cluster swaps performed.", info=True) }}
 {% endif %}
 
-{% if sinks %}
-    {% for sink in sinks %}
-        {% if not dry_run %}
-            {% call statement('alter_sink_' ~ loop.index, fetch_result=True, auto_begin=False) %}
-                {{ log("Running ALTER SINK " ~ adapter.quote(sink['database']) ~ "." ~ adapter.quote(sink['schema']) ~ "." ~ adapter.quote(sink['name']) ~ " SET FROM " ~ adapter.quote(get_current_database()) ~ "." ~ adapter.quote(sink['upstream_schema']) ~ "." ~ adapter.quote(sink['upstream_relation']), info=True) }}
-                ALTER SINK {{ adapter.quote(sink['database']) }}.{{ adapter.quote(sink['schema']) }}.{{ adapter.quote(sink['name']) }} SET FROM {{ adapter.quote(get_current_database()) }}.{{ adapter.quote(sink['upstream_schema']) }}.{{ adapter.quote(sink['upstream_relation']) }};
-            {% endcall %}
-        {% else %}
-            {{ log("DRY RUN: ALTER SINK " ~ adapter.quote(sink['database']) ~ "." ~ adapter.quote(sink['schema']) ~ "." ~ adapter.quote(sink['name']) ~ " SET FROM " ~ adapter.quote(get_current_database()) ~ "." ~ adapter.quote(sink['upstream_schema']) ~ "." ~ adapter.quote(sink['upstream_relation']), info=True) }}
-        {% endif %}
-    {% endfor %}
-{% else %}
-    {{ log("No sinks to process.", info=True) }}
-{% endif %}
+{% set sinks_to_alter = discover_sinks() %}
+{{ process_sinks(sinks_to_alter, dry_run) }}
+
 {% endmacro %}
 
 {% macro cluster_contains_sinks(cluster) %}
@@ -161,5 +149,46 @@
         {{ return(current_database) }}
     {% else %}
         {{ return(None) }}
+    {% endif %}
+{% endmacro %}
+
+{% macro discover_sinks() %}
+    {% set sinks_to_alter = [] %}
+    {% for node in graph.nodes.values() | selectattr("resource_type", "equalto", "model") | selectattr("config.materialized", "equalto", "sink") %}
+        {% set sink_database = node.database %}
+        {% set sink_schema = node.schema %}
+        {% set sink_name = node.name %}
+        {% set upstream_node = graph.nodes[node.depends_on.nodes[0]] %}
+        {% set upstream_database = upstream_node.database %}
+        {% set upstream_schema = upstream_node.schema %}
+        {% set upstream_relation = upstream_node.name %}
+        {% set new_upstream_relation = get_current_database() ~ '.' ~ adapter.quote(upstream_schema) ~ '.' ~ adapter.quote(upstream_relation) %}
+        {% set sink = {
+            "database": sink_database,
+            "schema": sink_schema,
+            "name": sink_name,
+            "new_upstream_relation": new_upstream_relation
+        } %}
+        {% do sinks_to_alter.append(sink) %}
+    {% endfor %}
+    {{ return(sinks_to_alter) }}
+{% endmacro %}
+
+{% macro process_sinks(sinks, dry_run) %}
+    {% if sinks|length > 0 %}
+        {% for sink in sinks %}
+            {% if sink['database'] and sink['schema'] and sink['name'] and sink['new_upstream_relation'] %}
+                {% if not dry_run %}
+                    {% call statement('alter_sink_' ~ loop.index, fetch_result=True, auto_begin=False) %}
+                        {{ log("Running ALTER SINK " ~ adapter.quote(sink['database']) ~ "." ~ adapter.quote(sink['schema']) ~ "." ~ adapter.quote(sink['name']) ~ " SET FROM " ~ sink['new_upstream_relation'], info=True) }}
+                        ALTER SINK {{ adapter.quote(sink['database']) }}.{{ adapter.quote(sink['schema']) }}.{{ adapter.quote(sink['name']) }} SET FROM {{ sink['new_upstream_relation'] }};
+                    {% endcall %}
+                {% else %}
+                    {{ log("DRY RUN: ALTER SINK " ~ adapter.quote(sink['database']) ~ "." ~ adapter.quote(sink['schema']) ~ "." ~ adapter.quote(sink['name']) ~ " SET FROM " ~ sink['new_upstream_relation'], info=True) }}
+                {% endif %}
+            {% endif %}
+        {% endfor %}
+    {% else %}
+        {{ log("No sinks to process.", info=True) }}
     {% endif %}
 {% endmacro %}

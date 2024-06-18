@@ -16,7 +16,11 @@
 import pytest
 from dbt.tests.util import run_dbt
 from fixtures import (
+    test_materialized_view,
+    test_materialized_view_deploy,
     test_materialized_view_index,
+    test_sink,
+    test_sink_deploy,
     test_source,
     test_view_index,
 )
@@ -334,6 +338,34 @@ class TestRunWithDeploy:
         run_dbt(["run-operation", "deploy_cleanup"])
 
 
+class TestSinkFail:
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "vars": {
+                "deployment": {
+                    "default": {"clusters": ["quickstart"], "schemas": ["public"]}
+                }
+            }
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_materialized_view.sql": test_materialized_view,
+            "test_sink.sql": test_sink,
+        }
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
+
+    def test_source_fails(self, project):
+        run_dbt(["run"])
+        run_dbt(["run-operation", "deploy_init"], expect_pass=False)
+
+
 class TestTargetDeploy:
     @pytest.fixture(scope="class")
     def project_config_update(self):
@@ -546,84 +578,101 @@ class TestTargetDeploy:
         )
 
 
-class TestRunWithSinkAlter:
+class TestEndToEndDeployment:
     @pytest.fixture(scope="class")
-    def project_config_update(self):
+    def models(self):
         return {
-            "vars": {
-                "deployment": {
-                    "default": {
-                        "clusters": ["prod"],
-                        "schemas": ["prod"],
-                        "sinks": [
-                            {
-                                "name": "sink",
-                                "database": "materialize",
-                                "schema": "sinks",
-                                "upstream_relation": "prod_view",
-                                "upstream_schema": "prod",
-                            }
-                        ],
-                    }
-                },
-            }
+            "test_materialized_view_deploy.sql": test_materialized_view_deploy,
+            "test_sink_deploy.sql": test_sink_deploy,
         }
 
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
-        project.run_sql("DROP CLUSTER IF EXISTS sink CASCADE")
-        project.run_sql("DROP CLUSTER IF EXISTS prod CASCADE")
-        project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS prod CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS prod_dbt_deploy CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS sinks CASCADE")
-        project.run_sql("DROP MATERIALIZED VIEW IF EXISTS prod.prod_view CASCADE")
-        project.run_sql(
-            "DROP MATERIALIZED VIEW IF EXISTS prod_dbt_deploy.prod_view CASCADE"
-        )
-        project.run_sql("DROP SINK IF EXISTS prod_dbt_deploy.sink CASCADE")
-        project.run_sql("DROP SINK IF EXISTS prod.sink CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS sinks_cluster CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS sinks_schema CASCADE")
+        project.run_sql("DROP TABLE IF EXISTS source_table")
+        project.run_sql("DROP VIEW IF EXISTS validation_source")
 
-    def test_dbt_deploy_with_sink(self, project):
-        project.run_sql("CREATE CLUSTER sink SIZE = '1'")
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
-        project.run_sql("CREATE SCHEMA prod")
-        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
-        project.run_sql("CREATE SCHEMA sinks")
-        project.run_sql("CREATE MATERIALIZED VIEW prod.prod_view AS SELECT 1")
-        project.run_sql(
-            "CREATE MATERIALIZED VIEW prod_dbt_deploy.prod_view AS SELECT 1"
+    def test_full_deploy_process(self, project):
+        # Prepare the source table and the sink cluster and schema
+        project.run_sql("CREATE TABLE source_table (val INTEGER)")
+        project.run_sql("CREATE CLUSTER sinks_cluster SIZE = '1'")
+        project.run_sql("CREATE SCHEMA sinks_schema")
+
+        # Add a row to the table and run DBT
+        project.run_sql("INSERT INTO source_table VALUES (1)")
+        run_dbt(["run"])
+
+        created_schema = project.created_schemas[0]
+
+        project_config = f"{{deployment: {{default: {{clusters: ['quickstart'], schemas: ['{created_schema}']}}}}}}"
+        project_config_deploy = f"{{deployment: {{default: {{clusters: ['quickstart'], schemas: ['{created_schema}']}}}}, deploy: True}}"
+
+        # Validate the initial sink result
+        # TODO: Create a source to ingest from the sink
+        # result = project.run_sql("SELECT val FROM validation_source", fetch="one")
+        # assert result[0] == 2
+
+        # Insert another row and validate the sink
+        # project.run_sql("INSERT INTO source_table VALUES (2)")
+        # result = project.run_sql("SELECT val FROM validation_source ORDER BY val DESC LIMIT 1", fetch="one")
+        # assert result[0] == 3
+
+        # Initialize the deployment environment
+        run_dbt(["run-operation", "deploy_init", "--vars", project_config])
+        # Run the deploy with the deploy flag set to True and exclude the sink creation
+        run_dbt(
+            [
+                "run",
+                "--vars",
+                project_config_deploy,
+                "--exclude",
+                "config.materialized:sink",
+            ]
         )
-        project.run_sql(
-            "CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (BROKER 'redpanda:9092', SECURITY PROTOCOL PLAINTEXT)"
-        )
-        project.run_sql(
-            "CREATE SINK sinks.sink IN CLUSTER sink FROM prod.prod_view INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink') FORMAT JSON ENVELOPE DEBEZIUM"
-        )
+
+        # Ensure the validation source has not changed
+        # result = project.run_sql("SELECT val FROM validation_source ORDER BY val DESC LIMIT 1", fetch="one")
+        # assert result[0] == 3
+
+        # Insert a new row and validate the new sink result after the deploy
+        # project.run_sql("INSERT INTO source_table VALUES (3)")
+        # result = project.run_sql("SELECT val FROM validation_source ORDER BY val DESC LIMIT 1", fetch="one")
+        # assert result[0] == 5
 
         # Get the IDs of the materialized views
         before_view_id = project.run_sql(
-            "SELECT id FROM mz_materialized_views WHERE name = 'prod_view' AND schema_id = (SELECT id FROM mz_schemas WHERE name = 'prod')",
+            f"SELECT id FROM mz_materialized_views WHERE name = 'test_materialized_view_deploy' AND schema_id = (SELECT id FROM mz_schemas WHERE name = '{created_schema}')",
             fetch="one",
         )[0]
         after_view_id = project.run_sql(
-            "SELECT id FROM mz_materialized_views WHERE name = 'prod_view' AND schema_id = (SELECT id FROM mz_schemas WHERE name = 'prod_dbt_deploy')",
+            f"SELECT id FROM mz_materialized_views WHERE name = 'test_materialized_view_deploy' AND schema_id = (SELECT id FROM mz_schemas WHERE name = '{created_schema}_dbt_deploy')",
             fetch="one",
         )[0]
 
         before_sink = project.run_sql(
-            "SELECT name, id, create_sql FROM mz_sinks WHERE name = 'sink'",
+            "SELECT name, id, create_sql FROM mz_sinks WHERE name = 'test_sink_deploy'",
             fetch="one",
         )
         assert (
             before_view_id in before_sink[2]
         ), "Before deployment, the sink should point to the original view ID"
 
-        run_dbt(["run-operation", "deploy_promote", "--args", "{dry_run: true}"])
+        run_dbt(
+            [
+                "run-operation",
+                "deploy_promote",
+                "--args",
+                "{dry_run: true}",
+                "--vars",
+                project_config,
+            ]
+        )
 
         after_sink = project.run_sql(
-            "SELECT name, id, create_sql FROM mz_sinks WHERE name = 'sink'",
+            "SELECT name, id, create_sql FROM mz_sinks WHERE name = 'test_sink_deploy'",
             fetch="one",
         )
 
@@ -633,12 +682,18 @@ class TestRunWithSinkAlter:
 
         assert before_sink[0] == after_sink[0], "Sink name should be the same"
 
-        run_dbt(["run-operation", "deploy_promote"])
+        # Promote and ensure the sink points to the new objects
+        run_dbt(["run-operation", "deploy_promote", "--vars", project_config])
 
         after_sink = project.run_sql(
-            "SELECT name, id, create_sql FROM mz_sinks WHERE name = 'sink'",
+            "SELECT name, id, create_sql FROM mz_sinks WHERE name = 'test_sink_deploy'",
             fetch="one",
         )
+
+        after_view_id = project.run_sql(
+            f"SELECT id FROM mz_materialized_views WHERE name = 'test_materialized_view_deploy' AND schema_id = (SELECT id FROM mz_schemas WHERE name = '{created_schema}')",
+            fetch="one",
+        )[0]
 
         assert (
             after_view_id in after_sink[2]
@@ -649,4 +704,4 @@ class TestRunWithSinkAlter:
             before_view_id != after_view_id
         ), "Sink's view ID should be different after deployment"
 
-        run_dbt(["run-operation", "deploy_cleanup"])
+        run_dbt(["run-operation", "deploy_cleanup", "--vars", project_config])

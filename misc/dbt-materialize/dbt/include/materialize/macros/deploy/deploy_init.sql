@@ -35,11 +35,23 @@
     {% if not schema_exists(schema) %}
         {{ exceptions.raise_compiler_error("Production schema " ~ schema ~ " does not exist") }}
     {% endif %}
+    {% if schema_contains_sinks(schema) %}
+        {{ exceptions.raise_compiler_error("""
+        Schema " ~ schema ~ " contains sinks.
+        Sinks should be isolated in their own schema.
+        """) }}
+    {% endif %}
 {% endfor %}
 
 {% for cluster in clusters %}
     {% if not cluster_exists(cluster) %}
         {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " does not exist") }}
+    {% endif %}
+    {% if cluster_contains_sinks(cluster) %}
+        {{ exceptions.raise_compiler_error("""
+        Production cluster " ~ cluster ~ " contains sinks.
+        Sinks should be isolated in their own cluster.
+        """) }}
     {% endif %}
 {% endfor %}
 
