@@ -9,7 +9,7 @@
 
 //! Derive insights for plans.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -58,8 +58,16 @@ pub struct PlanInsights {
     /// Each key is the ID of an imported collection, and each value contains
     /// further insights about each collection and how it is used by the plan.
     pub imports: BTreeMap<String, ImportInsights>,
-    /// If this plan is not fast path, this is the set of cluster names that would render this as fast path.
-    pub fast_path_clusters: BTreeSet<String>,
+    /// If this plan is not fast path, this is the map of cluster names to indexes that would render
+    /// this as fast path. That is: if this query were run on the cluster of the key, it would be
+    /// fast because it would use the index of the value.
+    pub fast_path_clusters: BTreeMap<String, Option<FastPathCluster>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct FastPathCluster {
+    index: String,
+    on: String,
 }
 
 impl PlanInsights {
@@ -105,8 +113,29 @@ impl PlanInsights {
                 continue;
             };
             let (plan, _, _) = plan.unapply();
-            if matches!(plan, PeekPlan::FastPath(_)) {
-                self.fast_path_clusters.insert(name);
+            if let PeekPlan::FastPath(plan) = plan {
+                let idx_name = if let FastPathPlan::PeekExisting(_, idx_id, _, _) = plan {
+                    let idx_entry = ctx.catalog.get_entry(&idx_id);
+                    let idx_name = ctx
+                        .catalog
+                        .resolve_full_name(idx_entry.name(), Some(session.conn_id()));
+                    let on_entry = ctx
+                        .catalog
+                        .get_entry(&idx_entry.index().expect("must be index").on);
+                    let on_name = ctx
+                        .catalog
+                        .resolve_full_name(on_entry.name(), Some(session.conn_id()));
+                    Some(FastPathCluster {
+                        index: idx_name.to_string(),
+                        on: on_name.to_string(),
+                    })
+                } else {
+                    // This shouldn't ever happen (changing the cluster should not affect whether a
+                    // fast path of type constant or persist peek is created), but protect against
+                    // it anyway.
+                    None
+                };
+                self.fast_path_clusters.insert(name, idx_name);
             }
         }
     }
