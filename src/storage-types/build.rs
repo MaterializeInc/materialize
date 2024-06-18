@@ -11,6 +11,7 @@ use std::env;
 
 fn main() {
     env::set_var("PROTOC", mz_build_tools::protoc());
+    env::set_var("PROTOC_INCLUDE", mz_build_tools::protoc_include());
 
     const ATTR: &str = "#[derive(Eq, PartialOrd, Ord, ::serde::Serialize, ::serde::Deserialize, ::proptest_derive::Arbitrary)]";
 
@@ -53,6 +54,7 @@ fn main() {
             &[
                 "storage-types/src/controller.proto",
                 "storage-types/src/collections.proto",
+                "storage-types/src/connections.proto",
                 "storage-types/src/shim.proto",
                 "storage-types/src/errors.proto",
                 "storage-types/src/connections/aws.proto",

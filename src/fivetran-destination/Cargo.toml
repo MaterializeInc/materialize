@@ -53,3 +53,6 @@ default = ["mz-build-tools/default", "workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[package.metadata.cargo-gazelle.build]
+skip_proto_search = true

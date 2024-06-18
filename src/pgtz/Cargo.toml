@@ -37,3 +37,6 @@ normal = ["workspace-hack"]
 
 [features]
 default = ["mz-build-tools/default", "mz-proto/default", "workspace-hack"]
+
+[package.metadata.cargo-gazelle.build]
+data = ["tznames/Default"]

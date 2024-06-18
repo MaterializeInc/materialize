@@ -9,6 +9,7 @@
 
 fn main() {
     std::env::set_var("PROTOC", mz_build_tools::protoc());
+    std::env::set_var("PROTOC_INCLUDE", mz_build_tools::protoc_include());
 
     prost_build::Config::new()
         .type_attribute(".", "#[derive(serde::Serialize)]")

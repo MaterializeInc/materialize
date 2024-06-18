@@ -83,3 +83,12 @@ default = ["mz-build-tools/default"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[package.metadata.cargo-gazelle.build]
+data = ["protos/**"]
+
+[package.metadata.cargo-gazelle.test.debug]
+data = ["tests/snapshots/debug*.snap"]
+
+[package.metadata.cargo-gazelle.test.open]
+data = ["tests/snapshots/open*.snap"]

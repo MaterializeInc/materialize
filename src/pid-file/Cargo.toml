@@ -1,0 +1,32 @@
+[package]
+name = "mz-pid-file"
+description = "PID file management."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+libc = "0.2.138"
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[dev-dependencies]
+tempfile = "3.8.1"
+
+[build-dependencies]
+cc = "1.0.78"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
+
+[package.metadata.cargo-gazelle.build]
+data = [
+    "libbsd/include/libutil.h",
+    "libbsd/src/flopen.c",
+    "libbsd/src/pidfile.c",
+    "libbsd/src/progname.c",
+]
