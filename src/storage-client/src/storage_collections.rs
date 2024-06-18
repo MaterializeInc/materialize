@@ -675,7 +675,7 @@ where
     /// Currently, collections have either 0 or 1 dependencies.
     fn determine_collection_dependencies(
         &self,
-        self_collections: &mut BTreeMap<GlobalId, CollectionState<T>>,
+        self_collections: &BTreeMap<GlobalId, CollectionState<T>>,
         data_source: &DataSource,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
         let dependencies = match &data_source {
@@ -1435,10 +1435,8 @@ where
             let data_shard_since = since_handle.since().clone();
 
             // Determine if this collection has any dependencies.
-            let storage_dependencies = self.determine_collection_dependencies(
-                &mut *self_collections,
-                &description.data_source,
-            )?;
+            let storage_dependencies = self
+                .determine_collection_dependencies(&*self_collections, &description.data_source)?;
 
             // Determine the intial since of the collection.
             let initial_since = match storage_dependencies
