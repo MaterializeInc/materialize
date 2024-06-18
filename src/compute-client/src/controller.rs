@@ -475,11 +475,6 @@ where
         }
     }
 
-    /// Reports whether the controller is in read only mode.
-    pub fn read_only(&self) -> bool {
-        self.read_only
-    }
-
     /// Wait until the controller is ready to do some processing.
     ///
     /// This method may block for an arbitrarily long time.

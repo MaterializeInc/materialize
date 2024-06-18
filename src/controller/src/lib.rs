@@ -158,6 +158,12 @@ pub struct Controller<T = mz_repr::Timestamp> {
     init_container_image: Option<String>,
     /// A number representing the environment's generation.
     deploy_generation: u64,
+    /// Whether or not this controller is in read-only mode.
+    ///
+    /// When in read-only mode, neither this controller nor the instances
+    /// controlled by it are allowed to affect changes to external systems
+    /// (largely persist).
+    read_only: bool,
     /// The cluster orchestrator.
     orchestrator: Arc<dyn NamespacedOrchestrator>,
     /// Tracks the readiness of the underlying controllers.
@@ -237,6 +243,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             clusterd_image: _,
             init_container_image: _,
             deploy_generation,
+            read_only,
             orchestrator: _,
             readiness,
             metrics_tasks: _,
@@ -272,6 +279,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
         let map = serde_json::Map::from_iter([
             field("compute", compute.dump()?)?,
             field("deploy_generation", deploy_generation)?,
+            field("read_only", read_only)?,
             field("readiness", format!("{readiness:?}"))?,
             field("unfulfilled_watch_sets", unfulfilled_watch_sets)?,
             field("immediate_watch_sets", immediate_watch_sets)?,
@@ -301,12 +309,20 @@ where
         self.compute.initialization_complete();
     }
 
+    /// Reports whether the controller is in read only mode.
+    pub fn read_only(&self) -> bool {
+        self.read_only
+    }
+
     /// Allow this controller and instances controlled by it to write to
     /// external systems.
     pub fn allow_writes(&mut self) {
-        if !self.compute.read_only() {
+        if !self.read_only {
+            // Already transitioned out of read-only mode!
             return;
         }
+
+        self.read_only = true;
 
         self.compute.allow_writes();
         // TODO: Storage does not yet understand the concept of read-only
@@ -687,6 +703,7 @@ where
             clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,
             deploy_generation: config.deploy_generation,
+            read_only,
             orchestrator: config.orchestrator.namespace("cluster"),
             readiness: Readiness::NotReady,
             metrics_tasks: BTreeMap::new(),
@@ -702,7 +719,7 @@ where
             immediate_watch_sets: Vec::new(),
         };
 
-        if !this.compute.read_only() {
+        if !this.read_only {
             this.remove_past_generation_replicas_in_background();
         }
 
