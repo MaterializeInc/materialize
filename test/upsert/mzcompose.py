@@ -387,7 +387,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             where s.name ='{source_name}'"""
         )[0]
         prefix = "/scratch"
-        cluster_prefix = f"cluster-{cluster_id}-replica-{replica_id}"
+        cluster_prefix = f"cluster-{cluster_id}-replica-{replica_id}-gen-0"
         postfix = "storage/upsert"
         return (
             f"{prefix}/{cluster_prefix}/{postfix}",
