@@ -71,7 +71,7 @@ def _print_outcome_entry_as_txt(
     url = "" if output_type == OUTPUT_TYPE_TXT_SHORT else f"{entry.web_url_to_build}, "
     commit_hash = f"{entry.commit_hash}, " if include_commit_hash else ""
     print(
-        f"{entry.step_key}, #{entry.build_number}, {entry.formatted_date()}, {formatted_duration} min, {url}{commit_hash}{'SUCCESS' if entry.passed else 'FAIL'}{' (RETRY)' if entry.retry_count > 0 else ''}"
+        f"{entry.step_key}, #{entry.build_number}, {entry.formatted_date()}, {formatted_duration} min, {url}{commit_hash}{'SUCCESS' if entry.passed else 'FAIL'}{f' (RETRY #{entry.retry_count})' if entry.retry_count > 0 else ''}"
     )
 
 
