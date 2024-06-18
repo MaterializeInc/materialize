@@ -84,7 +84,7 @@ pub(crate) async fn initialize(
     tx: &mut Transaction<'_>,
     options: &BootstrapArgs,
     initial_ts: EpochMillis,
-    deploy_generation: Option<u64>,
+    deploy_generation: u64,
 ) -> Result<(), CatalogError> {
     // Collect audit events so we can commit them once at the very end.
     let mut audit_events = vec![];
@@ -612,10 +612,7 @@ pub(crate) async fn initialize(
 
     for (key, value) in [
         (USER_VERSION_KEY.to_string(), CATALOG_VERSION),
-        (
-            DEPLOY_GENERATION.to_string(),
-            deploy_generation.unwrap_or(0),
-        ),
+        (DEPLOY_GENERATION.to_string(), deploy_generation),
         (SYSTEM_CONFIG_SYNCED_KEY.to_string(), 0),
     ] {
         tx.insert_config(key, value)?;

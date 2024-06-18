@@ -43,14 +43,25 @@ async fn test_confirm_leadership(
     openable_state1: Box<dyn OpenableDurableCatalogState>,
     openable_state2: Box<dyn OpenableDurableCatalogState>,
 ) {
+    let deploy_generation = 0;
     let mut state1 = openable_state1
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+        .open(
+            SYSTEM_TIME(),
+            &test_bootstrap_args(),
+            deploy_generation,
+            None,
+        )
         .await
         .unwrap();
     assert!(state1.confirm_leadership().await.is_ok());
 
     let mut state2 = openable_state2
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+        .open(
+            SYSTEM_TIME(),
+            &test_bootstrap_args(),
+            deploy_generation,
+            None,
+        )
         .await
         .unwrap();
     assert!(state2.confirm_leadership().await.is_ok());
@@ -97,10 +108,16 @@ async fn test_get_and_prune_storage_usage(openable_state: Box<dyn OpenableDurabl
         size_bytes: 42,
         collection_timestamp: 20,
     });
+    let deploy_generation = 0;
     let boot_ts = mz_repr::Timestamp::new(23);
 
     let mut state = openable_state
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+        .open(
+            SYSTEM_TIME(),
+            &test_bootstrap_args(),
+            deploy_generation,
+            None,
+        )
         .await
         .unwrap();
     let mut txn = state.transaction().await.unwrap();
@@ -138,9 +155,15 @@ async fn test_persist_allocate_id() {
 }
 
 async fn test_allocate_id(openable_state: Box<dyn OpenableDurableCatalogState>) {
+    let deploy_generation = 0;
     let id_type = USER_ITEM_ALLOC_KEY;
     let mut state = openable_state
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+        .open(
+            SYSTEM_TIME(),
+            &test_bootstrap_args(),
+            deploy_generation,
+            None,
+        )
         .await
         .unwrap();
 
@@ -215,8 +238,14 @@ async fn test_audit_logs(openable_state: Box<dyn OpenableDurableCatalogState>) {
         }),
     ];
 
+    let deploy_generation = 0;
     let mut state = openable_state
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+        .open(
+            SYSTEM_TIME(),
+            &test_bootstrap_args(),
+            deploy_generation,
+            None,
+        )
         .await
         .unwrap();
     let mut txn = state.transaction().await.unwrap();
@@ -264,8 +293,14 @@ async fn test_items(openable_state: Box<dyn OpenableDurableCatalogState>) {
         },
     ];
 
+    let deploy_generation = 0;
     let mut state = openable_state
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+        .open(
+            SYSTEM_TIME(),
+            &test_bootstrap_args(),
+            deploy_generation,
+            None,
+        )
         .await
         .unwrap();
     let mut txn = state.transaction().await.unwrap();
@@ -310,8 +345,14 @@ async fn test_persist_schemas() {
 }
 
 async fn test_schemas(openable_state: Box<dyn OpenableDurableCatalogState>) {
+    let deploy_generation = 0;
     let mut state = openable_state
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+        .open(
+            SYSTEM_TIME(),
+            &test_bootstrap_args(),
+            deploy_generation,
+            None,
+        )
         .await
         .unwrap();
     let mut txn = state.transaction().await.unwrap();

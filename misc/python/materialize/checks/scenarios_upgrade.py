@@ -261,7 +261,11 @@ class PreflightCheckContinue(Scenario):
             Validate(self),
             # A second restart while already on the new version
             KillMz(),
-            StartMz(self, tag=None),
+            StartMz(
+                self,
+                tag=None,
+                environment_extra=["MZ_DEPLOY_GENERATION=1"],
+            ),
             Validate(self),
         ]
 

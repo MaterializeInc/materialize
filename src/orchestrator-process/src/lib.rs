@@ -22,7 +22,7 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use async_stream::stream;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -39,7 +39,7 @@ use mz_ore::cast::{CastFrom, ReinterpretCast, TryCastFrom};
 use mz_ore::error::ErrorExt;
 use mz_ore::netio::UnixSocketAddr;
 use mz_ore::result::ResultExt;
-use mz_ore::task::{self, AbortOnDropHandle};
+use mz_ore::task::AbortOnDropHandle;
 use mz_pid_file::PidFile;
 use scopeguard::defer;
 use serde::Serialize;
@@ -455,17 +455,81 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
     }
 
     async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
+        let full_id = format!("{}-{}", self.namespace, id);
+        let run_dir = self.metadata_dir.join(&full_id);
+        let scratch_dir = self.scratch_directory.join(&full_id);
+
+        // Drop the supervisor for the service, if it exists. If this service
+        // was under supervision, this will kill all processes associated with
+        // it.
         {
             let mut supervisors = self.services.lock().expect("lock poisoned");
             supervisors.remove(id);
         }
+
+        // If the service was orphaned by a prior incarnation of the
+        // orchestrator, it won't have been under supervision and therefore will
+        // still be running. So kill any PIDs listed in the run directory.
+        //
+        // This is racy in several ways. It's possible that an orphaned process
+        // has yet to write its PID file and will get missed. It's also possible
+        // that the PID file is stale and the specified PID has been reused by
+        // an unrelated process. However, we accept both of these risks, as
+        // the process orchestrator is only used in development and this has
+        // the desired behavior the vast majority of the time.
+        let mut system = System::new();
+        if let Ok(mut entries) = fs::read_dir(&run_dir).await {
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                if path.extension() == Some(OsStr::new("pid")) {
+                    if let Ok(pid) = PidFile::read(path) {
+                        let pid = Pid::from_u32(u32::reinterpret_cast(pid));
+                        system.refresh_process_specifics(pid, ProcessRefreshKind::new());
+                        if let Some(process) = system.process(pid) {
+                            info!("terminating orphaned process for {full_id} with PID {pid}");
+                            process.kill();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clean up the on-disk state of the service.
+        if let Err(e) = remove_dir_all(run_dir).await {
+            if e.kind() != io::ErrorKind::NotFound {
+                warn!(
+                    "error cleaning up run directory for {full_id}: {}",
+                    e.display_with_causes()
+                );
+            }
+        }
+        if let Err(e) = remove_dir_all(scratch_dir).await {
+            if e.kind() != io::ErrorKind::NotFound {
+                warn!(
+                    "error cleaning up scratch directory for {full_id}: {}",
+                    e.display_with_causes()
+                );
+            }
+        }
+
         self.maybe_write_prometheus_service_discovery_file().await;
         Ok(())
     }
 
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
-        let supervisors = self.services.lock().expect("lock poisoned");
-        Ok(supervisors.keys().cloned().collect())
+        let mut services = vec![];
+        let namespace_prefix = format!("{}-", self.namespace);
+        let mut entries = fs::read_dir(&self.metadata_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let filename = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow!("unable to convert filename to string"))?;
+            if let Some(id) = filename.strip_prefix(&namespace_prefix) {
+                services.push(id.to_string());
+            }
+        }
+        Ok(services)
     }
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
@@ -544,16 +608,13 @@ impl NamespacedProcessOrchestrator {
         let mut args = args(&listen_addrs);
         args.push(format!("--pid-file-location={}", pid_file.display()));
 
-        let scratch_directory = if disk {
+        if disk {
             if let Some(scratch) = &scratch_dir {
                 args.push(format!("--scratch-directory={}", scratch.display()));
             } else {
                 panic!("internal error: service requested disk but no scratch directory was configured");
             }
-            scratch_dir
-        } else {
-            None
-        };
+        }
 
         async move {
             let mut proxy_handles = vec![];
@@ -575,24 +636,6 @@ impl NamespacedProcessOrchestrator {
                     proxy_handles.push(handle.abort_on_drop());
                 }
             }
-
-            // Clean up scratch directory when the service is terminated.
-            // This is best effort as a development and testing convenience.
-            // Because the process orchestrator is not used in production, we
-            // don't need to be perfectly robust with the cleanup.
-            let _guard = scopeguard::guard((), |_| {
-                if let Some(scratch) = scratch_directory {
-                    info!(scratch_dir = %scratch.display(), "cleaning up scratch directory");
-                    task::spawn(|| "clean_cluster_scratch_directory", async {
-                        if let Err(e) = remove_dir_all(scratch).await {
-                            warn!(
-                                "Error cleaning up scratch directory: {}",
-                                e.display_with_causes()
-                            );
-                        }
-                    });
-                }
-            });
 
             supervise_existing_process(&state_updater, &pid_file).await;
 

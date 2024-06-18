@@ -102,7 +102,7 @@ pub struct TestHarness {
     // tracing.
     orchestrator_tracing_cli_args: TracingCliArgs,
     bootstrap_role: Option<String>,
-    deploy_generation: Option<u64>,
+    deploy_generation: u64,
     system_parameter_defaults: BTreeMap<String, String>,
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
@@ -131,7 +131,7 @@ impl Default for TestHarness {
             propagate_crashes: false,
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
-            deploy_generation: None,
+            deploy_generation: 0,
             // This and startup_log_filter below are both (?) needed to suppress clusterd messages.
             // If we need those in the future, we might need to change both.
             system_parameter_defaults: BTreeMap::from([(
@@ -160,8 +160,8 @@ impl TestHarness {
     }
 
     /// Like [`TestHarness::start`] but can specify a cert reload trigger.
-    pub async fn start_with_trigger(self, reload_certs: ReloadTrigger) -> TestServer {
-        self.try_start_with_trigger(reload_certs)
+    pub async fn start_with_trigger(self, tls_reload_certs: ReloadTrigger) -> TestServer {
+        self.try_start_with_trigger(tls_reload_certs)
             .await
             .expect("Failed to start test Server")
     }
@@ -175,10 +175,10 @@ impl TestHarness {
     /// Like [`TestHarness::try_start`] but can specify a cert reload trigger.
     pub async fn try_start_with_trigger(
         self,
-        reload_certs: ReloadTrigger,
+        tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
         let listeners = Listeners::new().await?;
-        listeners.serve_with_trigger(self, reload_certs).await
+        listeners.serve_with_trigger(self, tls_reload_certs).await
     }
 
     /// Starts a runtime and returns a [`TestServerWithRuntime`].
@@ -278,7 +278,7 @@ impl TestHarness {
         self
     }
 
-    pub fn with_deploy_generation(mut self, deploy_generation: Option<u64>) -> Self {
+    pub fn with_deploy_generation(mut self, deploy_generation: u64) -> Self {
         self.deploy_generation = deploy_generation;
         self
     }
@@ -330,7 +330,7 @@ impl Listeners {
     pub async fn serve_with_trigger(
         self,
         config: TestHarness,
-        reload_certs: ReloadTrigger,
+        tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
         let (data_directory, temp_dir) = match config.data_directory {
             None => {
@@ -474,6 +474,7 @@ impl Listeners {
                     orchestrator,
                     clusterd_image: "clusterd".into(),
                     init_container_image: None,
+                    deploy_generation: config.deploy_generation,
                     persist_location: PersistLocation {
                         blob_uri: format!("file://{}/persist/blob", data_directory.display()),
                         consensus_uri,
@@ -524,11 +525,10 @@ impl Listeners {
                 config_sync_timeout: Duration::from_secs(30),
                 config_sync_loop_interval: None,
                 bootstrap_role: config.bootstrap_role,
-                deploy_generation: config.deploy_generation,
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 txn_wal_tables_cli: Some(TxnWalTablesImpl::Lazy),
-                reload_certs,
+                tls_reload_certs,
                 read_only_controllers: false,
             })
             .await?;

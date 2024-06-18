@@ -9,6 +9,8 @@
 
 //! Shared types for the `mz-controller` crate
 
+pub mod dyncfgs;
+
 /// Identifies a cluster.
 pub type ClusterId = mz_compute_types::ComputeInstanceId;
 

@@ -24,7 +24,6 @@ fn bench_transact(c: &mut Criterion) {
                 PersistClient::new_for_tests().await,
                 Uuid::new_v4(),
                 SYSTEM_TIME.clone(),
-                None,
             )
             .await
             .unwrap()

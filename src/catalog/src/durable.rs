@@ -94,7 +94,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
         mut self: Box<Self>,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        deploy_generation: Option<u64>,
+        deploy_generation: u64,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
@@ -119,7 +119,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
         mut self: Box<Self>,
         initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
-        deploy_generation: Option<u64>,
+        deploy_generation: u64,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
@@ -142,7 +142,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     async fn epoch(&mut self) -> Result<Epoch, CatalogError>;
 
     /// Get the deployment generation of this instance.
-    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError>;
+    async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError>;
 
     /// Reports if the remote configuration was synchronized at least once.
     async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError>;

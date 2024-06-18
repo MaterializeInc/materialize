@@ -503,13 +503,12 @@ impl Catalog {
     {
         let persist_client = PersistClient::new_for_tests().await;
         let environmentd_id = Uuid::new_v4();
-        let catalog =
-            match Self::open_debug_catalog(persist_client, environmentd_id, now, None).await {
-                Ok(catalog) => catalog,
-                Err(err) => {
-                    panic!("unable to open debug stash: {err}");
-                }
-            };
+        let catalog = match Self::open_debug_catalog(persist_client, environmentd_id, now).await {
+            Ok(catalog) => catalog,
+            Err(err) => {
+                panic!("unable to open debug stash: {err}");
+            }
+        };
         f(catalog).await
     }
 
@@ -520,13 +519,20 @@ impl Catalog {
         persist_client: PersistClient,
         organization_id: Uuid,
         now: NowFn,
-        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
+        let deploy_generation = 0;
+        let epoch_lower_bound = None;
+        let environment_id = None;
         let openable_storage =
             mz_catalog::durable::test_persist_backed_catalog_state(persist_client, organization_id)
                 .await;
         let storage = openable_storage
-            .open(now(), &test_bootstrap_args(), None, None)
+            .open(
+                now(),
+                &test_bootstrap_args(),
+                deploy_generation,
+                epoch_lower_bound,
+            )
             .await?;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
@@ -2064,7 +2070,6 @@ mod tests {
                 persist_client.clone(),
                 organization_id.clone(),
                 NOW_ZERO.clone(),
-                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -2085,14 +2090,10 @@ mod tests {
             catalog.expire().await;
         }
         {
-            let catalog = Catalog::open_debug_catalog(
-                persist_client,
-                organization_id,
-                NOW_ZERO.clone(),
-                None,
-            )
-            .await
-            .expect("unable to open debug catalog");
+            let catalog =
+                Catalog::open_debug_catalog(persist_client, organization_id, NOW_ZERO.clone())
+                    .await
+                    .expect("unable to open debug catalog");
             // Re-opening the same catalog resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
@@ -2297,7 +2298,6 @@ mod tests {
                 persist_client.clone(),
                 organization_id.clone(),
                 SYSTEM_TIME.clone(),
-                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -2328,14 +2328,10 @@ mod tests {
             catalog.expire().await;
         }
         {
-            let catalog = Catalog::open_debug_catalog(
-                persist_client,
-                organization_id,
-                SYSTEM_TIME.clone(),
-                None,
-            )
-            .await
-            .expect("unable to open debug catalog");
+            let catalog =
+                Catalog::open_debug_catalog(persist_client, organization_id, SYSTEM_TIME.clone())
+                    .await
+                    .expect("unable to open debug catalog");
             let view = catalog.get_entry(&id);
             assert_eq!("v", view.name.item);
             match &view.item {
@@ -3149,7 +3145,6 @@ mod tests {
                 persist_client.clone(),
                 organization_id.clone(),
                 NOW_ZERO.clone(),
-                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -3170,14 +3165,10 @@ mod tests {
             *guard = Some("\n".to_string());
         }
         {
-            let catalog = Catalog::open_debug_catalog(
-                persist_client,
-                organization_id,
-                NOW_ZERO.clone(),
-                None,
-            )
-            .await
-            .expect("unable to open debug catalog");
+            let catalog =
+                Catalog::open_debug_catalog(persist_client, organization_id, NOW_ZERO.clone())
+                    .await
+                    .expect("unable to open debug catalog");
 
             let new_id = catalog
                 .entries()

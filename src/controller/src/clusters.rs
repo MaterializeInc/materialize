@@ -10,6 +10,8 @@
 //! Cluster management.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,21 +24,23 @@ use mz_compute_client::controller::{
 };
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
-use mz_compute_types::ComputeInstanceId;
+use mz_controller_types::dyncfgs::CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL;
 use mz_controller_types::{is_cluster_size_v2, ClusterId, ReplicaId};
+use mz_orchestrator::NamespacedOrchestrator;
 use mz_orchestrator::{
     CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
 };
 use mz_ore::halt;
 use mz_ore::instrument;
-use mz_ore::task::AbortOnDropHandle;
+use mz_ore::task::{self, AbortOnDropHandle};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tracing::{error, warn};
+use tokio::time;
+use tracing::{error, info, warn};
 
 use crate::Controller;
 
@@ -508,7 +512,8 @@ where
         // needing to keep track of which replicas are managed and which are
         // unmanaged. Deprovisioning is a no-op if the replica ID was never
         // provisioned.
-        self.deprovision_replica(cluster_id, replica_id).await?;
+        self.deprovision_replica(cluster_id, replica_id, self.deploy_generation)
+            .await?;
         self.metrics_tasks.remove(&replica_id);
 
         self.compute.drop_replica(cluster_id, replica_id)?;
@@ -516,7 +521,37 @@ where
         Ok(())
     }
 
-    /// Remove orphaned replicas.
+    /// Removes replicas from past generations in a background task.
+    pub(crate) fn remove_past_generation_replicas_in_background(&self) {
+        let deploy_generation = self.deploy_generation;
+        let dyncfg = Arc::clone(self.compute.dyncfg());
+        let orchestrator = Arc::clone(&self.orchestrator);
+        task::spawn(
+            || "controller_remove_past_generation_replicas",
+            async move {
+                info!("attempting to remove past generation replicas");
+                loop {
+                    match try_remove_past_generation_replicas(&*orchestrator, deploy_generation)
+                        .await
+                    {
+                        Ok(()) => {
+                            info!("successfully removed past generation replicas");
+                            return;
+                        }
+                        Err(e) => {
+                            let interval =
+                                CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL
+                                    .get(&dyncfg);
+                            warn!(%e, "failed to remove past generation replicas; will retry in {interval:?}");
+                            time::sleep(interval).await;
+                        }
+                    }
+                }
+            },
+        );
+    }
+
+    /// Remove replicas that are orphaned in the current generation.
     #[instrument]
     pub async fn remove_orphaned_replicas(
         &mut self,
@@ -530,10 +565,22 @@ where
             .list_services()
             .await?
             .iter()
-            .map(|s| parse_replica_service_name(s))
+            .map(|s| ReplicaServiceName::from_str(s))
             .collect::<Result<_, _>>()?;
 
-        for (cluster_id, replica_id) in actual {
+        for ReplicaServiceName {
+            cluster_id,
+            replica_id,
+            generation,
+        } in actual
+        {
+            // We limit our attention here to replicas from the current deploy
+            // generation. Replicas from past generations are cleaned up during
+            // `Controller::allow_writes`.
+            if generation != self.deploy_generation {
+                continue;
+            }
+
             let smaller_next = match replica_id {
                 ReplicaId::User(id) if id >= next_user_replica_id => {
                     Some(ReplicaId::User(next_user_replica_id))
@@ -544,14 +591,15 @@ where
                 _ => None,
             };
             if let Some(next) = smaller_next {
-                // Found a replica in kubernetes with a higher replica ID than
-                // what we are aware of. This must have been created by an
-                // environmentd with higher epoch number.
+                // Found a replica in the orchestrator with a higher replica ID
+                // than what we are aware of. This must have been created by an
+                // environmentd that's competing for control of this generation.
+                // Abort to let the other process have full control.
                 halt!("found replica ID ({replica_id}) in orchestrator >= next ID ({next})");
             }
-
             if !desired.contains(&replica_id) {
-                self.deprovision_replica(cluster_id, replica_id).await?;
+                self.deprovision_replica(cluster_id, replica_id, generation)
+                    .await?;
             }
         }
 
@@ -560,7 +608,11 @@ where
 
     pub fn events_stream(&self) -> BoxStream<'static, ClusterEvent> {
         fn translate_event(event: ServiceEvent) -> Result<ClusterEvent, anyhow::Error> {
-            let (cluster_id, replica_id) = parse_replica_service_name(&event.service_id)?;
+            let ReplicaServiceName {
+                cluster_id,
+                replica_id,
+                ..
+            } = event.service_id.parse()?;
             Ok(ClusterEvent {
                 cluster_id,
                 replica_id,
@@ -595,7 +647,12 @@ where
         location: ManagedReplicaLocation,
         enable_worker_core_affinity: bool,
     ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
-        let service_name = generate_replica_service_name(cluster_id, replica_id);
+        let service_name = ReplicaServiceName {
+            cluster_id,
+            replica_id,
+            generation: self.deploy_generation,
+        }
+        .to_string();
         let role_label = match role {
             ClusterRole::SystemCritical => "system-critical",
             ClusterRole::System => "system",
@@ -769,30 +826,77 @@ where
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
+        generation: u64,
     ) -> Result<(), anyhow::Error> {
-        let service_name = generate_replica_service_name(cluster_id, replica_id);
+        let service_name = ReplicaServiceName {
+            cluster_id,
+            replica_id,
+            generation,
+        }
+        .to_string();
         self.orchestrator.drop_service(&service_name).await
     }
 }
 
-/// Deterministically generates replica names based on inputs.
-fn generate_replica_service_name(cluster_id: ClusterId, replica_id: ReplicaId) -> String {
-    format!("{cluster_id}-replica-{replica_id}")
+/// Remove all replicas from past generations.
+async fn try_remove_past_generation_replicas(
+    orchestrator: &dyn NamespacedOrchestrator,
+    deploy_generation: u64,
+) -> Result<(), anyhow::Error> {
+    let services: BTreeSet<_> = orchestrator.list_services().await?.into_iter().collect();
+
+    for service in services {
+        let name: ReplicaServiceName = service.parse()?;
+        if name.generation < deploy_generation {
+            info!(
+                cluster_id = %name.cluster_id,
+                replica_id = %name.replica_id,
+                "removing past generation replica",
+            );
+            orchestrator.drop_service(&service).await?;
+        }
+    }
+
+    Ok(())
 }
 
-/// Parses a name generated by `generate_replica_service_name`, to extract the
-/// replica's cluster ID and replica ID.
-fn parse_replica_service_name(
-    service_name: &str,
-) -> Result<(ComputeInstanceId, ReplicaId), anyhow::Error> {
-    static SERVICE_NAME_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(?-u)^([us]\d+)-replica-([us]\d+)$").unwrap());
+/// Represents the name of a cluster replica service in the orchestrator.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReplicaServiceName {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+    pub generation: u64,
+}
 
-    let caps = SERVICE_NAME_RE
-        .captures(service_name)
-        .ok_or_else(|| anyhow!("invalid service name: {service_name}"))?;
+impl fmt::Display for ReplicaServiceName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let ReplicaServiceName {
+            cluster_id,
+            replica_id,
+            generation,
+        } = self;
+        write!(f, "{cluster_id}-replica-{replica_id}-gen-{generation}")
+    }
+}
 
-    let cluster_id = caps.get(1).unwrap().as_str().parse().unwrap();
-    let replica_id = caps.get(2).unwrap().as_str().parse().unwrap();
-    Ok((cluster_id, replica_id))
+impl FromStr for ReplicaServiceName {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        static SERVICE_NAME_RE: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(?-u)^([us]\d+)-replica-([us]\d+)(?:-gen-(\d+))?$").unwrap());
+
+        let caps = SERVICE_NAME_RE
+            .captures(s)
+            .ok_or_else(|| anyhow!("invalid service name: {s}"))?;
+
+        Ok(ReplicaServiceName {
+            cluster_id: caps.get(1).unwrap().as_str().parse().unwrap(),
+            replica_id: caps.get(2).unwrap().as_str().parse().unwrap(),
+            // Old versions of Materialize did not include generations in
+            // replica service names. Synthesize generation 0 if absent.
+            // TODO: remove this in the next version of Materialize.
+            generation: caps.get(3).map_or("0", |m| m.as_str()).parse().unwrap(),
+        })
+    }
 }

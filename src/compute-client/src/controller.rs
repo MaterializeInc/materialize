@@ -434,6 +434,11 @@ where
         }
     }
 
+    /// Returns the compute controller's config set.
+    pub fn dyncfg(&self) -> &Arc<ConfigSet> {
+        &self.dyncfg
+    }
+
     /// Update compute configuration.
     pub fn update_configuration(&mut self, config_params: ComputeParameters) {
         // Apply dyncfg updates.
@@ -467,6 +472,11 @@ where
         for instance in self.instances.values_mut() {
             instance.allow_writes();
         }
+    }
+
+    /// Reports whether the controller is in read only mode.
+    pub fn read_only(&self) -> bool {
+        self.read_only
     }
 
     /// Wait until the controller is ready to do some processing.

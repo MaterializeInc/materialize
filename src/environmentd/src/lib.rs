@@ -74,13 +74,28 @@ pub struct Config {
     pub all_features: bool,
 
     // === Connection options. ===
+    /// TLS encryption and authentication configuration.
+    pub tls: Option<TlsCertConfig>,
+    /// Trigger to attempt to reload TLS certififcates.
+    #[derivative(Debug = "ignore")]
+    pub tls_reload_certs: ReloadTrigger,
+    /// Frontegg JWT authentication configuration.
+    pub frontegg: Option<FronteggAuthentication>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
     pub cors_allowed_origin: AllowOrigin,
-    /// TLS encryption and authentication configuration.
-    pub tls: Option<TlsCertConfig>,
-    /// Frontegg JWT authentication configuration.
-    pub frontegg: Option<FronteggAuthentication>,
+    /// Public IP addresses which the cloud environment has configured for
+    /// egress.
+    pub egress_ips: Vec<Ipv4Addr>,
+    /// The external host name to connect to the HTTP server of this
+    /// environment.
+    ///
+    /// Presently used to render webhook URLs for end users in notices and the
+    /// system catalog. Not used to establish connections directly.
+    pub http_host_name: Option<String>,
+    /// The URL of the Materialize console to proxy from the /internal-console
+    /// endpoint on the internal HTTP server.
+    pub internal_console_redirect_url: Option<String>,
 
     // === Controller options. ===
     /// Storage and compute controller configuration.
@@ -96,20 +111,40 @@ pub struct Config {
     /// mirrored to the catalog storage's "config" collection).
     pub txn_wal_tables_cli: Option<TxnWalTablesImpl>,
 
+    // === Storage options. ===
+    /// The interval at which to collect storage usage information.
+    pub storage_usage_collection_interval: Duration,
+    /// How long to retain storage usage records for.
+    pub storage_usage_retention_period: Option<Duration>,
+
     // === Adapter options. ===
     /// Catalog configuration.
     pub catalog_config: CatalogConfig,
-    /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
-    pub timestamp_oracle_url: Option<String>,
-
-    // === Bootstrap options. ===
-    /// The cloud ID of this environment.
-    pub environment_id: EnvironmentId,
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     pub availability_zones: Vec<String>,
     /// A map from size name to resource allocations for cluster replicas.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
+    /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
+    pub timestamp_oracle_url: Option<String>,
+    /// An API key for Segment. Enables export of audit events to Segment.
+    pub segment_api_key: Option<String>,
+    /// An SDK key for LaunchDarkly. Enables system parameter synchronization
+    /// with LaunchDarkly.
+    pub launchdarkly_sdk_key: Option<String>,
+    /// An invertible map from system parameter names to LaunchDarkly feature
+    /// keys to use when propagating values from the latter to the former.
+    pub launchdarkly_key_map: BTreeMap<String, String>,
+    /// The duration at which the system parameter synchronization times out during startup.
+    pub config_sync_timeout: Duration,
+    /// The interval in seconds at which to synchronize system parameter values.
+    pub config_sync_loop_interval: Option<Duration>,
+
+    // === Bootstrap options. ===
+    /// The cloud ID of this environment.
+    pub environment_id: EnvironmentId,
+    /// What role, if any, should be initially created with elevated privileges.
+    pub bootstrap_role: Option<String>,
     /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
     /// The size of the builtin system cluster replicas if bootstrapping.
@@ -123,42 +158,15 @@ pub struct Config {
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
     pub system_parameter_defaults: BTreeMap<String, String>,
-    /// The interval at which to collect storage usage information.
-    pub storage_usage_collection_interval: Duration,
-    /// How long to retain storage usage records for.
-    pub storage_usage_retention_period: Option<Duration>,
-    /// An API key for Segment. Enables export of audit events to Segment.
-    pub segment_api_key: Option<String>,
-    /// IP Addresses which will be used for egress.
-    pub egress_ips: Vec<Ipv4Addr>,
+
+    // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
     /// Materialize-controlled AWS resources.
     pub aws_account_id: Option<String>,
     /// Supported AWS PrivateLink availability zone ids.
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
-    /// An SDK key for LaunchDarkly. Enables system parameter synchronization
-    /// with LaunchDarkly.
-    pub launchdarkly_sdk_key: Option<String>,
-    /// The duration at which the system parameter synchronization times out during startup.
-    pub config_sync_timeout: Duration,
-    /// The interval in seconds at which to synchronize system parameter values.
-    pub config_sync_loop_interval: Option<Duration>,
-    /// An invertible map from system parameter names to LaunchDarkly feature
-    /// keys to use when propagating values from the latter to the former.
-    pub launchdarkly_key_map: BTreeMap<String, String>,
-    /// What role, if any, should be initially created with elevated privileges.
-    pub bootstrap_role: Option<String>,
-    /// Generation we want deployed. Generally only present when doing a production deploy.
-    pub deploy_generation: Option<u64>,
-    /// Host name or URL for connecting to the HTTP server of this instance.
-    pub http_host_name: Option<String>,
-    /// URL of the Web Console to proxy from the /internal-console endpoint on the InternalHTTPServer
-    pub internal_console_redirect_url: Option<String>,
-    /// Trigger to attempt to reload TLS certififcates.
-    #[derivative(Debug = "ignore")]
-    pub reload_certs: ReloadTrigger,
 
-    // === Tracing options. ===
+    // === Observability options. ===
     /// The metrics registry to use.
     pub metrics_registry: MetricsRegistry,
     /// Handle to tracing.
@@ -281,7 +289,7 @@ impl Listeners {
         let (pgwire_tls, http_tls) = match &config.tls {
             None => (None, None),
             Some(tls_config) => {
-                let context = tls_config.reloading_context(config.reload_certs)?;
+                let context = tls_config.reloading_context(config.tls_reload_certs)?;
                 let pgwire_tls = mz_server_core::ReloadingTlsConfig {
                     context: context.clone(),
                     mode: mz_server_core::TlsMode::Require,
@@ -355,19 +363,16 @@ impl Listeners {
         .await?;
 
         'leader_promotion: {
-            let Some(deploy_generation) = config.deploy_generation else {
-                break 'leader_promotion;
-            };
+            let deploy_generation = config.controller.deploy_generation;
             tracing::info!("Requested deploy generation {deploy_generation}");
 
             if !openable_adapter_storage.is_initialized().await? {
                 tracing::info!("Catalog storage doesn't exist so there's no current deploy generation. We won't wait to be leader");
                 break 'leader_promotion;
             }
-            // TODO: once all catalogs have a deploy_generation, don't need to handle the Option
             let catalog_generation = openable_adapter_storage.get_deployment_generation().await?;
             tracing::info!("Found catalog generation {catalog_generation:?}");
-            if catalog_generation < Some(deploy_generation) {
+            if catalog_generation < deploy_generation {
                 tracing::info!("Catalog generation {catalog_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
                 match openable_adapter_storage
                     .open_savepoint(
@@ -378,7 +383,7 @@ impl Listeners {
                                 .clone(),
                             bootstrap_role: config.bootstrap_role.clone(),
                         },
-                        None,
+                        deploy_generation,
                         None,
                     )
                     .await
@@ -429,7 +434,7 @@ impl Listeners {
                     Arc::clone(&config.catalog_config.metrics),
                 )
                 .await?;
-            } else if catalog_generation == Some(deploy_generation) {
+            } else if catalog_generation == deploy_generation {
                 tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
             } else {
                 mz_ore::halt!("Server started with requested generation {deploy_generation} but catalog was already at {catalog_generation:?}. Deploy generations must increase monotonically");
@@ -442,7 +447,12 @@ impl Listeners {
         };
 
         let mut adapter_storage = openable_adapter_storage
-            .open(boot_ts, &bootstrap_args, config.deploy_generation, None)
+            .open(
+                boot_ts,
+                &bootstrap_args,
+                config.controller.deploy_generation,
+                None,
+            )
             .await?;
 
         let txn_wal_tables_current_ld =

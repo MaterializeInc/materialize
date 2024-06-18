@@ -134,8 +134,9 @@ async fn test_debug<'a>(
     );
 
     // Use `NOW_ZERO` for consistent timestamps in the snapshots.
+    let deploy_generation = 0;
     let _ = openable_state1
-        .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
+        .open(NOW_ZERO(), &test_bootstrap_args(), deploy_generation, None)
         .await
         .unwrap();
 
