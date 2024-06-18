@@ -4203,14 +4203,33 @@ pub(crate) fn arb_numeric() -> BoxedStrategy<Numeric> {
     let int_value = any::<i128>()
         .prop_map(|v| Numeric::try_from(v).unwrap())
         .boxed();
-    // Numerics only support up to 39 digits.
-    let float_value = (1e-39f64..1e39)
+    let float_value = (-1e39f64..1e39)
+        .prop_map(|v| Numeric::try_from(v).unwrap())
+        .boxed();
+
+    // While these strategies are subsets of the ones above, including them
+    // helps us generate a more realistic set of values.
+    let tiny_floats = ((-10.0..10.0), (1u32..10))
+        .prop_map(|(v, num_digits)| {
+            // Truncate to a small number of digits.
+            let num_digits: f64 = 10u32.pow(num_digits).try_into().unwrap();
+            let trunc = f64::trunc(v * num_digits) / num_digits;
+            Numeric::try_from(trunc).unwrap()
+        })
+        .boxed();
+    let small_ints = (-1_000_000..1_000_000)
+        .prop_map(|v| Numeric::try_from(v).unwrap())
+        .boxed();
+    let small_floats = (-1_000_000.0..1_000_000.0)
         .prop_map(|v| Numeric::try_from(v).unwrap())
         .boxed();
 
     Union::new_weighted(vec![
-        (20, int_value),
-        (20, float_value),
+        (20, tiny_floats),
+        (20, small_ints),
+        (20, small_floats),
+        (10, int_value),
+        (10, float_value),
         (1, Just(Numeric::infinity()).boxed()),
         (1, Just(-Numeric::infinity()).boxed()),
         (1, Just(Numeric::nan()).boxed()),

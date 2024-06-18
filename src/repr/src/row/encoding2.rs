@@ -27,6 +27,7 @@ use arrow::array::{
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Fields};
 use chrono::DateTime;
+use dec::{Context, OrderedDecimal};
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema2};
 use prost::Message;
 use timely::Container;
@@ -38,6 +39,7 @@ use crate::adt::datetime::PackedNaiveTime;
 use crate::adt::interval::PackedInterval;
 use crate::adt::jsonb::{JsonbPacker, JsonbRef};
 use crate::adt::mz_acl_item::{PackedAclItem, PackedMzAclItem};
+use crate::adt::numeric::PackedNumeric;
 use crate::adt::timestamp::CheckedTimestamp;
 use crate::row::ProtoDatum;
 use crate::{Datum, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
@@ -95,7 +97,12 @@ enum DatumColumnEncoder {
     I64(Int64Builder),
     F32(Float32Builder),
     F64(Float64Builder),
-    Numeric(BinaryBuilder),
+    Numeric {
+        /// The raw bytes so we can losslessly roundtrip Numerics.
+        binary_values: BinaryBuilder,
+        /// Also maintain a float64 approximation for sorting.
+        approx_values: Float64Builder,
+    },
     Bytes(BinaryBuilder),
     String(StringBuilder),
     Date(Int32Builder),
@@ -183,10 +190,25 @@ impl DatumColumnEncoder {
             (DatumColumnEncoder::I64(builder), Datum::Int64(val)) => builder.append_value(val),
             (DatumColumnEncoder::F32(builder), Datum::Float32(val)) => builder.append_value(*val),
             (DatumColumnEncoder::F64(builder), Datum::Float64(val)) => builder.append_value(*val),
-            (DatumColumnEncoder::Numeric(builder), d @ Datum::Numeric(_)) => {
-                let proto = ProtoDatum::from(d);
-                let bytes = proto.encode_to_vec();
-                builder.append_value(&bytes);
+            (
+                DatumColumnEncoder::Numeric {
+                    approx_values,
+                    binary_values,
+                },
+                Datum::Numeric(val),
+            ) => {
+                let mut ctx = Context::default();
+                let float_approx = ctx.try_into_f64(val.0).unwrap_or_else(|_| {
+                    if val.0.is_negative() {
+                        f64::NEG_INFINITY
+                    } else {
+                        f64::INFINITY
+                    }
+                });
+                let packed = PackedNumeric::from_value(val.0);
+
+                approx_values.append_value(float_approx);
+                binary_values.append_value(packed.as_bytes());
             }
             (DatumColumnEncoder::String(builder), Datum::String(val)) => builder.append_value(val),
             (DatumColumnEncoder::Bytes(builder), Datum::Bytes(val)) => builder.append_value(val),
@@ -374,7 +396,13 @@ impl DatumColumnEncoder {
             DatumColumnEncoder::I64(builder) => builder.append_null(),
             DatumColumnEncoder::F32(builder) => builder.append_null(),
             DatumColumnEncoder::F64(builder) => builder.append_null(),
-            DatumColumnEncoder::Numeric(builder) => builder.append_null(),
+            DatumColumnEncoder::Numeric {
+                approx_values,
+                binary_values,
+            } => {
+                approx_values.append_null();
+                binary_values.append_null();
+            }
             DatumColumnEncoder::String(builder) => builder.append_null(),
             DatumColumnEncoder::Bytes(builder) => builder.append_null(),
             DatumColumnEncoder::Date(builder) => builder.append_null(),
@@ -480,7 +508,30 @@ impl DatumColumnEncoder {
             DatumColumnEncoder::I64(mut builder) => Arc::new(builder.finish()),
             DatumColumnEncoder::F32(mut builder) => Arc::new(builder.finish()),
             DatumColumnEncoder::F64(mut builder) => Arc::new(builder.finish()),
-            DatumColumnEncoder::Numeric(mut builder) => Arc::new(builder.finish()),
+            DatumColumnEncoder::Numeric {
+                mut approx_values,
+                mut binary_values,
+            } => {
+                let approx_array = approx_values.finish();
+                let binary_array = binary_values.finish();
+
+                assert_eq!(approx_array.len(), binary_array.len());
+                // This is O(n) so we only enable it for debug assertions.
+                debug_assert_eq!(approx_array.logical_nulls(), binary_array.logical_nulls());
+
+                let fields = Fields::from(vec![
+                    Field::new("approx", approx_array.data_type().clone(), true),
+                    Field::new("binary", binary_array.data_type().clone(), true),
+                ]);
+                let nulls = approx_array.logical_nulls();
+
+                let array = StructArray::new(
+                    fields,
+                    vec![Arc::new(approx_array), Arc::new(binary_array)],
+                    nulls,
+                );
+                Arc::new(array)
+            }
             DatumColumnEncoder::String(mut builder) => Arc::new(builder.finish()),
             DatumColumnEncoder::Bytes(mut builder) => Arc::new(builder.finish()),
             DatumColumnEncoder::Date(mut builder) => Arc::new(builder.finish()),
@@ -707,20 +758,13 @@ impl DatumColumnDecoder {
                 .is_valid(idx)
                 .then(|| array.value(idx))
                 .map(|x| Datum::Float64(ordered_float::OrderedFloat(x))),
-            DatumColumnDecoder::Numeric(array) => {
-                let Some(val) = array.is_valid(idx).then(|| array.value(idx)) else {
-                    packer.push(Datum::Null);
-                    return;
-                };
-
-                let proto = ProtoDatum::decode(val).expect("failed to roundtrip Numeric");
-                packer
-                    .try_push_proto(&proto)
-                    .expect("failed to pack ProtoNumeric");
-
-                // Return early because we've already packed the necessary Datums.
-                return;
-            }
+            DatumColumnDecoder::Numeric(array) => array.is_valid(idx).then(|| {
+                let val = array.value(idx);
+                let val = PackedNumeric::from_bytes(val)
+                    .expect("failed to roundtrip Numeric")
+                    .into_value();
+                Datum::Numeric(OrderedDecimal(val))
+            }),
             DatumColumnDecoder::String(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
@@ -1133,8 +1177,15 @@ fn array_to_decoder(
             let array = downcast_array::<Float64Array>(array)?;
             DatumColumnDecoder::F64(array.clone())
         }
-        (DataType::Binary, ScalarType::Numeric { .. }) => {
-            let array = downcast_array::<BinaryArray>(array)?;
+        (DataType::Struct(_), ScalarType::Numeric { .. }) => {
+            let array = downcast_array::<StructArray>(array)?;
+            // Note: We only use the approx column for sorting, and ignore it
+            // when decoding.
+            let binary_values = array
+                .column_by_name("binary")
+                .expect("missing binary column");
+
+            let array = downcast_array::<BinaryArray>(binary_values)?;
             DatumColumnDecoder::Numeric(array.clone())
         }
         (
@@ -1288,7 +1339,10 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
         ScalarType::Int64 => DatumColumnEncoder::I64(Int64Builder::new()),
         ScalarType::Float32 => DatumColumnEncoder::F32(Float32Builder::new()),
         ScalarType::Float64 => DatumColumnEncoder::F64(Float64Builder::new()),
-        ScalarType::Numeric { .. } => DatumColumnEncoder::Numeric(BinaryBuilder::new()),
+        ScalarType::Numeric { .. } => DatumColumnEncoder::Numeric {
+            approx_values: Float64Builder::new(),
+            binary_values: BinaryBuilder::new(),
+        },
         ScalarType::String
         | ScalarType::PgLegacyName
         | ScalarType::Char { .. }

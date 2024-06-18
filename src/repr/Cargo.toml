@@ -21,6 +21,10 @@ harness = false
 name = "packed"
 harness = false
 
+[[bench]]
+name = "data_types"
+harness = false
+
 [dependencies]
 anyhow = "1.0.66"
 arrow = { version = "51.0.0", default-features = false }
@@ -42,6 +46,7 @@ once_cell = "1.16.0"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = [
     "bytes_",
+    "id_gen",
     "smallvec",
     "region",
     "stack",
@@ -80,6 +85,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [dev-dependencies]
 criterion = { version = "0.4.0" }
+insta = { version = "1.33.0", features = ["json"] }
 mz-persist = { path = "../persist" }
 rand = "0.8.5"
 

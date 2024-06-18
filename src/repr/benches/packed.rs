@@ -17,8 +17,10 @@ use mz_repr::adt::interval::{Interval, PackedInterval, ProtoInterval};
 use mz_repr::adt::mz_acl_item::{
     AclItem, AclMode, MzAclItem, PackedAclItem, PackedMzAclItem, ProtoAclItem, ProtoMzAclItem,
 };
+use mz_repr::adt::numeric::{Numeric, PackedNumeric};
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
+use mz_repr::ProtoNumeric;
 use prost::Message;
 
 fn bench_interval(c: &mut Criterion) {
@@ -200,11 +202,58 @@ fn bench_mz_acl_item(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_numeric(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Numeric");
+    group.throughput(Throughput::Elements(1));
+
+    let val = Numeric::from(-101);
+    group.bench_function("encode", |b| {
+        let mut buf = vec![0u8; 64];
+        b.iter(|| {
+            let packed = PackedNumeric::from_value(std::hint::black_box(val));
+            std::hint::black_box(&mut buf[..PackedNumeric::SIZE])
+                .copy_from_slice(packed.as_bytes());
+        })
+    });
+    group.bench_function("encode/proto", |b| {
+        let mut buf = vec![0u8; 64];
+        b.iter(|| {
+            let (bcd, scale) = std::hint::black_box(val).to_packed_bcd().unwrap();
+            ProtoNumeric { bcd, scale }.encode(&mut buf).unwrap();
+            buf.clear();
+        });
+    });
+
+    const PACKED: [u8; 40] = [
+        3, 0, 0, 0, 0, 0, 0, 0, 101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 128, 0, 0, 0, 0, 0,
+    ];
+    group.bench_function("decode", |b| {
+        b.iter(|| {
+            let packed = PackedNumeric::from_bytes(std::hint::black_box(&PACKED)).unwrap();
+            let normal = std::hint::black_box(packed).into_value();
+            std::hint::black_box(normal);
+        })
+    });
+    const ENCODED: [u8; 4] = [10, 2, 16, 29];
+    group.bench_function("decode/proto", |b| {
+        b.iter(|| {
+            let proto = ProtoNumeric::decode(std::hint::black_box(&ENCODED[..])).unwrap();
+            let normal =
+                std::hint::black_box(Numeric::from_packed_bcd(&proto.bcd, proto.scale)).unwrap();
+            std::hint::black_box(normal);
+        })
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_interval,
     bench_time,
     bench_acl_item,
-    bench_mz_acl_item
+    bench_mz_acl_item,
+    bench_numeric
 );
 criterion_main!(benches);

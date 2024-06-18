@@ -5759,6 +5759,7 @@ dependencies = [
  "enum_dispatch",
  "fast-float",
  "hex",
+ "insta",
  "itertools 0.10.5",
  "mz-build-tools",
  "mz-lowertest",
