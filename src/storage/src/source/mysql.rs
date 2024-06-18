@@ -72,7 +72,7 @@ use mz_mysql_util::{
 use mz_ore::error::ErrorExt;
 use mz_repr::{Diff, Row};
 use mz_storage_types::errors::SourceErrorDetails;
-use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
+use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
 use mz_storage_types::sources::{MySqlSourceConnection, SourceTimestamp};
 use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
@@ -135,7 +135,7 @@ impl SourceRender for MySqlSourceConnection {
                 name: MySqlTableName::new(&desc.schema_name, &desc.name),
                 output_index: *ingestion_output,
                 desc,
-                initial_gtid_set,
+                initial_gtid_set: gtid_set_frontier(&initial_gtid_set).expect("invalid gtid set"),
                 resume_upper,
             });
         }
@@ -221,7 +221,7 @@ struct SubsourceInfo {
     output_index: usize,
     name: MySqlTableName,
     desc: MySqlTableDesc,
-    initial_gtid_set: String,
+    initial_gtid_set: Antichain<GtidPartition>,
     resume_upper: Antichain<GtidPartition>,
 }
 

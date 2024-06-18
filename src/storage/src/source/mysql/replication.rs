@@ -208,7 +208,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 // We've chosen the frontier beyond the GTID Set recorded
                 // during purification as this resume point.
                 if &subsource.resume_upper == &min_frontier {
-                    subsource_uppers.push(gtid_set_frontier(&subsource.initial_gtid_set)?);
+                    subsource_uppers.push(subsource.initial_gtid_set);
                 } else {
                     subsource_uppers.push(subsource.resume_upper);
                 }
