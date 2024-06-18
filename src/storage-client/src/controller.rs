@@ -300,7 +300,7 @@ pub trait StorageController: Debug {
 
     /// Allow this controller and instances controlled by it to write to
     /// external systems.
-    fn allow_writes(&mut self);
+    async fn allow_writes(&mut self);
 
     /// Update storage configuration with new parameters.
     fn update_parameters(&mut self, config_params: StorageParameters);
