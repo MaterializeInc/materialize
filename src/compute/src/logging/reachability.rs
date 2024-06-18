@@ -14,7 +14,6 @@ use std::convert::TryInto;
 use std::rc::Rc;
 use std::time::Duration;
 
-use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
@@ -26,7 +25,7 @@ use timely::container::flatcontainer::{Containerized, FlatStack};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Filter;
 
-use crate::extensions::arrange::{ArrangementSize, MzArrange};
+use crate::extensions::arrange::{MzArrange, MzArrangeCore};
 use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog};
 use crate::typedefs::{FlatKeyValSpine, RowRowSpine};
 
@@ -81,14 +80,11 @@ pub(super) fn construct<A: Allocate>(
         use timely::dataflow::channels::pact::Pipeline;
         let mut input = flatten.new_input(&logs, Pipeline);
 
-        type RUpdates = <(
-            ((bool, Vec<usize>, usize, usize, Option<Timestamp>), ()),
-            Timestamp,
-            Diff,
-        ) as Containerized>::Region;
+        type UpdatesKey = (bool, Vec<usize>, usize, usize, Option<Timestamp>);
+        type UpdatesRegion = <((UpdatesKey, ()), Timestamp, Diff) as Containerized>::Region;
 
         let (mut updates_out, updates) =
-            flatten.new_output::<CapacityContainerBuilder<FlatStack<RUpdates>>>();
+            flatten.new_output::<CapacityContainerBuilder<FlatStack<UpdatesRegion>>>();
 
         flatten.build(move |_capability| {
             move |_frontiers| {
@@ -111,14 +107,11 @@ pub(super) fn construct<A: Allocate>(
             }
         });
 
-        type K = (bool, Vec<usize>, usize, usize, Option<Timestamp>);
-        #[allow(clippy::disallowed_methods)]
-        let updates = arrange_core::<_, _, FlatKeyValSpine<K, (), Timestamp, Diff, _>>(
-            &updates,
-            Pipeline,
-            "PreArrange Timely reachability",
-        )
-        .log_arrangement_size();
+        let updates = updates
+            .mz_arrange_core::<_, FlatKeyValSpine<UpdatesKey, (), Timestamp, Diff, _>>(
+                Pipeline,
+                "PreArrange Timely reachability",
+            );
 
         let mut result = BTreeMap::new();
         for variant in logs_active {
