@@ -15,25 +15,25 @@
 
 CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_item_key, problem) AS
     -- violated references
-    SELECT 'build_step', build_step_id, build_id, 'build step references missing build'
-    FROM build_step
+    SELECT 'build_job', build_job_id, build_id, 'build job references missing build'
+    FROM build_job
     WHERE build_id NOT IN (SELECT build_id FROM build)
     UNION
-    SELECT 'feature_benchmark_result', build_step_id, build_step_id, 'benchmark result references missing build step'
+    SELECT 'feature_benchmark_result', build_job_id, build_job_id, 'benchmark result references missing build job'
     FROM feature_benchmark_result
-    WHERE build_step_id NOT IN (SELECT build_step_id FROM build_step)
+    WHERE build_job_id NOT IN (SELECT build_job_id FROM build_job)
     UNION
-    SELECT 'scalability_framework_result', build_step_id, build_step_id, 'scalability result references missing build step'
+    SELECT 'scalability_framework_result', build_job_id, build_job_id, 'scalability result references missing build job'
     FROM scalability_framework_result
-    WHERE build_step_id NOT IN (SELECT build_step_id FROM build_step)
+    WHERE build_job_id NOT IN (SELECT build_job_id FROM build_job)
     UNION
-    SELECT 'build_annotation', build_step_id, build_step_id, 'build annotation references missing build step'
+    SELECT 'build_annotation', build_job_id, build_job_id, 'build annotation references missing build job'
     FROM build_annotation
-    WHERE build_step_id NOT IN (SELECT build_step_id FROM build_step)
+    WHERE build_job_id NOT IN (SELECT build_job_id FROM build_job)
     UNION
-    SELECT 'build_annotation_error', build_step_id, build_step_id, 'build annotation error references missing build annotation'
+    SELECT 'build_annotation_error', build_job_id, build_job_id, 'build annotation error references missing build annotation'
     FROM build_annotation_error
-    WHERE build_step_id NOT IN (SELECT build_step_id FROM build_annotation)
+    WHERE build_job_id NOT IN (SELECT build_job_id FROM build_annotation)
     -- duplicate entries
     UNION
     SELECT 'build', build_id, NULL, 'duplicate build'
@@ -41,24 +41,24 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     GROUP BY build_id
     HAVING count(*) > 1
     UNION
-    SELECT 'build_step', build_step_id, NULL, 'duplicate build step'
-    FROM build_step
-    GROUP BY build_step_id
+    SELECT 'build_job', build_job_id, NULL, 'duplicate build job'
+    FROM build_job
+    GROUP BY build_job_id
     HAVING count(*) > 1
     UNION
-    SELECT 'build_annotation', build_step_id, NULL, 'duplicate annotation for build step'
+    SELECT 'build_annotation', build_job_id, NULL, 'duplicate annotation for build job'
     FROM build_annotation
-    GROUP BY build_step_id
+    GROUP BY build_job_id
     HAVING count(*) > 1
     -- other
     UNION
-    SELECT 'build_step', build_step_id, NULL, 'build step id is not unique'
-    FROM build_step
-    GROUP BY build_step_id
+    SELECT 'build_job', build_job_id, NULL, 'build job id is not unique'
+    FROM build_job
+    GROUP BY build_job_id
     HAVING count(distinct build_id) > 1
     UNION
-    SELECT 'build_step', build_step_key, max(build_step_id), 'multiple build steps as latest retry'
-    FROM build_step
+    SELECT 'build_job', concat(build_step_key, concat(', shard ', shard_index)), max(build_job_id), 'multiple build jobs as latest retry'
+    FROM build_job
     GROUP BY build_id, build_step_key, shard_index
     HAVING sum(CASE WHEN is_latest_retry THEN 1 ELSE 0 END) > 1
 ;
