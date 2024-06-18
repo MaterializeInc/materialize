@@ -28,7 +28,9 @@ _view&lowbar;name_ | A name for the materialized view.
 _cluster&lowbar;name_ | The cluster to maintain this materialized view. If not specified, defaults to the active cluster.
 _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose results you want to maintain incrementally updated.
 
-### `WITH` options
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
 
 | Field      | Value     | Description                                                                                                                                                       |
 | ---------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
