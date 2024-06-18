@@ -316,7 +316,10 @@ where
 
     /// Allow this controller and instances controlled by it to write to
     /// external systems.
-    pub async fn allow_writes(&mut self) {
+    ///
+    /// Caller must provide a `register_ts`, the timestamp at which any tables
+    /// that are known to the controller should be registered in the txn system.
+    pub async fn allow_writes(&mut self, register_ts: Option<T>) {
         if !self.read_only {
             // Already transitioned out of read-only mode!
             return;
@@ -325,7 +328,7 @@ where
         self.read_only = false;
 
         self.compute.allow_writes();
-        self.storage.allow_writes().await;
+        self.storage.allow_writes(register_ts).await;
         self.remove_past_generation_replicas_in_background();
     }
 
@@ -725,7 +728,11 @@ where
         // `read_only = false` _and_ when later transitioning out of read-only
         // mode. This way we keep that logic in one place.
         if !read_only {
-            this.allow_writes().await;
+            // We did not yet tell the controller about any collections, so
+            // there are no tables to initialize yet. Hence we don't need a
+            // register_ts.
+            let register_ts = None;
+            this.allow_writes(register_ts).await;
         }
 
         this

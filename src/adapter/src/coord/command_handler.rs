@@ -230,7 +230,8 @@ impl Coordinator {
                 }
 
                 Command::ControllerAllowWrites { tx } => {
-                    self.controller.allow_writes().await;
+                    let init_ts = self.get_local_write_ts().await.timestamp;
+                    self.controller.allow_writes(Some(init_ts)).await;
                     let _ = tx.send(Ok(true));
                 }
             }

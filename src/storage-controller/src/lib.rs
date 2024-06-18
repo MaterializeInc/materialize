@@ -257,7 +257,7 @@ where
         }
     }
 
-    async fn allow_writes(&mut self) {
+    async fn allow_writes(&mut self, register_ts: Option<Self::Timestamp>) {
         if !self.read_only {
             // Already done!
             return;
@@ -265,10 +265,17 @@ where
 
         self.read_only = false;
 
+        let persist_client = self
+            .persist
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
+
         // While in read-only mode, we didn't run ingestions or write to
         // introspection collections. Start doing that now!
         let mut ingestions_to_run = Vec::new();
         let mut introspections_to_run = Vec::new();
+        let mut tables_to_register = Vec::new();
         for (id, collection) in self.collections.iter() {
             match collection.data_source {
                 DataSource::Ingestion(_) => {
@@ -279,6 +286,24 @@ where
                     introspections_to_run.push((*id, i));
                 }
                 DataSource::Webhook => (),
+                DataSource::Other(DataSourceOther::TableWrites) => {
+                    // We don't optimize allow_writes() for performance, so we
+                    // don't parallelize opening these write handles, for
+                    // example. For now it's meant as a tool during development
+                    // of zero-downtime upgrades. If it ever becomes
+                    // load-bearing, we can employ optimizations similar to what
+                    // we use in create_collections.
+                    let write_handle = self
+                        .open_data_handles(
+                            id,
+                            collection.collection_metadata.data_shard,
+                            collection.collection_metadata.relation_desc.clone(),
+                            &persist_client,
+                        )
+                        .await;
+
+                    tables_to_register.push((*id, write_handle));
+                }
                 DataSource::Progress | DataSource::Other(_) => {}
             };
         }
@@ -301,6 +326,16 @@ where
         // happens when we take over instead be a periodic thing, and make it
         // resilient to the upper moving concurrently.
         self.collection_manager.allow_writes();
+
+        if !tables_to_register.is_empty() {
+            let register_ts = register_ts
+                .as_ref()
+                .expect("must provide a register_ts")
+                .clone();
+
+            self.persist_table_worker
+                .register(register_ts, tables_to_register);
+        }
 
         for id in ingestions_to_run {
             self.run_ingestion(id)
@@ -807,7 +842,7 @@ where
         }
 
         // Register the tables all in one batch.
-        if !table_registers.is_empty() {
+        if !table_registers.is_empty() && !self.read_only {
             let register_ts = register_ts
                 .expect("caller should have provided a register_ts when creating a table");
             // This register call advances the logical upper of the table. The
@@ -1489,6 +1524,10 @@ where
         tokio::sync::oneshot::Receiver<Result<(), StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,
     > {
+        if self.read_only {
+            return Err(StorageError::ReadOnly);
+        }
+
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
         for (id, updates) in commands.iter() {
             if !updates.is_empty() {
