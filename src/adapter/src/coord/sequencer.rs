@@ -348,8 +348,7 @@ impl Coordinator {
                     ctx.retire(Ok(ExecuteResponse::AlteredObject(plan.object_type)));
                 }
                 Plan::AlterCluster(plan) => {
-                    let result = self.sequence_alter_cluster(ctx.session(), plan).await;
-                    ctx.retire(result);
+                    self.sequence_alter_cluster_staged(ctx, plan).await;
                 }
                 Plan::AlterClusterRename(plan) => {
                     let result = self
