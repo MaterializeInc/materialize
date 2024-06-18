@@ -630,8 +630,8 @@ CREATE TEMPORARY VIEW temp_view AS SELECT * FROM non_temp_base;
 query TT
 SHOW CREATE VIEW temp_view;
 ----
-materialize.public.temp_view
-CREATE VIEW "mz_temp"."temp_view" AS SELECT * FROM "materialize"."public"."non_temp_base"
+mz_temp.temp_view
+CREATE TEMPORARY VIEW "mz_temp"."temp_view" AS SELECT * FROM "materialize"."public_renamed"."non_temp_base"
 
 statement ok
 ALTER TABLE non_temp_base RENAME TO non_temp_table;
@@ -639,5 +639,5 @@ ALTER TABLE non_temp_base RENAME TO non_temp_table;
 query TT
 SHOW CREATE VIEW temp_view;
 ----
-materialize.public.temp_view
-CREATE VIEW "mz_temp"."temp_view" AS SELECT * FROM "materialize"."public"."non_temp_table"
+mz_temp.temp_view
+CREATE TEMPORARY VIEW "mz_temp"."temp_view" AS SELECT * FROM "materialize"."public_renamed"."non_temp_table"
