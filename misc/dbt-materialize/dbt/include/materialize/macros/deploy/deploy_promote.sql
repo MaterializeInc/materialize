@@ -159,10 +159,7 @@
         {% set sink_schema = node.schema %}
         {% set sink_name = node.name %}
         {% set upstream_node = graph.nodes[node.depends_on.nodes[0]] %}
-        {% set upstream_database = upstream_node.database %}
-        {% set upstream_schema = upstream_node.schema %}
-        {% set upstream_relation = upstream_node.name %}
-        {% set new_upstream_relation = get_current_database() ~ '.' ~ adapter.quote(upstream_schema) ~ '.' ~ adapter.quote(upstream_relation) %}
+        {% set new_upstream_relation = adapter.quote(upstream_node.database) ~ '.' ~ adapter.quote(upstream_node.schema) ~ '.' ~ adapter.quote(upstream_node.name) %}
         {% set sink = {
             "database": sink_database,
             "schema": sink_schema,

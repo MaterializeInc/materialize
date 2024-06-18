@@ -139,7 +139,7 @@ test_sink_deploy = """
     )
 }}
  FROM {{ ref('test_materialized_view_deploy') }}
- INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink')
+ INTO KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-sink-1')
  FORMAT JSON
  ENVELOPE DEBEZIUM
 """
