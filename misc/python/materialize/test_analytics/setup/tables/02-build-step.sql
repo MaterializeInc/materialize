@@ -14,8 +14,9 @@
 -- limitations under the License.
 
 -- meta data of the build step
-CREATE TABLE build_step (
-    -- build_step_id is assumed to be globally unique for now
+CREATE TABLE build_job (
+    -- build_job_id is assumed to be globally unique (build_step_id is reused on shared and retried build jobs)
+    build_job_id TEXT NOT NULL,
     build_step_id TEXT NOT NULL,
     build_id TEXT NOT NULL,
     build_step_key TEXT NOT NULL,
