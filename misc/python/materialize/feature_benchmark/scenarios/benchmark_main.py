@@ -1387,7 +1387,7 @@ class ManyKafkaSourcesOnSameCluster(Scenario):
     SCALE = 2  # 100 sources
     FIXED_SCALE = True
 
-    COUNT_SOURCE_ENTRIES = 10000
+    COUNT_SOURCE_ENTRIES = 100000
 
     def shared(self) -> Action:
         create_topics = "\n".join(
