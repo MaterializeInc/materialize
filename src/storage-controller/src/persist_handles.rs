@@ -81,7 +81,10 @@ impl<T: Timestamp + Lattice + Codec64> PersistTableWriteCmd<T> {
 
 async fn append_work<T2: Timestamp + Lattice + Codec64>(
     write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T2, Diff>>,
-    mut commands: BTreeMap<GlobalId, (tracing::Span, Vec<Update<T2>>, Antichain<T2>)>,
+    mut commands: BTreeMap<
+        GlobalId,
+        (tracing::Span, Vec<Update<T2>>, Antichain<T2>, Antichain<T2>),
+    >,
 ) -> Result<(), Vec<(GlobalId, Antichain<T2>)>> {
     let futs = FuturesUnordered::new();
 
@@ -93,16 +96,14 @@ async fn append_work<T2: Timestamp + Lattice + Codec64>(
     // through all available write handles and see if there are any updates
     // for it. If yes, we send them all in one go.
     for (id, write) in write_handles.iter_mut() {
-        if let Some((span, updates, new_upper)) = commands.remove(id) {
-            let persist_upper = write.upper().clone();
+        if let Some((span, updates, expected_upper, new_upper)) = commands.remove(id) {
             let updates = updates
                 .into_iter()
                 .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
 
             futs.push(async move {
-                let persist_upper = persist_upper.clone();
                 write
-                    .compare_and_append(updates.clone(), persist_upper.clone(), new_upper.clone())
+                    .compare_and_append(updates.clone(), expected_upper.clone(), new_upper.clone())
                     .instrument(span.clone())
                     .await
                     .expect("cannot append updates")
@@ -491,8 +492,12 @@ enum PersistMonotonicWriteCmd<T: Timestamp + Lattice + Codec64> {
         /// Notifies us when all resources have been cleaned up.
         tx: oneshot::Sender<()>,
     },
+    RecentUpper(
+        GlobalId,
+        tokio::sync::oneshot::Sender<Result<Antichain<T>, StorageError<T>>>,
+    ),
     Append(
-        Vec<(GlobalId, Vec<Update<T>>, T)>,
+        Vec<(GlobalId, Vec<Update<T>>, T, T)>,
         tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     ),
     /// Appends `Vec<TimelessUpdate>` to `GlobalId` at, essentially,
@@ -550,15 +555,26 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                             // We don't care if our listener went away.
                             let _ = tx.send(());
                         }
+                        PersistMonotonicWriteCmd::RecentUpper(id, response) => {
+                            let write = write_handles.get_mut(&id);
+
+                            if let Some(write) = write {
+                                let upper = write.fetch_recent_upper().await;
+                                let _ = response.send(Ok(upper.clone()));
+                            } else {
+                                let _ = response.send(Err(StorageError::IdentifierMissing(id)));
+                            }
+                        }
                         PersistMonotonicWriteCmd::Append(updates, response) => {
                             let mut ids = BTreeSet::new();
-                            for (id, update, upper) in updates {
+                            for (id, update, expected_upper, new_upper) in updates {
                                 ids.insert(id);
-                                let (old_span, updates, old_upper) =
+                                let (old_span, updates, old_expected_upper, old_new_upper) =
                                     all_updates.entry(id).or_insert_with(|| {
                                         (
                                             span.clone(),
                                             Vec::default(),
+                                            Antichain::from_elem(T::minimum()),
                                             Antichain::from_elem(T::minimum()),
                                         )
                                     });
@@ -574,7 +590,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                                     old_span.follows_from(span.id());
                                 }
                                 updates.extend(update);
-                                old_upper.join_assign(&Antichain::from_elem(upper));
+                                old_new_upper.join_assign(&Antichain::from_elem(new_upper));
+                                old_expected_upper
+                                    .join_assign(&Antichain::from_elem(expected_upper));
                             }
                             all_responses.push((ids, response));
                         }
@@ -589,12 +607,14 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                                     continue;
                                 }
 
+                                let current_upper = current_upper
+                                    .into_option()
+                                    .expect("cannot append data to closed collection");
+
                                 let lower = if current_upper.less_than(&at_least) {
                                     at_least
                                 } else {
-                                    current_upper
-                                        .into_option()
-                                        .expect("cannot append data to closed collection")
+                                    current_upper.clone()
                                 };
 
                                 let upper = TimestampManipulation::step_forward(&lower);
@@ -607,7 +627,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                                     })
                                     .collect::<Vec<_>>();
 
-                                updates_outer.push((id, update, upper));
+                                updates_outer.push((id, update, current_upper, upper));
                             }
                             commands.push_front((
                                 span,
@@ -675,6 +695,32 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
     #[allow(dead_code)]
     pub(crate) fn update(&self, id: GlobalId, write_handle: WriteHandle<SourceData, (), T, Diff>) {
         self.send(PersistMonotonicWriteCmd::Update(id, write_handle))
+    }
+
+    /// TODO!
+    pub(crate) fn recent_upper(
+        &self,
+        id: GlobalId,
+    ) -> tokio::sync::oneshot::Receiver<Result<Antichain<T>, StorageError<T>>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.send(PersistMonotonicWriteCmd::RecentUpper(id, tx));
+        rx
+    }
+
+    /// TODO!
+    pub(crate) fn compare_and_append(
+        &self,
+        updates: Vec<(GlobalId, Vec<Update<T>>, T, T)>,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError<T>>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if updates.is_empty() {
+            tx.send(Ok(()))
+                .expect("rx has not been dropped at this point");
+            rx
+        } else {
+            self.send(PersistMonotonicWriteCmd::Append(updates, tx));
+            rx
+        }
     }
 
     /// Appends values to collections associated with `GlobalId`, but lets

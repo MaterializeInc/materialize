@@ -256,7 +256,7 @@ impl Coordinator {
         ] {
             self.controller
                 .storage
-                .record_introspection_updates(type_, updates)
+                .append_introspection_updates(type_, updates)
                 .await;
         }
     }

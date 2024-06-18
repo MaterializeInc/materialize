@@ -691,7 +691,9 @@ where
 
         for (type_, updates) in updates_by_type {
             if !updates.is_empty() {
-                storage.record_introspection_updates(type_, updates).await;
+                storage
+                    .update_introspection_collection(type_, updates)
+                    .await;
             }
         }
     }

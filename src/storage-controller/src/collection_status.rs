@@ -84,7 +84,7 @@ where
             .extend(new.iter().map(|r| (r.id, r.status)));
 
         self.collection_manager
-            .append_to_collection(
+            .blind_write(
                 source_status_history_id,
                 new.into_iter()
                     .map(|update| (Row::from(update), 1))
