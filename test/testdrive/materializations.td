@@ -464,25 +464,29 @@ c    d
 # in memory consumptions and should be understood before adapting the values.
 > SET cluster_replica = r1
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-AccumulableErrorCheck
-AccumulableErrorCheck
-AccumulableErrorCheck
-"ArrangeAccumulable [val: empty]"
-"ArrangeAccumulable [val: empty]"
-"ArrangeAccumulable [val: empty]"
-"ArrangeBy[[Column(0), Column(1)]]"
-"ArrangeBy[[Column(0), Column(1)]]"
-"ArrangeBy[[Column(0), Column(1)]]-errors"
-"ArrangeBy[[Column(0), Column(1)]]-errors"
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(1)]]
-ArrangeBy[[Column(1)]]-errors
-"ArrangeMonotonic [val: empty]"
-"ArrangeMonotonic [val: empty]"
-ReduceAccumulable
-ReduceAccumulable
-ReduceAccumulable
-ReduceMonotonic
-ReduceMonotonic
+> SELECT mdod.dataflow_name, mdod.name
+  FROM mz_internal.mz_arrangement_sharing mash
+  JOIN mz_internal.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
+  JOIN mz_internal.mz_compute_exports USING (dataflow_id)
+  WHERE export_id LIKE 'u%'
+"Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0)]]
+"Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
+"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
+"Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1)]]
+"Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1)]]-errors
+"Dataflow: materialize.public.mat_data_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
+"Dataflow: materialize.public.mat_data_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
+"Dataflow: materialize.public.test1" AccumulableErrorCheck
+"Dataflow: materialize.public.test1" "ArrangeAccumulable [val: empty]"
+"Dataflow: materialize.public.test1" ReduceAccumulable
+"Dataflow: materialize.public.test2" AccumulableErrorCheck
+"Dataflow: materialize.public.test2" "ArrangeAccumulable [val: empty]"
+"Dataflow: materialize.public.test2" ReduceAccumulable
+"Dataflow: materialize.public.test4" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.test4" ReduceMonotonic
+"Dataflow: materialize.public.test6" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.test6" ReduceMonotonic
+"Dataflow: materialize.public.test7" AccumulableErrorCheck
+"Dataflow: materialize.public.test7" "ArrangeAccumulable [val: empty]"
+"Dataflow: materialize.public.test7" ReduceAccumulable

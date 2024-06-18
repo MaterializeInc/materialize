@@ -13,6 +13,10 @@
 # This test relies on testdrive's automatic retries, since it queries
 # introspection sources that take a while to update.
 
+# Introspection subscribes add noise to the introspection sources, so disable them.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_introspection_subscribes = false
+
 # Create a clean replica to inspect dataflow state on.
 
 > DROP CLUSTER IF EXISTS test

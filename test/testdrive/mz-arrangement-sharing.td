@@ -13,10 +13,14 @@ $ set-arg-default default-replica-size=1
 # increase unexpectedly. This is to prevent issues like this:
 # https://github.com/MaterializeInc/materialize/issues/20179
 
+# Introspection subscribes add noise to the introspection sources, so disable them.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_introspection_subscribes = false
+
 # Run the majority of this test on its own cluster to ensure it doesn't
 # interfere with any other tests.
 > CREATE CLUSTER arrangement_sharing REPLICAS (r1 (SIZE '${arg.default-replica-size}'))
-> SET CLUSTER TO arrangement_sharing
+> SET cluster TO arrangement_sharing
 > SET cluster_replica = r1
 
 # from attributes/mir_unique_keys.slt
@@ -700,9 +704,14 @@ ReduceMinsMaxes
 > DROP TABLE t CASCADE
 
 # Check mz_catalog_server
-> SET CLUSTER TO mz_catalog_server
+> SET cluster TO mz_catalog_server
 
-> SELECT name, count(*) FROM (SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name) GROUP BY name;
+> SELECT mdod.name, count(*)
+  FROM mz_internal.mz_arrangement_sharing mash
+  JOIN mz_internal.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
+  WHERE mdod.dataflow_name NOT LIKE '%introspection-subscribe%'
+  GROUP BY mdod.name
+  ORDER BY mdod.name;
 "AccumulableErrorCheck"                       8
 "Arrange export iterative err"                1
 "Arrange export iterative"                    1
@@ -756,13 +765,11 @@ ArrangeBy[[Column(13)]]                       1
 "ReduceMinsMaxes"                             1
 "Threshold local"                             4
 
-> SET CLUSTER TO arrangement_sharing
+> SET cluster TO arrangement_sharing
 
 # Check dataflows of our logging infrastructure with log_logging
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET log_filter = 'debug'
-ALTER CLUSTER arrangement_sharing SET (MANAGED = false);
-CREATE CLUSTER REPLICA arrangement_sharing.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
+> ALTER CLUSTER arrangement_sharing SET (MANAGED = false);
+> CREATE CLUSTER REPLICA arrangement_sharing.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
 
 > SET cluster_replica = replica;
 
@@ -796,5 +803,23 @@ CREATE CLUSTER REPLICA arrangement_sharing.replica SIZE = '2', INTROSPECTION DEB
 "Arrange Timely(Operates)"
 "Arrange Timely(Parks)"
 
+# Check dataflows installed by introspection subscribes.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET log_filter = 'info'
+ALTER SYSTEM SET enable_introspection_subscribes = true
+
+# Flipping `enable_introspection_subscribes` affects new replicas, so force a
+# restart.
+> DROP CLUSTER REPLICA arrangement_sharing.replica
+> ALTER CLUSTER arrangement_sharing SET (MANAGED = true)
+> ALTER CLUSTER arrangement_sharing SET (REPLICATION FACTOR = 0)
+> ALTER CLUSTER arrangement_sharing SET (REPLICATION FACTOR = 1)
+> RESET cluster_replica
+
+> SELECT mdod.name, count(*)
+  FROM mz_internal.mz_arrangement_sharing mash
+  JOIN mz_internal.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
+  GROUP BY mdod.name
+  ORDER BY mdod.name
+AccumulableErrorCheck 1
+"ArrangeAccumulable [val: empty]" 1
+ReduceAccumulable 1
