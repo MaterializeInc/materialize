@@ -42,6 +42,13 @@
 macro_rules! halt {
     ($($arg:expr),* $(,)?) => {{
         $crate::__private::tracing::warn!("halting process: {}", format!($($arg),*));
-            ::std::process::exit(2);
+        $crate::process::halt();
     }}
+}
+
+/// Helper for the `halt!` macro.
+///
+/// This function exists to avoid that all callers of `halt!` have to explicitly depend on `libc`.
+pub fn halt() -> ! {
+    unsafe { libc::_exit(2) };
 }
