@@ -314,8 +314,8 @@ and finds associated open GitHub issues in Materialize repository.""",
     )
     test_analytics_db = TestAnalyticsDb(test_analytics_config)
 
-    # always insert a build step regardless whether it has annotations or not
-    store_build_step_in_test_analytics(test_analytics_db)
+    # always insert a build job regardless whether it has annotations or not
+    store_build_job_in_test_analytics(test_analytics_db)
 
     return annotate_logged_errors(args.log_files, test_analytics_db)
 
@@ -750,9 +750,9 @@ def format_error_message(error_message: str | None, max_length: int = 10_000) ->
     return f"```\n{sanitize_text(error_message, max_length)}\n```"
 
 
-def store_build_step_in_test_analytics(test_analytics: TestAnalyticsDb) -> None:
+def store_build_job_in_test_analytics(test_analytics: TestAnalyticsDb) -> None:
     try:
-        test_analytics.builds.insert_build_step(
+        test_analytics.builds.insert_build_job(
             was_successful=has_successful_buildkite_status()
         )
     except Exception as e:
@@ -766,7 +766,7 @@ def store_annotation_in_test_analytics(
     try:
         # the build step was already inserted before
         # the buildkite status may have been successful but the build may still fail due to unknown errors in the log
-        test_analytics.builds.update_build_step_success(
+        test_analytics.builds.update_build_job_success(
             was_successful=not annotation.is_failure
         )
 

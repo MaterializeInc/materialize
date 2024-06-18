@@ -32,7 +32,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
         results: list[FeatureBenchmarkResultEntry],
     ) -> None:
         build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
-        step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
+        job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
 
         sql_statements = []
 
@@ -43,7 +43,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                 INSERT INTO feature_benchmark_result
                 (
                     build_id,
-                    build_step_id,
+                    build_job_id,
                     framework_version,
                     scenario_name,
                     scenario_version,
@@ -55,7 +55,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                 )
                 SELECT
                     '{build_id}',
-                    '{step_id}',
+                    '{job_id}',
                     '{framework_version}',
                     '{result_entry.scenario_name}',
                     '{result_entry.scenario_version}',

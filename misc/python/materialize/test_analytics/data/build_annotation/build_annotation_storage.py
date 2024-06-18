@@ -37,7 +37,7 @@ class BuildAnnotationStorage(BaseDataStorage):
         annotation: AnnotationEntry,
     ) -> None:
         build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
-        step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
+        job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
 
         sql_statements = []
 
@@ -46,7 +46,7 @@ class BuildAnnotationStorage(BaseDataStorage):
             INSERT INTO build_annotation
             (
                 build_id,
-                build_step_id,
+                build_job_id,
                 test_suite,
                 test_retry_count,
                 is_failure,
@@ -54,7 +54,7 @@ class BuildAnnotationStorage(BaseDataStorage):
             )
             SELECT
                 '{build_id}',
-                '{step_id}',
+                '{job_id}',
                 {mz_sql_util.as_sanitized_literal(annotation.test_suite)},
                 {annotation.test_retry_count},
                 {annotation.is_failure},
@@ -68,14 +68,14 @@ class BuildAnnotationStorage(BaseDataStorage):
                 f"""
                 INSERT INTO build_annotation_error
                 (
-                    build_step_id,
+                    build_job_id,
                     error_type,
                     content,
                     issue,
                     occurrence_count
                 )
                 SELECT
-                    '{step_id}',
+                    '{job_id}',
                     '{error.error_type}',
                     {mz_sql_util.as_sanitized_literal(error.message)},
                     {mz_sql_util.as_sanitized_literal(error.issue)},
