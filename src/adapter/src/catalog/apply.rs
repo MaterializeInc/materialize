@@ -67,157 +67,6 @@ struct InProgressRetractions {
     system_object_mappings: BTreeMap<GlobalId, CatalogEntry>,
 }
 
-/// Sort [`StateUpdate`]s in dependency order.
-fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
-    fn push_update<T>(
-        update: T,
-        diff: StateDiff,
-        retractions: &mut Vec<T>,
-        additions: &mut Vec<T>,
-    ) {
-        match diff {
-            StateDiff::Retraction => retractions.push(update),
-            StateDiff::Addition => additions.push(update),
-        }
-    }
-
-    // Partition updates by type so that we can weave different update types into the right spots.
-    let mut pre_cluster_retractions = Vec::new();
-    let mut pre_cluster_additions = Vec::new();
-    let mut cluster_retractions = Vec::new();
-    let mut cluster_additions = Vec::new();
-    let mut builtin_item_updates = Vec::new();
-    let mut item_retractions = Vec::new();
-    let mut item_additions = Vec::new();
-    let mut post_item_retractions = Vec::new();
-    let mut post_item_additions = Vec::new();
-    for update in updates {
-        let diff = update.diff.clone();
-        match update.kind {
-            StateUpdateKind::Role(_)
-            | StateUpdateKind::Database(_)
-            | StateUpdateKind::Schema(_)
-            | StateUpdateKind::DefaultPrivilege(_)
-            | StateUpdateKind::SystemPrivilege(_)
-            | StateUpdateKind::SystemConfiguration(_) => push_update(
-                update,
-                diff,
-                &mut pre_cluster_retractions,
-                &mut pre_cluster_additions,
-            ),
-            StateUpdateKind::Cluster(_)
-            | StateUpdateKind::IntrospectionSourceIndex(_)
-            | StateUpdateKind::ClusterReplica(_) => push_update(
-                update,
-                diff,
-                &mut cluster_retractions,
-                &mut cluster_additions,
-            ),
-            StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
-                builtin_item_updates.push((system_object_mapping, update.diff))
-            }
-            StateUpdateKind::Item(item) => push_update(
-                (item, update.diff),
-                diff,
-                &mut item_retractions,
-                &mut item_additions,
-            ),
-            StateUpdateKind::Comment(_)
-            | StateUpdateKind::AuditLog(_)
-            | StateUpdateKind::StorageUsage(_)
-            | StateUpdateKind::StorageCollectionMetadata(_)
-            | StateUpdateKind::UnfinalizedShard(_) => push_update(
-                update,
-                diff,
-                &mut post_item_retractions,
-                &mut post_item_additions,
-            ),
-        }
-    }
-
-    // Sort builtin item updates by dependency.
-    let builtin_item_updates = builtin_item_updates
-        .into_iter()
-        .map(|(system_object_mapping, diff)| {
-            let idx = BUILTIN_LOOKUP
-                .get(&system_object_mapping.description)
-                .expect("missing builtin")
-                .0;
-            (idx, system_object_mapping, diff)
-        })
-        .sorted_by_key(|(idx, _, _)| *idx)
-        .map(|(_, system_object_mapping, diff)| (system_object_mapping, diff));
-
-    // Further partition builtin item updates.
-    let mut other_builtin_retractions = Vec::new();
-    let mut other_builtin_additions = Vec::new();
-    let mut builtin_index_retractions = Vec::new();
-    let mut builtin_index_additions = Vec::new();
-    for (builtin_item_update, diff) in builtin_item_updates {
-        match &builtin_item_update.description.object_type {
-            CatalogItemType::Index => push_update(
-                StateUpdate {
-                    kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                    diff,
-                },
-                diff,
-                &mut builtin_index_retractions,
-                &mut builtin_index_additions,
-            ),
-            CatalogItemType::Table
-            | CatalogItemType::Source
-            | CatalogItemType::Sink
-            | CatalogItemType::View
-            | CatalogItemType::MaterializedView
-            | CatalogItemType::Type
-            | CatalogItemType::Func
-            | CatalogItemType::Secret
-            | CatalogItemType::Connection => push_update(
-                StateUpdate {
-                    kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                    diff,
-                },
-                diff,
-                &mut other_builtin_retractions,
-                &mut other_builtin_additions,
-            ),
-        }
-    }
-
-    // Sort item updates by GlobalId.
-    fn sort_item_updates(
-        item_updates: Vec<(mz_catalog::durable::Item, StateDiff)>,
-    ) -> Vec<StateUpdate> {
-        item_updates
-            .into_iter()
-            .sorted_by_key(|(item, _diff)| item.id)
-            .map(|(item, diff)| StateUpdate {
-                kind: StateUpdateKind::Item(item),
-                diff,
-            })
-            .collect()
-    }
-    let item_retractions = sort_item_updates(item_retractions);
-    let item_additions = sort_item_updates(item_additions);
-
-    // Put everything back together.
-    iter::empty()
-        // All retractions must be reversed.
-        .chain(post_item_retractions.into_iter().rev())
-        .chain(item_retractions.into_iter().rev())
-        .chain(builtin_index_retractions.into_iter().rev())
-        .chain(cluster_retractions.into_iter().rev())
-        .chain(other_builtin_retractions.into_iter().rev())
-        .chain(pre_cluster_retractions.into_iter().rev())
-        .chain(pre_cluster_additions.into_iter())
-        .chain(other_builtin_additions.into_iter())
-        .chain(cluster_additions.into_iter())
-        .chain(builtin_index_additions.into_iter())
-        .chain(item_additions.into_iter())
-        .chain(post_item_additions.into_iter())
-        .collect()
-}
-
 impl CatalogState {
     /// Update in-memory catalog state from a list of updates made to the durable catalog state.
     ///
@@ -1060,6 +909,157 @@ impl CatalogState {
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
     }
+}
+
+/// Sort [`StateUpdate`]s in dependency order.
+fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
+    fn push_update<T>(
+        update: T,
+        diff: StateDiff,
+        retractions: &mut Vec<T>,
+        additions: &mut Vec<T>,
+    ) {
+        match diff {
+            StateDiff::Retraction => retractions.push(update),
+            StateDiff::Addition => additions.push(update),
+        }
+    }
+
+    // Partition updates by type so that we can weave different update types into the right spots.
+    let mut pre_cluster_retractions = Vec::new();
+    let mut pre_cluster_additions = Vec::new();
+    let mut cluster_retractions = Vec::new();
+    let mut cluster_additions = Vec::new();
+    let mut builtin_item_updates = Vec::new();
+    let mut item_retractions = Vec::new();
+    let mut item_additions = Vec::new();
+    let mut post_item_retractions = Vec::new();
+    let mut post_item_additions = Vec::new();
+    for update in updates {
+        let diff = update.diff.clone();
+        match update.kind {
+            StateUpdateKind::Role(_)
+            | StateUpdateKind::Database(_)
+            | StateUpdateKind::Schema(_)
+            | StateUpdateKind::DefaultPrivilege(_)
+            | StateUpdateKind::SystemPrivilege(_)
+            | StateUpdateKind::SystemConfiguration(_) => push_update(
+                update,
+                diff,
+                &mut pre_cluster_retractions,
+                &mut pre_cluster_additions,
+            ),
+            StateUpdateKind::Cluster(_)
+            | StateUpdateKind::IntrospectionSourceIndex(_)
+            | StateUpdateKind::ClusterReplica(_) => push_update(
+                update,
+                diff,
+                &mut cluster_retractions,
+                &mut cluster_additions,
+            ),
+            StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
+                builtin_item_updates.push((system_object_mapping, update.diff))
+            }
+            StateUpdateKind::Item(item) => push_update(
+                (item, update.diff),
+                diff,
+                &mut item_retractions,
+                &mut item_additions,
+            ),
+            StateUpdateKind::Comment(_)
+            | StateUpdateKind::AuditLog(_)
+            | StateUpdateKind::StorageUsage(_)
+            | StateUpdateKind::StorageCollectionMetadata(_)
+            | StateUpdateKind::UnfinalizedShard(_) => push_update(
+                update,
+                diff,
+                &mut post_item_retractions,
+                &mut post_item_additions,
+            ),
+        }
+    }
+
+    // Sort builtin item updates by dependency.
+    let builtin_item_updates = builtin_item_updates
+        .into_iter()
+        .map(|(system_object_mapping, diff)| {
+            let idx = BUILTIN_LOOKUP
+                .get(&system_object_mapping.description)
+                .expect("missing builtin")
+                .0;
+            (idx, system_object_mapping, diff)
+        })
+        .sorted_by_key(|(idx, _, _)| *idx)
+        .map(|(_, system_object_mapping, diff)| (system_object_mapping, diff));
+
+    // Further partition builtin item updates.
+    let mut other_builtin_retractions = Vec::new();
+    let mut other_builtin_additions = Vec::new();
+    let mut builtin_index_retractions = Vec::new();
+    let mut builtin_index_additions = Vec::new();
+    for (builtin_item_update, diff) in builtin_item_updates {
+        match &builtin_item_update.description.object_type {
+            CatalogItemType::Index => push_update(
+                StateUpdate {
+                    kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                    diff,
+                },
+                diff,
+                &mut builtin_index_retractions,
+                &mut builtin_index_additions,
+            ),
+            CatalogItemType::Table
+            | CatalogItemType::Source
+            | CatalogItemType::Sink
+            | CatalogItemType::View
+            | CatalogItemType::MaterializedView
+            | CatalogItemType::Type
+            | CatalogItemType::Func
+            | CatalogItemType::Secret
+            | CatalogItemType::Connection => push_update(
+                StateUpdate {
+                    kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                    diff,
+                },
+                diff,
+                &mut other_builtin_retractions,
+                &mut other_builtin_additions,
+            ),
+        }
+    }
+
+    // Sort item updates by GlobalId.
+    fn sort_item_updates(
+        item_updates: Vec<(mz_catalog::durable::Item, StateDiff)>,
+    ) -> Vec<StateUpdate> {
+        item_updates
+            .into_iter()
+            .sorted_by_key(|(item, _diff)| item.id)
+            .map(|(item, diff)| StateUpdate {
+                kind: StateUpdateKind::Item(item),
+                diff,
+            })
+            .collect()
+    }
+    let item_retractions = sort_item_updates(item_retractions);
+    let item_additions = sort_item_updates(item_additions);
+
+    // Put everything back together.
+    iter::empty()
+        // All retractions must be reversed.
+        .chain(post_item_retractions.into_iter().rev())
+        .chain(item_retractions.into_iter().rev())
+        .chain(builtin_index_retractions.into_iter().rev())
+        .chain(cluster_retractions.into_iter().rev())
+        .chain(other_builtin_retractions.into_iter().rev())
+        .chain(pre_cluster_retractions.into_iter().rev())
+        .chain(pre_cluster_additions.into_iter())
+        .chain(other_builtin_additions.into_iter())
+        .chain(cluster_additions.into_iter())
+        .chain(builtin_index_additions.into_iter())
+        .chain(item_additions.into_iter())
+        .chain(post_item_additions.into_iter())
+        .collect()
 }
 
 /// Most updates are applied one at a time, but during bootstrap, certain types are applied
