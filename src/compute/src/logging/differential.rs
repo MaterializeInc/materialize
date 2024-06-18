@@ -14,7 +14,6 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use differential_dataflow::collection::AsCollection;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::logging::{
     BatchEvent, BatcherEvent, DifferentialEvent, DropEvent, MergeEvent, TraceShare,
@@ -31,7 +30,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Filter;
 use timely::dataflow::Stream;
 
-use crate::extensions::arrange::MzArrange;
+use crate::extensions::arrange::{MzArrange, MzArrangeCore};
 use crate::logging::compute::ComputeEvent;
 use crate::logging::{
     DifferentialLog, EventQueue, LogCollection, LogVariant, PermutedRowPacker, SharedLoggingState,
@@ -128,7 +127,6 @@ pub(super) fn construct<A: Allocate>(
         let stream_to_collection = |input: Stream<_, ((usize, ()), Timestamp, Diff)>, log, name| {
             let mut packer = PermutedRowPacker::new(log);
             input
-                .as_collection()
                 .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(
                     Pipeline,
                     &format!("PreArrange Differential {name}"),

@@ -459,3 +459,29 @@ impl TryFrom<Numeric> for Timestamp {
 impl columnation::Columnation for Timestamp {
     type InnerRegion = columnation::CopyRegion<Timestamp>;
 }
+
+mod flatcontainer {
+    use flatcontainer::{Containerized, IntoOwned, MirrorRegion};
+
+    use crate::Timestamp;
+
+    impl Containerized for Timestamp {
+        type Region = MirrorRegion<Timestamp>;
+    }
+
+    impl<'a> IntoOwned<'a> for Timestamp {
+        type Owned = Self;
+
+        fn into_owned(self) -> Self::Owned {
+            self
+        }
+
+        fn clone_onto(self, other: &mut Self::Owned) {
+            *other = self;
+        }
+
+        fn borrow_as(owned: &'a Self::Owned) -> Self {
+            *owned
+        }
+    }
+}
