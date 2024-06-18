@@ -23,11 +23,23 @@ Kafka source-specific solution for handling source decoding errors.
 
 ### User experience
 
+We propose implementing two features to provide users an understanding of the errors
+encountered by their sources. These features will only apply to Kafka sources for now:
+
+- A [dead letter queue](#dead-letter-queue) (DLQ) to capture *all* decoding errors encountered by
+  the source. This feature is conceptually similar to those in other streaming-type
+  systems (e.g. [kafka connect](https://www.confluent.io/blog/kafka-connect-deep-dive-error-handling-dead-letter-queues/),
+  [AWS SNS](https://docs.aws.amazon.com/sns/latest/dg/sns-configure-dead-letter-queue.html),
+  [Flink](https://github.com/confluentinc/flink-cookbook/blob/master/kafka-dead-letter/README.md))
+  and can capture any type of decoding errors from all types of Kafka sources.
+- [Inline errors](#inline-errors-for-upsert-sources) to expose value-decoding errors on a per-key
+  basis in Kafka sources using the [Upsert envelope](https://materialize.com/docs/sql/create-source/#upsert-envelope),
+  to ensure correctness and expose upsert values that are potentially stale.
+
+
 #### Dead letter queue
 
-We propose to introduce a [dead letter queue][dlq] (DLQ) for Kafka sources.
-
-Intuitively, the DLQ provides a running log of all decoding errors encountered
+Intuitively, the [DLQ](dlq) provides a running log of all decoding errors encountered
 by the source. Materialize users can monitor the count of errors in the DLQ and
 set up alerts whenever the count increases. Users can filter on `mz_timestamp`
 and/or `timestamp` to eliminate old errors that are no longer relevant. (Using
@@ -75,6 +87,8 @@ When a DLQ table is attached to a source, no errors are emitted to the source's
   * Is there a better name for the option than `REDIRECT ERRORS`?
   * What type gets reported in the system catalog for DLQ tables? Is it really a
     table? Or is it a source or a subsource?
+    - 6/18 Update: Product preference is to use table over subsource, but this will
+    be decided based on implementation complexity.
   * Is it useful to report the `key` and the `value` in the DLQ relation? The
     raw bytes will not be human readable for binary formats like Avro, and even
     for textual formats like JSON you'll need to cast the values to `text`
@@ -82,12 +96,15 @@ When a DLQ table is attached to a source, no errors are emitted to the source's
   * Can the `REDIRECT ERRORS` option be added to an existing source (i.e., via
     `ALTER SOURCE`)? If so, what is the behavior? Does it pick up for all new
     messages?
+    - 6/18 Update: This will not be allowed since it is impossible to retract
+    a message from the errors stream without breaking correctness guarantees.
+  * Should the `REDIRECT ERRORS` option be the default for new Kafka sources?
   * Does the `mz_timestamp` column make sense? Is there something better
     to call this column? Do the semantics make sense? (Including an
     `ingested_at` wall clock timestamp would be nice, but that wouldn't
     be a deterministic function of reclocking.)
 
-#### Upsert errors
+#### Inline errors (for Upsert sources)
 
 While the DLQ is useful for alerting users to data quality issues, it doesn't
 help users answer the question "does my upsert source currently have any keys
@@ -103,22 +120,25 @@ ENVELOPE UPSERT (
 )
 ```
 
+This option requires one or more of `PROPAGATE` and `INLINE` to be specified.
+
 The default behavior, which matches today's behavior, is `PROPAGATE`. Value
 decoding errors are propagated to the DLQ table or the source's *err stream*,
 whichever is active.
 
-When the `INLINE` behavior is specified, the source's relation gains a nullable
-column named `error` with a type of `record(description: text, code: text)`. If
-the most recent value for a key has been successfully decoded, this column will
-be `NULL`. If the most recent value for a key was not succesfully decoded, this
-column will contain details about the error. Additionally, the value is forced
-into a single nullable column named `value` with a type reflecting the
-configured value format—flattening of record-type values into top-level columns
-does not occur.
-
-When the `PROPAGATE` behavior is not specified, value decoding errors are
-essentially *not* treated as errors. They are neither forwarded to the DLQ table
+If `PROPAGATE` is not specified, value decoding errors are essentially *not*
+treated as errors. They are neither forwarded to the DLQ table
 nor the source *errs stream*.
+
+When `INLINE` is specified, the source's relation will contain two
+top-level columns, `error` and `value` and will not contain top-level columns for
+fields in decoded values. The column named `error` is nullable with a
+type of `record(description: text, code: text)`. If the most recent value for a
+key has been successfully decoded, this column will be `NULL`. If the most recent
+value for a key was not succesfully decoded, this column will contain details
+about the error. In this case the value is forced into the nullable column
+named `value` with a type reflecting the configured value. Format—flattening of
+record-type values into top-level columns does not occur.
 
 When both `INLINE` and `PROPAGATE` are specified, the errors are both reported
 inline in the source and propagated to the DLQ table or the source's *errs
@@ -137,6 +157,10 @@ discover the affected keys by running `SELECT key ... WHERE error IS NOT NULL`.
 
   * Does the separation of the `REDIRECT ERRORS` and the `VALUE DECODING ERRORS`
     options make sense?
+    - 6/18 Update: We are considering just implementing the `VALUE DECODING ERRORS`
+    approach to start, as this provides correctness guarantees and solves the immediate
+    need of our customers who primarily encounter value-decoding errors in Kafka
+    upsert sources.
 
 #### Limitations
 
