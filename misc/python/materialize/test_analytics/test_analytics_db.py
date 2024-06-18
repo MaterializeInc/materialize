@@ -9,10 +9,10 @@
 
 """Test analytics database."""
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
+from materialize.test_analytics.data.build.build_data_storage import BuildDataStorage
 from materialize.test_analytics.data.build_annotation.build_annotation_storage import (
     BuildAnnotationStorage,
 )
-from materialize.test_analytics.data.build_data_storage import BuildDataStorage
 from materialize.test_analytics.data.feature_benchmark.feature_benchmark_result_storage import (
     FeatureBenchmarkResultStorage,
 )
