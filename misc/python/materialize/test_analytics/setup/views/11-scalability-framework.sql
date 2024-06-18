@@ -27,8 +27,8 @@ CREATE OR REPLACE VIEW v_scalability_framework_result_per_day AS
     FROM scalability_framework_result r
     INNER JOIN build b
     ON b.build_id = r.build_id
-    INNER JOIN build_step bs
-    ON bs.build_step_id = r.build_step_id
+    INNER JOIN build_job bs
+    ON bs.build_job_id = r.build_job_id
     WHERE bs.is_latest_retry = TRUE
     GROUP BY
         branch,
@@ -54,8 +54,8 @@ CREATE OR REPLACE VIEW v_scalability_framework_result_per_week AS
     FROM scalability_framework_result r
     INNER JOIN build b
     ON b.build_id = r.build_id
-    INNER JOIN build_step bs
-    ON bs.build_step_id = r.build_step_id
+    INNER JOIN build_job bs
+    ON bs.build_job_id = r.build_job_id
     WHERE bs.is_latest_retry = TRUE
     GROUP BY
         branch,
