@@ -150,15 +150,10 @@ create_index ::=
     )
     with_options?
 create_materialized_view ::=
-  'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS'?
+  'CREATE' 'OR REPLACE'? 'MATERIALIZED VIEW' 'IF NOT EXISTS'?
     view_name ( '(' col_ident ( ',' col_ident )* ')' )?
     ('IN CLUSTER' cluster_name)?
-    with_options?
-    'AS' select_stmt |
-  'CREATE' 'OR REPLACE' 'MATERIALIZED VIEW'
-    view_name ( '(' col_ident ( ',' col_ident )* ')' )?
-    ('IN CLUSTER' cluster_name)?
-    with_options?
+    ('WITH' with_options)?
     'AS' select_stmt
 create_role ::=
     'CREATE' 'ROLE' role_name ('WITH'? 'INHERIT')?
@@ -624,11 +619,4 @@ with_options_aws ::= 'WITH' '('
 
 with_options_aws_static ::=
   'access_key_id' '=' val ',' 'secret_access_key' '=' val ( ',' 'token' '=' val )?
-with_options_materialized_view ::=
-  ('WITH' '(' with_option ( ',' with_option )* ')')?
-with_option_materialized_view ::=
-  (
-    ( 'ASSERT NOT NULL' col_ident )
-    | ( 'RETAIN HISTORY' '='? 'FOR' retention_period )
-  )
 with_options_retain_history ::= ('WITH' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')')
