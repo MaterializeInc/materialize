@@ -140,6 +140,13 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
 
+    /// Whether or not this controller is in read-only mode.
+    ///
+    /// When in read-only mode, neither this controller nor the instances
+    /// controlled by it are allowed to affect changes to external systems
+    /// (largely persist).
+    read_only: bool,
+
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
@@ -248,6 +255,15 @@ where
         for client in self.clients.values_mut() {
             client.send(StorageCommand::InitializationComplete);
         }
+    }
+
+    /// Allow this controller and instances controlled by it to write to
+    /// external systems.
+    fn allow_writes(&mut self) {
+        self.read_only = false;
+        self.collection_manager.allow_writes();
+
+        // TODO: run ingestions!
     }
 
     fn update_parameters(&mut self, config_params: StorageParameters) {
@@ -2437,6 +2453,7 @@ where
         now: NowFn,
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
+        read_only: bool,
         metrics_registry: MetricsRegistry,
         txn_wal_tables: TxnWalTablesImpl,
         connection_context: ConnectionContext,
@@ -2479,8 +2496,11 @@ where
         let persist_monotonic_worker = persist_handles::PersistMonotonicWriteWorker::new();
         let collection_manager_write_handle = persist_monotonic_worker.clone();
 
-        let collection_manager =
-            collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
+        let collection_manager = collection_mgmt::CollectionManager::new(
+            read_only,
+            collection_manager_write_handle,
+            now.clone(),
+        );
 
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
 
@@ -2513,6 +2533,7 @@ where
             introspection_tokens: BTreeMap::new(),
             now,
             envd_epoch,
+            read_only,
             source_statistics: Arc::new(Mutex::new(statistics::SourceStatistics {
                 source_statistics: BTreeMap::new(),
                 webhook_statistics: BTreeMap::new(),

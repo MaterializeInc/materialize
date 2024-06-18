@@ -325,9 +325,7 @@ where
         self.read_only = false;
 
         self.compute.allow_writes();
-        // TODO: Storage does not yet understand the concept of read-only
-        // instances.
-
+        self.storage.allow_writes();
         self.remove_past_generation_replicas_in_background();
     }
 
@@ -674,6 +672,7 @@ where
             config.now,
             Arc::clone(&txns_metrics),
             envd_epoch,
+            read_only,
             config.metrics_registry.clone(),
             txn_wal_tables,
             config.connection_context,

@@ -219,6 +219,9 @@ pub enum StorageError<T> {
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
+    /// We are in read-only mode and were asked to do a something that requires
+    /// writing.
+    ReadOnly,
 }
 
 impl<T: Debug + Display + 'static> Error for StorageError<T> {
@@ -245,6 +248,7 @@ impl<T: Debug + Display + 'static> Error for StorageError<T> {
             Self::RtrTimeout(_) => None,
             Self::RtrDropFailure(_) => None,
             Self::Generic(err) => err.source(),
+            Self::ReadOnly => None,
         }
     }
 }
@@ -331,6 +335,7 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
                 "real-time source dropped before ingesting the upstream system's visible frontier"
             ),
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
+            Self::ReadOnly => write!(f, "cannot write in read-only mode"),
         }
     }
 }

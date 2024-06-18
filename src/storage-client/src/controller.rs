@@ -298,6 +298,10 @@ pub trait StorageController: Debug {
     /// This method can be invoked immediately, at the potential expense of performance.
     fn initialization_complete(&mut self);
 
+    /// Allow this controller and instances controlled by it to write to
+    /// external systems.
+    fn allow_writes(&mut self);
+
     /// Update storage configuration with new parameters.
     fn update_parameters(&mut self, config_params: StorageParameters);
 
