@@ -52,7 +52,7 @@ class RootScenario:
         return DummyAction()
 
     def benchmark(self) -> BenchmarkingSequence:
-        assert False
+        raise NotImplementedError
 
     def name(self) -> str:
         return self._name
