@@ -9,12 +9,12 @@ slow-timeout = { period = "1200s", terminate-after = 2 }
 
 [[profile.default.overrides]]
 filter = "package(mz-environmentd) and test(test_pgtest)"
-threads-required = 10
+threads-required = 12
 slow-timeout = { period = "300s", terminate-after = 2 }
 
 [[profile.default.overrides]]
 filter = "package(mz-environmentd)"
-threads-required = 10
+threads-required = 12
 slow-timeout = { period = "120s", terminate-after = 2 }
 
 [[profile.default.overrides]]
