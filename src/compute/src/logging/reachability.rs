@@ -93,11 +93,8 @@ pub(super) fn construct<A: Allocate>(
                 input.for_each(|cap, data| {
                     let mut updates_session = updates.session_with_builder(&cap);
                     for (time, _worker, (addr, massaged)) in data.iter() {
-                        let time: Duration = time;
-                        let time_ms: Timestamp = (((time.as_millis() / interval_ms) + 1)
-                            * interval_ms)
-                            .try_into()
-                            .expect("must fit");
+                        let time_ms = ((time.as_millis() / interval_ms) + 1) * interval_ms;
+                        let time_ms: Timestamp = time_ms.try_into().expect("must fit");
                         for (source, port, update_type, ts, diff) in massaged {
                             let datum = (update_type, addr, source, port, ts);
                             updates_session.give(((datum, ()), time_ms, diff));
