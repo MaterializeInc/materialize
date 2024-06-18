@@ -7,7 +7,25 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from __future__ import annotations
+
+from dataclasses import dataclass
 from enum import Enum, auto
+
+
+class WallclockUnit(Enum):
+    SECONDS = auto()
+    ONE_THIRD_MICROSECONDS = auto()
+
+
+@dataclass
+class WallclockMeasurement:
+    duration: float
+    unit: WallclockUnit
+
+    def is_equal_or_after(self, other: WallclockMeasurement) -> bool:
+        assert self.unit == other.unit
+        return self.duration >= other.duration
 
 
 class MeasurementType(Enum):
@@ -20,10 +38,11 @@ class MeasurementType(Enum):
         return self.name.lower()
 
 
+@dataclass
 class Measurement:
-    def __init__(self, type: MeasurementType, value: float) -> None:
-        self.type = type
-        self.value = value
+    type: MeasurementType
+    value: float
+    notes: str | None = None
 
     def __str__(self) -> str:
         return f"{self.value:>11.3f}({self.type})"

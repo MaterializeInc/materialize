@@ -18,10 +18,13 @@ import materialize.optbench
 import materialize.optbench.sql
 from materialize.feature_benchmark.action import Action
 from materialize.feature_benchmark.executor import Executor
-from materialize.feature_benchmark.measurement import MeasurementType
+from materialize.feature_benchmark.measurement import (
+    MeasurementType,
+    WallclockMeasurement,
+    WallclockUnit,
+)
 from materialize.feature_benchmark.measurement_source import (
     MeasurementSource,
-    Timestamp,
 )
 from materialize.feature_benchmark.scenario import Scenario
 
@@ -56,7 +59,7 @@ class OptbenchRun(MeasurementSource):
         self._optbench_scenario = optbench_scenario
         self._query = query
 
-    def run(self, executor: Executor | None = None) -> list[Timestamp]:
+    def run(self, executor: Executor | None = None) -> list[WallclockMeasurement]:
         assert not (executor is None and self._executor is None)
         assert not (executor is not None and self._executor is not None)
         e = executor or self._executor
@@ -73,7 +76,14 @@ class OptbenchRun(MeasurementSource):
             e._composition.sql_query(explain_query)[0][0]  # type: ignore
         )
         # Optimization time is in microseconds, divide by 3 to get a more readable number (still in wrong unit)
-        timestamps = [0, float(explain_output.optimization_time()) / 3]  # type: ignore
+        optimization_duration = float(explain_output.optimization_time()) / 3  # type: ignore
+        timestamps = [
+            WallclockMeasurement(0, WallclockUnit.ONE_THIRD_MICROSECONDS),
+            WallclockMeasurement(
+                optimization_duration,
+                WallclockUnit.ONE_THIRD_MICROSECONDS,
+            ),
+        ]
         return timestamps
 
 

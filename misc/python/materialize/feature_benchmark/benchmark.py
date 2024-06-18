@@ -16,7 +16,12 @@ from materialize.feature_benchmark.aggregation import Aggregation
 from materialize.feature_benchmark.comparator import Comparator
 from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.filter import Filter
-from materialize.feature_benchmark.measurement import Measurement, MeasurementType
+from materialize.feature_benchmark.measurement import (
+    Measurement,
+    MeasurementType,
+    WallclockMeasurement,
+)
+from materialize.feature_benchmark.measurement_source import MeasurementSource
 from materialize.feature_benchmark.scenario import Scenario
 from materialize.feature_benchmark.scenario_version import ScenarioVersion
 from materialize.feature_benchmark.termination import TerminationCondition
@@ -119,29 +124,31 @@ class Benchmark:
                 f"Running the benchmark for scenario {name} with {self._mz_version} ..."
             )
             # Collect timestamps from any part of the workload being benchmarked
-            timestamps = []
+            timestamps: list[WallclockMeasurement] = []
             benchmark = scenario.benchmark()
             for benchmark_item in (
                 benchmark if isinstance(benchmark, list) else [benchmark]
             ):
+                assert isinstance(
+                    benchmark_item, MeasurementSource
+                ), f"Benchmark item is of type {benchmark_item.__class__} but not a MeasurementSource"
                 item_timestamps = benchmark_item.run(executor=self._executor)
-                if item_timestamps:
-                    timestamps.extend(
-                        item_timestamps
-                        if isinstance(item_timestamps, list)
-                        else [item_timestamps]
-                    )
+                timestamps.extend(item_timestamps)
 
             assert (
                 len(timestamps) == 2
             ), f"benchmark() did not return exactly 2 timestamps: scenario: {scenario}, timestamps: {timestamps}"
             assert (
-                timestamps[1] >= timestamps[0]
+                timestamps[0].unit == timestamps[1].unit
+            ), f"benchmark() returned timestamps with different units: scenario: {scenario}, timestamps: {timestamps}"
+            assert timestamps[1].is_equal_or_after(
+                timestamps[0]
             ), f"Second timestamp reported not greater than first: scenario: {scenario}, timestamps: {timestamps}"
 
             performance_measurement = Measurement(
                 type=MeasurementType.WALLCLOCK,
-                value=timestamps[1] - timestamps[0],
+                value=timestamps[1].duration - timestamps[0].duration,
+                notes=f"Unit: {timestamps[0].unit}",
             )
 
             if not self._filter or not self._filter.filter(performance_measurement):
