@@ -108,7 +108,7 @@
     {{ log("Dry run completed. The statements above were **not** executed against Materialize.", info=True) }}
 {% endif %}
 
-{% set sinks_to_alter = discover_sinks() %}
+{% set sinks_to_alter = discover_sinks(schemas) %}
 {{ process_sinks(sinks_to_alter, dry_run) }}
 
 {% endmacro %}
@@ -154,21 +154,25 @@
     {% endif %}
 {% endmacro %}
 
-{% macro discover_sinks() %}
+{% macro discover_sinks(schemas) %}
     {% set sinks_to_alter = [] %}
     {% for node in graph.nodes.values() | selectattr("resource_type", "equalto", "model") | selectattr("config.materialized", "equalto", "sink") %}
-        {% set sink_database = node.database %}
-        {% set sink_schema = node.schema %}
-        {% set sink_name = node.name %}
         {% set upstream_node = graph.nodes[node.depends_on.nodes[0]] %}
-        {% set new_upstream_relation = adapter.quote(upstream_node.database) ~ '.' ~ adapter.quote(upstream_node.schema) ~ '.' ~ adapter.quote(upstream_node.name) %}
-        {% set sink = {
-            "database": sink_database,
-            "schema": sink_schema,
-            "name": sink_name,
-            "new_upstream_relation": new_upstream_relation
-        } %}
-        {% do sinks_to_alter.append(sink) %}
+        {% set upstream_schema = upstream_node.schema %}
+
+        {% if upstream_schema in schemas %}
+            {% set sink_database = node.database %}
+            {% set sink_schema = node.schema %}
+            {% set sink_name = node.name %}
+            {% set new_upstream_relation = adapter.quote(upstream_node.database) ~ '.' ~ adapter.quote(upstream_schema) ~ '.' ~ adapter.quote(upstream_node.name) %}
+            {% set sink = {
+                "database": sink_database,
+                "schema": sink_schema,
+                "name": sink_name,
+                "new_upstream_relation": new_upstream_relation
+            } %}
+            {% do sinks_to_alter.append(sink) %}
+        {% endif %}
     {% endfor %}
     {{ return(sinks_to_alter) }}
 {% endmacro %}
