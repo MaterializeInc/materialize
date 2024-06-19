@@ -15,7 +15,7 @@ To avoid bad surprises during source creation, like blocking queries, it's essen
 
 ## Initial data load
 
-It all starts with the creation of a new (sub)source, which triggers an initial snapshot for the source. The initial snapshot contains all historic data that is available in the external system, which is atomically committed to the storage layer at a specific timestamp. Because of that, you are not able to query your source until Materialize has finished ingesting the initial snapshot.
+It all starts with the creation of a new source, which triggers an initial snapshot. The initial snapshot contains all historic data that is available in the external system, which is atomically committed to the storage layer at a specific timestamp. Because of that, you are not able to query your source until Materialize has finished ingesting the initial snapshot.
 
 Depending on the size of the source, this progress can take a few minutes up to several hours. It’s also a resource intensive task (in particular if you are using `ENVELOPE UPSERT`). If your source cluster restarts while taking the initial snapshot, e.g., because it runs out of memory, you need to scale up the cluster of the source. Keep in mind that the initial snapshot needs to be restarted from scratch in case there is a failure. So your source may seem busy, whereas the cluster is constantly restarting and the initial snapshot cannot progress beyond a certain point. So it’s worthwhile to also keep an eye on the CPU and memory utilization during this phase.
 
@@ -46,7 +46,7 @@ FROM mz_sources AS s
 INNER JOIN mz_internal.mz_hydration_statuses AS h ON (s.id = h.object_id);
 ```
 
-Because the initial data load is more resource intensive than rehydration and consuming data from the external system, you might have needed to size up the source cluster during the initial snapshot. Now is a good time to restart the cluster to see if you can scale back down to understand the resource requirements during rehydration and steady state operations. Because the initial snapshot happens only once, knowing the resource requirements during steady state is much more important to correctly size the source cluster for normal operation. Restarting is achieved by removing all compute resources from the underlying cluster and subsequently adding it back.
+Because the initial data load is more resource intensive than rehydration and consuming data from the external system, there may be opportunity to scale down the cluster for the steady state workload. Because the taking initial snapshot is resource intensive but happens only once, knowing the resource requirements during steady state is much more important to correctly size the source cluster for normal operation. Restarting the cluster is achieved by removing all compute resources from the underlying cluster and subsequently adding it back.
 
 ```sql
 ALTER CLUSTER sources SET (REPLICATION FACTOR 0);
