@@ -23,7 +23,6 @@ CREATE TABLE build_job (
     shard_index UINT4,
     retry_count UINT4 NOT NULL,
     insert_date TIMESTAMPTZ NOT NULL,
-    url TEXT NOT NULL,
     is_latest_retry BOOL NOT NULL,
     success BOOL NOT NULL,
     aws_instance_type TEXT NOT NULL,
