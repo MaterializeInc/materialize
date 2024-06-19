@@ -29,6 +29,7 @@ use crate::source::types::{ProgressStatisticsUpdate, SourceRender, StackedCollec
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod auction;
+mod clock;
 mod counter;
 mod datums;
 mod key_value;
@@ -36,6 +37,7 @@ mod marketing;
 mod tpch;
 
 pub use auction::Auction;
+pub use clock::Clock;
 pub use counter::Counter;
 pub use datums::Datums;
 pub use tpch::Tpch;
@@ -64,6 +66,21 @@ impl GeneratorKind {
         match g {
             LoadGenerator::Auction => GeneratorKind::Simple {
                 generator: Box::new(Auction {}),
+                tick_micros,
+                as_of,
+                up_to,
+                required_exports,
+            },
+            LoadGenerator::Clock => GeneratorKind::Simple {
+                generator: Box::new(Clock {
+                    tick_ms: tick_micros
+                        .map(Duration::from_micros)
+                        .unwrap_or(Duration::from_secs(1))
+                        .as_millis()
+                        .try_into()
+                        .expect("reasonable tick interval"),
+                    as_of_ms: as_of,
+                }),
                 tick_micros,
                 as_of,
                 up_to,
