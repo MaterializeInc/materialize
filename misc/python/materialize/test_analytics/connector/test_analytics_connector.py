@@ -32,6 +32,7 @@ class DatabaseConnector:
         self._connection = self._create_connection(config)
         self._cursor = self._create_cursor(config, self._connection)
         self._log_sql = log_sql
+        self._read_only = False
 
     def _create_connection(self, config: MzDbConfig) -> Connection:
         connection = pg8000.connect(
@@ -58,9 +59,21 @@ class DatabaseConnector:
         cursor.execute(f"SET search_path = {config.search_path}")
         return cursor
 
+    def set_read_only(self) -> None:
+        self._read_only = True
+
+    def query_min_required_data_version(self) -> int:
+        self._cursor.execute(
+            "SELECT min_required_data_version_for_uploads FROM config;"
+        )
+        return int(self._cursor.fetchall()[0][0])
+
     def execute_updates(self, sql_statements: list[str]) -> None:
         if len(sql_statements) == 0:
             return
+
+        if self._read_only:
+            print("Skipping updates to test_analytics due to read-only mode!")
 
         last_executed_sql = sql_statements[0]
 
@@ -69,7 +82,7 @@ class DatabaseConnector:
                 sql = dedent(sql)
                 last_executed_sql = sql
                 if self._log_sql:
-                    print(f"> {sql}")
+                    print(f"> {sql.strip()}")
 
                 self._cursor.execute(sql)
         except Exception as e:
