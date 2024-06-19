@@ -105,7 +105,7 @@
         {{ log("DRY RUN: Swapping clusters " ~ adapter.generate_final_cluster_name(cluster) ~ " and " ~ deploy_cluster, info=True) }}
         {{ log("DRY RUN: ALTER CLUSTER " ~ adapter.quote(cluster) ~ " SWAP WITH " ~ adapter.quote(deploy_cluster), info=True) }}
     {% endfor %}
-    {{ log("DRY RUN: No actual schema or cluster swaps performed.", info=True) }}
+    {{ log("Dry run completed. The statements above were **not** executed against Materialize.", info=True) }}
 {% endif %}
 
 {% set sinks_to_alter = discover_sinks() %}
