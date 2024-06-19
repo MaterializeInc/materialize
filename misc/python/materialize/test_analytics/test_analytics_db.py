@@ -42,6 +42,9 @@ class TestAnalyticsDb:
         self, database_connector: DatabaseConnector
     ) -> None:
         min_required_data_version = database_connector.query_min_required_data_version()
+        print(
+            f"Current data version is {TEST_ANALYTICS_DATA_VERSION}, min required version is {min_required_data_version}"
+        )
 
         if TEST_ANALYTICS_DATA_VERSION < min_required_data_version:
             print(
