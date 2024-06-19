@@ -10,6 +10,9 @@
 from materialize.buildkite_insights.data.build_annotation import BuildAnnotation
 from materialize.buildkite_insights.data.build_info import Build
 
+ANY_PIPELINE_VALUE = "*"
+ANY_BRANCH_VALUE = "*"
+
 
 class AnnotationSearchSource:
     def fetch_builds(

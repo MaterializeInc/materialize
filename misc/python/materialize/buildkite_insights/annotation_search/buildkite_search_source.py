@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from materialize.buildkite_insights.annotation_search.annotation_search_source import (
+    ANY_PIPELINE_VALUE,
     AnnotationSearchSource,
 )
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
@@ -56,7 +57,7 @@ class BuildkiteDataSource(AnnotationSearchSource):
 
         # do not try to continue with incomplete data in case of an exceeded rate limit because fetching the annotations
         # will anyway most likely fail
-        if pipeline == "*":
+        if pipeline == ANY_PIPELINE_VALUE:
             raw_builds = builds_cache.get_or_query_builds_for_all_pipelines(
                 self.fetch_builds_mode,
                 self.max_build_fetches,
