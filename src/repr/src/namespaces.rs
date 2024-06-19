@@ -26,7 +26,16 @@ pub const SYSTEM_SCHEMAS: &[&str] = &[
     MZ_UNSAFE_SCHEMA,
 ];
 
+pub const UNSTABLE_SCHEMAS: &[&str] = &[
+    MZ_INTERNAL_SCHEMA,
+];
+
 /// Returns whether `name` identifies is a system schema.
 pub fn is_system_schema(name: &str) -> bool {
     SYSTEM_SCHEMAS.contains(&name)
+}
+
+/// Returns whether `name` identifies is an unstable schema.
+pub fn is_unstable_schema(name: &str) -> bool {
+    UNSTABLE_SCHEMAS.contains(&name)
 }

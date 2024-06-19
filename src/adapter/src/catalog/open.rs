@@ -44,7 +44,7 @@ use mz_ore::instrument;
 use mz_ore::now::to_datetime;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
-use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
+use mz_repr::namespaces::is_unstable_schema;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
@@ -1026,23 +1026,23 @@ fn add_new_remove_old_builtin_items_migration(
         .into_iter()
         .map(|(_, system_object_mapping)| system_object_mapping.description)
         .collect();
-    // If you are 100% positive that it is safe to delete a system object outside the
-    // `mz_internal` schema, then add it to this set. Make sure that no prod environments are
+    // If you are 100% positive that it is safe to delete a system object outside any of the
+    // unstable schemas, then add it to this set. Make sure that no prod environments are
     // using this object and that the upgrade checker does not show any issues.
     //
     // Objects can be removed from this set after one release.
     let delete_exceptions: HashSet<SystemObjectDescription> = [].into();
     // TODO(jkosh44) Technically we could support changing the type of a builtin object outside
-    // of `mz_internal` (i.e. from a table to a view). However, builtin migrations don't currently
+    // of unstable schemas (i.e. from a table to a view). However, builtin migrations don't currently
     // handle that scenario correctly.
     assert!(
         deleted_system_objects
             .iter()
             .all(
-                |deleted_object| deleted_object.schema_name == MZ_INTERNAL_SCHEMA
+                |deleted_object| is_unstable_schema(&deleted_object.schema_name)
                     || delete_exceptions.contains(deleted_object)
             ),
-        "only mz_internal objects can be deleted, deleted objects: {:?}",
+        "only objects in unstable schemas can be deleted, deleted objects: {:?}",
         deleted_system_objects
     );
     txn.remove_system_object_mappings(deleted_system_objects)?;

@@ -53,7 +53,7 @@ use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
-    PG_CATALOG_SCHEMA, SYSTEM_SCHEMAS,
+    PG_CATALOG_SCHEMA, SYSTEM_SCHEMAS, UNSTABLE_SCHEMAS,
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc};
@@ -505,11 +505,8 @@ impl CatalogState {
     ///
     /// Only stable items can be used as dependencies of other catalog items.
     fn is_stable(&self, id: GlobalId) -> bool {
-        let mz_internal_id = self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA];
-        match &self.get_entry(&id).name().qualifiers.schema_spec {
-            SchemaSpecifier::Temporary => true,
-            SchemaSpecifier::Id(id) => *id != mz_internal_id,
-        }
+        let spec = self.get_entry(&id).name().qualifiers.schema_spec;
+        !self.is_unstable_schema_specifier(spec)
     }
 
     pub(super) fn check_unstable_dependencies(&self, item: &CatalogItem) -> Result<(), Error> {
@@ -1404,6 +1401,23 @@ impl CatalogState {
         match spec {
             SchemaSpecifier::Temporary => false,
             SchemaSpecifier::Id(id) => self.is_system_schema_id(id),
+        }
+    }
+
+    pub fn unstable_schema_ids(&self) -> impl Iterator<Item = SchemaId> + '_ {
+        UNSTABLE_SCHEMAS
+            .iter()
+            .map(|name| self.ambient_schemas_by_name[*name])
+    }
+
+    pub fn is_unstable_schema_id(&self, id: SchemaId) -> bool {
+        self.unstable_schema_ids().contains(&id)
+    }
+
+    pub fn is_unstable_schema_specifier(&self, spec: SchemaSpecifier) -> bool {
+        match spec {
+            SchemaSpecifier::Temporary => false,
+            SchemaSpecifier::Id(id) => self.is_unstable_schema_id(id),
         }
     }
 
