@@ -74,6 +74,7 @@ def print_annotation_match(
 
 def print_summary(
     pipeline_slug: str,
+    branch: str,
     builds: list[Build],
     count_matches: int,
     max_results: int,
@@ -89,7 +90,7 @@ def print_summary(
             else ""
         )
         print(
-            f"{count_matches} match(es) in {len(builds)} searched builds of pipeline '{pipeline_slug}'. "
+            f"{count_matches} match(es) in {len(builds)} searched builds of pipeline '{pipeline_slug}' and branch '{branch}'. "
             f"{suppressed_results_info}"
             f"The most recent considered build was #{most_recent_build_number}, "
             f"the oldest was #{oldest_build_number}."

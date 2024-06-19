@@ -136,4 +136,4 @@ def start_search(
 
         count_matches = count_matches + matches_in_build
 
-    print_summary(pipeline_slug, builds, count_matches, max_results)
+    print_summary(pipeline_slug, branch, builds, count_matches, max_results)
