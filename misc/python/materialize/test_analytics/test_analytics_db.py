@@ -31,6 +31,7 @@ class TestAnalyticsDb:
     def __init__(self, config: MzDbConfig):
         self.config = config
         database_connector = DatabaseConnector(config, log_sql=True)
+        self._disable_writer_if_on_unsupported_version(database_connector)
 
         self.builds = BuildDataStorage(database_connector, TEST_ANALYTICS_DATA_VERSION)
         self.scalability_results = ScalabilityFrameworkResultStorage(database_connector)
@@ -41,6 +42,9 @@ class TestAnalyticsDb:
         self, database_connector: DatabaseConnector
     ) -> None:
         min_required_data_version = database_connector.query_min_required_data_version()
+        print(
+            f"Current data version is {TEST_ANALYTICS_DATA_VERSION}, min required version is {min_required_data_version}"
+        )
 
         if TEST_ANALYTICS_DATA_VERSION < min_required_data_version:
             print(
