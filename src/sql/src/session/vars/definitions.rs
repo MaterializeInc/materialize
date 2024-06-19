@@ -2120,6 +2120,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
+            enable_cardinality_estimates: vars.enable_cardinality_estimates(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
         }

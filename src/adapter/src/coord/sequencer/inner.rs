@@ -4466,6 +4466,10 @@ impl mz_transform::StatisticsOracle for CachedStatisticsOracle {
     fn cardinality_estimate(&self, id: GlobalId) -> Option<usize> {
         self.cache.get(&id).map(|estimate| *estimate)
     }
+
+    fn as_map(&self) -> BTreeMap<GlobalId, usize> {
+        self.cache.clone()
+    }
 }
 
 impl Coordinator {

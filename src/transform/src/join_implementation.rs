@@ -26,7 +26,9 @@ use mz_expr::{
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
+use mz_repr::optimize::OptimizerFeatures;
 
+use crate::analysis::{Cardinality, DerivedBuilder};
 use crate::join_implementation::index_map::IndexMap;
 use crate::predicate_pushdown::PredicatePushdown;
 use crate::{StatisticsOracle, TransformCtx, TransformError};
@@ -68,7 +70,7 @@ impl crate::Transform for JoinImplementation {
             relation,
             &mut IndexMap::new(ctx.indexes),
             ctx.stats,
-            ctx.features.enable_eager_delta_joins,
+            ctx.features,
         );
         mz_repr::explain::trace_plan(&*relation);
         result
@@ -85,11 +87,11 @@ impl JoinImplementation {
         relation: &mut MirRelationExpr,
         indexes: &mut IndexMap,
         stats: &dyn StatisticsOracle,
-        eager_delta_joins: bool,
+        features: &OptimizerFeatures,
     ) -> Result<(), TransformError> {
         self.checked_recur(|_| {
             if let MirRelationExpr::Let { id, value, body } = relation {
-                self.action_recursive(value, indexes, stats, eager_delta_joins)?;
+                self.action_recursive(value, indexes, stats, features)?;
                 match &**value {
                     MirRelationExpr::ArrangeBy { keys, .. } => {
                         for key in keys {
@@ -104,16 +106,16 @@ impl JoinImplementation {
                     }
                     _ => {}
                 }
-                self.action_recursive(body, indexes, stats, eager_delta_joins)?;
+                self.action_recursive(body, indexes, stats, features)?;
                 indexes.remove_local(*id);
                 Ok(())
             } else {
                 let (mfp, mfp_input) =
                     MapFilterProject::extract_non_errors_from_expr_ref_mut(relation);
                 mfp_input.try_visit_mut_children(|e| {
-                    self.action_recursive(e, indexes, stats, eager_delta_joins)
+                    self.action_recursive(e, indexes, stats, features)
                 })?;
-                self.action(mfp_input, mfp, indexes, stats, eager_delta_joins)?;
+                self.action(mfp_input, mfp, indexes, stats, features)?;
                 Ok(())
             }
         })
@@ -125,8 +127,8 @@ impl JoinImplementation {
         relation: &mut MirRelationExpr,
         mfp_above: MapFilterProject,
         indexes: &IndexMap,
-        _stats: &dyn StatisticsOracle,
-        eager_delta_joins: bool,
+        stats: &dyn StatisticsOracle,
+        features: &OptimizerFeatures,
     ) -> Result<(), TransformError> {
         if let MirRelationExpr::Join {
             inputs,
@@ -152,7 +154,7 @@ impl JoinImplementation {
             // If we eagerly plan delta joins, we don't need the second run to "pick up" delta joins
             // that could be planned with the arrangements from a differential. If such a delta
             // join were viable, we'd have already planned it the first time.
-            if eager_delta_joins && !matches!(implementation, Unimplemented) {
+            if features.enable_eager_delta_joins && !matches!(implementation, Unimplemented) {
                 return Ok(());
             }
 
@@ -268,10 +270,24 @@ impl JoinImplementation {
                 }
                 let push_down_characteristics =
                     FilterCharacteristics::filter_characteristics(&push_downs[index])?;
-                // let push_down_factor = push_down_characteristics.worst_case_scaling_factor();
+                let push_down_factor = push_down_characteristics.worst_case_scaling_factor();
                 characteristics |= push_down_characteristics;
 
-                cardinalities.push(None);
+                // Estimate cardinality
+                if features.enable_cardinality_estimates {
+                    let mut builder = DerivedBuilder::new(features);
+                    // TODO(mgree): it would be good to not have to copy the statistics here
+                    builder.require(Cardinality::with_stats(stats.as_map()));
+                    let derived = builder.visit(input);
+
+                    let estimate = *derived.as_view().value::<Cardinality>().unwrap();
+                    // we've already accounted for the filters _in_ the term; these capture the ones above
+                    let scaled = estimate * push_down_factor;
+                    cardinalities.push(scaled.rounded());
+                } else {
+                    cardinalities.push(None);
+                }
+
                 filters.push(characteristics);
 
                 // Collect available arrangements on this input.
@@ -344,7 +360,7 @@ impl JoinImplementation {
             // This code path is only active when `eager_delta_joins` is false.
             if matches!(old_implementation, Differential(..)) {
                 soft_assert_or_log!(
-                    !eager_delta_joins,
+                    !features.enable_eager_delta_joins,
                     "eager delta joins run join implementation just once"
                 );
 
@@ -464,7 +480,8 @@ impl JoinImplementation {
                         "comparing delta and differential joins",
                     );
 
-                    if eager_delta_joins && delta_new_arrangements <= differential_new_arrangements
+                    if features.enable_eager_delta_joins
+                        && delta_new_arrangements <= differential_new_arrangements
                     {
                         // If we're eagerly planning delta joins, pick the delta plan if it's more economical.
                         tracing::debug!(

@@ -153,6 +153,7 @@ mod tests {
                     config: &config,
                     features: &features,
                     humanizer: cat,
+                    cardinality_stats: Default::default(), // empty stats
                     used_indexes: Default::default(),
                     finishing: Default::default(),
                     duration: Default::default(),

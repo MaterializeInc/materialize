@@ -30,6 +30,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
+use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
 
@@ -247,6 +248,8 @@ impl Coordinator {
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
 
+        let cardinality_stats = BTreeMap::new();
+
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
                 view.raw_expr.clone(),
@@ -254,6 +257,7 @@ impl Coordinator {
                 &config,
                 &features,
                 &self.catalog().for_session(ctx.session()),
+                cardinality_stats,
                 Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::LocalPlan => explain_plan(
@@ -262,6 +266,7 @@ impl Coordinator {
                 &config,
                 &features,
                 &self.catalog().for_session(ctx.session()),
+                cardinality_stats,
                 Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::GlobalPlan => {
@@ -275,6 +280,7 @@ impl Coordinator {
                     &config,
                     &features,
                     &self.catalog().for_session(ctx.session()),
+                    cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
@@ -290,6 +296,7 @@ impl Coordinator {
                     &config,
                     &features,
                     &self.catalog().for_session(ctx.session()),
+                    cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?

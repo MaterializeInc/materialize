@@ -21,6 +21,7 @@
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::{fmt, iter};
@@ -59,7 +60,6 @@ pub mod reduce_elision;
 pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_idempotence;
-pub mod symbolic;
 pub mod threshold_elision;
 pub mod typecheck;
 pub mod union_cancel;
@@ -250,6 +250,9 @@ pub trait StatisticsOracle: fmt::Debug + Send {
     ///
     /// Returning `None` means "no estimate"; returning `Some(0)` means estimating that the shard backing `id` is empty
     fn cardinality_estimate(&self, id: GlobalId) -> Option<usize>;
+
+    /// Returns a map from identifiers to sizes
+    fn as_map(&self) -> BTreeMap<GlobalId, usize>;
 }
 
 /// A [`StatisticsOracle`] that knows nothing and can give no estimates.
@@ -259,6 +262,10 @@ pub struct EmptyStatisticsOracle;
 impl StatisticsOracle for EmptyStatisticsOracle {
     fn cardinality_estimate(&self, _: GlobalId) -> Option<usize> {
         None
+    }
+
+    fn as_map(&self) -> BTreeMap<GlobalId, usize> {
+        BTreeMap::new()
     }
 }
 

@@ -332,6 +332,7 @@ impl OptimizerTrace {
             config,
             features,
             humanizer,
+            cardinality_stats: Default::default(), // empty stats
             used_indexes: Default::default(),
             finishing: row_set_finishing.clone(),
             duration: Default::default(),
@@ -354,6 +355,7 @@ impl OptimizerTrace {
             config,
             features,
             humanizer,
+            cardinality_stats: Default::default(), // empty stats
             used_indexes: Default::default(),
             finishing: row_set_finishing,
             duration: Default::default(),
