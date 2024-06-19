@@ -38,16 +38,14 @@ from materialize.github import (
     get_known_issues_from_github,
 )
 from materialize.observed_error import ObservedBaseError, WithIssue
-from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_hostname,
 )
-from materialize.test_analytics.connection import test_analytics_connection
-from materialize.test_analytics.data import build_data_storage
 from materialize.test_analytics.data.build_annotation import build_annotation_storage
 from materialize.test_analytics.data.build_annotation.build_annotation_storage import (
     AnnotationErrorEntry,
 )
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 
 # Unexpected failures, report them
 ERROR_RE = re.compile(
@@ -311,20 +309,22 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    test_analytics_db_config = create_test_analytics_config_with_hostname(
+    test_analytics_config = create_test_analytics_config_with_hostname(
         args.cloud_hostname
     )
-    # always insert a build step regardless whether it has annotations or not
-    store_build_step_in_test_analytics(test_analytics_db_config)
+    test_analytics_db = TestAnalyticsDb(test_analytics_config)
 
-    return annotate_logged_errors(args.log_files, test_analytics_db_config)
+    # always insert a build step regardless whether it has annotations or not
+    store_build_step_in_test_analytics(test_analytics_db)
+
+    return annotate_logged_errors(args.log_files, test_analytics_db)
 
 
 def annotate_errors(
     unknown_errors: Sequence[ObservedBaseError],
     known_errors: Sequence[ObservedBaseError],
     build_history_on_main: BuildHistoryOnMain | None,
-    test_analytics_db_config: MzDbConfig,
+    test_analytics_db: TestAnalyticsDb,
 ) -> None:
     assert len(unknown_errors) > 0 or len(known_errors) > 0
     annotation_style = "info" if not unknown_errors else "error"
@@ -343,7 +343,7 @@ def annotate_errors(
 
     add_annotation_raw(style=annotation_style, markdown=annotation.to_markdown())
 
-    store_annotation_in_test_analytics(test_analytics_db_config, annotation)
+    store_annotation_in_test_analytics(test_analytics_db, annotation)
 
 
 def group_identical_errors(
@@ -364,7 +364,7 @@ def group_identical_errors(
 
 
 def annotate_logged_errors(
-    log_files: list[str], test_analytics_db_config: MzDbConfig
+    log_files: list[str], test_analytics_db: TestAnalyticsDb
 ) -> int:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
@@ -503,7 +503,7 @@ def annotate_logged_errors(
 
     build_history_on_main = get_failures_on_main()
     annotate_errors(
-        unknown_errors, known_errors, build_history_on_main, test_analytics_db_config
+        unknown_errors, known_errors, build_history_on_main, test_analytics_db
     )
 
     if unknown_errors:
@@ -531,7 +531,7 @@ def annotate_logged_errors(
             known_errors=[],
         )
         add_annotation_raw(style="error", markdown=annotation.to_markdown())
-        store_annotation_in_test_analytics(test_analytics_db_config, annotation)
+        store_annotation_in_test_analytics(test_analytics_db, annotation)
 
     return len(unknown_errors)
 
@@ -750,12 +750,10 @@ def format_error_message(error_message: str | None, max_length: int = 10_000) ->
     return f"```\n{sanitize_text(error_message, max_length)}\n```"
 
 
-def store_build_step_in_test_analytics(test_analytics_db_config: MzDbConfig) -> None:
+def store_build_step_in_test_analytics(test_analytics: TestAnalyticsDb) -> None:
     try:
-        cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
-
-        build_data_storage.insert_build_step(
-            cursor, was_successful=has_successful_buildkite_status()
+        test_analytics.builds.insert_build_step(
+            was_successful=has_successful_buildkite_status()
         )
     except Exception as e:
         # never cause the whole script to fail
@@ -763,15 +761,13 @@ def store_build_step_in_test_analytics(test_analytics_db_config: MzDbConfig) -> 
 
 
 def store_annotation_in_test_analytics(
-    test_analytics_db_config: MzDbConfig, annotation: Annotation
+    test_analytics: TestAnalyticsDb, annotation: Annotation
 ) -> None:
     try:
-        cursor = test_analytics_connection.create_cursor(test_analytics_db_config)
-
         # the build step was already inserted before
         # the buildkite status may have been successful but the build may still fail due to unknown errors in the log
-        build_data_storage.update_build_step_success(
-            cursor, was_successful=not annotation.is_failure
+        test_analytics.builds.update_build_step_success(
+            was_successful=not annotation.is_failure
         )
 
         error_entries = [
@@ -788,8 +784,7 @@ def store_annotation_in_test_analytics(
             for error in chain(annotation.known_errors, annotation.unknown_errors)
         ]
 
-        build_annotation_storage.insert_annotation(
-            cursor,
+        test_analytics.build_annotations.insert_annotation(
             build_annotation_storage.AnnotationEntry(
                 test_suite=get_suite_name(include_retry_info=False),
                 test_retry_count=get_retry_count(),

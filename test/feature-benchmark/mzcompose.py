@@ -28,11 +28,10 @@ from materialize.mzcompose.test_result import (
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )
-from materialize.test_analytics.connection import test_analytics_connection
-from materialize.test_analytics.data import build_data_storage
 from materialize.test_analytics.data.feature_benchmark import (
     feature_benchmark_result_storage,
 )
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 from materialize.version_ancestor_overrides import (
     get_ancestor_overrides_for_performance_regressions,
 )
@@ -685,10 +684,8 @@ def upload_results_to_test_analytics(
         return
 
     try:
-        cursor = test_analytics_connection.create_cursor(
-            create_test_analytics_config(c)
-        )
-        build_data_storage.insert_build_step(cursor, was_successful=was_successful)
+        test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+        test_analytics.builds.insert_build_step(was_successful=was_successful)
 
         result_entries = []
 
@@ -712,8 +709,7 @@ def upload_results_to_test_analytics(
                 )
             )
 
-        feature_benchmark_result_storage.insert_result(
-            cursor,
+        test_analytics.benchmark_results.insert_result(
             framework_version=FEATURE_BENCHMARK_FRAMEWORK_VERSION,
             results=result_entries,
         )

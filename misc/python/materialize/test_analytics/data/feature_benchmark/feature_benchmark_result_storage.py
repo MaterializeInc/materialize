@@ -8,13 +8,9 @@
 # by the Apache License, Version 2.0.
 from dataclasses import dataclass
 
-from pg8000 import Cursor
-
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
-from materialize.test_analytics.connection.test_analytics_connection import (
-    execute_updates,
-)
+from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 
 
 @dataclass
@@ -28,46 +24,48 @@ class FeatureBenchmarkResultEntry:
     memory_clusterd: float | None
 
 
-def insert_result(
-    cursor: Cursor,
-    framework_version: str,
-    results: list[FeatureBenchmarkResultEntry],
-) -> None:
-    build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
-    step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
+class FeatureBenchmarkResultStorage(BaseDataStorage):
 
-    sql_statements = []
+    def insert_result(
+        self,
+        framework_version: str,
+        results: list[FeatureBenchmarkResultEntry],
+    ) -> None:
+        build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
+        step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
 
-    for result_entry in results:
-        # TODO: remove NULL castings when #27429 is resolved
-        sql_statements.append(
-            f"""
-            INSERT INTO feature_benchmark_result
-            (
-                build_id,
-                build_step_id,
-                framework_version,
-                scenario_name,
-                scenario_version,
-                scale,
-                wallclock,
-                messages,
-                memory_mz,
-                memory_clusterd
+        sql_statements = []
+
+        for result_entry in results:
+            # TODO: remove NULL castings when #27429 is resolved
+            sql_statements.append(
+                f"""
+                INSERT INTO feature_benchmark_result
+                (
+                    build_id,
+                    build_step_id,
+                    framework_version,
+                    scenario_name,
+                    scenario_version,
+                    scale,
+                    wallclock,
+                    messages,
+                    memory_mz,
+                    memory_clusterd
+                )
+                SELECT
+                    '{build_id}',
+                    '{step_id}',
+                    '{framework_version}',
+                    '{result_entry.scenario_name}',
+                    '{result_entry.scenario_version}',
+                    '{result_entry.scale}',
+                    {result_entry.wallclock or 'NULL::DOUBLE'},
+                    {result_entry.messages or 'NULL::INT'},
+                    {result_entry.memory_mz or 'NULL::DOUBLE'},
+                    {result_entry.memory_clusterd or 'NULL::DOUBLE'}
+                ;
+                """
             )
-            SELECT
-                '{build_id}',
-                '{step_id}',
-                '{framework_version}',
-                '{result_entry.scenario_name}',
-                '{result_entry.scenario_version}',
-                '{result_entry.scale}',
-                {result_entry.wallclock or 'NULL::DOUBLE'},
-                {result_entry.messages or 'NULL::INT'},
-                {result_entry.memory_mz or 'NULL::DOUBLE'},
-                {result_entry.memory_clusterd or 'NULL::DOUBLE'}
-            ;
-            """
-        )
 
-    execute_updates(sql_statements, cursor)
+        self.database_connector.execute_updates(sql_statements)

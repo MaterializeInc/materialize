@@ -8,13 +8,9 @@
 # by the Apache License, Version 2.0.
 from dataclasses import dataclass
 
-from pg8000 import Cursor
-
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
-from materialize.test_analytics.connection.test_analytics_connection import (
-    execute_updates,
-)
+from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 from materialize.test_analytics.util import mz_sql_util
 
 
@@ -34,56 +30,58 @@ class AnnotationEntry:
     errors: list[AnnotationErrorEntry]
 
 
-def insert_annotation(
-    cursor: Cursor,
-    annotation: AnnotationEntry,
-) -> None:
-    build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
-    step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
+class BuildAnnotationStorage(BaseDataStorage):
 
-    sql_statements = []
+    def insert_annotation(
+        self,
+        annotation: AnnotationEntry,
+    ) -> None:
+        build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
+        step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
 
-    sql_statements.append(
-        f"""
-        INSERT INTO build_annotation
-        (
-            build_id,
-            build_step_id,
-            test_suite,
-            test_retry_count,
-            is_failure,
-            insert_date
-        )
-        SELECT
-            '{build_id}',
-            '{step_id}',
-            {mz_sql_util.as_sanitized_literal(annotation.test_suite)},
-            {annotation.test_retry_count},
-            {annotation.is_failure},
-            now()
-        ;
-            """
-    )
+        sql_statements = []
 
-    for error in annotation.errors:
         sql_statements.append(
             f"""
-            INSERT INTO build_annotation_error
+            INSERT INTO build_annotation
             (
+                build_id,
                 build_step_id,
-                error_type,
-                content,
-                issue,
-                occurrence_count
+                test_suite,
+                test_retry_count,
+                is_failure,
+                insert_date
             )
             SELECT
+                '{build_id}',
                 '{step_id}',
-                '{error.error_type}',
-                {mz_sql_util.as_sanitized_literal(error.message)},
-                {mz_sql_util.as_sanitized_literal(error.issue)},
-                {error.occurrence_count}
-        ;
-        """
+                {mz_sql_util.as_sanitized_literal(annotation.test_suite)},
+                {annotation.test_retry_count},
+                {annotation.is_failure},
+                now()
+            ;
+                """
         )
 
-    execute_updates(sql_statements, cursor)
+        for error in annotation.errors:
+            sql_statements.append(
+                f"""
+                INSERT INTO build_annotation_error
+                (
+                    build_step_id,
+                    error_type,
+                    content,
+                    issue,
+                    occurrence_count
+                )
+                SELECT
+                    '{step_id}',
+                    '{error.error_type}',
+                    {mz_sql_util.as_sanitized_literal(error.message)},
+                    {mz_sql_util.as_sanitized_literal(error.issue)},
+                    {error.occurrence_count}
+            ;
+            """
+            )
+
+        self.database_connector.execute_updates(sql_statements)
