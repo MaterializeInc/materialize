@@ -25,7 +25,7 @@ SELECT
     b.commit_hash,
     b.mz_version,
     b.date,
-    b.build_url,
+    concat(b.build_url, concat('#', bj.build_job_id)),
     bj.build_step_key,
     bj.shard_index
 FROM build b

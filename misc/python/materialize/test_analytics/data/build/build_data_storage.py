@@ -86,7 +86,6 @@ class BuildDataStorage(BaseDataStorage):
             BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB, "NULL::INT"
         )
         retry_count = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_RETRY_COUNT)
-        build_step_url = f"{build_url}#{job_id}"
         aws_instance_type = buildkite.get_var(
             BuildkiteEnvVar.BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE
         )
@@ -103,7 +102,6 @@ class BuildDataStorage(BaseDataStorage):
                 shard_index,
                 retry_count,
                 insert_date,
-                url,
                 is_latest_retry,
                 success,
                 aws_instance_type,
@@ -117,7 +115,6 @@ class BuildDataStorage(BaseDataStorage):
               {shard_index},
               {retry_count},
               now(),
-              '{build_step_url}',
               TRUE,
               {was_successful},
               '{aws_instance_type}',
