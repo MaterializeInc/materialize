@@ -346,7 +346,7 @@ where
     /// Obtains a `SpecializedTraceHandle` for the underlying arrangement.
     pub fn trace_handle(&self) -> SpecializedTraceHandle {
         match self {
-            MzArrangement::RowRow(inner) => SpecializedTraceHandle::RowRow(inner.trace.clone()),
+            MzArrangement::RowRow(inner) => inner.trace.clone().into(),
         }
     }
 }
