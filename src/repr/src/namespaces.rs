@@ -13,21 +13,28 @@
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
+pub const MZ_CATALOG_UNSTABLE_SCHEMA: &str = "mz_catalog_unstable";
 pub const PG_CATALOG_SCHEMA: &str = "pg_catalog";
 pub const MZ_INTERNAL_SCHEMA: &str = "mz_internal";
+pub const MZ_INTROSPECTION_SCHEMA: &str = "mz_introspection";
 pub const INFORMATION_SCHEMA: &str = "information_schema";
 pub const MZ_UNSAFE_SCHEMA: &str = "mz_unsafe";
 
 pub const SYSTEM_SCHEMAS: &[&str] = &[
     MZ_CATALOG_SCHEMA,
+    MZ_CATALOG_UNSTABLE_SCHEMA,
     PG_CATALOG_SCHEMA,
     MZ_INTERNAL_SCHEMA,
+    MZ_INTROSPECTION_SCHEMA,
     INFORMATION_SCHEMA,
     MZ_UNSAFE_SCHEMA,
 ];
 
 pub const UNSTABLE_SCHEMAS: &[&str] = &[
+    MZ_CATALOG_UNSTABLE_SCHEMA,
     MZ_INTERNAL_SCHEMA,
+    MZ_INTROSPECTION_SCHEMA,
+    MZ_UNSAFE_SCHEMA,
 ];
 
 /// Returns whether `name` identifies is a system schema.
