@@ -1204,6 +1204,7 @@ impl_display_t!(CreateSourceConnection);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LoadGenerator {
+    Clock,
     Counter,
     Marketing,
     Auction,
@@ -1216,6 +1217,7 @@ impl AstDisplay for LoadGenerator {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::Counter => f.write_str("COUNTER"),
+            Self::Clock => f.write_str("CLOCK"),
             Self::Marketing => f.write_str("MARKETING"),
             Self::Auction => f.write_str("AUCTION"),
             Self::Datums => f.write_str("DATUMS"),

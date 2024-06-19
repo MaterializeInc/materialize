@@ -74,6 +74,10 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     fn value_desc(&self) -> RelationDesc {
         match &self.load_generator {
             LoadGenerator::Auction => RelationDesc::empty(),
+            LoadGenerator::Clock => RelationDesc::empty().with_column(
+                "time",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            ),
             LoadGenerator::Datums => {
                 let mut desc =
                     RelationDesc::empty().with_column("rowid", ScalarType::Int64.nullable(false));
@@ -132,6 +136,7 @@ impl crate::AlterCompatible for LoadGeneratorSourceConnection {}
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
     Auction,
+    Clock,
     Counter {
         /// How many values will be emitted
         /// before old ones are retracted, or `None` for
@@ -173,6 +178,7 @@ impl LoadGenerator {
     pub fn schema_name(&self) -> &'static str {
         match self {
             LoadGenerator::Counter { .. } => "counter",
+            LoadGenerator::Clock => "clock",
             LoadGenerator::Marketing => "marketing",
             LoadGenerator::Auction => "auction",
             LoadGenerator::Datums => "datums",
@@ -234,6 +240,7 @@ impl LoadGenerator {
                         .with_key(vec![0]),
                 ),
             ],
+            LoadGenerator::Clock => vec![],
             LoadGenerator::Counter { max_cardinality: _ } => vec![],
             LoadGenerator::Marketing => {
                 vec![
@@ -427,6 +434,7 @@ impl LoadGenerator {
     pub fn is_monotonic(&self) -> bool {
         match self {
             LoadGenerator::Auction => true,
+            LoadGenerator::Clock => false,
             LoadGenerator::Counter {
                 max_cardinality: None,
             } => true,
@@ -703,6 +711,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
         ProtoLoadGeneratorSourceConnection {
             kind: Some(match &self.load_generator {
                 LoadGenerator::Auction => Kind::Auction(()),
+                LoadGenerator::Clock => Kind::Clock(()),
                 LoadGenerator::Counter { max_cardinality } => {
                     Kind::Counter(ProtoCounterLoadGenerator {
                         max_cardinality: *max_cardinality,
@@ -739,6 +748,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
         Ok(LoadGeneratorSourceConnection {
             load_generator: match kind {
                 Kind::Auction(()) => LoadGenerator::Auction,
+                Kind::Clock(()) => LoadGenerator::Clock,
                 Kind::Counter(ProtoCounterLoadGenerator { max_cardinality }) => {
                     LoadGenerator::Counter { max_cardinality }
                 }

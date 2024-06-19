@@ -1470,6 +1470,7 @@ impl LoadGeneratorOptionExtracted {
 
         let permitted_options: &[_] = match loadgen {
             ast::LoadGenerator::Auction => &[TickInterval, AsOf, UpTo],
+            ast::LoadGenerator::Clock => &[TickInterval, AsOf, UpTo],
             ast::LoadGenerator::Counter => &[TickInterval, AsOf, UpTo, MaxCardinality],
             ast::LoadGenerator::Marketing => &[TickInterval, AsOf, UpTo],
             ast::LoadGenerator::Datums => &[TickInterval, AsOf, UpTo],
@@ -1517,6 +1518,10 @@ pub(crate) fn load_generator_ast_to_generator(
 
     let load_generator = match loadgen {
         ast::LoadGenerator::Auction => LoadGenerator::Auction,
+        ast::LoadGenerator::Clock => {
+            scx.require_feature_flag(&crate::session::vars::ENABLE_CLOCK_LOAD_GENERATOR)?;
+            LoadGenerator::Clock
+        }
         ast::LoadGenerator::Counter => {
             let LoadGeneratorOptionExtracted {
                 max_cardinality, ..

@@ -74,6 +74,7 @@ Characteristics
 Check
 Class
 Client
+Clock
 Close
 Cluster
 Clusters
