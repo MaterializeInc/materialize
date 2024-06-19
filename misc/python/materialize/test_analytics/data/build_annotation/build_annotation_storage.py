@@ -84,4 +84,4 @@ class BuildAnnotationStorage(BaseDataStorage):
             """
             )
 
-        self.writer.execute_updates(sql_statements)
+        self.database_connector.execute_updates(sql_statements)

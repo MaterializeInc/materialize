@@ -27,7 +27,7 @@ class TestAnalyticsUploadError(Exception):
         return f"{self.message} (last executed sql: {self.sql})"
 
 
-class RawDatabaseWriter:
+class DatabaseConnector:
     def __init__(self, config: MzDbConfig, log_sql: bool):
         self._connection = self._create_connection(config)
         self._cursor = self._create_cursor(config, self._connection)

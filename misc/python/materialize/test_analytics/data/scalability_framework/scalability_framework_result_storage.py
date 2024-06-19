@@ -64,4 +64,4 @@ class ScalabilityFrameworkResultStorage(BaseDataStorage):
                     """
             )
 
-        self.writer.execute_updates(sql_statements)
+        self.database_connector.execute_updates(sql_statements)

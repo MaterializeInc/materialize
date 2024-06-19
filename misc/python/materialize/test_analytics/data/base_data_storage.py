@@ -8,10 +8,12 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.test_analytics.writer.test_analytics_writer import RawDatabaseWriter
+from materialize.test_analytics.connector.test_analytics_connector import (
+    DatabaseConnector,
+)
 
 
 class BaseDataStorage:
 
-    def __init__(self, writer: RawDatabaseWriter):
-        self.writer = writer
+    def __init__(self, database_connector: DatabaseConnector):
+        self.database_connector = database_connector

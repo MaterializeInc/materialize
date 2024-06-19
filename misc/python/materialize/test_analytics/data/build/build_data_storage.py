@@ -11,14 +11,14 @@
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
 from materialize.mz_version import MzVersion
+from materialize.test_analytics.connector.test_analytics_connector import DatabaseConnector
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
-from materialize.test_analytics.writer.test_analytics_writer import RawDatabaseWriter
 
 
 class BuildDataStorage(BaseDataStorage):
 
-    def __init__(self, writer: RawDatabaseWriter, data_version: int):
-        super().__init__(writer)
+    def __init__(self, database_connector: DatabaseConnector, data_version: int):
+        super().__init__(database_connector)
         self.data_version = data_version
 
     def insert_build(self) -> None:
@@ -66,7 +66,7 @@ class BuildDataStorage(BaseDataStorage):
             """
         )
 
-        self.writer.execute_updates(sql_statements)
+        self.database_connector.execute_updates(sql_statements)
 
     def insert_build_step(
         self,
@@ -140,7 +140,7 @@ class BuildDataStorage(BaseDataStorage):
             """
         )
 
-        self.writer.execute_updates(sql_statements)
+        self.database_connector.execute_updates(sql_statements)
 
     def update_build_step_success(
         self,
@@ -157,4 +157,4 @@ class BuildDataStorage(BaseDataStorage):
             """
         )
 
-        self.writer.execute_updates(sql_statements)
+        self.database_connector.execute_updates(sql_statements)
