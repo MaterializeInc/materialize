@@ -7,11 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any
 
 from materialize.buildkite_insights.annotation_search.annotation_match import (
     AnnotationMatch,
 )
+from materialize.buildkite_insights.data.build_info import Build
 from materialize.buildkite_insights.util.search_utility import (
     highlight_match,
     trim_match,
@@ -73,20 +73,23 @@ def print_annotation_match(
 
 
 def print_summary(
-    pipeline_slug: str, builds_data: list[Any], count_matches: int, max_results: int
+    pipeline_slug: str,
+    builds: list[Build],
+    count_matches: int,
+    max_results: int,
 ) -> None:
-    if len(builds_data) == 0:
+    if len(builds) == 0:
         print("Found no builds!")
     else:
-        most_recent_build_number = builds_data[0]["number"]
-        oldest_build_number = builds_data[-1]["number"]
+        most_recent_build_number = builds[0].number
+        oldest_build_number = builds[-1].number
         suppressed_results_info = (
             f"Showing only the first {max_results} matches! "
             if count_matches > max_results
             else ""
         )
         print(
-            f"{count_matches} match(es) in {len(builds_data)} searched builds of pipeline '{pipeline_slug}'. "
+            f"{count_matches} match(es) in {len(builds)} searched builds of pipeline '{pipeline_slug}'. "
             f"{suppressed_results_info}"
             f"The most recent considered build was #{most_recent_build_number}, "
             f"the oldest was #{oldest_build_number}."

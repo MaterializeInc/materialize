@@ -12,6 +12,9 @@
 import argparse
 
 from materialize.buildkite_insights.annotation_search import annotation_search_logic
+from materialize.buildkite_insights.annotation_search.buildkite_search_source import (
+    BuildkiteDataSource,
+)
 from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
 from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
@@ -92,17 +95,21 @@ if __name__ == "__main__":
     if args.short and args.oneline:
         print("Note: --oneline will be ignored if --short is set")
 
+    source = BuildkiteDataSource(
+        fetch_builds_mode=args.fetch_builds,
+        fetch_annotations_mode=args.fetch_annotations,
+        max_build_fetches=args.max_build_fetches,
+        first_build_page_to_fetch=args.first_build_page_to_fetch,
+        only_failed_builds=args.only_failed_builds,
+        only_failed_build_step_keys=args.only_failed_build_step_key,
+    )
+
     annotation_search_logic.start_search(
         args.pipeline,
         args.branch,
-        args.fetch_builds,
-        args.fetch_annotations,
-        args.max_build_fetches,
-        args.first_build_page_to_fetch,
+        source,
         args.max_results,
         args.only_one_result_per_build,
-        args.only_failed_builds,
-        args.only_failed_build_step_key,
         args.pattern,
         args.use_regex,
         args.short,
