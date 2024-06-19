@@ -27,7 +27,8 @@
       Defaults to false. It is recommended you call `deploy_await` manually and
       run additional validation checks before promoting a deployment to production.
   - `poll_interval` (integer): The interval, in seconds, between each readiness check.
-  - `dry_run` (boolean, optional): When True, prints the actions that would be taken without executing them.
+  - `dry_run` (boolean, optional): When True, prints out the commands that would
+    be executed as part of the deployment workflow (without executing them).
 
   ## Returns
   None: This macro performs deployment actions but does not return a value.
