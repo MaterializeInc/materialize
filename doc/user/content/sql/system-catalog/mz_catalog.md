@@ -275,7 +275,7 @@ Field        | Type     | Meaning
 -------------|----------|--------
 `id`         | [`text`] | The ID of the list type.
 `element_id` | [`text`] | The IID of the list's element type.
-`element_modifiers` | [`int8 list`] | The element type modifiers, or `NULL` if none.
+`element_modifiers` | [`uint8 list`] | The element type modifiers, or `NULL` if none.
 
 ### `mz_map_types`
 
@@ -287,8 +287,8 @@ Field          | Type       | Meaning
 `id`           | [`text`]   | The ID of the map type.
 `key_id `      | [`text`]   | The ID of the map's key type.
 `value_id`     | [`text`]   | The ID of the map's value type.
-`key_modifiers` | [`int8 list`] | The key type modifiers, or `NULL` if none.
-`value_modifiers` | [`int8 list`] | The value type modifiers, or `NULL` if none.
+`key_modifiers` | [`uint8 list`] | The key type modifiers, or `NULL` if none.
+`value_modifiers` | [`uint8 list`] | The value type modifiers, or `NULL` if none.
 
 ### `mz_materialized_views`
 
@@ -580,16 +580,20 @@ Field          | Type                 | Meaning
 
 [`bigint`]: /sql/types/bigint
 [`boolean`]: /sql/types/boolean
+[`integer`]: /sql/types/integer/
+[`interval`]: /sql/types/interval
 [`jsonb`]: /sql/types/jsonb
+[`mz_aclitem`]: /sql/types/mz_aclitem
+[`mz_aclitem array`]: /sql/types/mz_aclitem
+[`numeric`]: /sql/types/numeric/
 [`oid`]: /sql/types/oid
+[`record`]: /sql/types/record
 [`text`]: /sql/types/text
 [`timestamp with time zone`]: /sql/types/timestamp
-[oid]: /sql/types/oid
 [`text array`]: /sql/types/array
-[`record`]: /sql/types/record
+[`text list`]: /sql/types/list/
 [`uint8`]: /sql/types/uint8
+[`uint 8 list`]: /sql/types/uint8
 [`uint4`]: /sql/types/uint4
-[`mz_aclitem array`]: /sql/types/mz_aclitem
-[`interval`]: /sql/types/interval
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_operators -->

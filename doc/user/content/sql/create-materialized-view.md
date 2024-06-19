@@ -34,8 +34,9 @@ _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose results you wan
 
 | Field      | Value     | Description                                                                                                                                                       |
 | ---------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ASSERT NOT NULL** _col_ident_ | `text` | The column identifier for which to create a [non-null assertion](#non-null-assertions). To specify multiple columns, repeat the option multiple times. |
+| **ASSERT NOT NULL** _col_ident_ | `text` | The column identifier for which to create a [non-null assertion](#non-null-assertions). To specify multiple columns, use the option multiple times. |
 | **RETAIN HISTORY FOR** _retention_period_ | `interval` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+| **REFRESH _refresh_strategy_** | | ***Private preview.** This option has known performance or stability issues and is under active development.* The refresh strategy for the materialized view. See [Refresh strategies](#refresh-strategies) for syntax options. <br>Default: `ON COMMIT`. |
 
 ## Details
 
@@ -79,15 +80,143 @@ stacking."
 
 ### Non-null assertions
 
-Because materialized views may be created on arbitrary queries, it may
-not in all cases be possible for Materialize to automatically infer non-nullability
-of some columns that can in fact never be null. In such a case,
-`ASSERT NOT NULL` clauses may be used as described in the syntax
-section above. Specifying `ASSERT NOT NULL` for a column forces that
-column's type in the materialized view to include `NOT NULL`. If this
-clause is used erroneously, and a `NULL` value is in fact produced in
-a column for which `ASSERT NOT NULL` was specified, querying the
-materialized view will produce an error until the offending row is deleted.
+Because materialized views may be created on arbitrary queries, it may not in
+all cases be possible for Materialize to automatically infer non-nullability of
+some columns that can in fact never be null. In such a case, `ASSERT NOT NULL`
+clauses may be used as described in the syntax section above. Specifying
+`ASSERT NOT NULL` for a column forces that column's type in the materialized
+view to include `NOT NULL`. If this clause is used erroneously, and a `NULL`
+value is in fact produced in a column for which `ASSERT NOT NULL` was
+specified, querying the materialized view will produce an error until the
+offending row is deleted.
+
+### Refresh strategies
+
+{{< private-preview />}}
+
+Depending on your use case, you might have data that doesn't require
+up-to-the-second freshness, or that can be accessed using different patterns to
+optimize for performance and cost (e.g., hot vs. cold data). To support these
+use cases, you can tweak the refresh strategy of a materialized view.
+
+{{< note >}}
+We **do not** recommend using this feature if you're looking for very frequent
+refreshes (e.g., every few minutes). For cost savings to be significant in
+Materialize, the target refresh interval should be at least a few hours;
+otherwise, you'll want to stick with the [default behavior](#refresh-on-commit).
+{{< /note >}}
+
+Materialized views configured with a refresh strategy are **not incrementally
+maintained**, and must recompute their results from scracth on every refresh.
+Because these views can be hosted in [scheduled clusters](../sql/create-cluster/#scheduling),
+which automatically turn on and off based on the configured refresh strategies,
+this feature can lead to significant cost savings when handling large volumes of
+historical data that is updated less frequently.
+
+[//]: # "TODO(morsapaes) We should add a SQL pattern that walks through a
+full-blown example of how to implement the cold, warm, hot path with refresh
+strategies."
+
+#### Refresh on commit
+
+<p style="font-size:14px"><b>Syntax:</b> <code>REFRESH ON COMMIT</code></p>
+
+By default, Materialize refreshes a materialized view on every change to its
+inputs (i.e., on commit) — this guarantees that results are incrementally
+updated, fresh and consistent as new data arrives. Refresh on commit is
+the **default** when you create a materialized view that doesn't explicitly
+specify a refresh strategy, and is the **recommended behavior for the vast
+majority of use cases**.
+
+#### Refresh at
+
+<p style="font-size:14px"><b>Syntax:</b> <code>REFRESH AT</code> { <code>CREATION</code> | <i>timestamp</i> }</p>
+
+This strategy allows configuring a materialized view to **refresh at a specific
+time**. The refresh time can be specified as a timestamp, or using the `ON
+CREATION` clause, which triggers a first refresh when the materialized view is
+created.
+
+**Example**
+
+To create a materialized view that is refreshed at creation, and then at the
+specified dates:
+
+```sql
+CREATE MATERIALIZED VIEW mv_refresh_at
+IN CLUSTER my_refresh_cluster
+WITH (
+  -- Refresh at creation, so the view is populated ahead of
+  -- the first scheduled refresh
+  REFRESH AT CREATION,
+  -- Refresh at a specific (future) time
+  REFRESH AT '2024-06-06 12:00:00',
+  -- Refresh at another specific (future) time
+  REFRESH AT '2024-06-08 22:00:00'
+)
+AS SELECT ... FROM ...;
+```
+
+You can specify multiple `REFRESH AT` strategies in the same `CREATE` statement,
+and combine them with the [refresh every strategy](#refresh-every). We
+recommend **always** using the `REFRESH AT CREATION` strategy with `REFRESH
+EVERY`, so the materialized view is available for querying ahead of the first
+scheduled refresh.
+
+#### Refresh every
+
+<p style="font-size:14px"><b>Syntax:</b> <code>REFRESH EVERY</code> <i>interval</i> [ <code>ALIGNED TO</code> <i>timestamp</i> ]</code></p>
+
+This strategy allows configuring a materialized view to **refresh at regular
+intervals**. The `ALIGNED TO` clause additionally allows specifying the _phase_
+of the scheduled refreshes: for daily refreshes, it specifies the time of the
+day when the refresh will happen; for weekly refreshes, it specifies the day of
+the week and the time of the day when the refresh will happen. If `ALIGNED TO`
+is not specified, it defaults to the time when the materialized view is
+created.
+
+**Example**
+
+To create a materialized view that is refreshed at creation, and then once a day
+at 10PM UTC:
+
+```sql
+CREATE MATERIALIZED VIEW mv_refresh_every
+IN CLUSTER my_scheduled_cluster
+WITH (
+  -- Refresh at creation, so the view is populated ahead of
+  -- the first scheduled refresh
+  REFRESH AT CREATION,
+  -- Refresh every day at 10PM UTC
+  REFRESH EVERY '1 day' ALIGNED TO '2024-04-17 22:00:00'
+)
+AS SELECT ...  FROM ...;
+```
+
+You can specify multiple `REFRESH EVERY` strategies in the same `CREATE`
+statement, and combine them with the [refresh at strategy](#refresh-at).
+
+#### Introspection
+
+To check details about the (non-default) refresh strategies associated with any materialized
+view in the system, you can query
+the [`mz_internal.mz_materialized_view_refresh_strategies`](../system-catalog/mz_internal/#mz_materialized_view_refresh_strategies)
+and [`mz_internal.mz_materialized_view_refreshes`](../system-catalog/mz_internal/#mz_materialized_view_refreshes)
+system catalog tables:
+
+```sql
+SELECT mv.id AS materialized_view_id,
+       mv.name AS materialized_view_name,
+       rs.type AS refresh_strategy,
+       rs.interval AS refresh_interval,
+       rs.aligned_to AS refresh_interval_phase,
+       rs.at AS refresh_time,
+       r.last_completed_refresh,
+       r.next_refresh
+FROM mz_internal.mz_materialized_view_refresh_strategies rs
+JOIN mz_internal.mz_materialized_view_refreshes r ON r.materialized_view_id = rs.materialized_view_id
+JOIN mz_materialized_views mv ON rs.materialized_view_id = mv.id;
+```
 
 [//]: # "TODO(morsapaes) Add section linking to refresh strategies docs
 in #27521."
@@ -122,7 +251,22 @@ SELECT
 FROM users FULL OUTER JOIN orders ON users.id = orders.user_id
 ```
 
-[//]: # "TODO(morsapaes) Add example for setting a refresh strategy in #27521."
+### Using refresh strategies
+
+```sql
+CREATE MATERIALIZED VIEW mv
+IN CLUSTER my_refresh_cluster
+WITH (
+  -- Refresh every Tuesday at 12PM UTC
+  REFRESH EVERY '7 days' ALIGNED TO '2024-06-04 12:00:00',
+  -- Refresh every Thursday at 12PM UTC
+  REFRESH EVERY '7 days' ALIGNED TO '2024-06-06 12:00:00',
+  -- Refresh on creation, so the view is populated ahead of
+  -- the first scheduled refresh
+  REFRESH AT CREATION
+)
+AS SELECT ... FROM ...;
+```
 
 [//]: # "TODO(morsapaes) Add more elaborate examples with \timing that show
 things like querying materialized views from different clusters, indexed vs.
