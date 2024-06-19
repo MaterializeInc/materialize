@@ -512,7 +512,7 @@ impl Coordinator {
 
     #[instrument]
     async fn peek_optimize(
-        &self,
+        &mut self,
         session: &Session,
         PeekStageOptimize {
             validity,
