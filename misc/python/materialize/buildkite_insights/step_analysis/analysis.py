@@ -13,6 +13,9 @@ import argparse
 
 import pandas as pd
 
+from materialize.buildkite_insights.annotation_search.annotation_search_source import (
+    ANY_BRANCH_VALUE,
+)
 from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_BUILD_STATES,
@@ -231,7 +234,7 @@ if __name__ == "__main__":
         ],
         args.fetch,
         args.max_fetches,
-        args.branch if args.branch != "*" else None,
+        args.branch if args.branch != ANY_BRANCH_VALUE else None,
         selected_build_states,
         selected_build_step_states,
         args.output_type,
