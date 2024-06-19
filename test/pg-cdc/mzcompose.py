@@ -6,8 +6,13 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+import time
+
+import pg8000
+from pg8000 import Connection
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.service import Service, ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.test_certs import TestCerts
@@ -16,6 +21,47 @@ from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 # Set the max slot WAL keep size to 10MB
 DEFAULT_PG_EXTRA_COMMAND = ["-c", "max_slot_wal_keep_size=10"]
+
+
+class PostgresRecvlogical(Service):
+    """
+    Command to start a replication.
+    """
+
+    def __init__(self, replication_slot_name: str, publication_name: str) -> None:
+        command: list[str] = [
+            "pg_recvlogical",
+            "--start",
+            "--slot",
+            f"{replication_slot_name}",
+            "--file",
+            "-",
+            "--dbname",
+            "postgres",
+            "--host",
+            "postgres",
+            "--port",
+            "5432",
+            "--username",
+            "postgres",
+            "--no-password",
+            "-o",
+            "proto_version=1",
+            "-o",
+            f"publication_names={publication_name}",
+        ]
+        config: ServiceConfig = {"mzbuild": "postgres"}
+
+        config.update(
+            {
+                "command": command,
+                "allow_host_ports": True,
+                "ports": ["5432"],
+                "environment": ["PGPASSWORD=postgres"],
+            }
+        )
+
+        super().__init__(name="pg_recvlogical", config=config)
 
 
 def create_postgres(
@@ -111,6 +157,105 @@ def workflow_replication_disabled(
     ):
         c.up("materialized", "postgres")
         c.run_testdrive_files("override/replication-disabled.td")
+
+
+def workflow_silent_connection_drop(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Test that mz can regain a replication slot that is used by another service.
+    """
+
+    pg_version = get_targeted_pg_version(parser)
+    with c.override(
+        create_postgres(
+            pg_version=pg_version,
+            extra_command=[
+                "-c",
+                "wal_sender_timeout=0",
+            ],
+        ),
+    ):
+        c.up("materialized", "postgres")
+
+        c.run_testdrive_files(
+            "--no-reset",
+            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+            "override/silent-connection-drop-part-1.td",
+        )
+
+        pg_conn = pg8000.connect(
+            host="localhost",
+            user="postgres",
+            password="postgres",
+            port=c.default_port("postgres"),
+        )
+
+        _verify_only_one_replication_slot_exists(pg_conn)
+
+        _await_postgres_replication_slot_state(
+            pg_conn,
+            await_active=False,
+            error_message="Replication slot is still active",
+        )
+
+        _claim_postgres_replication_slot(c, pg_conn)
+
+        _await_postgres_replication_slot_state(
+            pg_conn,
+            await_active=True,
+            error_message="Replication slot has not been claimed",
+        )
+
+        c.run_testdrive_files("--no-reset", "override/silent-connection-drop-part-2.td")
+
+        _verify_only_one_replication_slot_exists(pg_conn)
+
+
+def _await_postgres_replication_slot_state(
+    pg_conn: Connection, await_active: bool, error_message: str
+) -> None:
+    for i in range(1, 5):
+        is_active = _is_postgres_activation_slot_active(pg_conn)
+
+        if is_active == await_active:
+            return
+        else:
+            time.sleep(1)
+
+    raise RuntimeError(error_message)
+
+
+def _get_postgres_replication_slot_name(pg_conn: Connection) -> str:
+    cursor = pg_conn.cursor()
+    cursor.execute("SELECT slot_name FROM pg_replication_slots;")
+    return cursor.fetchall()[0][0]
+
+
+def _claim_postgres_replication_slot(c: Composition, pg_conn: Connection) -> None:
+    replicator = PostgresRecvlogical(
+        replication_slot_name=_get_postgres_replication_slot_name(pg_conn),
+        publication_name="mz_source",
+    )
+
+    with c.override(replicator):
+        c.up(replicator.name)
+
+
+def _is_postgres_activation_slot_active(pg_conn: Connection) -> bool:
+    cursor = pg_conn.cursor()
+    cursor.execute("SELECT active FROM pg_replication_slots;")
+    is_active = cursor.fetchall()[0][0]
+    return is_active
+
+
+def _verify_only_one_replication_slot_exists(pg_conn: Connection) -> None:
+    cursor = pg_conn.cursor()
+    cursor.execute("SELECT count(*) FROM pg_replication_slots;")
+    count_slots = cursor.fetchall()[0][0]
+    assert (
+        count_slots == 1
+    ), f"Expected one replication slot but found {count_slots} slots"
 
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
