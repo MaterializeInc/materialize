@@ -38,7 +38,7 @@
     {% if schema_contains_sinks(schema) %}
         {{ exceptions.raise_compiler_error("""
         Schema " ~ schema ~ " contains sinks.
-        Sinks should be isolated in their own schema.
+        Blue/green deployments require sinks to be in a dedicated schema.
         """) }}
     {% endif %}
 {% endfor %}
