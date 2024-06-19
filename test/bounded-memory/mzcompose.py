@@ -876,6 +876,201 @@ SCENARIOS = [
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
+    Scenario(
+        name="cardinality-estimate-disjunction",
+        pre_restart=dedent(
+            """
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET ENABLE_CARDINALITY_ESTIMATES TO TRUE;
+
+            > SET ENABLE_SESSION_CARDINALITY_ESTIMATES TO TRUE;
+
+            > CREATE TABLE tab0_raw(pk INTEGER, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT);
+            > CREATE MATERIALIZED VIEW tab0 AS SELECT DISTINCT ON(pk) * FROM tab0_raw;
+            > INSERT INTO tab0_raw VALUES(0,6,72.32,'diidw',65,65.1,'uudvn'), (1,57,90.1,'jvnyz',84,48.99,'raktj'), (2,68,91.83,'wefta',37,71.86,'zddoc'), (3,10,78.14,'zwjtc',7,9.96,'epmyn'), (4,63,24.41,'rwaus',66,53.7,'gbgmw'), (5,87,70.88,'rwpww',46,26.5,'bvbew'), (6,76,46.18,'lfvrf',99,92.47,'hqpgb'), (7,25,81.99,'khylz',54,73.22,'qaonp'), (8,93,17.58,'clxlk',88,59.16,'ziwhr'), (9,64,18.54,'fgkop',82,18.73,'lztum');
+
+            > CREATE TABLE tab1_raw(pk INTEGER, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT);
+            > CREATE MATERIALIZED VIEW tab1 AS SELECT DISTINCT ON(pk) * FROM tab1_raw;
+            > CREATE INDEX idx_tab1_0 on tab1 (col0);
+            > CREATE INDEX idx_tab1_1 on tab1 (col1);
+            > CREATE INDEX idx_tab1_3 on tab1 (col3);
+            > CREATE INDEX idx_tab1_4 on tab1 (col4);
+            > INSERT INTO tab1_raw SELECT * FROM tab0;
+
+            > CREATE TABLE tab2_raw(pk INTEGER, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT);
+            > CREATE MATERIALIZED VIEW tab2 AS SELECT DISTINCT ON(pk) * FROM tab2_raw;
+            > CREATE INDEX idx_tab2_0 ON tab2 (col4);
+            > CREATE INDEX idx_tab2_2 ON tab2 (col1);
+            > CREATE INDEX idx_tab2_4 ON tab2 (col0,col3 DESC);
+            > CREATE INDEX idx_tab2_5 ON tab2 (col3);
+            > INSERT INTO tab2_raw SELECT * FROM tab0;
+
+            > CREATE TABLE tab3_raw(pk INTEGER, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT);
+            > CREATE MATERIALIZED VIEW tab3 AS SELECT DISTINCT ON(pk) * FROM tab3_raw;
+            > CREATE INDEX idx_tab3_0 ON tab3 (col0,col1,col3);
+            > CREATE INDEX idx_tab3_1 ON tab3 (col4);
+            > INSERT INTO tab3_raw SELECT * FROM tab0;
+
+            > CREATE TABLE tab4_raw(pk INTEGER, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT);
+            > CREATE MATERIALIZED VIEW tab4 AS SELECT DISTINCT ON(pk) * FROM tab4_raw;
+            > CREATE INDEX idx_tab4_0 ON tab4 (col4 DESC,col3 DESC);
+            > CREATE INDEX idx_tab4_2 ON tab4 (col1);
+            > INSERT INTO tab4_raw SELECT * FROM tab0;
+
+            > SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
+            0
+            1
+            2
+            3
+            4
+            5
+            6
+            7
+            8
+            9
+
+            ? EXPLAIN WITH(cardinality) SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
+            Explained Query:
+              Return // { cardinality: "<UNKNOWN>" }
+                Project (#0) // { cardinality: "<UNKNOWN>" }
+                  Filter ((#1 > 3) OR ((#1 <= 88) AND (#1 > 5) AND ((#1 = 98) OR (#1 >= 30) OR (#6 AND (#2) IS NULL AND (#3 < 48) AND (#4 < 86.27) AND (#1 <= 45) AND (#2 <= 10.7) AND (#3 > 49) AND (#3 > 66) AND (#4 > 42.2) AND (#1 >= 25) AND (#3 >= 49) AND (#3 >= 77) AND ((#1 = 67) OR (#1 = 81) OR (#1 = 86) OR (#1 = 94) OR (#1 = 97)) AND ((#2 < 20.99) OR (#2 <= 30.14) OR (#1 > 79) OR (#1 >= 89) OR (#3 >= 12) OR ((#3 > 77) AND (#2 >= 74.51)))) OR (#7 AND (#3 <= 88)) OR ((#1 < 68) AND (#1 <= 35)) OR ((#2 <= 17.96) AND (#7 OR ((#4 <= 2.63) AND (#1 > 2) AND (#3 > 8)))) OR ((#4 <= 97.11) AND ((#1 = 11) OR (#1 = 63) OR (#1 = 85) OR (#1 = 87) OR (#1 = 88)))))) // { cardinality: "<UNKNOWN>" }
+                    Map ((#1) IS NULL) // { cardinality: "<UNKNOWN>" }
+                      Join on=(#1 = #5) type=differential // { cardinality: "<UNKNOWN>" }
+                        ArrangeBy keys=[[#1]] // { cardinality: "<UNKNOWN>" }
+                          Project (#0..=#2, #4, #5) // { cardinality: "<UNKNOWN>" }
+                            Filter ((#1 > 3) OR ((#1 <= 88) AND (#1 > 5) AND ((#1 = 98) OR (#1 >= 30) OR (#7 AND (#4 <= 88)) OR ((#2) IS NULL AND (#4 < 48) AND (#5 < 86.27) AND (#1 <= 45) AND (#2 <= 10.7) AND (#4 > 49) AND (#4 > 66) AND (#5 > 42.2) AND (#1 >= 25) AND (#4 >= 49) AND (#4 >= 77) AND ((#1 = 67) OR (#1 = 81) OR (#1 = 86) OR (#1 = 94) OR (#1 = 97)) AND ((#2 < 20.99) OR (#2 <= 30.14) OR (#1 > 79) OR (#1 >= 89) OR (#4 >= 12) OR ((#4 > 77) AND (#2 >= 74.51)))) OR ((#1 < 68) AND (#1 <= 35)) OR ((#2 <= 17.96) AND (#7 OR ((#5 <= 2.63) AND (#1 > 2) AND (#4 > 8)))) OR ((#5 <= 97.11) AND ((#1 = 11) OR (#1 = 63) OR (#1 = 85) OR (#1 = 87) OR (#1 = 88)))))) // { cardinality: "<UNKNOWN>" }
+                              Map ((#1) IS NULL) // { cardinality: "<UNKNOWN>" }
+                                ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+                        ArrangeBy keys=[[#0]] // { cardinality: "<UNKNOWN>" }
+                          Union // { cardinality: "<UNKNOWN>" }
+                            Filter ((#0 > 3) OR ((#0 <= 88) AND (#0 > 5) AND ((#0) IS NULL OR (#0 = 11) OR (#0 = 63) OR (#0 = 85) OR (#0 = 87) OR (#0 = 88) OR (#0 = 98) OR (#0 > 2) OR (#0 >= 30) OR (#1 AND (#0 <= 45) AND (#0 >= 25) AND ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97))) OR ((#0 < 68) AND (#0 <= 35))))) // { cardinality: "<UNKNOWN>" }
+                              Get l2 // { cardinality: "<UNKNOWN>" }
+                            Project (#0, #18) // { cardinality: "<UNKNOWN>" }
+                              Filter (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16)))) AND (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16 AND null)))) // { cardinality: "<UNKNOWN>" }
+                                Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35)), null) // { cardinality: "<UNKNOWN>" }
+                                  Join on=(#0 = #1) type=differential // { cardinality: "<UNKNOWN>" }
+                                    ArrangeBy keys=[[#0]] // { cardinality: "<UNKNOWN>" }
+                                      Union // { cardinality: "<UNKNOWN>" }
+                                        Negate // { cardinality: "<UNKNOWN>" }
+                                          Project (#0) // { cardinality: "<UNKNOWN>" }
+                                            Filter (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16)))) AND (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16 AND null)))) // { cardinality: "<UNKNOWN>" }
+                                              Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35))) // { cardinality: "<UNKNOWN>" }
+                                                Get l2 // { cardinality: "<UNKNOWN>" }
+                                        Project (#0) // { cardinality: "<UNKNOWN>" }
+                                          Filter (#1 OR (#2 AND #3 AND (#4 OR #5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #16 OR (#13 AND #14 AND #15)))) AND (#1 OR (#2 AND #3 AND (#4 OR #5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #16 OR (#13 AND #14 AND #15 AND null)))) // { cardinality: "<UNKNOWN>" }
+                                            Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35))) // { cardinality: "<UNKNOWN>" }
+                                              Get l0 // { cardinality: "<UNKNOWN>" }
+                                    ArrangeBy keys=[[#0]] // { cardinality: "<UNKNOWN>" }
+                                      Get l0 // { cardinality: "<UNKNOWN>" }
+              With
+                cte l2 =
+                  Union // { cardinality: "<UNKNOWN>" }
+                    Get l1 // { cardinality: "<UNKNOWN>" }
+                    Map (false) // { cardinality: "<UNKNOWN>" }
+                      Union // { cardinality: "<UNKNOWN>" }
+                        Negate // { cardinality: "<UNKNOWN>" }
+                          Project (#0) // { cardinality: "<UNKNOWN>" }
+                            Get l1 // { cardinality: "<UNKNOWN>" }
+                        Get l0 // { cardinality: "<UNKNOWN>" }
+                cte l1 =
+                  Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { cardinality: "<UNKNOWN>" }
+                    CrossJoin type=differential // { cardinality: "<UNKNOWN>" }
+                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
+                        Get l0 // { cardinality: "<UNKNOWN>" }
+                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
+                        Project (#4) // { cardinality: "<UNKNOWN>" }
+                          Filter (#5 <= 97.63) AND (#5 >= 20.3) // { cardinality: "<UNKNOWN>" }
+                            ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+                cte l0 =
+                  Distinct project=[#0] // { cardinality: "<UNKNOWN>" }
+                    Project (#1) // { cardinality: "<UNKNOWN>" }
+                      ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+
+            Source materialize.public.tab0
+
+            Target cluster: quickstart
+            """
+        ),
+        post_restart=dedent(
+            """
+            > SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
+            0
+            1
+            2
+            3
+            4
+            5
+            6
+            7
+            8
+            9
+
+            ? EXPLAIN WITH(cardinality) SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
+            Explained Query:
+              Return // { cardinality: "<UNKNOWN>" }
+                Project (#0) // { cardinality: "<UNKNOWN>" }
+                  Filter ((#1 > 3) OR ((#1 <= 88) AND (#1 > 5) AND ((#1 = 98) OR (#1 >= 30) OR (#6 AND (#2) IS NULL AND (#3 < 48) AND (#4 < 86.27) AND (#1 <= 45) AND (#2 <= 10.7) AND (#3 > 49) AND (#3 > 66) AND (#4 > 42.2) AND (#1 >= 25) AND (#3 >= 49) AND (#3 >= 77) AND ((#1 = 67) OR (#1 = 81) OR (#1 = 86) OR (#1 = 94) OR (#1 = 97)) AND ((#2 < 20.99) OR (#2 <= 30.14) OR (#1 > 79) OR (#1 >= 89) OR (#3 >= 12) OR ((#3 > 77) AND (#2 >= 74.51)))) OR (#7 AND (#3 <= 88)) OR ((#1 < 68) AND (#1 <= 35)) OR ((#2 <= 17.96) AND (#7 OR ((#4 <= 2.63) AND (#1 > 2) AND (#3 > 8)))) OR ((#4 <= 97.11) AND ((#1 = 11) OR (#1 = 63) OR (#1 = 85) OR (#1 = 87) OR (#1 = 88)))))) // { cardinality: "<UNKNOWN>" }
+                    Map ((#1) IS NULL) // { cardinality: "<UNKNOWN>" }
+                      Join on=(#1 = #5) type=differential // { cardinality: "<UNKNOWN>" }
+                        ArrangeBy keys=[[#1]] // { cardinality: "<UNKNOWN>" }
+                          Project (#0..=#2, #4, #5) // { cardinality: "<UNKNOWN>" }
+                            Filter ((#1 > 3) OR ((#1 <= 88) AND (#1 > 5) AND ((#1 = 98) OR (#1 >= 30) OR (#7 AND (#4 <= 88)) OR ((#2) IS NULL AND (#4 < 48) AND (#5 < 86.27) AND (#1 <= 45) AND (#2 <= 10.7) AND (#4 > 49) AND (#4 > 66) AND (#5 > 42.2) AND (#1 >= 25) AND (#4 >= 49) AND (#4 >= 77) AND ((#1 = 67) OR (#1 = 81) OR (#1 = 86) OR (#1 = 94) OR (#1 = 97)) AND ((#2 < 20.99) OR (#2 <= 30.14) OR (#1 > 79) OR (#1 >= 89) OR (#4 >= 12) OR ((#4 > 77) AND (#2 >= 74.51)))) OR ((#1 < 68) AND (#1 <= 35)) OR ((#2 <= 17.96) AND (#7 OR ((#5 <= 2.63) AND (#1 > 2) AND (#4 > 8)))) OR ((#5 <= 97.11) AND ((#1 = 11) OR (#1 = 63) OR (#1 = 85) OR (#1 = 87) OR (#1 = 88)))))) // { cardinality: "<UNKNOWN>" }
+                              Map ((#1) IS NULL) // { cardinality: "<UNKNOWN>" }
+                                ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+                        ArrangeBy keys=[[#0]] // { cardinality: "<UNKNOWN>" }
+                          Union // { cardinality: "<UNKNOWN>" }
+                            Filter ((#0 > 3) OR ((#0 <= 88) AND (#0 > 5) AND ((#0) IS NULL OR (#0 = 11) OR (#0 = 63) OR (#0 = 85) OR (#0 = 87) OR (#0 = 88) OR (#0 = 98) OR (#0 > 2) OR (#0 >= 30) OR (#1 AND (#0 <= 45) AND (#0 >= 25) AND ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97))) OR ((#0 < 68) AND (#0 <= 35))))) // { cardinality: "<UNKNOWN>" }
+                              Get l2 // { cardinality: "<UNKNOWN>" }
+                            Project (#0, #18) // { cardinality: "<UNKNOWN>" }
+                              Filter (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16)))) AND (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16 AND null)))) // { cardinality: "<UNKNOWN>" }
+                                Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35)), null) // { cardinality: "<UNKNOWN>" }
+                                  Join on=(#0 = #1) type=differential // { cardinality: "<UNKNOWN>" }
+                                    ArrangeBy keys=[[#0]] // { cardinality: "<UNKNOWN>" }
+                                      Union // { cardinality: "<UNKNOWN>" }
+                                        Negate // { cardinality: "<UNKNOWN>" }
+                                          Project (#0) // { cardinality: "<UNKNOWN>" }
+                                            Filter (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16)))) AND (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16 AND null)))) // { cardinality: "<UNKNOWN>" }
+                                              Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35))) // { cardinality: "<UNKNOWN>" }
+                                                Get l2 // { cardinality: "<UNKNOWN>" }
+                                        Project (#0) // { cardinality: "<UNKNOWN>" }
+                                          Filter (#1 OR (#2 AND #3 AND (#4 OR #5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #16 OR (#13 AND #14 AND #15)))) AND (#1 OR (#2 AND #3 AND (#4 OR #5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #16 OR (#13 AND #14 AND #15 AND null)))) // { cardinality: "<UNKNOWN>" }
+                                            Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35))) // { cardinality: "<UNKNOWN>" }
+                                              Get l0 // { cardinality: "<UNKNOWN>" }
+                                    ArrangeBy keys=[[#0]] // { cardinality: "<UNKNOWN>" }
+                                      Get l0 // { cardinality: "<UNKNOWN>" }
+              With
+                cte l2 =
+                  Union // { cardinality: "<UNKNOWN>" }
+                    Get l1 // { cardinality: "<UNKNOWN>" }
+                    Map (false) // { cardinality: "<UNKNOWN>" }
+                      Union // { cardinality: "<UNKNOWN>" }
+                        Negate // { cardinality: "<UNKNOWN>" }
+                          Project (#0) // { cardinality: "<UNKNOWN>" }
+                            Get l1 // { cardinality: "<UNKNOWN>" }
+                        Get l0 // { cardinality: "<UNKNOWN>" }
+                cte l1 =
+                  Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { cardinality: "<UNKNOWN>" }
+                    CrossJoin type=differential // { cardinality: "<UNKNOWN>" }
+                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
+                        Get l0 // { cardinality: "<UNKNOWN>" }
+                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
+                        Project (#4) // { cardinality: "<UNKNOWN>" }
+                          Filter (#5 <= 97.63) AND (#5 >= 20.3) // { cardinality: "<UNKNOWN>" }
+                            ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+                cte l0 =
+                  Distinct project=[#0] // { cardinality: "<UNKNOWN>" }
+                    Project (#1) // { cardinality: "<UNKNOWN>" }
+                      ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+
+            Source materialize.public.tab0
+
+            Target cluster: quickstart
+            """
+        ),
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
+    ),
 ]
 
 
