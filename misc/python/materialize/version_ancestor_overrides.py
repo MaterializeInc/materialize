@@ -31,6 +31,12 @@ def get_ancestor_overrides_for_performance_regressions(
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "SwapSchema":
+        # PR#27607 (catalog: Listen for updates in transactions) increased wallclock
+        min_ancestor_mz_version_per_commit[
+            "d5388cccbcd860b04486573f632fb9337e7335a2"
+        ] = MzVersion.parse_mz("v0.105.0")
+
     if scenario_class_name == "MySqlInitialLoad":
         # PR#27058 (storage: wire up new reclock implementation) increased memory usage
         min_ancestor_mz_version_per_commit[

@@ -182,9 +182,9 @@ impl Catalog {
             .await
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
-        // Ensure the state changes from initialization are visible in the
-        // state.
-        state.update_storage_metadata(&txn);
+        let updates = txn.get_op_updates().collect();
+        let builtin_updates = state.apply_updates(updates);
+        assert_eq!(builtin_updates, Vec::new());
         txn.commit().await?;
         drop(storage);
 

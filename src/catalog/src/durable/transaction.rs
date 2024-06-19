@@ -17,6 +17,7 @@ use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::{u64_to_usize, usize_to_u64};
 use mz_ore::collections::{CollectionExt, HashSet};
+use mz_ore::now::EpochMillis;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_no_log, soft_assert_or_log};
 use mz_pgrepr::oid::FIRST_USER_OID;
@@ -51,8 +52,8 @@ use crate::durable::objects::{
 use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
     AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -183,8 +184,16 @@ impl<'a> Transaction<'a> {
         self.audit_log_updates.extend(events);
     }
 
-    pub fn insert_storage_usage_event(&mut self, metric: VersionedStorageUsage) {
+    pub fn insert_storage_usage_event(
+        &mut self,
+        shard_id: Option<String>,
+        size_bytes: u64,
+        collection_timestamp: EpochMillis,
+    ) -> Result<(), CatalogError> {
+        let id = self.get_and_increment_id(STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
+        let metric = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
         self.insert_storage_usage_events([metric]);
+        Ok(())
     }
 
     pub fn insert_storage_usage_events(
@@ -341,7 +350,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
-    ) -> Result<Vec<(&'static BuiltinLog, GlobalId, u32)>, CatalogError> {
+    ) -> Result<(), CatalogError> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
@@ -361,7 +370,7 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         owner_id: RoleId,
         config: ClusterConfig,
-    ) -> Result<Vec<(&'static BuiltinLog, GlobalId, u32)>, CatalogError> {
+    ) -> Result<(), CatalogError> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
@@ -380,7 +389,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
-    ) -> Result<Vec<(&'static BuiltinLog, GlobalId, u32)>, CatalogError> {
+    ) -> Result<(), CatalogError> {
         if let Err(_) = self.clusters.insert(
             ClusterKey { id: cluster_id },
             ClusterValue {
@@ -400,12 +409,12 @@ impl<'a> Transaction<'a> {
             .zip(oids.into_iter())
             .map(|((builtin, index_id), oid)| (builtin, index_id, oid))
             .collect();
-        for (builtin, index_id, oid) in &introspection_source_indexes {
+        for (builtin, index_id, oid) in introspection_source_indexes {
             let introspection_source_index = IntrospectionSourceIndex {
                 cluster_id,
                 name: builtin.name.to_string(),
-                index_id: *index_id,
-                oid: *oid,
+                index_id,
+                oid,
             };
             let (key, value) = introspection_source_index.into_key_value();
             self.introspection_sources
@@ -413,7 +422,7 @@ impl<'a> Transaction<'a> {
                 .expect("no uniqueness violation");
         }
 
-        Ok(introspection_source_indexes)
+        Ok(())
     }
 
     pub fn rename_cluster(
@@ -1563,8 +1572,16 @@ impl<'a> Transaction<'a> {
     /// These are mirrored so that we can toggle the flag with Launch Darkly,
     /// but use it in boot before Launch Darkly is available.
     pub fn set_txn_wal_tables(&mut self, value: TxnWalTablesImpl) -> Result<(), CatalogError> {
-        self.set_config(TXN_WAL_TABLES.into(), Some(u64::from(value)))?;
-        Ok(())
+        self.set_config(TXN_WAL_TABLES.into(), Some(u64::from(value)))
+    }
+
+    /// Removes the catalog `txn_wal_tables` "config" value to
+    /// match the `txn_wal_tables` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with Launch Darkly,
+    /// but use it in boot before Launch Darkly is available.
+    pub fn reset_txn_wal_tables(&mut self) -> Result<(), CatalogError> {
+        self.set_config(TXN_WAL_TABLES.into(), None)
     }
 
     /// Updates the catalog `system_config_synced` "config" value to true.

@@ -96,18 +96,18 @@ async fn test_persist_get_and_prune_storage_usage() {
 }
 
 async fn test_get_and_prune_storage_usage(openable_state: Box<dyn OpenableDurableCatalogState>) {
-    let old_event = VersionedStorageUsage::V1(StorageUsageV1 {
+    let old_event = StorageUsageV1 {
         id: 1,
         shard_id: Some("recent".to_string()),
         size_bytes: 42,
         collection_timestamp: 10,
-    });
-    let recent_event = VersionedStorageUsage::V1(StorageUsageV1 {
-        id: 1,
+    };
+    let recent_event = StorageUsageV1 {
+        id: 2,
         shard_id: Some("recent".to_string()),
         size_bytes: 42,
         collection_timestamp: 20,
-    });
+    };
     let deploy_generation = 0;
     let boot_ts = mz_repr::Timestamp::new(23);
 
@@ -121,9 +121,22 @@ async fn test_get_and_prune_storage_usage(openable_state: Box<dyn OpenableDurabl
         .await
         .unwrap();
     let mut txn = state.transaction().await.unwrap();
-    txn.insert_storage_usage_event(old_event.clone());
-    txn.insert_storage_usage_event(recent_event.clone());
+    txn.insert_storage_usage_event(
+        old_event.shard_id.clone(),
+        old_event.size_bytes.clone(),
+        old_event.collection_timestamp.clone(),
+    )
+    .unwrap();
+    txn.insert_storage_usage_event(
+        recent_event.shard_id.clone(),
+        recent_event.size_bytes.clone(),
+        recent_event.collection_timestamp.clone(),
+    )
+    .unwrap();
     txn.commit().await.unwrap();
+
+    let old_event = VersionedStorageUsage::V1(old_event);
+    let recent_event = VersionedStorageUsage::V1(recent_event);
 
     // Test with no retention period.
     let events = state

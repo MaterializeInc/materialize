@@ -529,7 +529,7 @@ impl Coordinator {
             .await?;
 
         // Update in-memory cluster replica statuses.
-        // TODO(jkosh44) All the builtin table updates should be handled as a builtin source
+        // TODO(jkosh44) All these builtin table updates should be handled as a builtin source
         // updates elsewhere.
         for (cluster_id, replica_id) in &cluster_replicas_to_drop {
             let replica_statuses =
