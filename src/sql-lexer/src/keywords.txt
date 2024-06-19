@@ -73,6 +73,7 @@ Character
 Characteristics
 Check
 Client
+Clock
 Close
 Cluster
 Clusters
