@@ -852,6 +852,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn smoketest_packed_numeric_roundtrips() {
         let og = PackedNumeric::from_value(Numeric::from(-42));
         let bytes = og.as_bytes();
