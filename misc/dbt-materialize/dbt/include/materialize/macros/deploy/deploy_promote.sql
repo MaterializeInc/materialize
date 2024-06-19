@@ -93,6 +93,7 @@
     COMMIT;
     {%- endcall %}
 {% else %}
+    {{ log("Starting dry run...", info=True) }}
     {% for schema in schemas %}
         {% set deploy_schema = schema ~ "_dbt_deploy" %}
         {{ log("DRY RUN: Swapping schemas " ~ schema ~ " and " ~ deploy_schema, info=True) }}
