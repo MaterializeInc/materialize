@@ -79,7 +79,7 @@ error: multiple LIMIT/FETCH clauses not allowed
 parse-statement roundtrip
 (SELECT LIMIT 1) FETCH FIRST ROW
 ----
-error: Expected end of statement, found FETCH
+error: multiple LIMIT/FETCH clauses not allowed
 (SELECT LIMIT 1) FETCH FIRST ROW
                  ^
 
