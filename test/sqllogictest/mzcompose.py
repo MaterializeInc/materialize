@@ -51,6 +51,7 @@ def workflow_selection(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--pattern",
         type=str,
         action="append",
+        help="Example: test/sqllogictest/map.slt",
     )
 
     parser.add_argument(
