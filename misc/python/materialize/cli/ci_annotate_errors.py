@@ -309,13 +309,19 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    test_analytics_config = create_test_analytics_config_with_hostname(
-        args.cloud_hostname
-    )
-    test_analytics_db = TestAnalyticsDb(test_analytics_config)
+    test_analytics_db = None
 
-    # always insert a build job regardless whether it has annotations or not
-    store_build_job_in_test_analytics(test_analytics_db)
+    try:
+        test_analytics_config = create_test_analytics_config_with_hostname(
+            args.cloud_hostname
+        )
+        test_analytics_db = TestAnalyticsDb(test_analytics_config)
+
+        # always insert a build job regardless whether it has annotations or not
+        store_build_job_in_test_analytics(test_analytics_db)
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        print(f"Uploading results failed! {e}")
 
     return annotate_logged_errors(args.log_files, test_analytics_db)
 
@@ -324,7 +330,7 @@ def annotate_errors(
     unknown_errors: Sequence[ObservedBaseError],
     known_errors: Sequence[ObservedBaseError],
     build_history_on_main: BuildHistoryOnMain | None,
-    test_analytics_db: TestAnalyticsDb,
+    test_analytics_db: TestAnalyticsDb | None,
 ) -> None:
     assert len(unknown_errors) > 0 or len(known_errors) > 0
     annotation_style = "info" if not unknown_errors else "error"
@@ -343,7 +349,8 @@ def annotate_errors(
 
     add_annotation_raw(style=annotation_style, markdown=annotation.to_markdown())
 
-    store_annotation_in_test_analytics(test_analytics_db, annotation)
+    if test_analytics_db is not None:
+        store_annotation_in_test_analytics(test_analytics_db, annotation)
 
 
 def group_identical_errors(
@@ -364,7 +371,7 @@ def group_identical_errors(
 
 
 def annotate_logged_errors(
-    log_files: list[str], test_analytics_db: TestAnalyticsDb
+    log_files: list[str], test_analytics_db: TestAnalyticsDb | None
 ) -> int:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
@@ -531,7 +538,9 @@ def annotate_logged_errors(
             known_errors=[],
         )
         add_annotation_raw(style="error", markdown=annotation.to_markdown())
-        store_annotation_in_test_analytics(test_analytics_db, annotation)
+
+        if test_analytics_db is not None:
+            store_annotation_in_test_analytics(test_analytics_db, annotation)
 
     return len(unknown_errors)
 
