@@ -13,7 +13,7 @@ use std::str::FromStr;
 use futures::future::BoxFuture;
 use maplit::btreeset;
 use mz_catalog::durable::{Item, Transaction};
-use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+use mz_catalog::memory::objects::StateUpdate;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp};
@@ -84,8 +84,9 @@ where
 pub(crate) async fn migrate(
     state: &CatalogState,
     tx: &mut Transaction<'_>,
+    item_updates: Vec<StateUpdate>,
     now: NowFn,
-    boot_ts: Timestamp,
+    _boot_ts: Timestamp,
     _connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let catalog_version = tx.get_catalog_content_version();
@@ -117,14 +118,6 @@ pub(crate) async fn migrate(
 
     // Load up a temporary catalog.
     let mut state = state.clone();
-    let item_updates = tx
-        .get_items()
-        .map(|item| StateUpdate {
-            kind: StateUpdateKind::Item(item),
-            ts: boot_ts,
-            diff: StateDiff::Addition,
-        })
-        .collect();
     // The catalog is temporary, so we can throw out the builtin updates.
     let _ = state.apply_updates_for_bootstrap(item_updates).await;
 

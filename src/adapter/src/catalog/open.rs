@@ -30,8 +30,8 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges, StateDiff, StateUpdate,
-    StateUpdateKind,
+    BootstrapStateUpdateKind, CatalogEntry, CatalogItem, CommentsMap, DefaultPrivileges,
+    StateUpdate, StateUpdateKind,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
@@ -40,13 +40,13 @@ use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{is_cluster_size_v2, ClusterId};
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::{CollectionExt, HashSet};
-use mz_ore::instrument;
 use mz_ore::now::to_datetime;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{instrument, soft_assert_no_log};
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::is_unstable_schema;
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, NameReference,
     RoleMembership, RoleVars,
@@ -175,6 +175,35 @@ impl Catalog {
         ),
         AdapterError,
     > {
+        /// Convert `updates` into a `Vec` that can be consolidated by doing the following:
+        ///
+        ///   - Convert each update into a type that implements [`std::cmp::Ord`].
+        ///   - Update the timestamp of each update to the same value.
+        ///   - Convert the diff of each update to a type that implements
+        ///     [`differential_dataflow::difference::Semigroup`].
+        ///
+        /// [`StateUpdateKind`] does not implement [`std::cmp::Ord`] only because it contains a
+        /// variant for temporary items, which do not implement [`std::cmp::Ord`]. However, we know
+        /// that during bootstrap no temporary items exist, because they are not persisted and are
+        /// only created after bootstrap is complete. So we forcibly convert each
+        /// [`StateUpdateKind`] into an [`BootstrapStateUpdateKind`], which is identical to
+        /// [`StateUpdateKind`] except it doesn't have a temporary item variant and does implement
+        /// [`std::cmp::Ord`].
+        fn into_consolidatable_updates(
+            updates: Vec<StateUpdate>,
+            ts: Timestamp,
+        ) -> Vec<(BootstrapStateUpdateKind, Timestamp, Diff)> {
+            updates
+                .into_iter()
+                .map(|StateUpdate { kind, ts: _, diff }| {
+                    let kind: BootstrapStateUpdateKind = kind.try_into().unwrap_or_else(|e| {
+                        panic!("temporary items do not exist during bootstrap: {e:?}")
+                    });
+                    (kind, ts, Diff::from(diff))
+                })
+                .collect()
+        }
+
         for builtin_role in BUILTIN_ROLES {
             assert!(
                 is_reserved_name(builtin_role.name),
@@ -233,6 +262,7 @@ impl Catalog {
         };
 
         let is_read_only = storage.is_read_only();
+        let mut updates: Vec<_> = storage.sync_to_current_updates().await?;
         let mut txn = storage.transaction().await?;
 
         // Migrate/update durable data before we start loading the in-memory catalog.
@@ -270,6 +300,8 @@ impl Catalog {
             }
             migrated_builtins
         };
+        let op_updates = txn.get_and_commit_op_updates();
+        updates.extend(op_updates);
 
         // Seed the in-memory catalog with values that don't come from the durable catalog.
         {
@@ -291,29 +323,48 @@ impl Catalog {
 
         let mut builtin_table_updates = Vec::new();
 
+        // Make life easier by consolidating all updates, so that we end up with only positive
+        // diffs.
+        let commit_ts = txn.commit_ts();
+        let mut updates = into_consolidatable_updates(updates, commit_ts);
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+        soft_assert_no_log!(
+            updates.iter().all(|(_, _, diff)| *diff == 1),
+            "consolidated updates should be positive during startup: {updates:?}"
+        );
+
         let mut pre_item_updates = Vec::new();
         let mut item_updates = Vec::new();
         let mut post_item_updates = Vec::new();
-        for update in txn.get_bootstrap_updates() {
-            match update.kind {
-                StateUpdateKind::Role(_)
-                | StateUpdateKind::Database(_)
-                | StateUpdateKind::Schema(_)
-                | StateUpdateKind::DefaultPrivilege(_)
-                | StateUpdateKind::SystemPrivilege(_)
-                | StateUpdateKind::SystemConfiguration(_)
-                | StateUpdateKind::Cluster(_)
-                | StateUpdateKind::IntrospectionSourceIndex(_)
-                | StateUpdateKind::ClusterReplica(_)
-                | StateUpdateKind::SystemObjectMapping(_) => pre_item_updates.push(update),
-                StateUpdateKind::Item(_) => item_updates.push(update),
-                StateUpdateKind::Comment(_)
-                | StateUpdateKind::AuditLog(_)
-                | StateUpdateKind::StorageUsage(_)
-                | StateUpdateKind::StorageCollectionMetadata(_)
-                | StateUpdateKind::UnfinalizedShard(_) => post_item_updates.push(update),
-                StateUpdateKind::TemporaryItem(item) => {
-                    unreachable!("temporary items don't exist during startup: {item:?}")
+        for (kind, ts, diff) in updates {
+            match kind {
+                BootstrapStateUpdateKind::Role(_)
+                | BootstrapStateUpdateKind::Database(_)
+                | BootstrapStateUpdateKind::Schema(_)
+                | BootstrapStateUpdateKind::DefaultPrivilege(_)
+                | BootstrapStateUpdateKind::SystemPrivilege(_)
+                | BootstrapStateUpdateKind::SystemConfiguration(_)
+                | BootstrapStateUpdateKind::Cluster(_)
+                | BootstrapStateUpdateKind::IntrospectionSourceIndex(_)
+                | BootstrapStateUpdateKind::ClusterReplica(_)
+                | BootstrapStateUpdateKind::SystemObjectMapping(_) => {
+                    pre_item_updates.push(StateUpdate {
+                        kind: kind.into(),
+                        ts,
+                        diff: diff.try_into().expect("valid diff"),
+                    })
+                }
+                BootstrapStateUpdateKind::Item(_) => item_updates.push((kind, ts, diff)),
+                BootstrapStateUpdateKind::Comment(_)
+                | BootstrapStateUpdateKind::AuditLog(_)
+                | BootstrapStateUpdateKind::StorageUsage(_)
+                | BootstrapStateUpdateKind::StorageCollectionMetadata(_)
+                | BootstrapStateUpdateKind::UnfinalizedShard(_) => {
+                    post_item_updates.push(StateUpdate {
+                        kind: kind.into(),
+                        ts,
+                        diff: diff.try_into().expect("valid diff"),
+                    })
                 }
             }
         }
@@ -326,10 +377,20 @@ impl Catalog {
             .unwrap_or_else(|| "new".to_string());
 
         // Migrate item ASTs.
-        if !config.skip_migrations {
+        let item_updates = if !config.skip_migrations {
+            let migration_item_updates = item_updates
+                .iter()
+                .cloned()
+                .map(|(kind, ts, diff)| StateUpdate {
+                    kind: kind.into(),
+                    ts,
+                    diff: diff.try_into().expect("valid diff"),
+                })
+                .collect();
             migrate::migrate(
                 &state,
                 &mut txn,
+                migration_item_updates,
                 config.now,
                 config.boot_ts,
                 &state.config.connection_context,
@@ -343,22 +404,24 @@ impl Catalog {
                 })
             })?;
             txn.set_catalog_content_version(config.build_info.version.to_string())?;
-            // Throw the existing item updates away because they may have been re-written in
-            // the migration.
-            let item_updates = txn
-                .get_items()
-                .map(|item| StateUpdate {
-                    kind: StateUpdateKind::Item(item),
-                    ts: config.boot_ts,
-                    diff: StateDiff::Addition,
-                })
-                .collect();
-            let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
-            builtin_table_updates.extend(builtin_table_update);
+            let op_item_updates = txn.get_and_commit_op_updates();
+            let op_item_updates = into_consolidatable_updates(op_item_updates, commit_ts);
+            item_updates.extend(op_item_updates);
+            differential_dataflow::consolidation::consolidate_updates(&mut item_updates);
+            item_updates
         } else {
-            let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
-            builtin_table_updates.extend(builtin_table_update);
-        }
+            item_updates
+        };
+        let item_updates = item_updates
+            .into_iter()
+            .map(|(kind, ts, diff)| StateUpdate {
+                kind: kind.into(),
+                ts,
+                diff: diff.try_into().expect("valid diff"),
+            })
+            .collect();
+        let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
+        builtin_table_updates.extend(builtin_table_update);
 
         let builtin_table_update = state.apply_updates_for_bootstrap(post_item_updates).await;
         builtin_table_updates.extend(builtin_table_update);
@@ -381,10 +444,10 @@ impl Catalog {
             Catalog::apply_builtin_migration(&mut state, &mut txn, &mut builtin_migration_metadata)
                 .await?;
         builtin_table_updates.extend(builtin_table_update);
-
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
 
         txn.commit().await?;
+
         Ok((
             state,
             builtin_migration_metadata,
@@ -643,51 +706,30 @@ impl Catalog {
                     _ => unreachable!("all operators must be scalar functions"),
                 }
             }
-            let audit_logs = catalog
-                .storage()
-                .await
-                .get_audit_logs()
-                .await?
-                .into_iter()
-                .map(|event| StateUpdate {
-                    kind: StateUpdateKind::AuditLog(mz_catalog::durable::objects::AuditLog {
-                        event,
-                    }),
-                    ts: boot_ts,
-                    diff: StateDiff::Addition,
-                })
-                .collect();
-            builtin_table_updates.extend(catalog.state.generate_builtin_table_updates(audit_logs));
 
-            // To avoid reading over storage_usage events multiple times, do both
-            // the table updates and delete calculations in a single read over the
-            // data.
             let wait_for_consolidation = catalog
                 .system_config()
                 .wait_catalog_consolidation_on_startup();
-            let storage_usage_events = catalog
-                .storage()
-                .await
-                .get_and_prune_storage_usage(
-                    config.storage_usage_retention_period,
-                    boot_ts,
-                    wait_for_consolidation,
-                )
-                .await?
-                .into_iter()
-                .map(|metric| StateUpdate {
-                    kind: StateUpdateKind::StorageUsage(
-                        mz_catalog::durable::objects::StorageUsage { metric },
-                    ),
-                    ts: boot_ts,
-                    diff: StateDiff::Addition,
-                })
-                .collect();
-            builtin_table_updates.extend(
-                catalog
-                    .state
-                    .generate_builtin_table_updates(storage_usage_events),
-            );
+            {
+                let mut storage = catalog.storage().await;
+                storage
+                    .prune_storage_usage(
+                        config.storage_usage_retention_period,
+                        boot_ts,
+                        wait_for_consolidation,
+                    )
+                    .await?;
+                let updates = storage.sync_to_current_updates().await?;
+                soft_assert_no_log!(
+                    updates
+                        .iter()
+                        .all(|update| matches!(update.kind, StateUpdateKind::StorageUsage(_))),
+                    "unexpected update kinds: {updates:?}"
+                );
+                let storage_usage_builtin_table_updates =
+                    catalog.state.generate_builtin_table_updates(updates);
+                builtin_table_updates.extend(storage_usage_builtin_table_updates);
+            }
 
             for ip in &catalog.state.egress_ips {
                 builtin_table_updates.push(
@@ -891,7 +933,6 @@ impl Catalog {
         migration_metadata: &mut BuiltinMigrationMetadata,
     ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, Error> {
         let mut builtin_table_updates = Vec::new();
-        txn.commit_op();
         txn.remove_items(&migration_metadata.user_item_drop_ops.drain(..).collect())?;
         txn.update_system_object_mappings(std::mem::take(
             &mut migration_metadata.migrated_system_object_mappings,
@@ -908,10 +949,9 @@ impl Catalog {
                     )
                 }),
         )?;
-        let updates = txn.get_op_updates().collect();
+        let updates = txn.get_and_commit_op_updates();
         let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
         builtin_table_updates.extend(builtin_table_update);
-        txn.commit_op();
         for CreateOp {
             id,
             oid,
@@ -933,10 +973,9 @@ impl Catalog {
                 owner_id.clone(),
                 privileges.all_values_owned().collect(),
             )?;
-            let updates = txn.get_op_updates().collect();
+            let updates = txn.get_and_commit_op_updates();
             let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
             builtin_table_updates.extend(builtin_table_update);
-            txn.commit_op();
         }
         Ok(builtin_table_updates)
     }
