@@ -96,7 +96,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         "type": "storage"
       }
     },
-    "fast_path_clusters": []
+    "fast_path_clusters": {}
   }
 }
 EOF
@@ -313,7 +313,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
         "type": "storage"
       }
     },
-    "fast_path_clusters": []
+    "fast_path_clusters": {}
   }
 }
 EOF
@@ -432,7 +432,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         "type": "compute"
       }
     },
-    "fast_path_clusters": []
+    "fast_path_clusters": {}
   }
 }
 EOF
@@ -651,7 +651,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
         "type": "compute"
       }
     },
-    "fast_path_clusters": []
+    "fast_path_clusters": {}
   }
 }
 EOF
@@ -744,9 +744,12 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         "type": "storage"
       }
     },
-    "fast_path_clusters": [
-      "quickstart"
-    ]
+    "fast_path_clusters": {
+      "quickstart": {
+        "index": "materialize.public.t_primary_idx",
+        "on": "materialize.public.t"
+      }
+    }
   }
 }
 EOF
