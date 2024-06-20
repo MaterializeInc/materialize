@@ -37,7 +37,7 @@
     {% endif %}
     {% if schema_contains_sinks(schema) %}
         {{ exceptions.raise_compiler_error("""
-        Schema " ~ schema ~ " contains sinks.
+        Production schema " ~ schema ~ " contains sinks.
         Blue/green deployments require sinks to be in a dedicated schema.
         """) }}
     {% endif %}
@@ -50,7 +50,7 @@
     {% if cluster_contains_sinks(cluster) %}
         {{ exceptions.raise_compiler_error("""
         Production cluster " ~ cluster ~ " contains sinks.
-        Sinks should be isolated in their own cluster.
+        Blue/green deployments require sinks to be in a dedicated cluster.
         """) }}
     {% endif %}
 {% endfor %}
