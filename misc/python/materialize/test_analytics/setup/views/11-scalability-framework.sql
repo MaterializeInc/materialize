@@ -15,54 +15,54 @@
 
 CREATE OR REPLACE VIEW v_scalability_framework_result_per_day AS
     SELECT
-        branch,
-        workload_name,
-        workload_group,
-        framework_version,
-        workload_version,
-        concurrency,
-        date_trunc('day', date) AS day,
-        min(count) AS min_count,
-        min(tps) AS min_tps
-    FROM scalability_framework_result r
+        b.branch,
+        res.workload_name,
+        res.workload_group,
+        res.framework_version,
+        res.workload_version,
+        res.concurrency,
+        date_trunc('day', b.date) AS day,
+        min(res.count) AS min_count,
+        min(res.tps) AS min_tps
+    FROM scalability_framework_result res
     INNER JOIN build_job bj
-    ON bj.build_job_id = r.build_job_id
+    ON bj.build_job_id = res.build_job_id
     INNER JOIN build b
     ON b.build_id = bj.build_id
     WHERE bj.is_latest_retry = TRUE
     GROUP BY
-        branch,
-        workload_name,
-        workload_group,
-        framework_version,
-        workload_version,
-        concurrency,
-        date_trunc('day', date)
+        b.branch,
+        res.workload_name,
+        res.workload_group,
+        res.framework_version,
+        res.workload_version,
+        res.concurrency,
+        date_trunc('day', b.date)
 ;
 
 CREATE OR REPLACE VIEW v_scalability_framework_result_per_week AS
     SELECT
-        branch,
-        workload_name,
-        workload_group,
-        framework_version,
-        workload_version,
-        concurrency,
-        date_trunc('week', date) AS day,
-        min(count) AS min_count,
-        min(tps) AS min_tps
-    FROM scalability_framework_result r
+        b.branch,
+        res.workload_name,
+        res.workload_group,
+        res.framework_version,
+        res.workload_version,
+        res.concurrency,
+        date_trunc('week', b.date) AS day,
+        min(res.count) AS min_count,
+        min(res.tps) AS min_tps
+    FROM scalability_framework_result res
     INNER JOIN build_job bj
-    ON bj.build_job_id = r.build_job_id
+    ON bj.build_job_id = res.build_job_id
     INNER JOIN build b
     ON b.build_id = bj.build_id
     WHERE bj.is_latest_retry = TRUE
     GROUP BY
-        branch,
-        workload_name,
-        workload_group,
-        framework_version,
-        workload_version,
-        concurrency,
-        date_trunc('week', date)
+        b.branch,
+        res.workload_name,
+        res.workload_group,
+        res.framework_version,
+        res.workload_version,
+        res.concurrency,
+        date_trunc('week', b.date)
 ;
