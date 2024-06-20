@@ -245,10 +245,6 @@ impl Catalog {
                     txn.upsert_system_config(&name, value)?;
                 }
                 txn.set_system_config_synced_once()?;
-                // This mirrors the `txn_wal_tables` "system var" into the catalog
-                // storage "config" collection so that we can toggle the flag with
-                // Launch Darkly, but use it in boot before Launch Darkly is available.
-                txn.set_txn_wal_tables(state.system_config().txn_wal_tables())?;
             }
             // Add any new builtin objects and remove old ones.
             let migrated_builtins = add_new_remove_old_builtin_items_migration(&mut txn)?;

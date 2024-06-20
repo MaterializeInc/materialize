@@ -170,9 +170,6 @@ def run_workload(c: Composition, workload: Workload) -> None:
                 external_cockroach=True,
                 external_minio=True,
                 sanity_restart=False,
-                additional_system_parameter_defaults={
-                    "persist_txn_tables": mzs[mz_name]
-                },
             )
             for mz_name in mzs
         ]
