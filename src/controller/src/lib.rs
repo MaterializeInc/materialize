@@ -322,7 +322,7 @@ where
             return;
         }
 
-        self.read_only = true;
+        self.read_only = false;
 
         self.compute.allow_writes();
         // TODO: Storage does not yet understand the concept of read-only
@@ -703,10 +703,10 @@ where
             clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,
             deploy_generation: config.deploy_generation,
-            // We initialize to false, but then call `allow_writes()` below,
+            // We initialize to true, but then call `allow_writes()` below,
             // based on our input. This way we avoid having the same logic in
             // two places.
-            read_only: false,
+            read_only: true,
             orchestrator: config.orchestrator.namespace("cluster"),
             readiness: Readiness::NotReady,
             metrics_tasks: BTreeMap::new(),
