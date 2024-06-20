@@ -30,7 +30,6 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
-use mz_pid_file::PidFile;
 use mz_service::emit_boot_diagnostics;
 use mz_service::grpc::{GrpcServer, GrpcServerMetrics, MAX_GRPC_MESSAGE_SIZE};
 use mz_service::secrets::SecretsReaderCliArgs;
@@ -115,13 +114,6 @@ struct Args {
     #[clap(long, env = "AWS_CONNECTION_ROLE_ARN")]
     aws_connection_role_arn: Option<String>,
 
-    // === Process orchestrator options. ===
-    /// Where to write a PID lock file.
-    ///
-    /// Should only be set by the local process orchestrator.
-    #[clap(long, env = "PID_FILE_LOCATION", value_name = "PATH")]
-    pid_file_location: Option<PathBuf>,
-
     // === Secrets reader options. ===
     #[clap(flatten)]
     secrets: SecretsReaderCliArgs,
@@ -195,11 +187,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
     mz_metrics::register_metrics_into(&metrics_registry).await;
-
-    let mut _pid_file = None;
-    if let Some(pid_file_location) = &args.pid_file_location {
-        _pid_file = Some(PidFile::open(pid_file_location).unwrap());
-    }
 
     let secrets_reader = args
         .secrets

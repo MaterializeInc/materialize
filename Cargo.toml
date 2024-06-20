@@ -64,7 +64,6 @@ members = [
     "src/pgtz",
     "src/pgwire",
     "src/pgwire-common",
-    "src/pid-file",
     "src/postgres-client",
     "src/postgres-util",
     "src/proc",

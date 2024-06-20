@@ -92,7 +92,6 @@
 /src/pgrepr                         @MaterializeInc/adapter
 /src/pgtest                         @MaterializeInc/adapter
 /src/pgwire                         @MaterializeInc/adapter
-/src/pid-file                       @benesch
 /src/postgres-util                  @MaterializeInc/cluster
 /src/prof                           @teskje
 /src/proto                          @aalexandrov

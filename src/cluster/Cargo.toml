@@ -23,7 +23,6 @@ mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
-mz-pid-file = { path = "../pid-file" }
 mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
 mz-timely-util = { path = "../timely-util" }
