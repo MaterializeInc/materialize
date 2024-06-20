@@ -124,7 +124,7 @@ pub struct PrimitiveStats<T> {
     ///
     /// Similarly, if the column is empty, this will contain `T: Default`.
     /// Emptiness will be indicated in statistics higher up (i.e.
-    /// [StructStats]).
+    /// [`crate::stats::StructStats`]).
     pub lower: T,
     /// Same as [Self::lower] but an (also inclusive) upper bound.
     pub upper: T,
