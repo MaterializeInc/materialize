@@ -167,7 +167,18 @@ class Identifiers(Check):
         > SHOW TYPES;
         {dq_print(self.ident["type"])}
 
-        > SHOW SCHEMAS FROM {dq(self.ident["db"])};
+        >[version>=10600] SHOW SCHEMAS FROM {dq(self.ident["db"])};
+        public
+        information_schema
+        mz_catalog
+        mz_catalog_unstable
+        mz_unsafe
+        mz_internal
+        mz_introspection
+        pg_catalog
+        {dq_print(self.ident["schema"])}
+
+        >[version<10600] SHOW SCHEMAS FROM {dq(self.ident["db"])};
         public
         information_schema
         mz_catalog

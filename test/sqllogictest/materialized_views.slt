@@ -1006,6 +1006,12 @@ NULL  -1  -2
 # Regression test for https://github.com/MaterializeInc/materialize/issues/24288
 # The sleep makes _optimization_ take a few seconds, so we need to grab read holds in purification right away after
 # choosing a timestamp for mz_now.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unstable_dependencies = true
+----
+COMPLETE 0
+
 statement ok
 create materialized view mv4 with (refresh at creation) as
 select * from
