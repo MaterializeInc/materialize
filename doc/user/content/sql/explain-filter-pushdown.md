@@ -22,8 +22,8 @@ The following objects can be explained with `EXPLAIN FILTER PUSHDOWN`:
 
  Explained object           | Description
 ----------------------------|-------------------------------------------------------------------------------
- **select_stmt**            | Display a plan for an ad-hoc [`SELECT` statement](../select).
- **MATERIALIZED VIEW name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing materialized view.
+ **select_stmt**            | Display statistics for an ad-hoc [`SELECT` statement](../select).
+ **MATERIALIZED VIEW name** | Display statistics for an existing materialized view.
 
 ## Details
 
