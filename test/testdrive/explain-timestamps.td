@@ -28,7 +28,7 @@ $ set-regex match=(s\d+|\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\
 > SET TRANSACTION_ISOLATION = 'STRICT SERIALIZABLE';
 > SET REAL_TIME_RECENCY TO TRUE
 > EXPLAIN TIMESTAMP FOR SELECT * FROM t1
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: true\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.t1 (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\n    real time recency timestamp:             0 <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: true\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.t1 (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
 # Test autorouting explain timestamp queries
 > EXPLAIN TIMESTAMP FOR SELECT * from mz_internal.mz_cluster_replica_metrics
