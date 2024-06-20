@@ -745,7 +745,7 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
     );
 
     let mut system = System::new();
-    let Some(process) = find_process_from_pid_file(&mut system, &pid_file).await else {
+    let Some(process) = find_process_from_pid_file(&mut system, pid_file).await else {
         return;
     };
     let pid = process.pid();
