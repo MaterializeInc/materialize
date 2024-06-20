@@ -35,7 +35,7 @@ pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
 /// Enable installation of introspection subscribes.
 pub const ENABLE_INTROSPECTION_SUBSCRIBES: Config<bool> = Config::new(
     "enable_introspection_subscribes",
-    false,
+    true,
     "Enable installation of introspection subscribes.",
 );
 

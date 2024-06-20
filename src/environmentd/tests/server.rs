@@ -921,6 +921,13 @@ fn test_cancel_long_running_query() {
 }
 
 fn test_cancellation_cancels_dataflows(query: &str) {
+    // Query that returns how many dataflows are currently installed.
+    // Accounts for the presence of introspection subscribe dataflows by ignoring those.
+    const DATAFLOW_QUERY: &str = " \
+        SELECT count(*) \
+        FROM mz_introspection.mz_dataflows \
+        WHERE name NOT LIKE '%introspection-subscribe%'";
+
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
@@ -933,10 +940,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
     // No dataflows expected at startup.
     assert_eq!(
         client1
-            .query_one(
-                "SELECT count(*) FROM mz_introspection.mz_dataflow_operators",
-                &[]
-            )
+            .query_one(DATAFLOW_QUERY, &[])
             .unwrap()
             .get::<_, i64>(0),
         0
@@ -947,10 +951,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
         Retry::default()
             .retry(|_state| {
                 let count: i64 = client2
-                    .query_one(
-                        "SELECT count(*) FROM mz_introspection.mz_dataflow_operators",
-                        &[],
-                    )
+                    .query_one(DATAFLOW_QUERY, &[])
                     .map_err(|_| ())
                     .unwrap()
                     .get(0);
@@ -973,10 +974,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
     Retry::default()
         .retry(|_state| {
             let count: i64 = client1
-                .query_one(
-                    "SELECT count(*) FROM mz_introspection.mz_dataflow_operators",
-                    &[],
-                )
+                .query_one(DATAFLOW_QUERY, &[])
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
@@ -1006,6 +1004,13 @@ fn test_cancel_insert_select() {
 }
 
 fn test_closing_connection_cancels_dataflows(query: String) {
+    // Query that returns how many dataflows are currently installed.
+    // Accounts for the presence of introspection subscribe dataflows by ignoring those.
+    const DATAFLOW_QUERY: &str = " \
+        SELECT count(*) \
+        FROM mz_introspection.mz_dataflows \
+        WHERE name NOT LIKE '%introspection-subscribe%'";
+
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
@@ -1045,10 +1050,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
                 panic!("waited too long for psql to send the query");
             }
             let count: i64 = client
-                .query_one(
-                    "SELECT count(*) FROM mz_introspection.mz_dataflow_operators",
-                    &[],
-                )
+                .query_one(DATAFLOW_QUERY, &[])
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
@@ -1074,10 +1076,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
                 panic!("waited too long for dataflow cancellation");
             }
             let count: i64 = client
-                .query_one(
-                    "SELECT count(*) FROM mz_introspection.mz_dataflow_operators",
-                    &[],
-                )
+                .query_one(DATAFLOW_QUERY, &[])
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
