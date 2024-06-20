@@ -254,10 +254,12 @@ impl Coordinator {
             (StatementLifecycleHistory, statement_lifecycle_updates),
             (SqlText, sql_text_updates),
         ] {
-            self.controller
-                .storage
-                .append_introspection_updates(type_, updates)
-                .await;
+            if !updates.is_empty() {
+                self.controller
+                    .storage
+                    .append_introspection_updates(type_, updates)
+                    .await;
+            }
         }
     }
 

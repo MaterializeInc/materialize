@@ -83,14 +83,16 @@ where
         self.previous_statuses
             .extend(new.iter().map(|r| (r.id, r.status)));
 
-        self.collection_manager
-            .blind_write(
-                source_status_history_id,
-                new.into_iter()
-                    .map(|update| (Row::from(update), 1))
-                    .collect(),
-            )
-            .await;
+        if !new.is_empty() {
+            self.collection_manager
+                .blind_write(
+                    source_status_history_id,
+                    new.into_iter()
+                        .map(|update| (Row::from(update), 1))
+                        .collect(),
+                )
+                .await;
+        }
     }
 }
 
