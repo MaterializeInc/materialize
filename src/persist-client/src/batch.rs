@@ -32,8 +32,7 @@ use mz_persist::indexed::columnar::{
 };
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
-use mz_persist_types::stats::primitive::{truncate_bytes, TruncateBound, TRUNCATE_LEN};
-use mz_persist_types::stats::trim_to_budget;
+use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use mz_timely_util::order::Reverse;

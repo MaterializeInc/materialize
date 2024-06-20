@@ -37,7 +37,9 @@ pub mod structured;
 
 pub use bytes::{AtomicBytesStats, BytesStats};
 pub use json::{JsonMapElementStats, JsonStats};
-pub use primitive::{PrimitiveStats, PrimitiveStatsVariants};
+pub use primitive::{
+    truncate_bytes, PrimitiveStats, PrimitiveStatsVariants, TruncateBound, TRUNCATE_LEN,
+};
 pub use structured::StructStats;
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_types.stats.rs"));
@@ -174,7 +176,6 @@ impl PartStats {
         Ok(PartStats { key })
     }
 }
-
 
 /// Statistics about a column of some optional type.
 pub struct OptionStats<T> {
