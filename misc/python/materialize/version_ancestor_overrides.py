@@ -34,7 +34,7 @@ def get_ancestor_overrides_for_performance_regressions(
     if scenario_class_name == "SwapSchema":
         # PR#27607 (catalog: Listen for updates in transactions) increased wallclock
         min_ancestor_mz_version_per_commit[
-            "d5388cccbcd860b04486573f632fb9337e7335a2"
+            "eef900de75d25fe854524dff9feeed8057e4bf79"
         ] = MzVersion.parse_mz("v0.105.0")
 
     if scenario_class_name == "MySqlInitialLoad":
