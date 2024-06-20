@@ -53,7 +53,6 @@ copyright_files=$(grep -vE \
     -e '^misc/completions/.*' \
     -e '^misc/python/MANIFEST\.in' \
     -e '^test/chbench/chbench' \
-    -e '^src/pid-file/libbsd' \
     -e '^src/pgtz/tznames/.*' \
     -e '^test/sqllogictest/postgres/testdata/.*\.data' \
     -e '^test/pgtest/.*\.pt' \

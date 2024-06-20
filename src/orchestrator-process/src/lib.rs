@@ -19,6 +19,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::{ExitStatus, Stdio};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -35,16 +36,15 @@ use mz_orchestrator::{
     CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
     ServiceEvent, ServiceProcessMetrics, ServiceStatus,
 };
-use mz_ore::cast::{CastFrom, ReinterpretCast, TryCastFrom};
+use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::error::ErrorExt;
 use mz_ore::netio::UnixSocketAddr;
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
-use mz_pid_file::PidFile;
 use scopeguard::defer;
 use serde::Serialize;
 use sha1::{Digest, Sha1};
-use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
+use sysinfo::{Pid, PidExt, Process, ProcessExt, ProcessRefreshKind, System, SystemExt};
 use tokio::fs::remove_dir_all;
 use tokio::net::{TcpListener, UnixStream};
 use tokio::process::{Child, Command};
@@ -110,10 +110,6 @@ pub struct ProcessOrchestratorTcpProxyConfig {
 /// **This orchestrator is for development only.** Due to limitations in the
 /// Unix process API, it does not exactly conform to the documented semantics
 /// of `Orchestrator`.
-///
-/// Processes launched by this orchestrator must support a `--pid-file-location`
-/// command line flag which causes a PID file to be emitted at the specified
-/// path.
 #[derive(Debug)]
 pub struct ProcessOrchestrator {
     image_dir: PathBuf,
@@ -469,27 +465,19 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
         // If the service was orphaned by a prior incarnation of the
         // orchestrator, it won't have been under supervision and therefore will
-        // still be running. So kill any PIDs listed in the run directory.
-        //
-        // This is racy in several ways. It's possible that an orphaned process
-        // has yet to write its PID file and will get missed. It's also possible
-        // that the PID file is stale and the specified PID has been reused by
-        // an unrelated process. However, we accept both of these risks, as
-        // the process orchestrator is only used in development and this has
-        // the desired behavior the vast majority of the time.
-        let mut system = System::new();
+        // still be running. So kill any process that we have state for in the
+        // run directory.
         if let Ok(mut entries) = fs::read_dir(&run_dir).await {
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
                 if path.extension() == Some(OsStr::new("pid")) {
-                    if let Ok(pid) = PidFile::read(path) {
-                        let pid = Pid::from_u32(u32::reinterpret_cast(pid));
-                        system.refresh_process_specifics(pid, ProcessRefreshKind::new());
-                        if let Some(process) = system.process(pid) {
-                            info!("terminating orphaned process for {full_id} with PID {pid}");
-                            process.kill();
-                        }
-                    }
+                    let mut system = System::new();
+                    let Some(process) = find_process_from_pid_file(&mut system, &path).await else {
+                        continue;
+                    };
+                    let pid = process.pid();
+                    info!("terminating orphaned process for {full_id} with PID {pid}");
+                    process.kill();
                 }
             }
         }
@@ -606,7 +594,6 @@ impl NamespacedProcessOrchestrator {
             })
             .collect();
         let mut args = args(&listen_addrs);
-        args.push(format!("--pid-file-location={}", pid_file.display()));
 
         if disk {
             if let Some(scratch) = &scratch_dir {
@@ -661,7 +648,9 @@ impl NamespacedProcessOrchestrator {
                     cmd.stdout(Stdio::null());
                     cmd.stderr(Stdio::null());
                 }
-                match spawn_process(&state_updater, cmd, !command_wrapper.is_empty()).await {
+                match spawn_process(&state_updater, cmd, &pid_file, !command_wrapper.is_empty())
+                    .await
+                {
                     Ok(status) => {
                         if propagate_crashes && did_process_crash(status) {
                             panic!("{full_id}-{i} crashed; aborting because propagate_crashes is enabled");
@@ -755,16 +744,11 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
         state_updater.namespace, state_updater.id, state_updater.i
     );
 
-    let Ok(pid) = PidFile::read(pid_file) else {
-        return;
-    };
-
-    let pid = Pid::from_u32(u32::reinterpret_cast(pid));
     let mut system = System::new();
-    system.refresh_process_specifics(pid, ProcessRefreshKind::new());
-    let Some(process) = system.process(pid) else {
+    let Some(process) = find_process_from_pid_file(&mut system, &pid_file).await else {
         return;
     };
+    let pid = process.pid();
 
     info!(%pid, "discovered existing process for {name}");
     state_updater.update_state(ProcessStatus::Ready { pid });
@@ -806,6 +790,7 @@ fn interpolate_command(
 async fn spawn_process(
     state_updater: &ProcessStateUpdater,
     mut cmd: Command,
+    pid_file: &Path,
     send_sigterm: bool,
 ) -> Result<ExitStatus, anyhow::Error> {
     struct KillOnDropChild(Child, bool);
@@ -825,9 +810,18 @@ async fn spawn_process(
     }
 
     let mut child = KillOnDropChild(cmd.spawn()?, send_sigterm);
-    state_updater.update_state(ProcessStatus::Ready {
-        pid: Pid::from_u32(child.0.id().unwrap()),
-    });
+
+    // Immediately write out a file containing the PID of the child process and
+    // its start time. We'll use this state to rediscover our children if we
+    // crash and restart. There's a very small window where we can crash after
+    // having spawned the child but before writing this file, in which case we
+    // might orphan the process. We accept this risk, though. It's hard to do
+    // anything more robust given the Unix APIs available to us, and the
+    // solution here is good enough given that the process orchestrator is only
+    // used in development/testing.
+    let pid = Pid::from_u32(child.0.id().unwrap());
+    write_pid_file(pid_file, pid).await?;
+    state_updater.update_state(ProcessStatus::Ready { pid });
     Ok(child.0.wait().await?)
 }
 
@@ -839,6 +833,41 @@ fn did_process_crash(status: ExitStatus) -> bool {
         status.signal(),
         Some(SIGABRT | SIGBUS | SIGSEGV | SIGTRAP | SIGILL)
     )
+}
+
+async fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> {
+    let mut system = System::new();
+    system.refresh_process_specifics(pid, ProcessRefreshKind::new());
+    let start_time = system.process(pid).map_or(0, |p| p.start_time());
+    fs::write(pid_file, format!("{pid}\n{start_time}\n")).await?;
+    Ok(())
+}
+
+async fn find_process_from_pid_file<'a>(
+    system: &'a mut System,
+    pid_file: &Path,
+) -> Option<&'a Process> {
+    let Ok(contents) = fs::read_to_string(pid_file).await else {
+        return None;
+    };
+    let lines = contents.trim().split('\n').collect::<Vec<_>>();
+    let [pid, start_time] = lines.as_slice() else {
+        return None;
+    };
+    let Ok(pid) = Pid::from_str(pid) else {
+        return None;
+    };
+    let Ok(start_time) = u64::from_str(start_time) else {
+        return None;
+    };
+    system.refresh_process_specifics(pid, ProcessRefreshKind::new());
+    let process = system.process(pid)?;
+    // Checking the start time protects against killing an unrelated process due
+    // to PID reuse.
+    if process.start_time() != start_time {
+        return None;
+    }
+    Some(process)
 }
 
 struct TcpProxyConfig {

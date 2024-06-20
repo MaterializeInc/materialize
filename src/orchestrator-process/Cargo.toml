@@ -21,7 +21,6 @@ libc = "0.2.138"
 maplit = "1.0.2"
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["async"] }
-mz-pid-file = { path = "../pid-file" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 nix = "0.26.1"

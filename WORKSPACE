@@ -406,7 +406,6 @@ crates_repository(
         "//:src/pgtz/Cargo.toml",
         "//:src/pgwire-common/Cargo.toml",
         "//:src/pgwire/Cargo.toml",
-        "//:src/pid-file/Cargo.toml",
         "//:src/postgres-client/Cargo.toml",
         "//:src/postgres-util/Cargo.toml",
         "//:src/proc/Cargo.toml",
