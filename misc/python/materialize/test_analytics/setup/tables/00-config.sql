@@ -17,4 +17,4 @@ CREATE TABLE config (
    min_required_data_version_for_uploads INT
 );
 
-INSERT INTO config (min_required_data_version_for_uploads) VALUES (4);
+INSERT INTO config (min_required_data_version_for_uploads) VALUES (5);

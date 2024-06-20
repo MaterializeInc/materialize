@@ -16,7 +16,7 @@
 CREATE OR REPLACE VIEW v_build_annotation_error AS
     SELECT
       ann.build_id,
-      ann.build_step_id,
+      ann.build_job_id,
       b.pipeline,
       b.build_number,
       b.branch,
@@ -32,7 +32,7 @@ CREATE OR REPLACE VIEW v_build_annotation_error AS
       err.occurrence_count
     FROM build_annotation ann
     LEFT OUTER JOIN build_annotation_error err
-    ON ann.build_step_id = err.build_step_id
+    ON ann.build_job_id = err.build_job_id
     INNER JOIN build b
     ON ann.build_id = b.build_id
 ;
@@ -40,7 +40,7 @@ CREATE OR REPLACE VIEW v_build_annotation_error AS
 CREATE OR REPLACE VIEW v_build_annotation_overview AS
     SELECT
       bae.build_id,
-      bae.build_step_id,
+      bae.build_job_id,
       bae.pipeline,
       bae.build_number,
       bae.branch,
@@ -53,7 +53,7 @@ CREATE OR REPLACE VIEW v_build_annotation_overview AS
     FROM v_build_annotation_error bae
     GROUP BY
       bae.build_id,
-      bae.build_step_id,
+      bae.build_job_id,
       bae.pipeline,
       bae.build_number,
       bae.branch,

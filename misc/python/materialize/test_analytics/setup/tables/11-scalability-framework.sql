@@ -17,7 +17,7 @@
 -- result of individual workloads
 CREATE TABLE scalability_framework_result (
    build_id TEXT NOT NULL,
-   build_step_id TEXT NOT NULL,
+   build_job_id TEXT NOT NULL,
    framework_version TEXT NOT NULL,
    workload_name TEXT NOT NULL,
    workload_group TEXT NOT NULL,

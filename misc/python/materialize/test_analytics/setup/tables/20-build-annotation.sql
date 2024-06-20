@@ -15,7 +15,7 @@
 
 CREATE TABLE build_annotation (
    build_id TEXT NOT NULL,
-   build_step_id TEXT NOT NULL,
+   build_job_id TEXT NOT NULL,
    test_suite TEXT NOT NULL,
    test_retry_count UINT4 NOT NULL,
    is_failure BOOL NOT NULL,
@@ -23,7 +23,7 @@ CREATE TABLE build_annotation (
 );
 
 CREATE TABLE build_annotation_error (
-   build_step_id TEXT NOT NULL,
+   build_job_id TEXT NOT NULL,
    error_type TEXT NOT NULL,
    content TEXT NOT NULL,
    issue TEXT,
