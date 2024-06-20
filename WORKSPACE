@@ -270,13 +270,14 @@ crates_repository(
             ],
             compile_data = [":rocksdb_lib"],
         )],
-        "tikv-jemalloc-sys": [crate.annotation(
-            build_script_env = {
-                "JEMALLOC_OVERRIDE": "$(execpath @jemalloc//:libjemalloc)",
-            },
-            build_script_data = ["@jemalloc//:libjemalloc"],
-            compile_data = ["@jemalloc//:libjemalloc"],
-        )],
+        # TODO(parkmycar): Re-enable linking with a jemalloc built by Bazel.
+        # "tikv-jemalloc-sys": [crate.annotation(
+        #     build_script_env = {
+        #         "JEMALLOC_OVERRIDE": "$(execpath @jemalloc//:libjemalloc)",
+        #     },
+        #     build_script_data = ["@jemalloc//:libjemalloc"],
+        #     compile_data = ["@jemalloc//:libjemalloc"],
+        # )],
         "rdkafka-sys": [crate.annotation(
             gen_build_script = False,
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.librdkafka.bazel",
