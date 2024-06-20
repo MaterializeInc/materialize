@@ -20,7 +20,7 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-# 1. Run cargo-gazelle so to generate BUILD files.
+# 1. Run cargo-gazelle to generate BUILD files.
 try cargo run --release --no-default-features --manifest-path=misc/bazel/cargo-gazelle/Cargo.toml -- --path Cargo.toml
 
 # 2. Re-pin Bazel's notion of our external dependencies.
