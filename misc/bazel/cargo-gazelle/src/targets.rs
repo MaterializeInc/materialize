@@ -1028,9 +1028,7 @@ impl<'a> WorkspaceDependencies<'a> {
                     .filter(|link| link.from().id() == self.package.id())
                     // Tests and build scipts can rely on normal dependencies, so always make sure they're
                     // included.
-                    .filter(move |link| {
-                        link.normal().is_present() || link.req_for_kind(kind).is_present()
-                    })
+                    .filter(move |link| link.req_for_kind(kind).is_present())
                     .map(|link| link.to())
                     // Ignore deps filtered out by the global config.
                     .filter(|meta| self.config.include_dep(meta.name()))
