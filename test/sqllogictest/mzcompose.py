@@ -51,6 +51,7 @@ def workflow_selection(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--pattern",
         type=str,
         action="append",
+        help="Example: test/sqllogictest/map.slt",
     )
 
     parser.add_argument(
@@ -137,6 +138,11 @@ class InputBasedSltRunStepConfig(SltRunStepConfig):
         if args.pattern is not None:
             file_list = list(file_util.resolve_paths_with_wildcard(args.pattern))
             file_list.sort()
+
+            if len(file_list) == 0:
+                raise RuntimeError(f"Pattern {args.pattern} matched no files!")
+
+            print(f"Matched files are: {file_list}")
             self.file_list = file_list
 
         if args.auto_index_selects:
