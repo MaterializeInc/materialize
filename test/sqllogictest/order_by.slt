@@ -397,6 +397,136 @@ one  1
 two  2
 zero 0
 
+# LIMIT (or FETCH) and OFFSET should be accepted in any order. (Postgres also does, and Monte Carlo needs this.)
+query TI
+SELECT b, a
+FROM foo
+ORDER BY b
+LIMIT 2;
+----
+one  1
+two  2
+
+query TI
+SELECT b, a
+FROM foo
+ORDER BY b
+FETCH FIRST 2 ROWS ONLY;
+----
+one  1
+two  2
+
+query TI
+SELECT b, a
+FROM foo
+ORDER BY b
+LIMIT 2 OFFSET 1;
+----
+two  2
+zero  0
+
+query TI
+SELECT b, a
+FROM foo
+ORDER BY b
+FETCH FIRST 2 ROWS ONLY OFFSET 1;
+----
+two  2
+zero  0
+
+query TI
+SELECT b, a
+FROM foo
+ORDER BY b
+OFFSET 1 LIMIT 1;
+----
+two  2
+
+query TI
+SELECT b, a
+FROM foo
+ORDER BY b
+OFFSET 1;
+----
+two  2
+zero  0
+
+# FETCH FIRST and FETCH NEXT mean the same thing.
+query TI
+SELECT b, a
+FROM foo
+ORDER BY b
+OFFSET 1
+FETCH FIRST 1 ROWS ONLY;
+----
+two  2
+
+query TI
+SELECT b, a
+FROM foo
+ORDER BY b
+OFFSET 1
+FETCH NEXT 1 ROWS ONLY;
+----
+two  2
+
+# OFFSET can have optional ROW or ROWS (which doesn't mean anything)
+query TI
+SELECT b, a
+FROM foo
+ORDER BY b
+OFFSET 1 ROW LIMIT 3;
+----
+two  2
+zero  0
+
+query TI
+SELECT b, a
+FROM foo
+ORDER BY b
+OFFSET 1 ROWS LIMIT 3;
+----
+two  2
+zero  0
+
+# Multiple LIMIT/FETCH or multiple OFFSET not allowed
+query error multiple LIMIT/FETCH clauses not allowed
+SELECT b, a
+FROM foo
+ORDER BY b
+LIMIT 1 LIMIT 2;
+
+query error multiple LIMIT/FETCH clauses not allowed
+SELECT b, a
+FROM foo
+ORDER BY b
+LIMIT 1
+FETCH FIRST 3 ROWS ONLY;
+
+query error multiple OFFSET clauses not allowed
+SELECT b, a
+FROM foo
+ORDER BY b
+OFFSET 1 OFFSET 2;
+
+query error multiple LIMIT/FETCH clauses not allowed
+SELECT b, a
+FROM foo
+ORDER BY b
+LIMIT 1 OFFSET 1 LIMIT 2;
+
+query error multiple OFFSET clauses not allowed
+SELECT b, a
+FROM foo
+ORDER BY b
+OFFSET 1 LIMIT 3 OFFSET 2;
+
+query error multiple OFFSET clauses not allowed
+SELECT b, a
+FROM foo
+ORDER BY b
+OFFSET 1 OFFSET 2 LIMIT 3;
+
 ### sorts, limits, and offsets in subqueries ###
 
 # These tests have been designed to cover a wide range of situations where there

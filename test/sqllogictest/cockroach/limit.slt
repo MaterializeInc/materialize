@@ -57,10 +57,10 @@ SELECT generate_series FROM generate_series(1, 100) ORDER BY generate_series OFF
 ----
 4
 
-statement error Expected end of statement, found LIMIT
+statement error db error: ERROR: multiple LIMIT/FETCH clauses not allowed
 SELECT generate_series FROM generate_series(1, 100) FETCH NEXT ROW ONLY LIMIT 3;
 
-statement error Expected end of statement, found FETCH
+statement error db error: ERROR: multiple LIMIT/FETCH clauses not allowed
 SELECT generate_series FROM generate_series(1, 100) LIMIT 3 FETCH NEXT ROW ONLY;
 
 query I

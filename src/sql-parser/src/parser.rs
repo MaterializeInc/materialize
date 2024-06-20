@@ -6320,65 +6320,76 @@ impl<'a> Parser<'a> {
             inner_order_by
         };
 
-        let mut limit = if self.parse_keyword(LIMIT) {
-            if inner_limit.is_some() {
-                return parser_err!(
-                    self,
-                    self.peek_prev_pos(),
-                    "multiple LIMIT/FETCH clauses not allowed"
-                );
+        // Parse LIMIT, FETCH, OFFSET in any order, but:
+        // - Only at most one of LIMIT or FETCH is allowed.
+        // - Only at most one occurrence is allowed from each of these.
+        let mut limit = inner_limit;
+        let mut offset = inner_offset;
+        while let Some(parsed_keyword) = self.parse_one_of_keywords(&[LIMIT, OFFSET, FETCH]) {
+            match parsed_keyword {
+                LIMIT => {
+                    if limit.is_some() {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            "multiple LIMIT/FETCH clauses not allowed"
+                        );
+                    }
+                    limit = if self.parse_keyword(ALL) {
+                        None
+                    } else {
+                        Some(Limit {
+                            with_ties: false,
+                            quantity: self.parse_expr()?,
+                        })
+                    };
+                }
+                OFFSET => {
+                    if offset.is_some() {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            "multiple OFFSET clauses not allowed"
+                        );
+                    }
+                    let value = self.parse_expr()?;
+                    let _ = self.parse_one_of_keywords(&[ROW, ROWS]);
+                    offset = Some(value);
+                }
+                FETCH => {
+                    if limit.is_some() {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            "multiple LIMIT/FETCH clauses not allowed"
+                        );
+                    }
+                    self.expect_one_of_keywords(&[FIRST, NEXT])?;
+                    let quantity = if self.parse_one_of_keywords(&[ROW, ROWS]).is_some() {
+                        Expr::Value(Value::Number('1'.into()))
+                    } else {
+                        let quantity = self.parse_expr()?;
+                        self.expect_one_of_keywords(&[ROW, ROWS])?;
+                        quantity
+                    };
+                    let with_ties = if self.parse_keyword(ONLY) {
+                        false
+                    } else if self.parse_keywords(&[WITH, TIES]) {
+                        true
+                    } else {
+                        return self.expected(
+                            self.peek_pos(),
+                            "one of ONLY or WITH TIES",
+                            self.peek_token(),
+                        );
+                    };
+                    limit = Some(Limit {
+                        with_ties,
+                        quantity,
+                    });
+                }
+                _ => unreachable!(),
             }
-            if self.parse_keyword(ALL) {
-                None
-            } else {
-                Some(Limit {
-                    with_ties: false,
-                    quantity: self.parse_expr()?,
-                })
-            }
-        } else {
-            inner_limit
-        };
-
-        let offset = if self.parse_keyword(OFFSET) {
-            if inner_offset.is_some() {
-                return parser_err!(
-                    self,
-                    self.peek_prev_pos(),
-                    "multiple OFFSET clauses not allowed"
-                );
-            }
-            let value = self.parse_expr()?;
-            let _ = self.parse_one_of_keywords(&[ROW, ROWS]);
-            Some(value)
-        } else {
-            inner_offset
-        };
-
-        if limit.is_none() && self.parse_keyword(FETCH) {
-            self.expect_one_of_keywords(&[FIRST, NEXT])?;
-            let quantity = if self.parse_one_of_keywords(&[ROW, ROWS]).is_some() {
-                Expr::Value(Value::Number('1'.into()))
-            } else {
-                let quantity = self.parse_expr()?;
-                self.expect_one_of_keywords(&[ROW, ROWS])?;
-                quantity
-            };
-            let with_ties = if self.parse_keyword(ONLY) {
-                false
-            } else if self.parse_keywords(&[WITH, TIES]) {
-                true
-            } else {
-                return self.expected(
-                    self.peek_pos(),
-                    "one of ONLY or WITH TIES",
-                    self.peek_token(),
-                );
-            };
-            limit = Some(Limit {
-                with_ties,
-                quantity,
-            });
         }
 
         Ok(Query {
