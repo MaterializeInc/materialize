@@ -145,16 +145,31 @@ pub enum UpsertStyle {
     Default(KeyEnvelope),
     /// `ENVELOPE DEBEZIUM UPSERT`
     Debezium { after_idx: usize },
+    /// `ENVELOPE UPSERT`, where any decoded value will get packed into a ScalarType::Record
+    /// named `value`, and any decode errors will get serialized into a ScalarType::Record
+    /// named `error`. The error will be propagated to the error stream if `propagate_errors`
+    /// is set. The key shape depends on the independent `KeyEnvelope`.
+    ValueErrInline {
+        key_envelope: KeyEnvelope,
+        propagate_errors: bool,
+    },
 }
 
 impl RustType<ProtoUpsertStyle> for UpsertStyle {
     fn into_proto(&self) -> ProtoUpsertStyle {
-        use proto_upsert_style::{Kind, ProtoDebezium};
+        use proto_upsert_style::{Kind, ProtoDebezium, ProtoValueErrInline};
         ProtoUpsertStyle {
             kind: Some(match self {
                 UpsertStyle::Default(e) => Kind::Default(e.into_proto()),
                 UpsertStyle::Debezium { after_idx } => Kind::Debezium(ProtoDebezium {
                     after_idx: after_idx.into_proto(),
+                }),
+                UpsertStyle::ValueErrInline {
+                    key_envelope,
+                    propagate_errors,
+                } => Kind::ValueErrorInline(ProtoValueErrInline {
+                    key_envelope: Some(key_envelope.into_proto()),
+                    propagate_errors: *propagate_errors,
                 }),
             }),
         }
@@ -170,7 +185,29 @@ impl RustType<ProtoUpsertStyle> for UpsertStyle {
             Kind::Debezium(d) => UpsertStyle::Debezium {
                 after_idx: d.after_idx.into_rust()?,
             },
+            Kind::ValueErrorInline(e) => UpsertStyle::ValueErrInline {
+                key_envelope: e
+                    .key_envelope
+                    .ok_or_else(|| {
+                        TryFromProtoError::missing_field("ProtoValueErrInline::key_envelope")
+                    })?
+                    .into_rust()?,
+                propagate_errors: e.propagate_errors,
+            },
         })
+    }
+}
+
+impl UpsertStyle {
+    /// Returns whether this style should propagate errors to the error stream
+    pub fn propagate_errors(&self) -> bool {
+        match self {
+            UpsertStyle::Default(_) => true,
+            UpsertStyle::Debezium { .. } => true,
+            UpsertStyle::ValueErrInline {
+                propagate_errors, ..
+            } => *propagate_errors,
+        }
     }
 }
 
@@ -249,6 +286,9 @@ impl UnplannedSourceEnvelope {
             | UnplannedSourceEnvelope::Upsert {
                 style: UpsertStyle::Default(key_envelope),
                 ..
+            }
+            | UnplannedSourceEnvelope::Upsert {
+                style: UpsertStyle::ValueErrInline { key_envelope, .. },
             } => {
                 let key_desc = match key_desc {
                     Some(desc) if !desc.is_empty() => desc,
@@ -261,13 +301,14 @@ impl UnplannedSourceEnvelope {
                 };
                 let key_arity = key_desc.arity();
 
-                let (keyed, key) = match key_envelope {
-                    KeyEnvelope::None => (value_desc, None),
+                // Compute any key relation and key indices
+                let (key_desc, key) = match key_envelope {
+                    KeyEnvelope::None => (None, None),
                     KeyEnvelope::Flattened => {
                         // Add the key columns as a key.
                         let key_indices: Vec<usize> = (0..key_desc.arity()).collect();
                         let key_desc = key_desc.with_key(key_indices.clone());
-                        (key_desc.concat(value_desc), Some(key_indices))
+                        (Some(key_desc), Some(key_indices))
                     }
                     KeyEnvelope::Named(key_name) => {
                         let key_desc = {
@@ -299,10 +340,16 @@ impl UnplannedSourceEnvelope {
                             }
                             _ => unreachable!(),
                         };
-                        (key_desc.concat(value_desc), key)
+                        (Some(key_desc), key)
                     }
                 };
-                let desc = keyed.concat(metadata_desc);
+
+                let value_desc = compute_envelope_value_desc(&self, value_desc);
+                // Add value-related columns and metadata columns after any key columns.
+                let desc = match key_desc {
+                    Some(key_desc) => key_desc.concat(value_desc).concat(metadata_desc),
+                    None => value_desc.concat(metadata_desc),
+                };
                 (
                     self.into_source_envelope(key, Some(key_arity), Some(desc.arity())),
                     desc,
@@ -398,5 +445,62 @@ impl RustType<ProtoKeyEnvelope> for KeyEnvelope {
             Kind::Flattened(()) => KeyEnvelope::Flattened,
             Kind::Named(name) => KeyEnvelope::Named(name),
         })
+    }
+}
+
+/// Compute the resulting value relation given the decoded value relation and the envelope
+/// style. This will nest the value relation in a record if the ValueErrInline upsert style
+/// is used and add an error column.
+fn compute_envelope_value_desc(
+    source_envelope: &UnplannedSourceEnvelope,
+    value_desc: RelationDesc,
+) -> RelationDesc {
+    match &source_envelope {
+        // If the ValueErrInline upsert style is used, create a `value` column as a record
+        // that nests the value relation, plus an `error` column. Otherwise directly use
+        // the value relation.
+        UnplannedSourceEnvelope::Upsert {
+            style: UpsertStyle::ValueErrInline { .. },
+        } => {
+            // Add the value and error columns as a record.
+            let value_type = value_desc.typ();
+            let relation_type = RelationType::new(vec![
+                ColumnType {
+                    nullable: true,
+                    scalar_type: ScalarType::Record {
+                        fields: value_desc
+                            .iter_names()
+                            .zip(value_type.column_types.iter())
+                            .map(|(name, ty)| (name.clone(), ty.clone()))
+                            .collect(),
+                        custom_id: None,
+                    },
+                },
+                ColumnType {
+                    nullable: true,
+                    scalar_type: ScalarType::Record {
+                        fields: vec![
+                            (
+                                "description".into(),
+                                ColumnType {
+                                    nullable: true,
+                                    scalar_type: ScalarType::String,
+                                },
+                            ),
+                            (
+                                "code".into(),
+                                ColumnType {
+                                    nullable: true,
+                                    scalar_type: ScalarType::String,
+                                },
+                            ),
+                        ],
+                        custom_id: None,
+                    },
+                },
+            ]);
+            RelationDesc::new(relation_type, ["value".to_string(), "error".to_string()])
+        }
+        _ => value_desc,
     }
 }

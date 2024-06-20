@@ -49,8 +49,14 @@ message ProtoUpsertStyle {
         uint64 after_idx = 1;
     }
 
+    message ProtoValueErrInline {
+        ProtoKeyEnvelope key_envelope = 1;
+        bool propagate_errors = 2;
+    }
+
     oneof kind {
         ProtoKeyEnvelope default = 1;
         ProtoDebezium debezium = 2;
+        ProtoValueErrInline value_error_inline = 3;
     }
 }
