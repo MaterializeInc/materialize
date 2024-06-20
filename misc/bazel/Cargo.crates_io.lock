@@ -1,5 +1,5 @@
 {
-  "checksum": "c9fa81abc1f62e4fef0594d81e30fe3598f07be3691d3189239771fedc1cc364",
+  "checksum": "dc81339b8b733ea7d65944a55f347b05bd4009006ca9b9506f0f7663087e1cc0",
   "crates": {
     "abomonation 0.7.3": {
       "name": "abomonation",
@@ -13812,14 +13812,14 @@
       ],
       "license_file": null
     },
-    "flatcontainer 0.4.0": {
+    "flatcontainer 0.4.1": {
       "name": "flatcontainer",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "package_url": "https://github.com/antiguru/flatcontainer",
       "repository": {
         "Http": {
-          "url": "https://static.crates.io/crates/flatcontainer/0.4.0/download",
-          "sha256": "48bf7552d4ab459c1fc6894d9895b5d21485fddf9885190c6ae690cbfca24a79"
+          "url": "https://static.crates.io/crates/flatcontainer/0.4.1/download",
+          "sha256": "bcaca60d6093f2c5328fe97b9dfafa16a3968577bc5df75ebd6b23ea79b0a0a4"
         }
       },
       "targets": [
@@ -13871,7 +13871,7 @@
           ],
           "selects": {}
         },
-        "version": "0.4.0"
+        "version": "0.4.1"
       },
       "license": "MIT OR Apache-2.0",
       "license_ids": [
@@ -28496,6 +28496,7 @@
             "hyper-tls",
             "id_gen",
             "lgalloc",
+            "libc",
             "metrics",
             "native-tls",
             "network",
@@ -28504,6 +28505,7 @@
             "opentelemetry-otlp",
             "opentelemetry_sdk",
             "parquet",
+            "process",
             "prometheus",
             "proptest",
             "rand",
@@ -28587,6 +28589,10 @@
             {
               "id": "lgalloc 0.3.1",
               "target": "lgalloc"
+            },
+            {
+              "id": "libc 0.2.153",
+              "target": "libc"
             },
             {
               "id": "native-tls 0.2.11",
@@ -30032,85 +30038,6 @@
       "license_ids": [],
       "license_file": null
     },
-    "mz-pid-file 0.0.0": {
-      "name": "mz-pid-file",
-      "version": "0.0.0",
-      "package_url": null,
-      "repository": null,
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "mz_pid_file",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        },
-        {
-          "BuildScript": {
-            "crate_name": "build_script_build",
-            "crate_root": "build.rs",
-            "srcs": {
-              "allow_empty": false,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "mz_pid_file",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "libc 0.2.153",
-              "target": "libc"
-            },
-            {
-              "id": "mz-pid-file 0.0.0",
-              "target": "build_script_build"
-            }
-          ],
-          "selects": {}
-        },
-        "deps_dev": {
-          "common": [
-            {
-              "id": "tempfile 3.8.1",
-              "target": "tempfile"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "0.0.0"
-      },
-      "build_script_attrs": {
-        "data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "cc 1.0.83",
-              "target": "cc"
-            }
-          ],
-          "selects": {}
-        }
-      },
-      "license": null,
-      "license_ids": [],
-      "license_file": null
-    },
     "mz-postgres-client 0.0.0": {
       "name": "mz-postgres-client",
       "version": "0.0.0",
@@ -31293,6 +31220,10 @@
               "target": "fast_float"
             },
             {
+              "id": "flatcontainer 0.4.1",
+              "target": "flatcontainer"
+            },
+            {
               "id": "hex 0.4.3",
               "target": "hex"
             },
@@ -31400,6 +31331,10 @@
             {
               "id": "criterion 0.4.0",
               "target": "criterion"
+            },
+            {
+              "id": "insta 1.33.0",
+              "target": "insta"
             },
             {
               "id": "rand 0.8.5",
@@ -50784,12 +50719,6 @@
       ],
       "library_target_name": "tikv_jemalloc_sys",
       "common_attrs": {
-        "compile_data": {
-          "common": [
-            "@jemalloc//:libjemalloc"
-          ],
-          "selects": {}
-        },
         "compile_data_glob": [
           "**"
         ],
@@ -50821,12 +50750,6 @@
         "version": "0.5.2+5.3.0-patched"
       },
       "build_script_attrs": {
-        "data": {
-          "common": [
-            "@jemalloc//:libjemalloc"
-          ],
-          "selects": {}
-        },
         "data_glob": [
           "**"
         ],
@@ -50841,12 +50764,6 @@
               "target": "fs_extra"
             }
           ],
-          "selects": {}
-        },
-        "build_script_env": {
-          "common": {
-            "JEMALLOC_OVERRIDE": "$(execpath @jemalloc//:libjemalloc)"
-          },
           "selects": {}
         },
         "links": "jemalloc"
@@ -51373,7 +51290,7 @@
               "target": "columnation"
             },
             {
-              "id": "flatcontainer 0.4.0",
+              "id": "flatcontainer 0.4.1",
               "target": "flatcontainer"
             },
             {
@@ -60840,7 +60757,6 @@
     "mz-pgtz 0.0.0": "src/pgtz",
     "mz-pgwire 0.0.0": "src/pgwire",
     "mz-pgwire-common 0.0.0": "src/pgwire-common",
-    "mz-pid-file 0.0.0": "src/pid-file",
     "mz-postgres-client 0.0.0": "src/postgres-client",
     "mz-postgres-util 0.0.0": "src/postgres-util",
     "mz-proc 0.1.0": "src/proc",
@@ -61716,6 +61632,7 @@
     "fallible-iterator 0.2.0",
     "fancy-regex 0.11.0",
     "fast-float 0.2.0",
+    "flatcontainer 0.4.1",
     "flate2 1.0.24",
     "futures 0.3.25",
     "futures-channel 0.3.30",
