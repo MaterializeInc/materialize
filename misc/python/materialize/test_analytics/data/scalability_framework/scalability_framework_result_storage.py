@@ -30,7 +30,6 @@ class ScalabilityFrameworkResultStorage(BaseDataStorage):
         framework_version: str,
         results: list[ScalabilityFrameworkResultEntry],
     ) -> None:
-        build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
         job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
 
         sql_statements = []
@@ -40,7 +39,6 @@ class ScalabilityFrameworkResultStorage(BaseDataStorage):
                 f"""
                     INSERT INTO scalability_framework_result
                     (
-                        build_id,
                         build_job_id,
                         framework_version,
                         workload_name,
@@ -51,7 +49,6 @@ class ScalabilityFrameworkResultStorage(BaseDataStorage):
                         tps
                     )
                     SELECT
-                        '{build_id}',
                         '{job_id}',
                         '{framework_version}',
                         '{result_entry.workload_name}',

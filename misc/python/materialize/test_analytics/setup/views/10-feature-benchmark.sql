@@ -15,54 +15,54 @@
 
 CREATE OR REPLACE VIEW v_feature_benchmark_result_per_day AS
     SELECT
-        branch,
-        scenario_name,
-        framework_version,
-        scenario_version,
-        scale,
-        date_trunc('day', date) AS day,
-        max(wallclock) AS max_wallclock,
-        max(messages) AS max_messages,
-        max(memory_mz) AS max_memory_mz,
-        max(memory_clusterd) AS max_memory_clusterd
-    FROM feature_benchmark_result r
-    INNER JOIN build b
-    ON b.build_id = r.build_id
+        b.branch,
+        res.scenario_name,
+        res.framework_version,
+        res.scenario_version,
+        res.scale,
+        date_trunc('day', b.date) AS day,
+        max(res.wallclock) AS max_wallclock,
+        max(res.messages) AS max_messages,
+        max(res.memory_mz) AS max_memory_mz,
+        max(res.memory_clusterd) AS max_memory_clusterd
+    FROM feature_benchmark_result res
     INNER JOIN build_job bj
-    ON bj.build_job_id = r.build_job_id
+    ON bj.build_job_id = res.build_job_id
+    INNER JOIN build b
+    ON b.build_id = bj.build_id
     WHERE bj.is_latest_retry = TRUE
     GROUP BY
-        branch,
-        scenario_name,
-        framework_version,
-        scenario_version,
-        scale,
-        date_trunc('day', date)
+        b.branch,
+        res.scenario_name,
+        res.framework_version,
+        res.scenario_version,
+        res.scale,
+        date_trunc('day', b.date)
 ;
 
 CREATE OR REPLACE VIEW v_feature_benchmark_result_per_week AS
     SELECT
-        branch,
-        scenario_name,
-        framework_version,
-        scenario_version,
-        scale,
-        date_trunc('week', date) AS day,
-        max(wallclock) AS max_wallclock,
-        max(messages) AS max_messages,
-        max(memory_mz) AS max_memory_mz,
-        max(memory_clusterd) AS max_memory_clusterd
-    FROM feature_benchmark_result r
-    INNER JOIN build b
-    ON b.build_id = r.build_id
+        b.branch,
+        res.scenario_name,
+        res.framework_version,
+        res.scenario_version,
+        res.scale,
+        date_trunc('week', b.date) AS day,
+        max(res.wallclock) AS max_wallclock,
+        max(res.messages) AS max_messages,
+        max(res.memory_mz) AS max_memory_mz,
+        max(res.memory_clusterd) AS max_memory_clusterd
+    FROM feature_benchmark_result res
     INNER JOIN build_job bj
-    ON bj.build_job_id = r.build_job_id
+    ON bj.build_job_id = res.build_job_id
+    INNER JOIN build b
+    ON b.build_id = bj.build_id
     WHERE bj.is_latest_retry = TRUE
     GROUP BY
-        branch,
-        scenario_name,
-        framework_version,
-        scenario_version,
-        scale,
-        date_trunc('week', date)
+        b.branch,
+        res.scenario_name,
+        res.framework_version,
+        res.scenario_version,
+        res.scale,
+        date_trunc('week', b.date)
 ;
