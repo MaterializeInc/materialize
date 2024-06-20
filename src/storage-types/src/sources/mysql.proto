@@ -32,5 +32,10 @@ message ProtoMySqlSourceConnection {
 
 message ProtoMySqlSourceDetails {
     repeated mz_mysql_util.ProtoMySqlTableDesc tables = 1;
-    string initial_gtid_set = 2;
+    // This was changed from a string to a repeated string in order to support
+    // separate GTID sets for each table. If this field contains a single element,
+    // or the `legacy_initial_gtid_set` field is populated, it
+    // is the initial GTID set for all tables.
+    string legacy_initial_gtid_set = 2;
+    repeated string initial_gtid_set = 3;
 }

@@ -84,7 +84,7 @@
 //! updates to be potentially negated by the replication operator, which will emit negated
 //! updates at the minimum timestamp (by convention) when it encounters rows from a table that
 //! occur before the GTID frontier in the Rewind Request for that table.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use differential_dataflow::{AsCollection, Collection};
@@ -94,14 +94,14 @@ use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
 use mz_timely_util::antichain::AntichainExt;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream};
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Timestamp;
 use tracing::{error, trace};
 
-use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlError, MySqlTableDesc, ER_NO_SUCH_TABLE};
+use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlError, ER_NO_SUCH_TABLE};
 use mz_ore::future::InTask;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::result::ResultExt;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, Row};
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
@@ -113,7 +113,7 @@ use crate::source::{RawSourceCreationConfig, SourceReaderError};
 use super::schemas::verify_schemas;
 use super::{
     return_definite_error, validate_mysql_repl_settings, DefiniteError, MySqlTableName,
-    ReplicationError, RewindRequest, TransientError,
+    ReplicationError, RewindRequest, SubsourceInfo, TransientError,
 };
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -121,8 +121,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     scope: G,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
-    subsource_resume_uppers: BTreeMap<GlobalId, Antichain<GtidPartition>>,
-    table_info: BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
+    subsources: Vec<SubsourceInfo>,
     metrics: MySqlSnapshotMetrics,
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
@@ -141,37 +140,25 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     let (mut stats_output, stats_stream) = builder.new_output();
 
-    // A global view of all exports that need to be snapshot by all workers. Note that this affects
-    // `reader_snapshot_table_info` but must be kept separate from it because each worker needs to
-    // understand if any worker is snapshotting any subsource.
-    let export_indexes_to_snapshot: BTreeSet<_> = subsource_resume_uppers
-        .into_iter()
-        .filter_map(|(id, upper)| {
-            // Determined which collections need to be snapshot and which already have been.
-            if id != config.id && *upper == [GtidPartition::minimum()] {
-                // Convert from `GlobalId` to output index.
-                Some(config.source_exports[&id].ingestion_output)
-            } else {
-                None
-            }
-        })
-        .collect();
-
+    // A global view of all outputs that will be snapshot by all workers.
     let mut all_outputs = vec![];
     // A map containing only the table infos that this worker should snapshot.
     let mut reader_snapshot_table_info = BTreeMap::new();
 
-    for (table, val) in table_info {
+    for subsource in subsources.into_iter() {
         mz_ore::soft_assert_or_log!(
-            val.0 != 0,
-            "primary collection should not be represented in table info"
+            subsource.output_index != 0,
+            "primary collection should not be represented in subsources info"
         );
-        if !export_indexes_to_snapshot.contains(&val.0) {
+        // Determine which collections need to be snapshot and which already have been.
+        if *subsource.resume_upper != [GtidPartition::minimum()] {
+            // Already has been snapshotted.
             continue;
         }
-        all_outputs.push(val.0);
-        if config.responsible_for(&table) {
-            reader_snapshot_table_info.insert(table, val);
+        all_outputs.push(subsource.output_index);
+        if config.responsible_for(&subsource.name) {
+            reader_snapshot_table_info
+                .insert(subsource.name, (subsource.output_index, subsource.desc));
         }
     }
 
@@ -188,7 +175,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 if reader_snapshot_table_info.is_empty() {
                     trace!(%id, "timely-{worker_id} initializing table reader \
                                  with no tables to snapshot, exiting");
-                    if !export_indexes_to_snapshot.is_empty() {
+                    if !all_outputs.is_empty() {
                         // Emit 0, to mark this worker as having started up correctly,
                         // but having done no snapshotting. Otherwise leave
                         // this not filled in (no snapshotting is occurring in this instance of

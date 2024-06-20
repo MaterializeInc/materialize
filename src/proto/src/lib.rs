@@ -75,6 +75,8 @@ pub enum TryFromProtoError {
     InvalidBitFlags(String),
     /// Failed to deserialize a LIKE/ILIKE pattern.
     LikePatternDeserializationError(String),
+    /// A field represented invalid semantics.
+    InvalidFieldError(String),
 }
 
 impl TryFromProtoError {
@@ -166,6 +168,7 @@ impl std::fmt::Display for TryFromProtoError {
                 "Protobuf deserialization failed for a LIKE/ILIKE pattern: `{}`",
                 inner_error
             ),
+            InvalidFieldError(error) => error.fmt(f),
         }
     }
 }
@@ -200,6 +203,7 @@ impl std::error::Error for TryFromProtoError {
             InvalidUrl(error) => Some(error),
             InvalidBitFlags(_) => None,
             LikePatternDeserializationError(_) => None,
+            InvalidFieldError(_) => None,
         }
     }
 }

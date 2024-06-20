@@ -278,11 +278,25 @@ pub struct MySqlSourceDetails {
         strategy = "proptest::collection::vec(any::<mz_mysql_util::MySqlTableDesc>(), 0..4)"
     )]
     pub tables: Vec<mz_mysql_util::MySqlTableDesc>,
-    /// The initial 'gtid_executed' set for the source. This is used as the effective
-    /// snapshot point, to ensure consistency if the source is interrupted but commits
-    /// one or more tables before the initial snapshot of all tables is complete.
-    #[proptest(strategy = "any_gtidset()")]
-    pub initial_gtid_set: String,
+    /// The initial 'gtid_executed' set for each subsource. The index of each string in this
+    /// vector corresponds to the index of the corresponding table in the `tables` field.
+    /// If this vector has only one element, it is the initial gtid set for all tables.
+    ///
+    /// This is used as the effective snapshot point for each subsource to ensure correctness
+    /// if the source is interrupted but commits one or more tables before the initial snapshot
+    /// of all tables is complete.
+    #[proptest(strategy = "proptest::collection::vec(any_gtidset(), 1..4)")]
+    pub initial_gtid_set: Vec<String>,
+}
+
+impl MySqlSourceDetails {
+    /// The initial 'gtid_executed' set for the given table index.
+    pub fn table_initial_gtid_set(&self, table_index: usize) -> &str {
+        match &*self.initial_gtid_set {
+            [gtid] => gtid,
+            gtids => &gtids[table_index],
+        }
+    }
 }
 
 fn any_gtidset() -> impl Strategy<Value = String> {
@@ -294,17 +308,31 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
         ProtoMySqlSourceDetails {
             tables: self.tables.iter().map(|t| t.into_proto()).collect(),
             initial_gtid_set: self.initial_gtid_set.clone(),
+            legacy_initial_gtid_set: "".to_string(),
         }
     }
 
     fn from_proto(proto: ProtoMySqlSourceDetails) -> Result<Self, TryFromProtoError> {
+        // Handle the migration of the legacy_initial_gtid_set field to the initial_gtid_set field
+        let gtid_set = match (proto.initial_gtid_set, proto.legacy_initial_gtid_set) {
+            (gtid_set, legacy_gtid_set) if legacy_gtid_set.is_empty() => gtid_set,
+            (gtid_set, legacy_gtid_set) if gtid_set.is_empty() => vec![legacy_gtid_set],
+            (gtid_set, legacy_gtid_set) => {
+                return Err(TryFromProtoError::InvalidFieldError(format!(
+                    "initial_gtid_set and legacy_initial_gtid_set both contain values:\n{}\n{}",
+                    gtid_set.join(", "),
+                    legacy_gtid_set
+                )));
+            }
+        };
+
         Ok(MySqlSourceDetails {
             tables: proto
                 .tables
                 .into_iter()
                 .map(mz_mysql_util::MySqlTableDesc::from_proto)
                 .collect::<Result<_, _>>()?,
-            initial_gtid_set: proto.initial_gtid_set,
+            initial_gtid_set: gtid_set,
         })
     }
 }
@@ -312,19 +340,17 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
 impl AlterCompatible for MySqlSourceDetails {
     fn alter_compatible(
         &self,
-        id: mz_repr::GlobalId,
-        other: &Self,
+        _id: mz_repr::GlobalId,
+        _other: &Self,
     ) -> Result<(), crate::controller::AlterError> {
-        if self.initial_gtid_set == other.initial_gtid_set {
-            Ok(())
-        } else {
-            tracing::warn!(
-                "MySqlSourceDetails incompatible at initial_gtid_set:\nself:\n{:#?}\n\nother\n{:#?}",
-                self,
-                other
-            );
-            Err(crate::controller::AlterError { id })
-        }
+        // TODO(roshan): We should verify here that the initial_gtid_set value for a given
+        // subsource remains the same. However, since a DROP SOURCE operation can drop a specific
+        // subsource without updating these `details`, and then an `ALTER SOURCE .. ADD SUBSOURCE`
+        // can re-add the same subsource with a new initial_gtid_set, there is no way for us to
+        // know that was a valid operation. We could consider updating `details` on DROP SOURCE
+        // but a better long-term fix is to store the initial_gtid_set in the catalog on each subsource
+        // itself, rather than in the source details.
+        Ok(())
     }
 }
 

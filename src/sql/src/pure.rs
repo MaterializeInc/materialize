@@ -998,7 +998,11 @@ async fn purify_create_source(
             // Create/Update the details for the source to include the new tables
             let details = MySqlSourceDetails {
                 tables,
-                initial_gtid_set,
+                // Since we're creating a new source, we can just use a single
+                // value in this vector which is assumed to be for all tables.
+                // If we ever alter this source, this will be expanded to have a
+                // distinct value for each table.
+                initial_gtid_set: vec![initial_gtid_set],
             };
             // Update options with the purified details
             options
@@ -1431,6 +1435,11 @@ async fn purify_alter_source(
             )
             .await?;
 
+            // Retrieve the current @gtid_executed value of the server to mark as the effective
+            // initial snapshot point for these subsources.
+            let initial_gtid_set =
+                mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
+
             // These new details need to be merged with the existing details and cannot
             // simply overwrite the existing details. This suggests they should be their
             // own options, but it's nice to be able to take the values to and from a
@@ -1443,8 +1452,9 @@ async fn purify_alter_source(
                 // that later because the sources that are present might have changed while this
                 // purification occurs.
                 tables,
-                // This value is not allowed to be altered in the source.
-                initial_gtid_set: mysql_source_connection.details.initial_gtid_set,
+                // This value will be expanded and merged with the existing value during sequencing to
+                // match the final set of tables.
+                initial_gtid_set: vec![initial_gtid_set],
             };
 
             options.push(AlterSourceAddSubsourceOption {

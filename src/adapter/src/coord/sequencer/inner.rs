@@ -3695,8 +3695,19 @@ impl Coordinator {
                                 let details = ProtoMySqlSourceDetails::decode(&*details)
                                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
-                                MySqlSourceDetails::from_proto(details)
-                                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
+                                let mut details = MySqlSourceDetails::from_proto(details)
+                                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+
+                                // Expand the initial_gtid_set vec to be one entry per table if
+                                // it's currently in the form of one entry for the whole source.
+                                if details.initial_gtid_set.len() == 1 {
+                                    details.initial_gtid_set = vec![
+                                        details.initial_gtid_set[0]
+                                            .clone();
+                                        details.tables.len()
+                                    ];
+                                }
+                                Ok(details)
                             };
 
                         let mut curr_details = gen_details(details)?;
@@ -3707,17 +3718,23 @@ impl Coordinator {
                             .alter_compatible(cur_entry.id(), &new_details)
                             .map_err(StorageError::InvalidAlter)?;
 
-                        // Trim any unreferred-to tables.
-                        curr_details.tables.retain(|table| {
+                        // Trim any unreferred-to tables and their corresponding initial_gtid_sets.
+                        let mut to_remove = vec![];
+                        for (i, table) in curr_details.tables.iter().enumerate() {
                             let name = UnresolvedItemName(vec![
                                 // Unchecked is fine beause we have previously verified
                                 // that these are valid idents.
                                 Ident::new_unchecked(table.schema_name.clone()),
                                 Ident::new_unchecked(table.name.clone()),
                             ]);
-
-                            curr_references.contains(&name)
-                        });
+                            if !curr_references.contains(&name) {
+                                to_remove.push(i);
+                            }
+                        }
+                        for i in to_remove.into_iter().rev() {
+                            curr_details.tables.remove(i);
+                            curr_details.initial_gtid_set.remove(i);
+                        }
 
                         mz_ore::soft_assert_eq_or_log!(
                             curr_details.tables.len(),
@@ -3741,6 +3758,15 @@ impl Coordinator {
                         // Merge the current table definitions into new tables. Note
                         // this changes the output indexes of the subsources.
                         new_details.tables.extend(curr_details.tables);
+                        new_details
+                            .initial_gtid_set
+                            .extend(curr_details.initial_gtid_set);
+
+                        assert_eq!(
+                            new_details.tables.len(),
+                            new_details.initial_gtid_set.len(),
+                            "initial_gtid_set must have entry for every table after merging"
+                        );
 
                         curr_options.push(MySqlConfigOption {
                             name: MySqlConfigOptionName::Details,
