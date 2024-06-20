@@ -696,14 +696,17 @@ where
         let mut frontiers_ticker = time::interval(Duration::from_secs(1));
         frontiers_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        let this = Self {
+        let mut this = Self {
             storage: Box::new(storage_controller),
             storage_collections: collections_ctl,
             compute: compute_controller,
             clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,
             deploy_generation: config.deploy_generation,
-            read_only,
+            // We initialize to false, but then call `allow_writes()` below,
+            // based on our input. This way we avoid having the same logic in
+            // two places.
+            read_only: false,
             orchestrator: config.orchestrator.namespace("cluster"),
             readiness: Readiness::NotReady,
             metrics_tasks: BTreeMap::new(),
@@ -719,8 +722,11 @@ where
             immediate_watch_sets: Vec::new(),
         };
 
-        if !this.read_only {
-            this.remove_past_generation_replicas_in_background();
+        // We have some logic that we want to run both when initialized with
+        // `read_only = false` _and_ when later transitioning out of read-only
+        // mode. This way we keep that logic in one place.
+        if !read_only {
+            this.allow_writes();
         }
 
         this
