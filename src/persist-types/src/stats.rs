@@ -261,19 +261,11 @@ pub trait ColumnStats<T: Data>: DynStats {
         Self: Sized;
 }
 
-/// A source of aggregate statistics about a column of data.
-pub trait StatsFrom<T> {
-    /// Computes statistics from a column of data.
-    ///
-    /// The validity, if given, indicates which values in the columns are and
-    /// are not used for stats. This allows us to model non-nullable columns in
-    /// a nullable struct. For optional columns (i.e. ones with their own
-    /// validity) it _must be a subset_ of the column's validity, otherwise this
-    /// panics.
-    fn stats_from(col: &T, validity: ValidityRef) -> Self;
-}
-
-/// Type-erased aggregate statistics about a column of data.
+/// Type that can be used to represent some [`ColumnStats`].
+///
+/// This is a separate trait than [`ColumnStats`] because its implementations
+/// generally don't care about what kind of stats they contain, whereas
+/// [`ColumnStats`] is generic over the inner type of statistics.
 pub trait DynStats: Debug + Send + Sync + 'static {
     /// Returns the name of the erased type for use in error messages.
     fn type_name(&self) -> &'static str {
@@ -285,6 +277,18 @@ pub trait DynStats: Debug + Send + Sync + 'static {
 
     /// Return `self` as [`ColumnarStats`].
     fn into_columnar_stats(self) -> ColumnarStats;
+}
+
+/// A source of aggregate statistics about a column of data.
+pub trait StatsFrom<T> {
+    /// Computes statistics from a column of data.
+    ///
+    /// The validity, if given, indicates which values in the columns are and
+    /// are not used for stats. This allows us to model non-nullable columns in
+    /// a nullable struct. For optional columns (i.e. ones with their own
+    /// validity) it _must be a subset_ of the column's validity, otherwise this
+    /// panics.
+    fn stats_from(col: &T, validity: ValidityRef) -> Self;
 }
 
 /// Trim, possibly in a lossy way, statistics to reduce the serialization costs.
