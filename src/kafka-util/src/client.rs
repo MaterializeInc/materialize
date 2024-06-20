@@ -754,7 +754,7 @@ impl TimeoutConfig {
                 i32::MAX
             );
             DEFAULT_TRANSACTION_TIMEOUT
-        } else if socket_timeout.as_millis() < 1000 {
+        } else if transaction_timeout.as_millis() < 1000 {
             error!(
                 "transaction_timeout ({transaction_timeout:?}) less than max \
                 of 1000ms, defaulting to the default of {DEFAULT_TRANSACTION_TIMEOUT:?}"
@@ -767,31 +767,37 @@ impl TimeoutConfig {
         let progress_record_fetch_timeout = if progress_record_fetch_timeout < transaction_timeout {
             error!(
                 "progress record fetch ({progress_record_fetch_timeout:?}) less than transaction \
-                timeout ({transaction_timeout:?}), defaulting to the default of {DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT:?}",
+                timeout ({transaction_timeout:?}), defaulting to transaction timeout {transaction_timeout:?}",
             );
-            DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT
-        } else {
             transaction_timeout
+        } else {
+            progress_record_fetch_timeout
         };
 
         // The documented max here is `300000`, but rdkafka bans `socket.timeout.ms` being more
         // than `transaction.timeout.ms` + 100ms.
-        let socket_timeout = if socket_timeout.as_millis()
-            > (std::cmp::min(transaction_timeout.as_millis() + 100, 300000))
-        {
+        let max_socket_timeout = std::cmp::min(
+            transaction_timeout + Duration::from_millis(100),
+            Duration::from_secs(300),
+        );
+        let derived_default = std::cmp::min(
+            transaction_timeout + Duration::from_millis(100),
+            DEFAULT_SOCKET_TIMEOUT,
+        );
+        let socket_timeout = if socket_timeout > max_socket_timeout {
             error!(
                 "socket_timeout ({socket_timeout:?}) greater than max \
                 of min(30000, transaction.timeout.ms + 100 ({})), \
-                defaulting to the default of {DEFAULT_SOCKET_TIMEOUT:?}",
+                defaulting to the maximum of {max_socket_timeout:?}",
                 transaction_timeout.as_millis() + 100
             );
-            DEFAULT_SOCKET_TIMEOUT
+            max_socket_timeout
         } else if socket_timeout.as_millis() < 10 {
             error!(
-                "socket_timeout ({socket_timeout:?}) less than max \
-                of 10ms, defaulting to the default of {DEFAULT_SOCKET_TIMEOUT:?}"
+                "socket_timeout ({socket_timeout:?}) less than min \
+                of 10ms, defaulting to the default of {derived_default:?}"
             );
-            DEFAULT_SOCKET_TIMEOUT
+            derived_default
         } else {
             socket_timeout
         };
@@ -805,7 +811,7 @@ impl TimeoutConfig {
                     i32::MAX,
                 );
                 DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT
-            } else if socket_timeout.as_millis() < 10 {
+            } else if socket_connection_setup_timeout.as_millis() < 10 {
                 error!(
                     "socket_connection_setup_timeout ({socket_connection_setup_timeout:?}) \
                     less than max of 10ms, defaulting to the default of \

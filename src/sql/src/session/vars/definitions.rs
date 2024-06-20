@@ -1080,7 +1080,6 @@ pub static KAFKA_SOCKET_TIMEOUT: VarDefinition = VarDefinition::new(
     value!(Duration; mz_kafka_util::client::DEFAULT_SOCKET_TIMEOUT),
     "Controls `socket.timeout.ms` for rdkafka \
         client connections. Defaults to the rdkafka default (60000ms). \
-        Cannot be greater than 300000ms or more than 100ms greater than \
         Cannot be greater than 300000ms, more than 100ms greater than \
         `kafka_transaction_timeout`, or less than 10ms.",
     true,
