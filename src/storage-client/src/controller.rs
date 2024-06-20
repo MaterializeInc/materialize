@@ -262,6 +262,30 @@ pub trait StorageTxn<T> {
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
+/// A predicate for a `Row` filter.
+pub type RowPredicate = Box<dyn Fn(&Row) -> bool + Send + Sync>;
+
+/// High-level write operations applicable to storage collections.
+pub enum StorageWriteOp {
+    /// Append a set of rows with specified multiplicities.
+    ///
+    /// The multiplicities may be negative, so an `Append` operation can perform
+    /// both insertions and retractions.
+    Append { updates: Vec<(Row, Diff)> },
+    /// Delete all rows matching the given predicate.
+    Delete { filter: RowPredicate },
+}
+
+impl StorageWriteOp {
+    /// Returns whether this operation appends an empty set of updates.
+    pub fn is_empty_append(&self) -> bool {
+        match self {
+            Self::Append { updates } => updates.is_empty(),
+            Self::Delete { .. } => false,
+        }
+    }
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
     type Timestamp: TimelyTimestamp;
@@ -673,12 +697,12 @@ pub trait StorageController: Debug {
 
     /// Updates the desired state of the given introspection type.
     ///
-    /// Rows passed in `updates` MUST have the correct schema for the given
+    /// Rows passed in `op` MUST have the correct schema for the given
     /// introspection type, as readers rely on this and might panic otherwise.
     async fn update_introspection_collection(
         &mut self,
         type_: IntrospectionType,
-        updates: Vec<(Row, Diff)>,
+        op: StorageWriteOp,
     );
 
     /// Resets the txns system to a set of invariants necessary for correctness.

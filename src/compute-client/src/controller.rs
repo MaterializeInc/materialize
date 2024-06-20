@@ -49,7 +49,7 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
-use mz_storage_client::controller::{IntrospectionType, StorageController};
+use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::{Deserialize, Serialize};
@@ -687,9 +687,8 @@ where
 
         for (type_, updates) in updates_by_type {
             if !updates.is_empty() {
-                storage
-                    .update_introspection_collection(type_, updates)
-                    .await;
+                let op = StorageWriteOp::Append { updates };
+                storage.update_introspection_collection(type_, op).await;
             }
         }
     }

@@ -55,7 +55,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     CollectionDescription, DataSource, DataSourceOther, ExportDescription, ExportState,
     IntrospectionType, MonotonicAppender, PersistEpoch, Response, SnapshotCursor,
-    StorageController, StorageMetadata, StorageTxn,
+    StorageController, StorageMetadata, StorageTxn, StorageWriteOp,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
@@ -2180,7 +2180,9 @@ where
         }
 
         let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager
+            .differential_append(id, updates)
+            .await;
     }
 
     async fn record_replica_frontiers(
@@ -2254,7 +2256,9 @@ where
 
         let id =
             self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager
+            .differential_append(id, updates)
+            .await;
     }
 
     async fn append_introspection_updates(
@@ -2269,10 +2273,10 @@ where
     async fn update_introspection_collection(
         &mut self,
         type_: IntrospectionType,
-        updates: Vec<(Row, Diff)>,
+        op: StorageWriteOp,
     ) {
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager.differential_write(id, op).await;
     }
 
     /// With the CRDB based timestamp oracle, there is no longer write timestamp
@@ -3087,7 +3091,9 @@ where
             updates.push((row_buf.clone(), 1));
         }
 
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager
+            .differential_append(id, updates)
+            .await;
     }
 
     /// Effectively truncates the status history shard except for the most
@@ -3360,7 +3366,9 @@ where
             updates.push((row_buf.clone(), diff));
         }
 
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager
+            .differential_append(id, updates)
+            .await;
     }
 
     /// Determines and returns this collection's dependencies, if any.
