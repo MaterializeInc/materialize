@@ -56,3 +56,14 @@ GROUP BY
     EXTRACT(WEEK FROM date),
     b.branch,
     b.pipeline;
+
+CREATE OR REPLACE VIEW v_most_recent_build AS
+SELECT
+    b.branch,
+    b.pipeline,
+    max(b.build_number) AS highest_build_number
+FROM build b
+GROUP BY
+    b.branch,
+    b.pipeline
+;
