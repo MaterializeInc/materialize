@@ -330,6 +330,13 @@ explain_plan ::=
     'INDEX' name |
     'MATERIALIZED VIEW' name
   )
+explain_filter_pushdown ::=
+  'EXPLAIN FILTER PUSHDOWN'
+  'FOR'
+  (
+    select_stmt |
+    'MATERIALIZED VIEW' name
+  )
 explain_timestamp ::=
   'EXPLAIN' 'TIMESTAMP'
   ( 'AS' ( 'TEXT' | 'JSON' ) )?
