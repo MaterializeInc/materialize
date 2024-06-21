@@ -168,7 +168,7 @@ impl Coordinator {
         } = &plan;
 
         // Collect optimizer parameters.
-        let cluster_id = validity.cluster_id.expect("cluser_id");
+        let cluster_id = validity.cluster_id.expect("cluster_id");
         let compute_instance = self
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");

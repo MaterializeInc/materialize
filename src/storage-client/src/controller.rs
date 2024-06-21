@@ -87,6 +87,7 @@ pub enum IntrospectionType {
     ComputeHydrationStatus,
     ComputeOperatorHydrationStatus,
     ComputeMaterializedViewRefreshes,
+    ComputeErrorCounts,
 
     // Written by the Adapter for tracking AWS PrivateLink Connection Status History
     PrivatelinkConnectionStatusHistory,

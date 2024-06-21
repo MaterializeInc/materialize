@@ -22,6 +22,10 @@ use thiserror::Error;
 
 use crate::controller::{instance, ComputeInstanceId, ReplicaId};
 
+/// The error returned by replica-targeted peeks and subscribes when the target replica
+/// disconnects.
+pub const ERROR_TARGET_REPLICA_FAILED: &str = "target replica failed or was dropped";
+
 /// Error returned in response to a reference to an unknown compute instance.
 #[derive(Error, Debug)]
 #[error("instance does not exist: {0}")]
