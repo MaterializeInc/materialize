@@ -26,7 +26,7 @@ and pop open the SQL Shell.
 To validate requests between the webhook event generator and Materialize, you
 need a [secret](/sql/create-secret/):
 
-```sql
+```mzsql
 CREATE SECRET demo_webhook AS '<secret_value>';
 ```
 
@@ -39,7 +39,7 @@ Using the secret from the previous step, create a webhook source to ingest data
 from the webhook event generator. By default, the source will be created in the
 current cluster.
 
-```sql
+```mzsql
 CREATE SOURCE webhook_demo FROM WEBHOOK
   BODY FORMAT JSON
   CHECK (
@@ -70,7 +70,7 @@ to shape the events.
 
 In the SQL Shell, validate that the source is ingesting data:
 
-```sql
+```mzsql
 SELECT jsonb_pretty(body) AS body FROM webhook_demo LIMIT 1;
 ```
 
@@ -97,7 +97,7 @@ top of your webhook source that uses [jsonb operators](https://materialize.com/d
 to map the individual fields to columns with the required data types. Using the
 previous example:
 
-```sql
+```mzsql
 CREATE VIEW webhook_demo_parsed AS SELECT
     (body->'location'->>'latitude')::numeric AS location_latitude,
     (body->'location'->>'longitude')::numeric AS location_longitude,
@@ -112,7 +112,7 @@ FROM webhook_demo;
 To see results change over time, let’s [`SUBSCRIBE`](/sql/subscribe/) to the
 `webhook_demo_parsed ` view:
 
-```sql
+```mzsql
 SUBSCRIBE(SELECT * FROM webhook_demo_parsed) WITH (SNAPSHOT = FALSE);
 ```
 
@@ -124,7 +124,7 @@ cancel out of the `SUBSCRIBE` using **Stop streaming**.
 Once you’re done exploring the generated webhook data, remember to clean up your
 environment:
 
-```sql
+```mzsql
 DROP SOURCE webhook_demo CASCADE;
 
 DROP SECRET demo_webhook;

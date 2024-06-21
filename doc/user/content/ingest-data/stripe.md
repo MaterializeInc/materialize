@@ -27,7 +27,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
 
-```sql
+```mzsql
 CREATE CLUSTER webhooks_cluster (SIZE = '25cc');
 
 SET CLUSTER = webhooks_cluster;
@@ -37,7 +37,7 @@ SET CLUSTER = webhooks_cluster;
 
 To validate requests between Stripe and Materialize, you must create a [secret](/sql/create-secret/):
 
-```sql
+```mzsql
 CREATE SECRET stripe_webhook_secret AS '<secret_value>';
 ```
 
@@ -50,7 +50,7 @@ in Materialize to ingest data from Stripe. By default, the source will be
 created in the active cluster; to use a different cluster, use the `IN
 CLUSTER` clause.
 
-```sql
+```mzsql
 CREATE SOURCE stripe_source IN CLUSTER webhooks_cluster
 FROM WEBHOOK
     BODY FORMAT JSON;
@@ -132,7 +132,7 @@ Stripe signing scheme, check out the [Stripe documentation](https://stripe.com/d
 
 1. Use SQL queries to inspect and analyze the incoming data:
 
-    ```sql
+    ```mzsql
     SELECT * FROM stripe_source LIMIT 10;
     ```
 
@@ -146,7 +146,7 @@ Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
 top of your webhook source that uses [`jsonb` operators](https://materialize.com/docs/sql/types/jsonb/#operators)
 to map the individual fields to columns with the required data types.
 
-```sql
+```mzsql
 CREATE VIEW parse_stripe AS SELECT
     body->>'api_version' AS api_version,
     to_timestamp((body->'created')::int) AS created,
