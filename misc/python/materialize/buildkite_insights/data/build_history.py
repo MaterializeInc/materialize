@@ -22,6 +22,9 @@ class BuildHistory:
     branch: str
     last_build_step_outcomes: list[BuildHistoryEntry]
 
+    def has_entries(self) -> bool:
+        return len(self.last_build_step_outcomes) > 0
+
     def to_markdown(self) -> str:
         return (
             f'<a href="/materialize/{self.pipeline}/builds?branch=main">main</a> history: '

@@ -238,7 +238,7 @@ class Annotation:
     suite_name: str
     buildkite_job_id: str
     is_failure: bool
-    build_history_on_main: BuildHistory | None
+    build_history_on_main: BuildHistory
     unknown_errors: Sequence[ObservedBaseError] = field(default_factory=list)
     known_errors: Sequence[ObservedBaseError] = field(default_factory=list)
 
@@ -259,7 +259,7 @@ class Annotation:
             title = f"{title}, but no error in logs found"
 
         markdown = title
-        if self.build_history_on_main is not None:
+        if self.build_history_on_main.has_entries():
             markdown += ", " + self.build_history_on_main.to_markdown()
 
         if wrap_in_summary:
@@ -319,7 +319,7 @@ and finds associated open GitHub issues in Materialize repository.""",
 def annotate_errors(
     unknown_errors: Sequence[ObservedBaseError],
     known_errors: Sequence[ObservedBaseError],
-    build_history_on_main: BuildHistory | None,
+    build_history_on_main: BuildHistory,
     test_analytics_db: TestAnalyticsDb,
 ) -> None:
     assert len(unknown_errors) > 0 or len(known_errors) > 0
@@ -643,7 +643,7 @@ def sanitize_text(text: str, max_length: int = 4_000) -> str:
     return text
 
 
-def get_failures_on_main() -> BuildHistory | None:
+def get_failures_on_main() -> BuildHistory:
     pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
     step_key = os.getenv("BUILDKITE_STEP_KEY")
     step_name = os.getenv("BUILDKITE_LABEL") or step_key
@@ -667,9 +667,13 @@ def get_failures_on_main() -> BuildHistory | None:
         items_per_page=5 + 1,
     )
 
+    no_entries_result = BuildHistory(
+        pipeline=pipeline_slug, branch="main", last_build_step_outcomes=[]
+    )
+
     if not builds_data:
         print(f"Got no finished builds of pipeline {pipeline_slug}")
-        return None
+        return no_entries_result
     else:
         print(f"Fetched {len(builds_data)} builds of pipeline {pipeline_slug}")
 
@@ -695,7 +699,6 @@ def get_failures_on_main() -> BuildHistory | None:
         print(
             f"The {len(builds_data)} last fetched builds do not contain a completed build step matching {build_step_matcher}"
         )
-        return None
 
     pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
     assert pipeline_slug is not None
