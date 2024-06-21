@@ -110,3 +110,22 @@ AND d.build_step_key = pred_bj.build_step_key
 WHERE d.predecessor_index <> 0
 AND pred_bj.is_latest_retry = TRUE
 ;
+
+CREATE OR REPLACE VIEW v_most_recent_build_job AS
+SELECT
+    b.pipeline,
+    b.branch,
+    b.build_id,
+    bj.build_job_id,
+    bj.build_step_id,
+    bj.build_step_key,
+    bj.shard_index,
+    bj.success
+FROM build_job bj
+INNER JOIN build b
+    ON bj.build_id = b.build_id
+INNER JOIN v_most_recent_build mrb
+    ON b.pipeline = mrb.pipeline
+    AND b.build_number = mrb.highest_build_number
+WHERE bj.is_latest_retry = TRUE
+;
