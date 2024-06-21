@@ -154,7 +154,7 @@ information about upstream database operations, like the `before` and `after`
 values for each record. To create a source that interprets the
 [Debezium envelope](/sql/create-source/kafka/#using-debezium) in Materialize:
 
-```sql
+```mzsql
 CREATE SOURCE kafka_repl
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'server1.testDB.tableName')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -177,7 +177,7 @@ Any materialized view defined on top of this source will be incrementally
 updated as new change events stream in through Kafka, resulting from `INSERT`,
 `UPDATE`, and `DELETE` operations in the original SQL Server database.
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW cnt_table AS
     SELECT field1,
            COUNT(*) AS cnt
