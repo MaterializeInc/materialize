@@ -109,7 +109,6 @@ impl BuiltinMigrationMetadata {
 pub enum CatalogItemRebuilder {
     SystemSource(CatalogItem),
     Object {
-        id: GlobalId,
         sql: String,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
@@ -134,7 +133,6 @@ impl CatalogItemRebuilder {
                 .ast;
             mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, ancestor_ids);
             Self::Object {
-                id,
                 sql: create_stmt.to_ast_string_stable(),
                 is_retained_metrics_object: entry.item().is_retained_metrics_object(),
                 custom_logical_compaction_window: entry.item().custom_logical_compaction_window(),
@@ -146,7 +144,6 @@ impl CatalogItemRebuilder {
         match self {
             Self::SystemSource(item) => item,
             Self::Object {
-                id: _,
                 sql,
                 is_retained_metrics_object,
                 custom_logical_compaction_window,

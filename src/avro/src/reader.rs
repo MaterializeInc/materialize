@@ -329,6 +329,7 @@ pub struct SchemaResolver<'a> {
     pub writer_to_reader_names: BTreeMap<usize, usize>,
     pub reader_to_writer_names: BTreeMap<usize, usize>,
     pub reader_to_resolved_names: BTreeMap<usize, usize>,
+    #[allow(dead_code)]
     pub reader_fullnames: BTreeMap<usize, &'a FullName>,
     pub reader_schema: &'a Schema,
 }

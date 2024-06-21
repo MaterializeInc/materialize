@@ -395,7 +395,7 @@ mod tests {
                     .typ()
                     .columns()
                     .iter()
-                    .map(|ct| arb_datum_for_column(ct))
+                    .map(arb_datum_for_column)
                     .collect::<Vec<_>>()
                     .prop_map(|datums| Row::pack(datums.iter().map(Datum::from)));
                 proptest::collection::vec(rows, 1..max_rows)
