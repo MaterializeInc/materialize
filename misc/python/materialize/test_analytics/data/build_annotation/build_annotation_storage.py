@@ -32,7 +32,7 @@ class AnnotationEntry:
 
 class BuildAnnotationStorage(BaseDataStorage):
 
-    def insert_annotation(
+    def add_annotation(
         self,
         annotation: AnnotationEntry,
     ) -> None:

@@ -21,7 +21,7 @@ class BuildDataStorage(BaseDataStorage):
         super().__init__(database_connector)
         self.data_version = data_version
 
-    def insert_build(self) -> None:
+    def add_build(self) -> None:
         pipeline = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_PIPELINE_SLUG)
         build_number = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_NUMBER)
         build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
@@ -68,16 +68,15 @@ class BuildDataStorage(BaseDataStorage):
 
         self.database_connector.add_update_statements(sql_statements)
 
-    def insert_build_job(
+    def add_build_job(
         self,
         was_successful: bool,
-        include_insert_build: bool = True,
+        include_build: bool = True,
     ) -> None:
-        if include_insert_build:
-            self.insert_build()
+        if include_build:
+            self.add_build()
 
         build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
-        build_url = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_URL)
         job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
         step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
         step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)

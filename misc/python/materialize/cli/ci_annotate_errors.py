@@ -770,7 +770,7 @@ def format_error_message(error_message: str | None, max_length: int = 10_000) ->
 
 def store_build_job_in_test_analytics(test_analytics: TestAnalyticsDb) -> None:
     try:
-        test_analytics.builds.insert_build_job(
+        test_analytics.builds.add_build_job(
             was_successful=has_successful_buildkite_status()
         )
     except Exception as e:
@@ -802,7 +802,7 @@ def store_annotation_in_test_analytics(
             for error in chain(annotation.known_errors, annotation.unknown_errors)
         ]
 
-        test_analytics.build_annotations.insert_annotation(
+        test_analytics.build_annotations.add_annotation(
             build_annotation_storage.AnnotationEntry(
                 test_suite=get_suite_name(include_retry_info=False),
                 test_retry_count=get_retry_count(),

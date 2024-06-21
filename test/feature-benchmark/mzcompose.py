@@ -685,7 +685,7 @@ def upload_results_to_test_analytics(
 
     try:
         test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
-        test_analytics.builds.insert_build_job(was_successful=was_successful)
+        test_analytics.builds.add_build_job(was_successful=was_successful)
 
         result_entries = []
 
@@ -709,7 +709,7 @@ def upload_results_to_test_analytics(
                 )
             )
 
-        test_analytics.benchmark_results.insert_result(
+        test_analytics.benchmark_results.add_result(
             framework_version=FEATURE_BENCHMARK_FRAMEWORK_VERSION,
             results=result_entries,
         )
