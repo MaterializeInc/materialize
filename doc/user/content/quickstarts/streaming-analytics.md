@@ -32,20 +32,20 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
 
 1. In your `psql` terminal, create a new [cluster](https://materialize.com/docs/sql/create-cluster/) and [schema](https://materialize.com/docs/sql/create-schema/):
 
-    ```sql
+    ```mzsql
     CREATE CLUSTER demo (SIZE = '100cc');
     CREATE SCHEMA shop;
     ```
 
 1. Within the same `psql` terminal, we will switch to the cluster and schema we just created. This way everything done for this demo will be safely isolated from any other workflows we may have running:
 
-    ```sql
+    ```mzsql
     SET cluster = demo;
     SET SCHEMA shop;
     ```
 
 1. Create [a connection](/sql/create-connection/#confluent-schema-registry) to the Confluent Schema Registry:
-    ```sql
+    ```mzsql
     CREATE SECRET IF NOT EXISTS csr_username AS '<TBD>';
     CREATE SECRET IF NOT EXISTS csr_password AS '<TBD>';
 
@@ -58,7 +58,7 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
 
 1. Create [a connection](/sql/create-connection/#kafka) to the Kafka broker:
 
-    ```sql
+    ```mzsql
     CREATE SECRET kafka_password AS '<TBD>';
 
     CREATE CONNECTION kafka_connection TO KAFKA (
@@ -71,7 +71,7 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
 
 1. Create the sources, one per Kafka topic:
 
-    ```sql
+    ```mzsql
     CREATE SOURCE IF NOT EXISTS purchases
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'mysql.shop.purchases')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
@@ -98,7 +98,7 @@ Reuse your `psql` session and build the analytics:
 
     A `MATERIALIZED VIEW` is persisted in durable storage and is incrementally updated as new data arrives.
 
-    ```sql
+    ```mzsql
     CREATE MATERIALIZED VIEW vip_purchases AS
         SELECT
             user_id,
@@ -115,7 +115,7 @@ Reuse your `psql` session and build the analytics:
 
     1. Create a view that takes the on-time bids and finds the highest bid for each auction:
 
-    ```sql
+    ```mzsql
     CREATE VIEW highest_bid_per_auction AS
         SELECT grp.auction_id,
                bid_id,
@@ -150,7 +150,7 @@ Reuse your `psql` session and build the analytics:
 `SUBSCRIBE` can stream updates from materialized views as they occur. Use it to verify how the analytics change over time.
 
 1. Subscribe to the vip purchases:
-    ```sql
+    ```mzsql
     COPY (SUBSCRIBE (SELECT * FROM vip_purchases)) TO STDOUT;
     ```
 
