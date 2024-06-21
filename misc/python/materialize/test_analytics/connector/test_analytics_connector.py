@@ -43,8 +43,7 @@ class DatabaseConnector:
             ssl_context=ssl.SSLContext(),
         )
 
-        if config.auto_commit:
-            connection.autocommit = True
+        connection.autocommit = False
 
         return connection
 
@@ -79,11 +78,18 @@ class DatabaseConnector:
         last_executed_sql = sql_statements[0]
 
         try:
+            self._execute_sql("BEGIN;")
             for sql in sql_statements:
                 sql = dedent(sql)
                 last_executed_sql = sql
                 self._execute_sql(sql)
+            self._execute_sql("COMMIT;")
         except Exception as e:
+            try:
+                self._execute_sql("ROLLBACK;")
+            except:
+                pass
+
             error_msg = f"Failed to write to test analytics database! Cause: {e}"
             raise TestAnalyticsUploadError(error_msg, sql=last_executed_sql)
 
