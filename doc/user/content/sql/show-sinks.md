@@ -40,7 +40,7 @@ Field       | Meaning
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SINKS;
 ```
 ```nofmt
@@ -50,7 +50,7 @@ my_sink       | kafka |         | c1
 my_other_sink | kafka |         | c2
 ```
 
-```sql
+```mzsql
 SHOW SINKS IN CLUSTER c1;
 ```
 ```nofmt

@@ -18,7 +18,7 @@ _view&lowbar;name_ | The materialized view you want to use. You can find availab
 
 ## Examples
 
-```sql
+```mzsql
 SHOW CREATE MATERIALIZED VIEW winning_bids;
 ```
 ```nofmt

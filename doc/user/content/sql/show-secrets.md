@@ -18,7 +18,7 @@ _schema&lowbar;name_ | The schema to show secrets from. If omitted, secrets from
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SECRETS;
 ```
 
@@ -30,7 +30,7 @@ SHOW SECRETS;
  upstash_sasl_username
 ```
 
-```sql
+```mzsql
 SHOW SECRETS FROM public LIKE '%cert%';
 ```
 

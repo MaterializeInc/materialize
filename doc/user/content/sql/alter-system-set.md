@@ -32,7 +32,7 @@ this statement.
 
 ### Enable RBAC
 
-```sql
+```mzsql
 SHOW enable_rbac_checks;
 
  enable_rbac_checks

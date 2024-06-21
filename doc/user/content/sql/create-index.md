@@ -107,7 +107,7 @@ of the index.
 You can optimize the performance of `JOIN` on two relations by ensuring their
 join keys are the key columns in an index.
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW active_customers AS
     SELECT guid, geo_id, last_active_on
     FROM customer_source
@@ -138,7 +138,7 @@ In the above example, the index `active_customers_geo_idx`...
 
 If you commonly filter by a certain column being equal to a literal value, you can set up an index over that column to speed up your queries:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW active_customers AS
     SELECT guid, geo_id, last_active_on
     FROM customer_source

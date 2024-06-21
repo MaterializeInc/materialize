@@ -74,13 +74,13 @@ tables may not depend on temporary objects.
 
 You can create a table `t` with the following statement:
 
-```sql
+```mzsql
 CREATE TABLE t (a int, b text NOT NULL);
 ```
 
 Once a table is created, you can inspect the table with various `SHOW` commands.
 
-```sql
+```mzsql
 SHOW TABLES;
 TABLES
 ------

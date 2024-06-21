@@ -26,13 +26,13 @@ _secret&lowbar;name_ | The secret you want to drop. For available secrets, see [
 
 To drop an existing secret, run:
 
-```sql
+```mzsql
 DROP SECRET upstash_sasl_password;
 ```
 
 To avoid issuing an error if the specified secret does not exist, use the `IF EXISTS` option:
 
-```sql
+```mzsql
 DROP SECRET IF EXISTS upstash_sasl_password;
 ```
 
@@ -40,7 +40,7 @@ DROP SECRET IF EXISTS upstash_sasl_password;
 
 If the secret has dependencies, Materialize will throw an error similar to:
 
-```sql
+```mzsql
 DROP SECRET upstash_sasl_password;
 ```
 
@@ -51,7 +51,7 @@ ERROR:  cannot drop materialize.public.upstash_sasl_password: still depended upo
 
 , and you'll have to explicitly ask to also remove any dependent objects using the `CASCADE` option:
 
-```sql
+```mzsql
 DROP SECRET upstash_sasl_password CASCADE;
 ```
 

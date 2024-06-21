@@ -23,7 +23,7 @@ _role_name_                                         | Only shows privileges gran
 
 ## Examples
 
-```sql
+```mzsql
 SHOW PRIVILEGES;
 ```
 
@@ -44,7 +44,7 @@ SHOW PRIVILEGES;
  mz_system | materialize |             |        |             | system      | CREATEROLE
 ```
 
-```sql
+```mzsql
 SHOW PRIVILEGES ON SCHEMAS;
 ```
 
@@ -56,7 +56,7 @@ SHOW PRIVILEGES ON SCHEMAS;
  mz_system | materialize | materialize |        | public | schema      | USAGE
 ```
 
-```sql
+```mzsql
 SHOW PRIVILEGES FOR materialize;
 ```
 

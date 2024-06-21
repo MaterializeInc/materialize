@@ -18,11 +18,11 @@ _table&lowbar;name_ | The table you want use. You can find available table names
 
 ## Examples
 
-```sql
+```mzsql
 CREATE TABLE t (a int, b text NOT NULL);
 ```
 
-```sql
+```mzsql
 SHOW CREATE TABLE t;
 ```
 ```nofmt

@@ -67,15 +67,15 @@ except that:
 
 ## Example
 
-```sql
+```mzsql
 COPY t FROM STDIN WITH (DELIMITER '|');
 ```
 
-```sql
+```mzsql
 COPY t FROM STDIN (FORMAT CSV);
 ```
 
-```sql
+```mzsql
 COPY t FROM STDIN (DELIMITER '|');
 ```
 

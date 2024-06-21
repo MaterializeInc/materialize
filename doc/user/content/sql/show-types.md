@@ -21,7 +21,7 @@ _schema&lowbar;name_ | The schema to show types from. Defaults to first resolvab
 
 ### Show custom data types
 
-```sql
+```mzsql
 SHOW TYPES;
 ```
 ```

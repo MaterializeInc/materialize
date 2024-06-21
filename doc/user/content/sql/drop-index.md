@@ -25,7 +25,7 @@ _index&lowbar;name_ | The name of the index you want to remove.
 
 ### Remove an index
 
-```sql
+```mzsql
 SHOW VIEWS;
 ```
 ```nofmt
@@ -36,7 +36,7 @@ SHOW VIEWS;
 | q01                               |
 +-----------------------------------+
 ```
-```sql
+```mzsql
 SHOW INDEXES ON q01;
 ```
 ```nofmt
@@ -51,19 +51,19 @@ You can use the unqualified index name (`q01_geo_idx`) rather the fully qualifie
 
 You can remove an index with any of the following commands:
 
-- ```sql
+- ```mzsql
   DROP INDEX q01_geo_idx;
   ```
-- ```sql
+- ```mzsql
   DROP INDEX q01_geo_idx RESTRICT;
   ```
-- ```sql
+- ```mzsql
   DROP INDEX q01_geo_idx CASCADE;
   ```
 
 ### Do not issue an error if attempting to remove a nonexistent index
 
-```sql
+```mzsql
 DROP INDEX IF EXISTS q01_geo_idx;
 ```
 

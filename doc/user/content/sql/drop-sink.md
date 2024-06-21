@@ -20,13 +20,13 @@ _sink&lowbar;name_ | The sink you want to drop. You can find available sink name
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SINKS;
 ```
 ```nofmt
 my_sink
 ```
-```sql
+```mzsql
 DROP SINK my_sink;
 ```
 ```nofmt

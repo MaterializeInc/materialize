@@ -31,7 +31,7 @@ this statement.
 
 ### Reset enable RBAC
 
-```sql
+```mzsql
 SHOW enable_rbac_checks;
 
  enable_rbac_checks
