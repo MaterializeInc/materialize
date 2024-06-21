@@ -285,3 +285,7 @@ def add_annotation(style: str, title: str, content: str) -> None:
 
 {truncate_str(content)}"""
     add_annotation_raw(style, markdown)
+
+
+def get_job_url(build_url: str, build_job_id: str) -> str:
+    return f"{build_url}#{build_job_id}"

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from materialize.buildkite import get_job_url
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_COMPLETED_BUILD_STEP_STATES,
 )
@@ -140,7 +141,7 @@ def _extract_build_step_data_from_build(
             completed=job_completed,
             exit_status=exit_status,
             retry_count=retry_count,
-            web_url_to_job=f"{build_data['web_url']}#{job['id']}",
+            web_url_to_job=get_job_url(build_data["web_url"], job["id"]),
         )
 
         if retry_count == 0:
