@@ -85,7 +85,7 @@ pub(crate) async fn migrate(
     state: &CatalogState,
     tx: &mut Transaction<'_>,
     now: NowFn,
-    _boot_ts: Timestamp,
+    boot_ts: Timestamp,
     _connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let catalog_version = tx.get_catalog_content_version();
@@ -121,6 +121,7 @@ pub(crate) async fn migrate(
         .get_items()
         .map(|item| StateUpdate {
             kind: StateUpdateKind::Item(item),
+            ts: boot_ts,
             diff: StateDiff::Addition,
         })
         .collect();
