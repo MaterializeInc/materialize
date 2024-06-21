@@ -28,7 +28,8 @@ class TestAnalyticsUploadError(Exception):
 
 
 class DatabaseConnector:
-    def __init__(self, config: MzDbConfig, log_sql: bool):
+    def __init__(self, config: MzDbConfig, current_data_version: int, log_sql: bool):
+        self.current_data_version = current_data_version
         self._connection = self._create_connection(config)
         self._cursor = self._create_cursor(config, self._connection)
         self.update_statements = []
@@ -75,6 +76,8 @@ class DatabaseConnector:
         if len(self.update_statements) == 0:
             return
 
+        self._disable_if_on_unsupported_version()
+
         if self._read_only:
             print("Skipping updates to test_analytics due to read-only mode!")
             return
@@ -104,3 +107,17 @@ class DatabaseConnector:
             print(f"> {sql.strip()}")
 
         self._cursor.execute(sql)
+
+    def _disable_if_on_unsupported_version(
+        self,
+    ) -> None:
+        min_required_data_version = self.query_min_required_data_version()
+        print(
+            f"Current data version is {self.current_data_version}, min required version is {min_required_data_version}"
+        )
+
+        if self.current_data_version < min_required_data_version:
+            print(
+                f"Uploading test_analytics data is not supported from this data version ({self.current_data_version})"
+            )
+            self.set_read_only()

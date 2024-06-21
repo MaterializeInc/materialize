@@ -30,8 +30,9 @@ class TestAnalyticsDb:
 
     def __init__(self, config: MzDbConfig):
         self.config = config
-        self.database_connector = DatabaseConnector(config, log_sql=True)
-        self._disable_writer_if_on_unsupported_version(self.database_connector)
+        self.database_connector = DatabaseConnector(
+            config, current_data_version=TEST_ANALYTICS_DATA_VERSION, log_sql=True
+        )
 
         self.builds = BuildDataStorage(
             self.database_connector, TEST_ANALYTICS_DATA_VERSION
@@ -44,17 +45,3 @@ class TestAnalyticsDb:
 
     def submit_updates(self) -> None:
         self.database_connector.submit_update_statements()
-
-    def _disable_writer_if_on_unsupported_version(
-        self, database_connector: DatabaseConnector
-    ) -> None:
-        min_required_data_version = database_connector.query_min_required_data_version()
-        print(
-            f"Current data version is {TEST_ANALYTICS_DATA_VERSION}, min required version is {min_required_data_version}"
-        )
-
-        if TEST_ANALYTICS_DATA_VERSION < min_required_data_version:
-            print(
-                f"Uploading test_analytics data is not supported from this data version ({TEST_ANALYTICS_DATA_VERSION})"
-            )
-            database_connector.set_read_only()
