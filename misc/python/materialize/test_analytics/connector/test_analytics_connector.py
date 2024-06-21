@@ -36,8 +36,17 @@ class DatabaseConnector:
         self._read_only = False
         # Note that transactions in mz do not allow to mix read and write statements (INSERT INTO ... SELECT FROM ...)
         self._use_transaction = False
+        self.open_connection: Connection | None = None
 
-    def _create_connection(self, autocommit: bool = False) -> Connection:
+    def get_or_create_connection(self, autocommit: bool = False) -> Connection:
+        if self.open_connection is None:
+            self.open_connection = self.create_connection(autocommit=autocommit)
+        else:
+            self.open_connection.autocommit = autocommit
+
+        return self.open_connection
+
+    def create_connection(self, autocommit: bool = False) -> Connection:
         connection = pg8000.connect(
             host=self.config.hostname,
             user=self.config.username,
@@ -50,11 +59,17 @@ class DatabaseConnector:
 
         return connection
 
-    def _create_cursor(
-        self, connection: Connection | None = None, autocommit: bool = False
+    def create_cursor(
+        self,
+        connection: Connection | None = None,
+        autocommit: bool = False,
+        allow_reusing_connection: bool = False,
     ) -> Cursor:
         if connection is None:
-            connection = self._create_connection(autocommit=autocommit)
+            if allow_reusing_connection:
+                connection = self.get_or_create_connection(autocommit=autocommit)
+            else:
+                connection = self.create_connection(autocommit=autocommit)
 
         cursor = connection.cursor()
         cursor.execute(f"SET database = {self.config.database}")
@@ -75,7 +90,7 @@ class DatabaseConnector:
         if len(self.update_statements) == 0:
             return
 
-        cursor = self._create_cursor(autocommit=not self._use_transaction)
+        cursor = self.create_cursor(autocommit=not self._use_transaction)
 
         self._disable_if_on_unsupported_version(cursor)
 
