@@ -397,7 +397,7 @@ environment before cutting over.
 
     ```bash
     # Do a dry run to validate the sequence of commands to execute
-    dbt run-operation deploy_promote --args 'dry_run: True
+    dbt run-operation deploy_promote --args 'dry_run: True'
     ```
 
     ```bash
