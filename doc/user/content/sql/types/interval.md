@@ -115,7 +115,7 @@ Operation | Computes | Notes
 
 ## Examples
 
-```sql
+```mzsql
 SELECT INTERVAL '1' MINUTE AS interval_m;
 ```
 
@@ -127,7 +127,7 @@ SELECT INTERVAL '1' MINUTE AS interval_m;
 
 ### SQL Standard syntax
 
-```sql
+```mzsql
 SELECT INTERVAL '1-2 3 4:5:6.7' AS interval_p;
 ```
 
@@ -139,7 +139,7 @@ SELECT INTERVAL '1-2 3 4:5:6.7' AS interval_p;
 
 ### PostgreSQL syntax
 
-```sql
+```mzsql
 SELECT INTERVAL '1 year 2.3 days 4.5 seconds' AS interval_p;
 ```
 
@@ -153,7 +153,7 @@ SELECT INTERVAL '1 year 2.3 days 4.5 seconds' AS interval_p;
 
 `interval_n` demonstrates using negative and positive components in an interval.
 
-```sql
+```mzsql
 SELECT INTERVAL '-1 day 2:3:4.5' AS interval_n;
 ```
 
@@ -168,7 +168,7 @@ SELECT INTERVAL '-1 day 2:3:4.5' AS interval_n;
 `interval_r` demonstrates how `head_time_unit` and `tail_time_unit` truncate the
 interval.
 
-```sql
+```mzsql
 SELECT INTERVAL '1-2 3 4:5:6.7' DAY TO MINUTE AS interval_r;
 ```
 
@@ -184,7 +184,7 @@ SELECT INTERVAL '1-2 3 4:5:6.7' DAY TO MINUTE AS interval_r;
 as well as using `tail_time_unit` to control the `time_unit` of the last value
 of the `interval` string.
 
-```sql
+```mzsql
 SELECT INTERVAL '1 day 2-3 4' MINUTE AS interval_w;
 ```
 
@@ -196,7 +196,7 @@ SELECT INTERVAL '1 day 2-3 4' MINUTE AS interval_w;
 
 ### Interaction with timestamps
 
-```sql
+```mzsql
 SELECT TIMESTAMP '2020-01-01 8:00:00' + INTERVAL '1' DAY AS ts_interaction;
 ```
 
