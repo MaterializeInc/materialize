@@ -78,6 +78,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         input=dedent(
                             """
                                 $ kafka-create-topic topic=test-source partitions=1
+                                $ kafka-create-topic topic=test-sink partitions=1
                                 """
                         )
                     )
