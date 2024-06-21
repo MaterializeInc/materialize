@@ -21,4 +21,4 @@
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+  FOR TABLES (public.t0, public.t1, public.t2, public.alter_fail_drop_constraint, public.alter_fail_drop_col);
