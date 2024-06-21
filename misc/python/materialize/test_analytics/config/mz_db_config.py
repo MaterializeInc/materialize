@@ -19,5 +19,3 @@ class MzDbConfig:
     search_path: str
 
     port: int = 6875
-
-    auto_commit: bool = True
