@@ -309,28 +309,23 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    test_analytics_db = None
+    test_analytics_config = create_test_analytics_config_with_hostname(
+        args.cloud_hostname
+    )
+    test_analytics = TestAnalyticsDb(test_analytics_config)
+
+    # always insert a build job regardless whether it has annotations or not
+    test_analytics.builds.add_build_job(
+        was_successful=has_successful_buildkite_status()
+    )
+
+    return_code = annotate_logged_errors(args.log_files, test_analytics)
 
     try:
-        test_analytics_config = create_test_analytics_config_with_hostname(
-            args.cloud_hostname
-        )
-        test_analytics_db = TestAnalyticsDb(test_analytics_config)
-
-        # always insert a build job regardless whether it has annotations or not
-        store_build_job_in_test_analytics(test_analytics_db)
+        test_analytics.submit_updates()
     except Exception as e:
         # An error during an upload must never cause the build to fail
         print(f"Uploading results failed! {e}")
-
-    return_code = annotate_logged_errors(args.log_files, test_analytics_db)
-
-    if test_analytics_db is not None:
-        try:
-            test_analytics_db.submit_updates()
-        except Exception as e:
-            # An error during an upload must never cause the build to fail
-            print(f"Uploading results failed! {e}")
 
     return return_code
 
@@ -339,7 +334,7 @@ def annotate_errors(
     unknown_errors: Sequence[ObservedBaseError],
     known_errors: Sequence[ObservedBaseError],
     build_history_on_main: BuildHistoryOnMain | None,
-    test_analytics_db: TestAnalyticsDb | None,
+    test_analytics_db: TestAnalyticsDb,
 ) -> None:
     assert len(unknown_errors) > 0 or len(known_errors) > 0
     annotation_style = "info" if not unknown_errors else "error"
@@ -358,8 +353,7 @@ def annotate_errors(
 
     add_annotation_raw(style=annotation_style, markdown=annotation.to_markdown())
 
-    if test_analytics_db is not None:
-        store_annotation_in_test_analytics(test_analytics_db, annotation)
+    store_annotation_in_test_analytics(test_analytics_db, annotation)
 
 
 def group_identical_errors(
@@ -380,7 +374,7 @@ def group_identical_errors(
 
 
 def annotate_logged_errors(
-    log_files: list[str], test_analytics_db: TestAnalyticsDb | None
+    log_files: list[str], test_analytics: TestAnalyticsDb
 ) -> int:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
@@ -518,9 +512,7 @@ def annotate_logged_errors(
             raise RuntimeError(f"Unexpected error type: {type(error)}")
 
     build_history_on_main = get_failures_on_main()
-    annotate_errors(
-        unknown_errors, known_errors, build_history_on_main, test_analytics_db
-    )
+    annotate_errors(unknown_errors, known_errors, build_history_on_main, test_analytics)
 
     if unknown_errors:
         print(f"+++ Failing test because of {len(unknown_errors)} unknown error(s)")
@@ -548,8 +540,7 @@ def annotate_logged_errors(
         )
         add_annotation_raw(style="error", markdown=annotation.to_markdown())
 
-        if test_analytics_db is not None:
-            store_annotation_in_test_analytics(test_analytics_db, annotation)
+        store_annotation_in_test_analytics(test_analytics, annotation)
 
     return len(unknown_errors)
 
@@ -768,51 +759,37 @@ def format_error_message(error_message: str | None, max_length: int = 10_000) ->
     return f"```\n{sanitize_text(error_message, max_length)}\n```"
 
 
-def store_build_job_in_test_analytics(test_analytics: TestAnalyticsDb) -> None:
-    try:
-        test_analytics.builds.add_build_job(
-            was_successful=has_successful_buildkite_status()
-        )
-    except Exception as e:
-        # never cause the whole script to fail
-        print(e)
-
-
 def store_annotation_in_test_analytics(
     test_analytics: TestAnalyticsDb, annotation: Annotation
 ) -> None:
-    try:
-        # the build step was already inserted before
-        # the buildkite status may have been successful but the build may still fail due to unknown errors in the log
-        test_analytics.builds.update_build_job_success(
-            was_successful=not annotation.is_failure
-        )
+    # the build step was already inserted before
+    # the buildkite status may have been successful but the build may still fail due to unknown errors in the log
+    test_analytics.builds.update_build_job_success(
+        was_successful=not annotation.is_failure
+    )
 
-        error_entries = [
-            AnnotationErrorEntry(
-                error_type=error.internal_error_type,
-                message=error.to_text(),
-                issue=(
-                    f"materialize/{error.issue_number}"
-                    if isinstance(error, WithIssue)
-                    else None
-                ),
-                occurrence_count=error.occurrences,
-            )
-            for error in chain(annotation.known_errors, annotation.unknown_errors)
-        ]
-
-        test_analytics.build_annotations.add_annotation(
-            build_annotation_storage.AnnotationEntry(
-                test_suite=get_suite_name(include_retry_info=False),
-                test_retry_count=get_retry_count(),
-                is_failure=annotation.is_failure,
-                errors=error_entries,
+    error_entries = [
+        AnnotationErrorEntry(
+            error_type=error.internal_error_type,
+            message=error.to_text(),
+            issue=(
+                f"materialize/{error.issue_number}"
+                if isinstance(error, WithIssue)
+                else None
             ),
+            occurrence_count=error.occurrences,
         )
-    except Exception as e:
-        # never cause the whole script to fail
-        print(e)
+        for error in chain(annotation.known_errors, annotation.unknown_errors)
+    ]
+
+    test_analytics.build_annotations.add_annotation(
+        build_annotation_storage.AnnotationEntry(
+            test_suite=get_suite_name(include_retry_info=False),
+            test_retry_count=get_retry_count(),
+            is_failure=annotation.is_failure,
+            errors=error_entries,
+        ),
+    )
 
 
 if __name__ == "__main__":

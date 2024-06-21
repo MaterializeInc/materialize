@@ -44,4 +44,8 @@ class TestAnalyticsDb:
         self.build_annotations = BuildAnnotationStorage(self.database_connector)
 
     def submit_updates(self) -> None:
+        """
+        This will open a connection to the test-analytics database and submit the SQL statements.
+        Make sure that this method is always invoked within a try-catch block.
+        """
         self.database_connector.submit_update_statements()
