@@ -82,10 +82,13 @@ class DatabaseConnector:
             for sql in sql_statements:
                 sql = dedent(sql)
                 last_executed_sql = sql
-                if self._log_sql:
-                    print(f"> {sql.strip()}")
-
-                self._cursor.execute(sql)
+                self._execute_sql(sql)
         except Exception as e:
             error_msg = f"Failed to write to test analytics database! Cause: {e}"
             raise TestAnalyticsUploadError(error_msg, sql=last_executed_sql)
+
+    def _execute_sql(self, sql: str) -> None:
+        if self._log_sql:
+            print(f"> {sql.strip()}")
+
+        self._cursor.execute(sql)
