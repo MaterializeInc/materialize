@@ -74,6 +74,7 @@ class DatabaseConnector:
 
         if self._read_only:
             print("Skipping updates to test_analytics due to read-only mode!")
+            return
 
         last_executed_sql = sql_statements[0]
 
