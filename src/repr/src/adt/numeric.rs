@@ -856,7 +856,7 @@ mod tests {
     fn smoketest_packed_numeric_roundtrips() {
         let og = PackedNumeric::from_value(Numeric::from(-42));
         let bytes = og.as_bytes();
-        let rnd = PackedNumeric::from_bytes(&bytes).expect("valid");
+        let rnd = PackedNumeric::from_bytes(bytes).expect("valid");
         assert_eq!(og, rnd);
 
         // Returns an error if the size of the slice is invalid.
