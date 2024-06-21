@@ -42,7 +42,7 @@ example.
 1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
    client connected to Materialize, create a new role:
 
-    ```sql
+    ```mzsql
     CREATE ROLE dev_role;
     ```
 
@@ -50,7 +50,7 @@ example.
     can interact with Materialize objects. Let's look at the role attributes of
     the role you created:
 
-    ```sql
+    ```mzsql
     SELECT * FROM mz_roles WHERE name = 'dev_role';
    ```
 
@@ -87,27 +87,27 @@ privileges the role needs.
 1. In the SQL client connected to Materialize, create a new example cluster to
 avoid impacting other environments:
 
-   ```sql
+   ```mzsql
    CREATE CLUSTER dev_cluster (SIZE = '25cc');
    ```
 
 1. Change into the example cluster:
 
-   ```sql
+   ```mzsql
    SET CLUSTER TO dev_cluster;
    ```
 
 1. Create a new database, schema, and table:
 
-   ```sql
+   ```mzsql
    CREATE DATABASE dev_db;
    ```
 
-   ```sql
+   ```mzsql
    CREATE SCHEMA dev_db.schema;
    ```
 
-   ```sql
+   ```mzsql
    CREATE TABLE dev_table (a int, b text NOT NULL);
    ```
 
@@ -126,7 +126,7 @@ In this example, let's say your `dev_role` needs the following permissions:
 
 1. In your terminal, grant table-level privileges to the `dev_role`:
 
-   ```sql
+   ```mzsql
    GRANT SELECT, UPDATE, INSERT ON dev_table TO dev_role;
    ```
 
@@ -136,7 +136,7 @@ In this example, let's say your `dev_role` needs the following permissions:
 
 2. Grant schema privileges to the `dev_role`:
 
-   ```sql
+   ```mzsql
    GRANT USAGE ON SCHEMA dev_db.schema TO dev_role;
    ```
 
@@ -145,13 +145,13 @@ In this example, let's say your `dev_role` needs the following permissions:
 3. Grant database privileges to the `dev_role`. You can use the `GRANT ALL`
    statement to grant all available privileges on an object.
 
-   ```sql
+   ```mzsql
    GRANT ALL ON DATABASE dev_db TO dev_role;
    ```
 
 4. Grant cluster privileges to the `dev_role`:
 
-   ```sql
+   ```mzsql
    GRANT USAGE, CREATE ON CLUSTER dev_cluster TO dev_role;
    ```
 
@@ -166,13 +166,13 @@ to a user in your Materialize organization.
 
 1. In your terminal, use the `GRANT` statement to apply a role to your new user:
 
-   ```sql
+   ```mzsql
    GRANT dev_role TO <new_user>;
    ```
 
 1. To review the permissions a role has, you can view the object data:
 
-   ```sql
+   ```mzsql
    SELECT name, privileges FROM mz_tables WHERE name='dev_table';
    ```
 
@@ -196,13 +196,13 @@ privileges as needed.
 
 1. Create a second role your Materialize account:
 
-   ```sql
+   ```mzsql
    CREATE ROLE qa_role;
    ```
 
 2. Apply `CREATEDB` privileges to the `qa_role`
 
-   ```sql
+   ```mzsql
    GRANT CREATEDB ON SYSTEM TO qa_role;
    ```
 
@@ -210,13 +210,13 @@ privileges as needed.
 
 3. Create a new `qa_db` database:
 
-   ```sql
+   ```mzsql
    CREATE DATABASE qa_db;
    ```
 
 4. Apply `USAGE` and `CREATE` privileges to the `qa_role` role for the new database:
 
-   ```sql
+   ```mzsql
    GRANT USAGE, CREATE ON DATABASE qa_db TO qa_role;
    ```
 
@@ -228,7 +228,7 @@ permissions as the `qa_role`.
 
 1. Add `dev_role` as a member of `qa_role`:
 
-   ```sql
+   ```mzsql
    GRANT qa_role TO dev_role;
    ```
 
@@ -238,7 +238,7 @@ permissions as the `qa_role`.
 
 2. Review the privileges of `qa_role` and `dev_role`:
 
-   ```sql
+   ```mzsql
    SELECT name, privileges FROM mz_databases WHERE name='qa_db';
    ```
 
@@ -261,7 +261,7 @@ You can revoke certain privileges for each role, even if they are inherited from
 1. Let's say you decide `dev_role` no longer needs `CREATE` privileges on the
    `dev_table` object. You can revoke that privilege for the role:
 
-   ```sql
+   ```mzsql
    REVOKE CREATE ON DATABASE dev_table FROM dev_role;
    ```
 
@@ -277,7 +277,7 @@ You can revoke certain privileges for each role, even if they are inherited from
    If you need to revoke specific privileges from a role that have been
    inheritied from another role, you must revoke the role with those privileges.
 
-   ```sql
+   ```mzsql
    REVOKE qa_role FROM dev_role;
    ```
    In this example, when `dev_role` inherits from `qa_role`, `dev_role` always has
@@ -294,14 +294,14 @@ to destroy the objects you created for this guide.
 
 1. Drop the roles you created:
 
-   ```sql
+   ```mzsql
    DROP ROLE qa_role;
    DROP ROLE dev_role;
    ```
 
 1. Drop the other objects you created:
 
-   ```sql
+   ```mzsql
    DROP CLUSTER dev_cluster CASCADE;
    DROP DATABASE dev_db CASCADE;
    DROP TABLE dev_table;

@@ -175,7 +175,7 @@ exposed** in dbt, and need to exist before you run any `source` models.
 Create a [Kafka source](/sql/create-source/kafka/).
 
 **Filename:** sources/kafka_topic_a.sql
-```sql
+```mzsql
 {{ config(materialized='source') }}
 
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'topic_a')
@@ -193,7 +193,7 @@ database.schema.kafka_topic_a
 Create a [PostgreSQL source](/sql/create-source/postgres/).
 
 **Filename:** sources/pg.sql
-```sql
+```mzsql
 {{ config(materialized='source') }}
 
 FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
@@ -225,7 +225,7 @@ models in, you should additionally force a dependency on the parent source
 model (`pg`), as described in the [dbt documentation](https://docs.getdbt.com/reference/dbt-jinja-functions/ref#forcing-dependencies).
 
 **Filename:** staging/dep_subsources.sql
-```sql
+```mzsql
 -- depends_on: {{ ref('pg') }}
 {{ config(materialized='view') }}
 
@@ -251,7 +251,7 @@ database.schema.table_b
 Create a [MySQL source](/sql/create-source/mysql/).
 
 **Filename:** sources/mysql.sql
-```sql
+```mzsql
 {{ config(materialized='source') }}
 
 FROM MYSQL CONNECTION mysql_connection
@@ -283,7 +283,7 @@ models in, you should additionally force a dependency on the parent source
 model (`mysql`), as described in the [dbt documentation](https://docs.getdbt.com/reference/dbt-jinja-functions/ref#forcing-dependencies).
 
 **Filename:** staging/dep_subsources.sql
-```sql
+```mzsql
 -- depends_on: {{ ref('mysql') }}
 {{ config(materialized='view') }}
 
@@ -309,7 +309,7 @@ database.schema.table_b
 Create a [webhook source](/sql/create-source/webhook/).
 
 **Filename:** sources/webhook.sql
-```sql
+```mzsql
 {{ config(materialized='source') }}
 
 FROM WEBHOOK
@@ -352,7 +352,7 @@ in Materialize you can simply provide the SQL statement in the model (and skip
 the `materialized` configuration parameter).
 
 **Filename:** models/view_a.sql
-```sql
+```mzsql
 SELECT
     col_a, ...
 FROM {{ ref('kafka_topic_a') }}
@@ -370,7 +370,7 @@ databases), with [materialized views](/sql/create-materialized-view)
 that **continuously update** as the underlying data changes:
 
 **Filename:** models/materialized_view_a.sql
-```sql
+```mzsql
 {{ config(materialized='materialized_view') }}
 
 SELECT
@@ -394,7 +394,7 @@ can instruct dbt to create a sink using the custom `sink` materialization.
 Create a [Kafka sink](/sql/create-sink).
 
 **Filename:** sinks/kafka_topic_c.sql
-```sql
+```mzsql
 {{ config(materialized='sink') }}
 
 FROM {{ ref('materialized_view_a') }}
@@ -419,7 +419,7 @@ Use the `cluster` option to specify the [cluster](/sql/create-cluster/) in which
 a `materialized view`, `index`, `source`, or `sink` model is created. If
 unspecified, the default cluster for the connection is used.
 
-```sql
+```mzsql
 {{ config(materialized='materialized_view', cluster='cluster_a') }}
 ```
 
@@ -429,7 +429,7 @@ Use the `database` option to specify the [database](/sql/namespaces/#database-de
 in which a `source`, `view`, `materialized view` or `sink` is created. If
 unspecified, the default database for the connection is used.
 
-```sql
+```mzsql
 {{ config(materialized='materialized_view', database='database_a') }}
 ```
 
@@ -448,14 +448,14 @@ Component                            | Value     | Description
 
 ##### Creating a multi-column index
 
-```sql
+```mzsql
 {{ config(materialized='view',
           indexes=[{'columns': ['col_a','col_b'], 'cluster': 'cluster_a'}]) }}
 ```
 
 ##### Creating a default index
 
-```sql
+```mzsql
 {{ config(materialized='view',
     indexes=[{'default': True}]) }}
 ```
@@ -514,7 +514,7 @@ types are supported.
 A `not_null` constraint will be compiled to an [`ASSERT NOT NULL`](/sql/create-materialized-view/#non-null-assertions)
 option for the specified columns of the materialize view.
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW model_with_constraints
 WITH (
         ASSERT NOT NULL col_with_constraints
@@ -541,8 +541,13 @@ SELECT NULL AS col_with_constraints,
    SQL client connected to Materialize, double-check that all objects have been
    created:
 
-    ```sql
+    ```mzsql
     SHOW SOURCES [FROM database.schema];
+    ```
+
+    <p></p>
+
+    ```nofmt
            name
     -------------------
      mysql_table_a
@@ -550,13 +555,31 @@ SELECT NULL AS col_with_constraints,
      postgres_table_a
      postgres_table_b
      kafka_topic_a
+    ```
 
+    <p></p>
+
+    ```mzsql
     SHOW VIEWS;
+    ```
+
+    <p></p>
+
+    ```nofmt
            name
     -------------------
      view_a
+    ```
 
-     SHOW MATERIALIZED VIEWS;
+    <p></p>
+
+    ```mzsql
+    SHOW MATERIALIZED VIEWS;
+    ```
+
+    <p></p>
+
+    ```nofmt
            name
     -------------------
      materialized_view_a
@@ -633,14 +656,28 @@ trigger **real-time alerts** downstream.
    SQL client connected to Materialize, that the schema storing the tests has been
    created, as well as the test materialized views:
 
-    ```sql
+    ```mzsql
     SHOW SCHEMAS;
+    ```
+
+    <p></p>
+
+    ```nofmt
            name
     -------------------
      public
      public_etl_failure
+    ```
 
-    SHOW MATERIALIZED VIEWS FROM public_etl_failure;;
+    <p></p>
+
+    ```mzsql
+    SHOW MATERIALIZED VIEWS FROM public_etl_failure;
+    ```
+
+    <p></p>
+
+    ```nofmt
            name
     -------------------
      not_null_col_a
@@ -719,7 +756,7 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
 
     As an alternative, you can configure `persist-docs` in the config block of your models:
 
-    ```sql
+    ```mzsql
     {{ config(
         materialized=materialized_view,
         persist_docs={"relation": true, "columns": true}
@@ -730,8 +767,12 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
   files is persisted to Materialize in the [mz_internal.mz_comments](/sql/system-catalog/mz_internal/#mz_comments)
   system catalog table on every `dbt run`:
 
-    ```sql
+    ```mzsql
       SELECT * FROM mz_internal.mz_comments;
+    ```
+    <p></p>
+
+    ```nofmt
 
         id  |    object_type    | object_sub_id |              comment
       ------+-------------------+---------------+----------------------------------
