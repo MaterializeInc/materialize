@@ -231,7 +231,7 @@ impl Coordinator {
                     let _ = tx.send(self.dump());
                 }
 
-                Command::ControllerAllowWrites { tx } => {
+                Command::AllowWrites { tx } => {
                     self.handle_allow_writes(tx).await;
                 }
             }
