@@ -59,6 +59,14 @@ impl ColumnarStats {
     pub fn downcast<T: Data>(&self) -> Option<T::Stats> {
         T::Stats::downcast(self)
     }
+
+    /// Returns the inner [`ColumnStatKinds`] if `nulls` is [`None`].
+    pub fn non_null_values(&self) -> Option<&ColumnStatKinds> {
+        match self.nulls {
+            None => Some(&self.values),
+            Some(_) => None,
+        }
+    }
 }
 
 impl DynStats for ColumnarStats {
@@ -255,7 +263,7 @@ pub trait ColumnStats<T: Data>: DynStats {
     /// [`ColumnarStats`] contains `Self`.
     ///
     /// Note: This method is intended to help bridge the gap between [`Data`]
-    /// and [`crate::Schema2`].
+    /// and [`crate::columnar::Schema2`].
     fn downcast(stats: &ColumnarStats) -> Option<Self>
     where
         Self: Sized;
@@ -398,10 +406,7 @@ impl<T: Data> ColumnStats<T> for NoneStats {
     where
         Self: Sized,
     {
-        if stats.nulls.is_some() {
-            return None;
-        }
-        match &stats.values {
+        match stats.non_null_values()? {
             ColumnStatKinds::None => Some(NoneStats),
             _ => None,
         }

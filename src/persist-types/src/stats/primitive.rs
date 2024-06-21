@@ -202,10 +202,7 @@ macro_rules! stats_primitive {
             where
                 Self: Sized,
             {
-                if stats.nulls.is_some() {
-                    return None;
-                }
-                match &stats.values {
+                match stats.non_null_values()? {
                     ColumnStatKinds::Primitive(PrimitiveStatsVariants::$variant(prim)) => {
                         Some(prim.clone())
                     }
