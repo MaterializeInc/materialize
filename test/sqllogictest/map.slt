@@ -596,11 +596,10 @@ SELECT '{a=>1,b=>2}'::int4_map::text;
 ----
 {a=>1,b=>2}
 
-# TODO: #27761
-# query T
-# SELECT pg_typeof(NULL::int4_map);
-# ----
-# int4_map
+query T
+SELECT pg_typeof(NULL::int4_map);
+----
+int4_map
 
 # 🔬🔬 Check each valid value type
 
