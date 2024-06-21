@@ -479,3 +479,26 @@ WHERE
     AND mda.address[1] = dataflows.dataflow_address
     AND mdo.id = dataflows.dataflow_operator;
 ```
+
+## I dropped an index, why haven't my plans and dataflows changed?
+If you drop an index from the catalog, but it is depended on by downstream objects, then it will continue to be maintained and take up resources until all those dependent objects are dropped or altered, or Materialize is restarted.
+
+<!-- Todo: add reference to the console once it's available there. -->
+To see if you have any residual dataflows on a given cluster, you can run the following query
+```sql
+SET CLUSTER TO <clusterName>;
+SELECT s.name AS residualIndexName, s.id as dataflowId
+FROM mz_internal.mz_dataflow_arrangement_sizes AS s
+INNER JOIN mz_internal.mz_compute_exports AS ce ON ce.dataflow_id = s.id
+LEFT JOIN mz_catalog.mz_objects AS o ON o.id = ce.export_id
+WHERE o.id IS NULL;
+```
+
+<!-- Todo: Is there a way to list the dependencies? -->
+
+To have your dependent downstream objects re-plan without the index you can
+* Drop all of the dependent objects then recreate them
+* Restart your cluster (first set `REPLICATION FACTOR = 0`, then set replication factor back to the original value)
+
+Note: take the above actions with caution(!) because both of these will incur downtime while the objects are being recreated and hydrated. It is not advised to do this to production clusters and objects. For
+changing production objects, it is recommended to use [blue/green deployments](/manage/dbt/development-workflows/#bluegreen-deployments).
