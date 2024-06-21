@@ -138,9 +138,7 @@ impl CatalogState {
         retractions: &mut InProgressRetractions,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         soft_assert_no_log!(
-            updates
-                .windows(2)
-                .all(|window| window[0].ts == window[1].ts),
+            updates.iter().map(|update| update.ts).all_equal(),
             "all timestamps should be equal: {updates:?}"
         );
 
@@ -1023,9 +1021,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     }
 
     soft_assert_no_log!(
-        updates
-            .windows(2)
-            .all(|window| window[0].ts == window[1].ts),
+        updates.iter().map(|update| update.ts).all_equal(),
         "all timestamps should be equal: {updates:?}"
     );
 
