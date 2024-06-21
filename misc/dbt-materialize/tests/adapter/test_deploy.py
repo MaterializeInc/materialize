@@ -507,6 +507,27 @@ class TestTargetDeploy:
 
         run_dbt(["run-operation", "deploy_init"], expect_pass=False)
 
+    def test_dbt_deploy_init_with_refresh_rehydration_time(self, project):
+        project.run_sql(
+            "CREATE CLUSTER prod (SIZE = '1', SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour'))"
+        )
+        project.run_sql("CREATE SCHEMA prod")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        # Get the rehydration time from the cluster
+        rehydration_time = project.run_sql(
+            """
+            SELECT cs.refresh_rehydration_time_estimate
+            FROM mz_internal.mz_cluster_schedules cs
+            JOIN mz_clusters c ON cs.cluster_id = c.id
+            WHERE c.name = 'prod_dbt_deploy'
+            """,
+            fetch="one",
+        )
+
+        assert rehydration_time == ("01:00:00",)
+
     def test_dbt_deploy_init_and_cleanup(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
         project.run_sql("CREATE SCHEMA prod")
