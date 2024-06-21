@@ -51,7 +51,7 @@ day of year | `DOY`
 
 ### Extract second from timestamptz
 
-```sql
+```mzsql
 SELECT date_part('S', TIMESTAMP '2006-01-02 15:04:05.06');
 ```
 ```nofmt
@@ -62,7 +62,7 @@ SELECT date_part('S', TIMESTAMP '2006-01-02 15:04:05.06');
 
 ### Extract century from date
 
-```sql
+```mzsql
 SELECT date_part('CENTURIES', DATE '2006-01-02');
 ```
 ```nofmt
