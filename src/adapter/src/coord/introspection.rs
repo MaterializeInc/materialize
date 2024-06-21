@@ -29,6 +29,7 @@
 //!   by reinstalling the failed introspection subscribes.
 
 use anyhow::bail;
+use mz_adapter_types::dyncfgs::ENABLE_INTROSPECTION_SUBSCRIBES;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::error::ERROR_TARGET_REPLICA_FAILED;
 use mz_compute_client::protocol::response::SubscribeBatch;
@@ -91,6 +92,11 @@ impl Coordinator {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
     ) {
+        let dyncfgs = self.catalog().system_config().dyncfgs();
+        if !ENABLE_INTROSPECTION_SUBSCRIBES.get(dyncfgs) {
+            return;
+        }
+
         for spec in SUBSCRIBES {
             self.install_introspection_subscribe(cluster_id, replica_id, spec)
                 .await;

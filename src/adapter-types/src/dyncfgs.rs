@@ -32,6 +32,13 @@ pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.",
 );
 
+/// Enable installation of introspection subscribes.
+pub const ENABLE_INTROSPECTION_SUBSCRIBES: Config<bool> = Config::new(
+    "enable_introspection_subscribes",
+    false,
+    "Enable installation of introspection subscribes.",
+);
+
 /// The plan insights notice will not investigate fast path clusters if plan optimization took longer than this.
 pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Duration> = Config::new(
     "plan_insights_notice fast_path_clusters_optimize_duration",
@@ -50,5 +57,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ALLOW_USER_SESSIONS)
         .add(&ENABLE_0DT_DEPLOYMENT)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
+        .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
 }
