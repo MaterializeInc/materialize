@@ -410,9 +410,9 @@ ORDER BY r.id;
 ----
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
-    Project (#0..=#3, #5, #27)
-      Map (((uint8_to_double(#25) / uint8_to_double(#19)) * 100))
-        Join on=(#0 = #13 = #22 AND #2 = #4 AND #14 = #15) type=delta
+    Project (#0..=#3, #5, #29)
+      Map (((uint8_to_double(#27) / uint8_to_double(#21)) * 100))
+        Join on=(#0 = #15 = #24 AND #2 = #4 AND #16 = #17) type=delta
           ArrangeBy keys=[[#0], [#2]]
             Project (#0..=#3)
               ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]

@@ -212,6 +212,8 @@ mz_cluster_replicas  size
 mz_clusters  availability_zones
 mz_clusters  disk
 mz_clusters  id
+mz_clusters  introspection_debugging
+mz_clusters  introspection_interval
 mz_clusters  managed
 mz_clusters  name
 mz_clusters  owner_id
