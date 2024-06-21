@@ -111,6 +111,7 @@ impl<'a> DirectiveArgs<'a> {
                         stats: None,
                         ts_rewrite: None,
                         diffs_sum: None,
+                        format: None,
                     })
                 })
                 .collect(),

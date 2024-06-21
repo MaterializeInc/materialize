@@ -22,7 +22,11 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
 use mz_persist_types::Codec64;
+use proptest::arbitrary::Arbitrary;
+use proptest::prelude::*;
+use proptest::strategy::{BoxedStrategy, Just};
 use prost::Message;
+use serde::Serialize;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
@@ -37,7 +41,7 @@ use crate::location::Blob;
 use crate::metrics::ColumnarMetrics;
 
 /// Column format of a batch.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum BatchColumnarFormat {
     /// Rows are encoded to `ProtoRow` and then a batch is written down as a Parquet with a schema
     /// of `(k, v, t, d)`, where `k` are the serialized bytes.
@@ -45,7 +49,7 @@ pub enum BatchColumnarFormat {
     /// Rows are encoded to `ProtoRow` and a columnar struct. The batch is written down as Parquet
     /// with a schema of `(k, k_c, v, v_c, t, d)`, where `k` are the serialized bytes and `k_c` is
     /// nested columnar data.
-    Both,
+    Both(usize),
 }
 
 impl BatchColumnarFormat {
@@ -60,7 +64,8 @@ impl BatchColumnarFormat {
     pub fn from_str(s: &str) -> Self {
         match s {
             "row" => BatchColumnarFormat::Row,
-            "both" => BatchColumnarFormat::Both,
+            "both" => BatchColumnarFormat::Both(0),
+            "both_v1" => BatchColumnarFormat::Both(1),
             x => {
                 let default = BatchColumnarFormat::default();
                 soft_panic_or_log!("Invalid batch columnar type: {x}, falling back to {default}");
@@ -73,7 +78,9 @@ impl BatchColumnarFormat {
     pub const fn as_str(&self) -> &'static str {
         match self {
             BatchColumnarFormat::Row => "row",
-            BatchColumnarFormat::Both => "both",
+            BatchColumnarFormat::Both(0) => "both",
+            BatchColumnarFormat::Both(1) => "both_v1",
+            _ => panic!("unknown batch columnar format"),
         }
     }
 
@@ -81,7 +88,7 @@ impl BatchColumnarFormat {
     pub const fn is_structured(&self) -> bool {
         match self {
             BatchColumnarFormat::Row => false,
-            BatchColumnarFormat::Both => true,
+            BatchColumnarFormat::Both(_) => true,
         }
     }
 }
@@ -89,6 +96,20 @@ impl BatchColumnarFormat {
 impl fmt::Display for BatchColumnarFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+impl Arbitrary for BatchColumnarFormat {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<BatchColumnarFormat>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        proptest::strategy::Union::new(vec![
+            Just(BatchColumnarFormat::Row).boxed(),
+            Just(BatchColumnarFormat::Both(0)).boxed(),
+            Just(BatchColumnarFormat::Both(1)).boxed(),
+        ])
+        .boxed()
     }
 }
 

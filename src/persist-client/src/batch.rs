@@ -1123,6 +1123,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             }
             stats
         });
+        let format = if cfg.batch_columnar_format.is_structured() {
+            Some(cfg.batch_columnar_format)
+        } else {
+            None
+        };
 
         BatchPart::Hollow(HollowBatchPart {
             key: partial_key,
@@ -1131,6 +1136,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             stats,
             ts_rewrite,
             diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
+            format,
         })
     }
 
