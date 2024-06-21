@@ -1,5 +1,13 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Add support for sinks cutover in blue/green deployments [#27557](https://github.com/MaterializeInc/materialize/pull/27557).
+  Sinks still have to be created in a **dedicated schema and cluster**.
+* Introduced `dry_run: True` argument to the `deploy_promote` macro
+  to preview the changes that will be made during the cutover.
+* Added support for `SCHEDULED` cluster type in the `deploy_init` macro.
+
 ## 1.8.1 - 2024-06-08
 
 * Add support for overriding the `generate_cluster_name` macro to customize the
