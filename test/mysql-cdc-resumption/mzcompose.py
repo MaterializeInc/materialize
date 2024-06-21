@@ -103,7 +103,10 @@ def workflow_bin_log_manipulations(c: Composition) -> None:
     with c.override(
         Materialized(sanity_restart=False),
     ):
-        scenarios = [reset_master_gtid, corrupt_bin_log]
+        scenarios = [
+            reset_master_gtid,
+            corrupt_bin_log_to_stall_source,
+        ]
         for scenario in scenarios:
             print(f"--- Running scenario {scenario.__name__}")
             initialize(c)
@@ -417,7 +420,7 @@ def reset_master_gtid(c: Composition) -> None:
     )
 
 
-def corrupt_bin_log(c: Composition) -> None:
+def corrupt_bin_log_to_stall_source(c: Composition) -> None:
     """
     Switch off mz, modify data in mysql, and purge the bin-log so that mz hasn't seen all entries in the replication
     stream.
