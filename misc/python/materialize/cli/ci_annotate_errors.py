@@ -497,7 +497,7 @@ def annotate_logged_errors(
         else:
             raise RuntimeError(f"Unexpected error type: {type(error)}")
 
-    build_history_on_main = get_failures_on_main()
+    build_history_on_main = get_failures_on_main(test_analytics)
     annotate_errors(unknown_errors, known_errors, build_history_on_main, test_analytics)
 
     if unknown_errors:
@@ -643,16 +643,44 @@ def sanitize_text(text: str, max_length: int = 4_000) -> str:
     return text
 
 
-def get_failures_on_main() -> BuildHistory:
+def get_failures_on_main(test_analytics: TestAnalyticsDb) -> BuildHistory:
     pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
     step_key = os.getenv("BUILDKITE_STEP_KEY")
-    step_name = os.getenv("BUILDKITE_LABEL") or step_key
     parallel_job = os.getenv("BUILDKITE_PARALLEL_JOB")
-    current_build_number = os.getenv("BUILDKITE_BUILD_NUMBER")
-    if parallel_job is not None:
-        parallel_job = int(parallel_job)
     assert pipeline_slug is not None
     assert step_key is not None
+
+    if parallel_job is not None:
+        parallel_job = int(parallel_job)
+
+    try:
+        build_history = test_analytics.build_history.get_recent_build_job_failures(
+            pipeline=pipeline_slug,
+            branch="main",
+            step_key=step_key,
+            parallel_job_index=parallel_job,
+        )
+
+        if len(build_history.last_build_step_outcomes) < 5:
+            print(
+                "Loading build history from test analytics did not provide enough data"
+            )
+        else:
+            return build_history
+    except Exception as e:
+        print(f"Loading build history from test analytics failed: {e}")
+
+    print("Loading build history from buildkite instead")
+    return _get_failures_on_main_from_buildkite(
+        pipeline_slug=pipeline_slug, step_key=step_key, parallel_job=parallel_job
+    )
+
+
+def _get_failures_on_main_from_buildkite(
+    pipeline_slug: str, step_key: str, parallel_job: int | None
+) -> BuildHistory:
+    step_name = os.getenv("BUILDKITE_LABEL") or step_key
+    current_build_number = os.getenv("BUILDKITE_BUILD_NUMBER")
     assert step_name is not None
     assert current_build_number is not None
 
@@ -699,9 +727,7 @@ def get_failures_on_main() -> BuildHistory:
         print(
             f"The {len(builds_data)} last fetched builds do not contain a completed build step matching {build_step_matcher}"
         )
-
-    pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
-    assert pipeline_slug is not None
+        return no_entries_result
 
     return BuildHistory(
         pipeline=pipeline_slug,
