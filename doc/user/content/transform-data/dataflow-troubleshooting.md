@@ -30,7 +30,7 @@ joining relations.
 To make these concepts a bit more tangible, let's look at the example from the
 [getting started guide](https://materialize.com/docs/get-started/quickstart/).
 
-```sql
+```mzsql
 CREATE SOURCE auction_house
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '100ms')
@@ -52,7 +52,7 @@ understand how this SQL query is translated to a dataflow, we can use
 [`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/) to display the
 plan used to evaluate the join.
 
-```sql
+```mzsql
 EXPLAIN MATERIALIZED VIEW num_bids;
 ```
 ```
@@ -135,7 +135,7 @@ To understand which dataflow is taking the most time we can query the
 time the dataflows was busy since the system started and the dataflow was
 created.
 
-```sql
+```mzsql
 -- Extract raw elapsed time information for dataflows
 SELECT
     mdo.id,
@@ -177,7 +177,7 @@ interpret. The following query therefore only returns operators from the
 `mz_scheduling_elapsed` relation. You can further drill down by adding a filter
 condition that matches the name of a specific dataflow.
 
-```sql
+```mzsql
 SELECT
     mdod.id,
     mdod.name,
@@ -231,7 +231,7 @@ operators, it will become visible in the histogram. The offending operator will
 be scheduled in much longer intervals compared to other operators, which
 reflects in the histogram as larger time buckets.
 
-```sql
+```mzsql
 -- Extract raw scheduling histogram information for operators
 WITH histograms AS (
     SELECT
@@ -280,7 +280,7 @@ The reported duration is still reporting aggregated values since the operator
 has been created. To get a feeling for which operators are currently doing
 work, you can subscribe to the changes of the relation.
 
-```sql
+```mzsql
 -- Observe changes to the raw scheduling histogram information
 COPY(SUBSCRIBE(
     WITH histograms AS (
@@ -331,7 +331,7 @@ numbers of records and the size of the arrangements. The reported records may
 exceed the number of logical records; the report reflects the uncompacted
 state.
 
-```sql
+```mzsql
 -- Extract dataflow records and sizes
 SELECT
     id,
@@ -351,7 +351,7 @@ ORDER BY size DESC
 If you need to drill down into individual operators, you can query
 `mz_arrangement_sizes` instead.
 
-```sql
+```mzsql
 -- Extract operator records and sizes
 SELECT
     mdod.id,
@@ -401,7 +401,7 @@ they (currently) have a granularity determined by the source itself. For
 example, Kafka topic ingestion work can become skewed if most of the data is in
 only one out of multiple partitions.
 
-```sql
+```mzsql
 -- Get operators where one worker has spent more than 2 times the average
 -- amount of time spent. The number 2 can be changed according to the threshold
 -- for the amount of skew deemed problematic.
@@ -438,7 +438,7 @@ position `n`, then it is part of the `x` subregion of the region defined by
 positions `0..n-1`. The example SQL query and result below shows an operator
 whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow 21".
 
-```sql
+```mzsql
 SELECT * FROM mz_internal.mz_dataflow_addresses WHERE id=515;
 ```
 ```
@@ -456,7 +456,7 @@ said operator has only a single entry. For the example operator 515 above, you
 can find the name of the dataflow if you can find the name of the operator
 whose address is just "dataflow 21."
 
-```sql
+```mzsql
 -- get id and name of the operator representing the entirety of the dataflow
 -- that a problematic operator comes from
 SELECT

@@ -38,7 +38,7 @@ Speed up a query involving a `WHERE` clause with equality comparisons to literal
 | `WHERE upper(y) = 'HELLO'`                        | `CREATE INDEX ON obj_name (upper(y));` |
 
 You can verify that Materialize is accessing the input by an index lookup using `EXPLAIN`. Check for `lookup_value` after the index name to confirm that an index lookup is happening, i.e., that Materialize is only reading the matching records from the index instead of scanning the entire index:
-```sql
+```mzsql
 EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 'hello';
 ```
 ```
@@ -66,7 +66,7 @@ In general, you can [improve the performance of your joins](https://materialize.
 
 Let's create a few tables to work through examples.
 
-```sql
+```mzsql
 CREATE TABLE teachers (id INT, name TEXT);
 CREATE TABLE sections (id INT, teacher_id INT, course_id INT, schedule TEXT);
 CREATE TABLE courses (id INT, name TEXT);
@@ -78,7 +78,7 @@ Let's consider two queries that join on a common collection. The idea is to crea
 
 Here is a query where we join a collection `teachers` to a collection `sections` to see the name of the teacher, schedule, and course ID for a specific section of a course.
 
-```sql
+```mzsql
 SELECT
     t.name,
     s.schedule,
@@ -89,7 +89,7 @@ INNER JOIN sections s ON t.id = s.teacher_id;
 
 Here is another query that also joins on `teachers.id`. This one counts the number of sections each teacher teaches.
 
-```sql
+```mzsql
 SELECT
     t.id,
     t.name,
@@ -101,7 +101,7 @@ GROUP BY t.id, t.name;
 
 We can eliminate redundant memory usage for these two queries by creating an index on the common column being joined, `teachers.id`.
 
-```sql
+```mzsql
 CREATE INDEX pk_teachers ON teachers (id);
 ```
 
@@ -113,7 +113,7 @@ Note that when the same input is being used in a join as well as being constrain
 - on `teachers(name)` to perform the `t.name = 'Escalante'` point lookup before the join,
 - on `teachers(id)` to speed up the join and then perform the `WHERE t.name = 'Escalante'`.
 
-```sql
+```mzsql
 SELECT
     t.name,
     s.schedule,
@@ -131,7 +131,7 @@ Materialize has access to a join execution strategy we call `DeltaQuery`, a.k.a.
 
 From the previous example, add the name of the course rather than just the course ID.
 
-```sql
+```mzsql
 CREATE VIEW course_schedule AS
   SELECT
       t.name AS teacher_name,
@@ -144,14 +144,14 @@ CREATE VIEW course_schedule AS
 
 In this case, we create indexes on the join keys to optimize the query:
 
-```sql
+```mzsql
 CREATE INDEX pk_teachers ON teachers (id);
 CREATE INDEX sections_fk_teachers ON sections (teacher_id);
 CREATE INDEX pk_courses ON courses (id);
 CREATE INDEX sections_fk_courses ON sections (course_id);
 ```
 
-```sql
+```mzsql
 EXPLAIN SELECT * FROM course_schedule;
 ```
 
@@ -186,7 +186,7 @@ To understand late materialization, you need to know about primary and foreign k
 In many relational databases, indexes don't replicate the entire collection of data. Rather, they maintain just a mapping from the indexed columns back to a primary key. These few columns can take substantially less space than the whole collection, and may also change less as various unrelated attributes are updated. This is called **late materialization**, and it is possible to achieve in Materialize as well. Here are the steps to implementing late materialization along with examples.
 
 1. Create indexes on the primary key column(s) for your input collections.
-    ```sql
+    ```mzsql
     CREATE INDEX pk_teachers ON teachers (id);
     CREATE INDEX pk_sections ON sections (id);
     CREATE INDEX pk_courses ON courses (id);
@@ -194,7 +194,7 @@ In many relational databases, indexes don't replicate the entire collection of d
 
 
 2. For each foreign key in the join, create a "narrow" view with just two columns: foreign key and primary key. Then create two indexes: one for the foreign key and one for the primary key. In our example, the two foreign keys are `sections.teacher_id` and `sections.course_id`, so we do the following:
-    ```sql
+    ```mzsql
     -- Create a "narrow" view containing primary key sections.id
     -- and foreign key sections.teacher_id
     CREATE VIEW sections_narrow_teachers AS SELECT id, teacher_id FROM sections;
@@ -202,7 +202,7 @@ In many relational databases, indexes don't replicate the entire collection of d
     CREATE INDEX sections_narrow_teachers_0 ON sections_narrow_teachers (id);
     CREATE INDEX sections_narrow_teachers_1 ON sections_narrow_teachers (teacher_id);
     ```
-    ```sql
+    ```mzsql
     -- Create a "narrow" view containing primary key sections.id
     -- and foreign key sections.course_id
     CREATE VIEW sections_narrow_courses AS SELECT id, course_id FROM sections;
@@ -216,7 +216,7 @@ In many relational databases, indexes don't replicate the entire collection of d
 
 3. Rewrite your query to use your narrow collections in the join conditions. Example:
 
-    ```sql
+    ```mzsql
     SELECT
       t.name AS teacher_name,
       s.schedule,
@@ -240,7 +240,7 @@ Clause                                               | Index                    
 
 Use `EXPLAIN` to verify that indexes are used as you expect. For example:
 
-```SQL
+```mzsql
 CREATE TABLE teachers (id INT, name TEXT);
 CREATE TABLE sections (id INT, teacher_id INT, course_id INT, schedule TEXT);
 CREATE TABLE courses (id INT, name TEXT);
@@ -301,7 +301,7 @@ The number of levels needed in the hierarchical scheme is by default set assumin
 
 Consider the previous example with the collection `sections`. Maintenance of the maximum `course_id` per `teacher` can be achieved with a materialized view:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW max_course_id_per_teacher AS
 SELECT teacher_id, MAX(course_id)
 FROM sections
@@ -310,7 +310,7 @@ GROUP BY teacher_id;
 
 If the largest number of `course_id` values that are allocated to a single `teacher_id` is known, then this number can be provided as the `AGGREGATE INPUT GROUP SIZE`. For the query above, it is possible to get an estimate for this number by:
 
-```sql
+```mzsql
 SELECT MAX(course_count)
 FROM (
   SELECT teacher_id, COUNT(*) course_count
@@ -323,7 +323,7 @@ However, the estimate is based only on data that is already present in the syste
 
 For our example, let's suppose that we determined the largest number of courses per teacher to be `1000`. Then, the original definition of `max_course_id_per_teacher` can be revised to include the `AGGREGATE INPUT GROUP SIZE` query hint as follows:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW max_course_id_per_teacher AS
 SELECT teacher_id, MAX(course_id)
 FROM sections
@@ -333,7 +333,7 @@ OPTIONS (AGGREGATE INPUT GROUP SIZE = 1000)
 
 The other two hints can be provided in [Top K] query patterns specified by `DISTINCT ON` or `LIMIT`. As examples, consider that we wish not to compute the maximum `course_id`, but rather the `id` of the section of this top course. This computation can be incrementally maintained by the following materialized view:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW section_of_top_course_per_teacher AS
 SELECT DISTINCT ON(teacher_id) teacher_id, id AS section_id
 FROM sections
@@ -343,7 +343,7 @@ ORDER BY teacher_id ASC, course_id DESC;
 
 In the above examples, we see that the query hints are always positioned in an `OPTIONS` clause after a `GROUP BY` clause, but before an `ORDER BY`, as captured by the [`SELECT` syntax]. However, in the case of Top K using a `LATERAL` subquery and `LIMIT`, it is important to note that the hint is specified in the subquery. For instance, the following materialized view illustrates how to incrementally maintain the top-3 section `id`s ranked by `course_id` for each teacher:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW sections_of_top_3_courses_per_teacher AS
 SELECT id AS teacher_id, section_id
 FROM teachers grp,
@@ -357,7 +357,7 @@ FROM teachers grp,
 
 For indexed and materialized views that have already been created without specifying query hints, Materialize includes an introspection view, [`mz_internal.mz_expected_group_size_advice`], that can be used to query, for a given cluster, all incrementally maintained [dataflows] where tuning of the above query hints could be beneficial. The introspection view also provides an advice value based on an estimate of how many levels could be cut from the hierarchy. The following query illustrates how to access this introspection view:
 
-```sql
+```mzsql
 SELECT dataflow_name, region_name, levels, to_cut, hint
 FROM mz_internal.mz_expected_group_size_advice
 ORDER BY dataflow_name, region_name;
