@@ -432,6 +432,7 @@ pub trait TimestampProvider {
             largest_not_in_advance_of_upper,
             oracle_read_ts,
             session_oracle_read_ts,
+            real_time_recency_ts,
         };
 
         Ok((determination, read_holds))
@@ -690,6 +691,8 @@ pub struct TimestampDetermination<T> {
     pub oracle_read_ts: Option<T>,
     /// The value of the session local timestamp's oracle timestamp, if used.
     pub session_oracle_read_ts: Option<T>,
+    /// The value of the real time recency timestamp, if used.
+    pub real_time_recency_ts: Option<T>,
 }
 
 impl<T: TimestampManipulation> TimestampDetermination<T> {
@@ -791,6 +794,13 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
                 f,
                 "  session oracle read timestamp: {}",
                 session_oracle_read_ts.display(timeline)
+            )?;
+        }
+        if let Some(real_time_recency_ts) = &self.determination.real_time_recency_ts {
+            writeln!(
+                f,
+                "    real time recency timestamp: {}",
+                real_time_recency_ts.display(timeline)
             )?;
         }
         writeln!(
