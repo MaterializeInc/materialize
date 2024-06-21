@@ -38,7 +38,7 @@ pub(crate) const BLOB_CACHE_MEM_LIMIT_BYTES: Config<usize> = Config::new(
     // help with multi-process replicas, but the memory usage seems
     // unobjectionable enough to have it for the cases that it does help.
     1024 * 1024,
-    "Capacity of in-mem blob cache in bytes. Only takes effect on restart (Materialize).",
+    "Capacity of in-mem blob cache in bytes (Materialize).",
 );
 
 impl BlobMemCache {
