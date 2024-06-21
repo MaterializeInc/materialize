@@ -1300,7 +1300,6 @@ mod builtin_migration_tests {
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::ClusterId;
     use mz_expr::MirRelationExpr;
-    use mz_ore::now::NOW_ZERO;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names::{
@@ -1481,7 +1480,7 @@ mod builtin_migration_tests {
     }
 
     async fn run_test_case(test_case: BuiltinMigrationTestCase) {
-        Catalog::with_debug(NOW_ZERO.clone(), |mut catalog| async move {
+        Catalog::with_debug(|mut catalog| async move {
             let mut id_mapping = BTreeMap::new();
             let mut name_mapping = BTreeMap::new();
             for entry in test_case.initial_state {
