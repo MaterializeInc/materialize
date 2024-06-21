@@ -45,7 +45,7 @@ trial period.
 To see your current credit consumption rate, measured in credits per hour, run
 the following query against Materialize:
 
-```sql
+```mzsql
 SELECT sum(s.credits_per_hour) AS credit_consumption_rate
   FROM mz_cluster_replicas r
   JOIN mz_cluster_replica_sizes s ON r.size = s.size;
@@ -68,7 +68,7 @@ No, you cannot go over the rate limit of 4 credits per hour at any time during
 your free trial. If you try to add a replica that puts you over the limit,
 Materialize will return an error similar to:
 
-```sql
+```nofmt
 Error: creating cluster replica would violate max_credit_consumption_rate limit (desired: 6, limit: 4, current: 3)
 Hint: Drop an existing cluster replica or contact support to request a limit increase.
 ```
