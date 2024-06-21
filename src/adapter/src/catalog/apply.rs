@@ -572,6 +572,7 @@ impl CatalogState {
                             },
                         ),
                         is_retained_metrics_object: table.is_retained_metrics_object,
+                        insert_only: false,
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(acl_items),

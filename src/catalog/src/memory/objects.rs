@@ -489,6 +489,7 @@ pub struct Table {
     /// Whether the table's logical compaction window is controlled by
     /// METRICS_RETENTION
     pub is_retained_metrics_object: bool,
+    pub insert_only: bool,
 }
 
 impl Table {
@@ -1490,6 +1491,14 @@ impl CatalogEntry {
     pub fn index(&self) -> Option<&Index> {
         match self.item() {
             CatalogItem::Index(idx) => Some(idx),
+            _ => None,
+        }
+    }
+
+    /// Returns the inner [`Table`] if this entry is a table, else `None`.
+    pub fn table(&self) -> Option<&Table> {
+        match self.item() {
+            CatalogItem::Table(table) => Some(table),
             _ => None,
         }
     }

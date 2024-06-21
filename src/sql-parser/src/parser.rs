@@ -3588,15 +3588,26 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(REDACTED) {
             return Ok(TableOptionName::RedactedTest);
         }
-        self.expect_keywords(&[RETAIN, HISTORY])?;
-        Ok(TableOptionName::RetainHistory)
+        match self.expect_one_of_keywords(&[RETAIN, INSERT])? {
+            RETAIN => {
+                self.expect_keyword(HISTORY)?;
+                Ok(TableOptionName::RetainHistory)
+            }
+            INSERT => {
+                self.expect_keyword(ONLY)?;
+                Ok(TableOptionName::InsertOnly)
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn parse_table_option(&mut self) -> Result<TableOption<Raw>, ParserError> {
         let name = self.parse_table_option_name()?;
         let value = match name {
             TableOptionName::RetainHistory => self.parse_option_retain_history(),
-            TableOptionName::RedactedTest => self.parse_optional_option_value(),
+            TableOptionName::RedactedTest | TableOptionName::InsertOnly => {
+                self.parse_optional_option_value()
+            }
         }?;
         Ok(TableOption { name, value })
     }

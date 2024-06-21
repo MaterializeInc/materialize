@@ -34,7 +34,7 @@ clarity around best practices."
 
 ### `with_options`
 
-{{< diagram "with-options-retain-history.svg" >}}
+{{< diagram "with-options.svg" >}}
 
 Field | Use
 ------|-----
@@ -43,8 +43,14 @@ _table&lowbar;name_ | A name for the table.
 _col&lowbar;name_ | The name of the column to be created in the table.
 _col&lowbar;type_ | The data type of the column indicated by _col&lowbar;name_.
 **NOT NULL** | Do not allow the column to contain _NULL_ values. Columns without this constraint can contain _NULL_ values.
-*default_expr* | A default value to use for the column in an [`INSERT`](/sql/insert) statement if an explicit value is not provided. If not specified, `NULL` is assumed.
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+*default_expr* | A default value to use for the column in an [`INSERT`](/sql/insert) statement if an explicit value is not provided. If not specified, `NULL` is assumed.]]]
+
+### **CREATE TABLE** `with_options`
+
+Field | Value | Description
+-|-|-
+`RETAIN HISTORY` | _retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data for performing [time travel queries](/transform-data/patterns/time-travel-queries). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+`INSERT ONLY` | optional `bool`; `true` if ommitted | ***Private preview.** This option has known performance or stability issues and is under active development.* Whether the table is `INSERT`-only: `UPDATE` and `DELETE` are disallowed. Enables some memory and other optimizations.
 
 ## Details
 

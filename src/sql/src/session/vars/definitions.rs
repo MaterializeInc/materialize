@@ -2108,6 +2108,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_insert_only_tables,
+        desc: "`INSERT`-only tables",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

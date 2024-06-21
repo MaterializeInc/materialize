@@ -206,7 +206,7 @@ impl<'a> DataflowBuilder<'a> {
                 let entry = self.catalog.get_entry(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
-                        dataflow.import_source(*id, table.desc.typ().clone(), false);
+                        dataflow.import_source(*id, table.desc.typ().clone(), table.insert_only);
                     }
                     CatalogItem::Source(source) => {
                         dataflow.import_source(
