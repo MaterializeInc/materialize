@@ -4,7 +4,7 @@
    command to securely store the password for the `materialize` MySQL user
    you created [earlier](#step-2-create-a-user-for-replication):
 
-    ```sql
+    ```mzsql
     CREATE SECRET mysqlpass AS '<PASSWORD>';
     ```
 
@@ -12,7 +12,7 @@
    connection object with access and authentication details for Materialize to
    use:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION mysql_connection TO MYSQL (
         HOST <host>,
         PORT 3306,
@@ -27,7 +27,7 @@
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your Azure instance and start ingesting data:
 
-    ```sql
+    ```mzsql
     CREATE SOURCE mz_source
       FROM mysql CONNECTION mysql_connection
       FOR ALL TABLES;
