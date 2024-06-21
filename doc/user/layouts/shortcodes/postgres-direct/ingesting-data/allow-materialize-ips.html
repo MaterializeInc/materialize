@@ -3,7 +3,7 @@
    command to securely store the password for the `materialize` PostgreSQL user you
    created [earlier](#step-2-create-a-publication):
 
-    ```sql
+    ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
     ```
 
@@ -11,7 +11,7 @@
    connection object with access and authentication details for Materialize to
    use:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION pg_connection TO POSTGRES (
       HOST '<host>',
       PORT 5432,
@@ -31,7 +31,7 @@
 to your PostgreSQL instance and start ingesting data from the publication you
 created [earlier](#step-2-create-a-publication):
 
-    ```sql
+    ```mzsql
     CREATE SOURCE mz_source
       IN CLUSTER ingest_postgres
       FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
