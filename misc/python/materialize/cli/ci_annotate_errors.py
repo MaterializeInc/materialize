@@ -28,9 +28,12 @@ from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
 )
+from materialize.buildkite_insights.data.build_history import (
+    BuildHistory,
+    BuildHistoryEntry,
+)
 from materialize.buildkite_insights.steps.build_step import (
     BuildStepMatcher,
-    BuildStepOutcome,
     extract_build_step_outcomes,
 )
 from materialize.github import (
@@ -231,28 +234,11 @@ class FailureInCoverageRun(ObservedError):
 
 
 @dataclass
-class BuildHistoryOnMain:
-    pipeline_slug: str
-    last_build_step_outcomes: list[BuildStepOutcome]
-
-    def to_markdown(self) -> str:
-        return (
-            f'<a href="/materialize/{self.pipeline_slug}/builds?branch=main">main</a> history: '
-            + "".join(
-                [
-                    f"<a href=\"{outcome.web_url_to_job}\">{':bk-status-passed:' if outcome.passed else ':bk-status-failed:'}</a>"
-                    for outcome in self.last_build_step_outcomes
-                ]
-            )
-        )
-
-
-@dataclass
 class Annotation:
     suite_name: str
     buildkite_job_id: str
     is_failure: bool
-    build_history_on_main: BuildHistoryOnMain | None
+    build_history_on_main: BuildHistory | None
     unknown_errors: Sequence[ObservedBaseError] = field(default_factory=list)
     known_errors: Sequence[ObservedBaseError] = field(default_factory=list)
 
@@ -333,7 +319,7 @@ and finds associated open GitHub issues in Materialize repository.""",
 def annotate_errors(
     unknown_errors: Sequence[ObservedBaseError],
     known_errors: Sequence[ObservedBaseError],
-    build_history_on_main: BuildHistoryOnMain | None,
+    build_history_on_main: BuildHistory | None,
     test_analytics_db: TestAnalyticsDb,
 ) -> None:
     assert len(unknown_errors) > 0 or len(known_errors) > 0
@@ -657,7 +643,7 @@ def sanitize_text(text: str, max_length: int = 4_000) -> str:
     return text
 
 
-def get_failures_on_main() -> BuildHistoryOnMain | None:
+def get_failures_on_main() -> BuildHistory | None:
     pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
     step_key = os.getenv("BUILDKITE_STEP_KEY")
     step_name = os.getenv("BUILDKITE_LABEL") or step_key
@@ -714,9 +700,13 @@ def get_failures_on_main() -> BuildHistoryOnMain | None:
     pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
     assert pipeline_slug is not None
 
-    return BuildHistoryOnMain(
-        pipeline_slug,
-        last_build_step_outcomes,
+    return BuildHistory(
+        pipeline=pipeline_slug,
+        branch="main",
+        last_build_step_outcomes=[
+            BuildHistoryEntry(entry.web_url_to_job, entry.passed)
+            for entry in last_build_step_outcomes
+        ],
     )
 
 
