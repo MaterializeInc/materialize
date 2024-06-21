@@ -80,10 +80,14 @@ class DatabaseConnector:
         self._disable_if_on_unsupported_version(cursor)
 
         if self._read_only:
-            print("Skipping updates to test_analytics due to read-only mode!")
+            print(
+                "Read-only mode: Not writing any data to the test analytics database!"
+            )
             return
 
         last_executed_sql = self.update_statements[0]
+
+        print("--- Updates to test analytics database")
 
         try:
             if self._use_transaction:
@@ -92,11 +96,13 @@ class DatabaseConnector:
             for sql in self.update_statements:
                 sql = dedent(sql)
                 last_executed_sql = sql
-                self._execute_sql(cursor, sql)
+                self._execute_sql(cursor, sql, print_status=True)
 
             if self._use_transaction:
                 self._execute_sql(cursor, "COMMIT;")
+            print("Upload completed.")
         except Exception as e:
+            print("Upload failed, triggering rollback.")
             try:
                 if self._use_transaction:
                     self._execute_sql(cursor, "ROLLBACK;")
@@ -108,11 +114,22 @@ class DatabaseConnector:
         finally:
             self.update_statements = []
 
-    def _execute_sql(self, cursor: Cursor, sql: str) -> None:
+    def _execute_sql(
+        self, cursor: Cursor, sql: str, print_status: bool = False
+    ) -> None:
         if self._log_sql:
-            print(f"> {sql.strip()}")
+            printable_sql = sql.replace("\n", " ").strip()
+            print(f"> {printable_sql}")
 
-        cursor.execute(sql)
+        try:
+            cursor.execute(sql)
+
+            if print_status:
+                print(f"-- OK ({cursor.rowcount} row(s) affected)")
+        except:
+            if print_status:
+                print("-- FAILED!")
+            raise
 
     def _disable_if_on_unsupported_version(
         self,
