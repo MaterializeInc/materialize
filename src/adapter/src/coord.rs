@@ -325,7 +325,7 @@ impl Message {
                 Command::RetireExecute { .. } => "command-retire_execute",
                 Command::CheckConsistency { .. } => "command-check_consistency",
                 Command::Dump { .. } => "command-dump",
-                Command::ControllerAllowWrites { .. } => "command-controller-allow-writes",
+                Command::AllowWrites { .. } => "command-allow-writes",
             },
             Message::ControllerReady => "controller_ready",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
