@@ -126,7 +126,7 @@ use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalDuration, TryFromValue};
 use crate::plan::{
-    plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
+    literal, plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan,
     AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan,
@@ -3542,6 +3542,9 @@ generate_extracted_config!(
     (EnableLetrecFixpointAnalysis, Option<bool>, Default(None))
 );
 
+/// Convert a [`CreateClusterStatement`] into a [`Plan`].
+///
+/// The reverse of [`unplan_create_cluster`].
 pub fn plan_create_cluster(
     scx: &StatementContext,
     CreateClusterStatement {
@@ -3698,6 +3701,79 @@ pub fn plan_create_cluster(
     }
 }
 
+/// Convert a [`CreateClusterPlan`] into a [`CreateClusterStatement`].
+///
+/// The reverse of [`plan_create_cluster`].
+pub fn unplan_create_cluster(
+    scx: &StatementContext,
+    CreateClusterPlan { name, variant }: CreateClusterPlan,
+) -> Result<CreateClusterStatement<Aug>, PlanError> {
+    match variant {
+        CreateClusterVariant::Managed(CreateClusterManagedPlan {
+            replication_factor,
+            size,
+            availability_zones,
+            compute,
+            disk,
+            optimizer_feature_overrides,
+            schedule,
+        }) => {
+            let schedule = unplan_cluster_schedule(schedule);
+            let OptimizerFeatureOverrides {
+                enable_consolidate_after_union_negate: _,
+                enable_reduce_mfp_fusion: _,
+                enable_cardinality_estimates: _,
+                persist_fast_path_limit: _,
+                reoptimize_imported_views,
+                enable_eager_delta_joins,
+                enable_new_outer_join_lowering,
+                enable_variadic_left_join_lowering,
+                enable_letrec_fixpoint_analysis,
+            } = optimizer_feature_overrides;
+            let features_extracted = ClusterFeatureExtracted {
+                // Seen is ignored when unplanning.
+                seen: Default::default(),
+                reoptimize_imported_views,
+                enable_eager_delta_joins,
+                enable_new_outer_join_lowering,
+                enable_variadic_left_join_lowering,
+                enable_letrec_fixpoint_analysis,
+            };
+            let features = features_extracted.into_values(scx.catalog);
+            let availability_zones = if availability_zones.is_empty() {
+                None
+            } else {
+                Some(availability_zones)
+            };
+            let (introspection_interval, introspection_debugging) =
+                unplan_compute_replica_config(compute);
+            let options_extracted = ClusterOptionExtracted {
+                // Seen is ignored when unplanning.
+                seen: Default::default(),
+                availability_zones,
+                disk: Some(disk),
+                introspection_debugging: Some(introspection_debugging),
+                introspection_interval,
+                managed: Some(true),
+                replicas: None,
+                replication_factor: Some(replication_factor),
+                size: Some(size),
+                schedule: Some(schedule),
+            };
+            let options = options_extracted.into_values(scx.catalog);
+            let name = Ident::new_unchecked(name);
+            Ok(CreateClusterStatement {
+                name,
+                options,
+                features,
+            })
+        }
+        CreateClusterVariant::Unmanaged(_) => {
+            bail_unsupported!(15435, "SHOW CREATE for unmanaged clusters")
+        }
+    }
+}
+
 generate_extracted_config!(
     ReplicaOption,
     (AvailabilityZone, String),
@@ -3850,6 +3926,9 @@ fn plan_replica_config(
     }
 }
 
+/// Convert an [`Option<OptionalDuration>`] and [`bool`] into a [`ComputeReplicaConfig`].
+///
+/// The reverse of [`unplan_compute_replica_config`].
 fn plan_compute_replica_config(
     introspection_interval: Option<OptionalDuration>,
     introspection_debugging: bool,
@@ -3871,6 +3950,24 @@ fn plan_compute_replica_config(
     Ok(compute)
 }
 
+/// Convert a [`ComputeReplicaConfig`] into an [`Option<OptionalDuration>`] and [`bool`].
+///
+/// The reverse of [`plan_compute_replica_config`].
+fn unplan_compute_replica_config(
+    compute_replica_config: ComputeReplicaConfig,
+) -> (Option<OptionalDuration>, bool) {
+    match compute_replica_config.introspection {
+        Some(ComputeReplicaIntrospectionConfig {
+            debugging,
+            interval,
+        }) => (Some(OptionalDuration(Some(interval))), debugging),
+        None => (Some(OptionalDuration(None)), false),
+    }
+}
+
+/// Convert a [`ClusterScheduleOptionValue`] into a [`ClusterSchedule`].
+///
+/// The reverse of [`unplan_cluster_schedule`].
 fn plan_cluster_schedule(
     schedule: ClusterScheduleOptionValue,
 ) -> Result<ClusterSchedule, PlanError> {
@@ -3910,6 +4007,25 @@ fn plan_cluster_schedule(
             }
         }
     })
+}
+
+/// Convert a [`ClusterSchedule`] into a [`ClusterScheduleOptionValue`].
+///
+/// The reverse of [`plan_cluster_schedule`].
+fn unplan_cluster_schedule(schedule: ClusterSchedule) -> ClusterScheduleOptionValue {
+    match schedule {
+        ClusterSchedule::Manual => ClusterScheduleOptionValue::Manual,
+        ClusterSchedule::Refresh {
+            rehydration_time_estimate,
+        } => {
+            let interval = Interval::from_duration(&rehydration_time_estimate)
+                .expect("planning ensured that this is convertible back to Interval");
+            let interval_value = literal::unplan_interval(&interval);
+            ClusterScheduleOptionValue::Refresh {
+                rehydration_time_estimate: Some(interval_value),
+            }
+        }
+    }
 }
 
 pub fn describe_create_cluster_replica(

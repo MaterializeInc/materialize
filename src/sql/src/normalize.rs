@@ -559,6 +559,29 @@ macro_rules! generate_extracted_config {
                     Ok(extracted)
                 }
             }
+
+            impl [<$option_ty Extracted>] {
+                #[allow(unused)]
+                fn into_values(self, catalog: &dyn crate::catalog::SessionCatalog) -> Vec<$option_ty<Aug>> {
+                    use [<$option_ty Name>]::*;
+                    let mut options = Vec::new();
+                    $(
+                        let value = self.[<$option_name:snake>];
+                        let values = generate_extracted_config!(
+                            @ifexpr $allow_multiple,
+                            value,
+                            vec![value]
+                        );
+                        for value in values {
+                            if let Some(value) = value.try_into_value(catalog) {
+                                let option = $option_ty {name: $option_name, value};
+                                options.push(option);
+                            }
+                        }
+                    )*
+                    options
+                }
+            }
         }
     };
     ($option_ty:ty, $($h:tt),+) => {

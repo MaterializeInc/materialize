@@ -476,6 +476,8 @@ show_cluster_replicas ::=
   ('LIKE' 'pattern' | 'WHERE' expr)?
 show_create_connection ::=
   'SHOW' 'CREATE' 'CONNECTION' connection_name
+show_create_cluster ::=
+  'SHOW' 'CREATE' 'CLUSTER' cluster_name
 show_create_index ::=
   'SHOW' 'CREATE' 'INDEX' index_name
 show_create_materialized_view ::=

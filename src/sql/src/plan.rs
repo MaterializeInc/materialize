@@ -782,7 +782,7 @@ impl SubscribeFrom {
 
 #[derive(Debug)]
 pub struct ShowCreatePlan {
-    pub id: GlobalId,
+    pub id: ObjectId,
     pub row: Row,
 }
 

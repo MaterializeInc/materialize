@@ -174,6 +174,9 @@ pub fn describe(
         Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
             show::describe_show_create_connection(&scx, stmt)?
         }
+        Statement::Show(ShowStatement::ShowCreateCluster(stmt)) => {
+            show::describe_show_create_cluster(&scx, stmt)?
+        }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
             show::describe_show_create_index(&scx, stmt)?
         }
@@ -361,6 +364,9 @@ pub fn plan(
         Statement::Show(ShowStatement::ShowColumns(stmt)) => show::show_columns(scx, stmt)?.plan(),
         Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
             show::plan_show_create_connection(scx, stmt).map(Plan::ShowCreate)
+        }
+        Statement::Show(ShowStatement::ShowCreateCluster(stmt)) => {
+            show::plan_show_create_cluster(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
             show::plan_show_create_index(scx, stmt).map(Plan::ShowCreate)
@@ -647,6 +653,10 @@ impl<'a> StatementContext<'a> {
             Some((_db, schema)) => Ok(schema),
             None => Err(PlanError::InvalidSchemaName),
         }
+    }
+
+    pub fn get_cluster(&self, id: &ClusterId) -> &dyn CatalogCluster {
+        self.catalog.get_cluster(*id)
     }
 
     pub fn resolve_database(
