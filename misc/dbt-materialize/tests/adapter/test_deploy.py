@@ -516,9 +516,9 @@ class TestTargetDeploy:
         run_dbt(["run-operation", "deploy_init"])
 
         # Get the rehydration time from the cluster
-        rehydration_time = project.run_sql(
+        cluster_type = project.run_sql(
             """
-            SELECT cs.refresh_rehydration_time_estimate
+            SELECT cs.type
             FROM mz_internal.mz_cluster_schedules cs
             JOIN mz_clusters c ON cs.cluster_id = c.id
             WHERE c.name = 'prod_dbt_deploy'
@@ -526,7 +526,7 @@ class TestTargetDeploy:
             fetch="one",
         )
 
-        assert rehydration_time == ("01:00:00",)
+        assert cluster_type == ("on-refresh",)
 
     def test_dbt_deploy_init_and_cleanup(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
