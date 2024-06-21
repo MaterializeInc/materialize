@@ -96,7 +96,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         "type": "storage"
       }
     },
-    "fast_path_clusters": {}
+    "fast_path_clusters": {},
+    "persist_count": []
   }
 }
 EOF
@@ -313,7 +314,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
         "type": "storage"
       }
     },
-    "fast_path_clusters": {}
+    "fast_path_clusters": {},
+    "persist_count": []
   }
 }
 EOF
@@ -432,7 +434,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         "type": "compute"
       }
     },
-    "fast_path_clusters": {}
+    "fast_path_clusters": {},
+    "persist_count": []
   }
 }
 EOF
@@ -651,7 +654,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
         "type": "compute"
       }
     },
-    "fast_path_clusters": {}
+    "fast_path_clusters": {},
+    "persist_count": []
   }
 }
 EOF
@@ -749,7 +753,264 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         "index": "materialize.public.t_primary_idx",
         "on": "materialize.public.t"
       }
+    },
+    "persist_count": []
+  }
+}
+EOF
+
+
+# Ensure persist_count is set here.
+query T multiline
+EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
+----
+{
+  "plans": {
+    "raw": {
+      "text": "Reduce aggregates=[count(*)]\n  Get materialize.public.t\n\nTarget cluster: other\n",
+      "json": {
+        "Reduce": {
+          "input": {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 1
+                }
+              },
+              "typ": {
+                "column_types": [
+                  {
+                    "scalar_type": "Int32",
+                    "nullable": true
+                  }
+                ],
+                "keys": []
+              }
+            }
+          },
+          "group_key": [],
+          "aggregates": [
+            {
+              "func": "Count",
+              "expr": {
+                "Literal": [
+                  {
+                    "data": [
+                      2
+                    ]
+                  },
+                  {
+                    "scalar_type": "Bool",
+                    "nullable": false
+                  }
+                ]
+              },
+              "distinct": false
+            }
+          ],
+          "expected_group_size": null
+        }
+      }
+    },
+    "optimized": {
+      "global": {
+        "text": "Explained Query:\n  Return\n    Union\n      Get l0\n      Map (0)\n        Union\n          Negate\n            Project ()\n              Get l0\n          Constant\n            - ()\n  With\n    cte l0 =\n      Reduce aggregates=[count(*)]\n        Project ()\n          ReadStorage materialize.public.t\n\nSource materialize.public.t\n\nTarget cluster: other\n",
+        "json": {
+          "plans": [
+            {
+              "id": "Explained Query",
+              "plan": {
+                "Let": {
+                  "id": 0,
+                  "value": {
+                    "Reduce": {
+                      "input": {
+                        "Project": {
+                          "input": {
+                            "Get": {
+                              "id": {
+                                "Global": {
+                                  "User": 1
+                                }
+                              },
+                              "typ": {
+                                "column_types": [
+                                  {
+                                    "scalar_type": "Int32",
+                                    "nullable": true
+                                  }
+                                ],
+                                "keys": []
+                              },
+                              "access_strategy": "Persist"
+                            }
+                          },
+                          "outputs": []
+                        }
+                      },
+                      "group_key": [],
+                      "aggregates": [
+                        {
+                          "func": "Count",
+                          "expr": {
+                            "Literal": [
+                              {
+                                "Ok": {
+                                  "data": [
+                                    2
+                                  ]
+                                }
+                              },
+                              {
+                                "scalar_type": "Bool",
+                                "nullable": false
+                              }
+                            ]
+                          },
+                          "distinct": false
+                        }
+                      ],
+                      "monotonic": false,
+                      "expected_group_size": null
+                    }
+                  },
+                  "body": {
+                    "Union": {
+                      "base": {
+                        "Get": {
+                          "id": {
+                            "Local": 0
+                          },
+                          "typ": {
+                            "column_types": [
+                              {
+                                "scalar_type": "Int64",
+                                "nullable": false
+                              }
+                            ],
+                            "keys": [
+                              []
+                            ]
+                          },
+                          "access_strategy": "UnknownOrLocal"
+                        }
+                      },
+                      "inputs": [
+                        {
+                          "Map": {
+                            "input": {
+                              "Union": {
+                                "base": {
+                                  "Negate": {
+                                    "input": {
+                                      "Project": {
+                                        "input": {
+                                          "Get": {
+                                            "id": {
+                                              "Local": 0
+                                            },
+                                            "typ": {
+                                              "column_types": [
+                                                {
+                                                  "scalar_type": "Int64",
+                                                  "nullable": false
+                                                }
+                                              ],
+                                              "keys": [
+                                                []
+                                              ]
+                                            },
+                                            "access_strategy": "UnknownOrLocal"
+                                          }
+                                        },
+                                        "outputs": []
+                                      }
+                                    }
+                                  }
+                                },
+                                "inputs": [
+                                  {
+                                    "Constant": {
+                                      "rows": {
+                                        "Ok": [
+                                          [
+                                            {
+                                              "data": []
+                                            },
+                                            1
+                                          ]
+                                        ]
+                                      },
+                                      "typ": {
+                                        "column_types": [],
+                                        "keys": []
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            "scalars": [
+                              {
+                                "Literal": [
+                                  {
+                                    "Ok": {
+                                      "data": [
+                                        46
+                                      ]
+                                    }
+                                  },
+                                  {
+                                    "scalar_type": "Int64",
+                                    "nullable": false
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "sources": [
+            {
+              "id": {
+                "User": 1
+              },
+              "op": null
+            }
+          ]
+        }
+      },
+      "fast_path": {
+        "text": "<unknown>",
+        "json": null
+      }
     }
+  },
+  "insights": {
+    "imports": {
+      "u1": {
+        "name": {
+          "database": "materialize",
+          "schema": "public",
+          "item": "t"
+        },
+        "type": "storage"
+      }
+    },
+    "fast_path_clusters": {},
+    "persist_count": [
+      {
+        "database": "materialize",
+        "schema": "public",
+        "item": "t"
+      }
+    ]
   }
 }
 EOF
