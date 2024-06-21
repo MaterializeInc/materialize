@@ -30,8 +30,8 @@ pub fn main() -> Result<(), anyhow::Error> {
         .member_by_name(manifest.package().name())?;
     let config = GlobalConfig::default();
 
-    let crate_context = CrateContext::generate(&config, &package)?;
     let crate_config = CrateConfig::new(&package);
+    let crate_context = CrateContext::generate(&config, &crate_config, &package)?;
 
     let build_script =
         CargoBuildScript::generate(&config, &crate_context, &crate_config, &package)?.unwrap();

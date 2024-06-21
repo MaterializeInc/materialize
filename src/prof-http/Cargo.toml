@@ -47,3 +47,6 @@ jemalloc = ["mz-prof/jemalloc"]
 [package.metadata.cargo-udeps.ignore]
 # "bytesize" not used on linux
 normal = ["bytesize", "workspace-hack"]
+
+[package.metadata.cargo-gazelle.lib]
+compile_data = ["templates/*", "src/http/static/**/*"]

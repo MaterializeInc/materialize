@@ -19,6 +19,6 @@ fn main() {
         .include_file("mod.rs")
         .file_descriptor_set_path(out_dir.join("file_descriptor_set.pb"))
         .btree_map(["."])
-        .compile_protos(&["benchmark.proto"], &["testdata"])
+        .compile_protos(&["interchange/testdata/benchmark.proto"], &[".."])
         .unwrap_or_else(|e| panic!("{e}"))
 }

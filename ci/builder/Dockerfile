@@ -85,6 +85,8 @@ COPY --from=crosstool /opt/x-tools /opt/x-tools
 # Install dependencies needed by any CI job. Not all of these are available in
 # the Ubuntu repositories.
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    autoconf \
+    automake \
     binfmt-support \
     bsdmainutils \
     ca-certificates \

@@ -33,15 +33,17 @@ CONFIGURE_OPTIONS = [
     "--enable-doc=no",
     "--enable-shared=no",
     "--disable-cxx",
-    "--with-malloc-conf=background_thread:true",
     "--with-jemalloc-prefix=_rjem_",
     "--with-private-namespace=_rjem_",
+    # Features we enable for jemalloc-sys.
+    "--enable-prof",
+    "--enable-stats",
+    "--with-malloc-conf=background_thread:true",
 ]
 
 configure_make(
     name = "jemalloc",
-    # autogen = True,
-    configure_command = "configure",
+    autogen = True,
     configure_in_place = True,
     # TODO(parkmycar): Do we want to customize page sizes?
     configure_options = CONFIGURE_OPTIONS + select({

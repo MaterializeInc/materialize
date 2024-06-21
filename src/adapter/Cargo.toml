@@ -112,10 +112,15 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 criterion = { version = "0.4.0", features = ["async_tokio"] }
 datadriven = "0.8.0"
 
-
 [[bench]]
 name = "catalog"
 harness = false
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[package.metadata.cargo-gazelle.test.sql]
+data = ["tests/testdata/sql"]
+
+[package.metadata.cargo-gazelle.test.timestamp_selection]
+data = ["tests/testdata/timestamp_selection"]

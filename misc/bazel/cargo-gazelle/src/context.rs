@@ -19,7 +19,7 @@ use camino::Utf8PathBuf;
 use guppy::graph::{BuildTargetId, PackageMetadata};
 use quote::ToTokens;
 
-use crate::config::GlobalConfig;
+use crate::config::{CrateConfig, GlobalConfig};
 
 #[derive(Default, Debug, Clone)]
 pub struct CrateContext {
@@ -31,6 +31,7 @@ impl CrateContext {
     /// Generates necessary external (non-`Cargo.toml`) context for a crate.
     pub fn generate(
         config: &GlobalConfig,
+        crate_config: &CrateConfig,
         metadata: &PackageMetadata<'_>,
     ) -> Result<CrateContext, anyhow::Error> {
         tracing::debug!(name = metadata.name(), "generating context");
@@ -38,9 +39,11 @@ impl CrateContext {
         let mut context = CrateContext::default();
 
         if let Some(build) = metadata.build_target(&BuildTargetId::BuildScript) {
-            let build_script_context =
-                BuildScriptContext::generate(config, build.path()).context("build script")?;
-            context.build_script = Some(build_script_context);
+            if !crate_config.build().skip_proto_search() {
+                let build_script_context =
+                    BuildScriptContext::generate(config, build.path()).context("build script")?;
+                context.build_script = Some(build_script_context);
+            }
         }
 
         Ok(context)

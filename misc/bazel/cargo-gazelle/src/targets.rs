@@ -248,7 +248,17 @@ impl RustBinary {
                 "can only generate `rust_binary` rules for binary build targets, found {x:?}"
             ),
         };
-        let target_name = QuotedString::new(name.to_case(Case::Snake));
+        let maybe_library = metadata
+            .build_targets()
+            .find(|target| matches!(target.id(), BuildTargetId::Library));
+
+        // Adjust the target name to avoid a possible conflict.
+        let target_name = match &maybe_library {
+            Some(library) if library.name() == name => {
+                QuotedString::new(format!("{}_bin", name.to_case(Case::Snake)))
+            }
+            _ => QuotedString::new(name.to_case(Case::Snake)),
+        };
 
         if crate_config.binary(name).common().skip() {
             return Ok(None);
@@ -282,10 +292,7 @@ impl RustBinary {
         }
 
         // Add the library crate as a dep if it isn't already.
-        let crate_has_lib = metadata
-            .build_targets()
-            .any(|target| matches!(target.id(), BuildTargetId::Library));
-        if crate_has_lib {
+        if maybe_library.is_some() {
             let dep = format!(":{}", metadata.name().to_case(Case::Snake));
             if metadata.is_proc_macro() {
                 if !proc_macro_deps.iter().any(|d| d.unquoted().ends_with(&dep)) {
@@ -1021,9 +1028,7 @@ impl<'a> WorkspaceDependencies<'a> {
                     .filter(|link| link.from().id() == self.package.id())
                     // Tests and build scipts can rely on normal dependencies, so always make sure they're
                     // included.
-                    .filter(move |link| {
-                        link.normal().is_present() || link.req_for_kind(kind).is_present()
-                    })
+                    .filter(move |link| link.req_for_kind(kind).is_present())
                     .map(|link| link.to())
                     // Ignore deps filtered out by the global config.
                     .filter(|meta| self.config.include_dep(meta.name()))
