@@ -106,6 +106,7 @@ def workflow_bin_log_manipulations(c: Composition) -> None:
         scenarios = [
             reset_master_gtid,
             corrupt_bin_log_to_stall_source,
+            corrupt_bin_log_and_add_sub_source,
         ]
         for scenario in scenarios:
             print(f"--- Running scenario {scenario.__name__}")
@@ -430,6 +431,21 @@ def corrupt_bin_log_to_stall_source(c: Composition) -> None:
     run_testdrive_files(
         c,
         "verify-source-stalled.td",
+    )
+
+
+def corrupt_bin_log_and_add_sub_source(c: Composition) -> None:
+    """
+    Corrupt the bin log, add a sub source, and expect it to be working.
+    """
+
+    _corrupt_bin_log(c)
+
+    run_testdrive_files(
+        c,
+        "populate-table-t3.td",
+        "alter-source-add-subsource.td",
+        "verify-t3.td",
     )
 
 
