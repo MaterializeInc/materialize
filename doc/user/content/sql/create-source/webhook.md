@@ -89,7 +89,7 @@ In addition to the request body, Materialize can expose headers to SQL. If a
 request header exists, you can map its fields to columns using the `INCLUDE
 HEADER` syntax.
 
-```sql
+```mzsql
 CREATE SOURCE my_webhook_source FROM WEBHOOK
   BODY FORMAT JSON
   INCLUDE HEADER 'timestamp' as ts
@@ -114,7 +114,7 @@ syntax in combination with the `NOT` option. This can be useful if, for
 example, you need to accept a dynamic list of fields but want to exclude
 sensitive information like authorization.
 
-```sql
+```mzsql
 CREATE SOURCE my_webhook_source FROM WEBHOOK
   BODY FORMAT JSON
   INCLUDE HEADERS ( NOT 'authorization', NOT 'x-api-key' );
@@ -146,7 +146,7 @@ For example, the following source HMACs the request body using the `sha256`
 hashing algorithm, and asserts the result is equal to the value provided in the
 `x-signature` header, decoded with `base64`.
 
-```sql
+```mzsql
 CREATE SOURCE my_webhook_source FROM WEBHOOK
   BODY FORMAT JSON
   CHECK (
@@ -180,7 +180,7 @@ application does not have a way to send test events. If you're having trouble
 with your `CHECK` statement, we recommend creating a temporary source without
 `CHECK` and using that to iterate more quickly.
 
-```sql
+```mzsql
 CREATE SOURCE my_webhook_temporary_debug FROM WEBHOOK
   -- Specify the BODY FORMAT as TEXT or BYTES,
   -- which is how it's provided to CHECK.
@@ -191,7 +191,7 @@ CREATE SOURCE my_webhook_temporary_debug FROM WEBHOOK
 Once you have a few events in _my_webhook_temporary_debug_, you can query it with your would-be
 `CHECK` statement.
 
-```sql
+```mzsql
 SELECT
   -- Your would-be CHECK statement.
   constant_time_eq(
@@ -213,7 +213,7 @@ Given any number of conditions, e.g. a network hiccup, it's possible for your ap
 an event more than once. If your event contains a unique identifier, you can de-duplicate these events
 using a [`MATERIALIZED VIEW`](/sql/create-materialized-view/) and the `DISTINCT ON` clause.
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW my_webhook_idempotent AS (
   SELECT DISTINCT ON (body->>'unique_id') *
   FROM my_webhook_source
@@ -234,7 +234,7 @@ When a build job starts we receive an event containing _id_ and the _started_at_
 build finished, we'll receive a second event with the same _id_ but now a _finished_at_ timestamp.
 To merge these events into a single row, we can again use the `DISTINCT ON` clause.
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW my_build_jobs_merged AS (
   SELECT DISTINCT ON (id) *
   FROM (
@@ -264,7 +264,7 @@ in the following formats:
 You can automatically expand a batch of requests formatted as a JSON array into
 separate rows using `BODY FORMAT JSON ARRAY`.
 
-```sql
+```mzsql
 -- Webhook source that parses request bodies as a JSON array.
 CREATE SOURCE webhook_source_json_array FROM WEBHOOK
   BODY FORMAT JSON ARRAY
@@ -283,7 +283,7 @@ POST webhook_source_json_array
 ]
 ```
 
-```sql
+```mzsql
 SELECT COUNT(body) FROM webhook_source_json_array;
 ----
 3
@@ -297,7 +297,7 @@ POST webhook_source_json_array
 { "event_type": "d" }
 ```
 
-```sql
+```mzsql
 SELECT body FROM webhook_source_json_array;
 ----
 { "event_type": "a" }
@@ -311,7 +311,7 @@ SELECT body FROM webhook_source_json_array;
 You can automatically expand a batch of requests formatted as NDJSON into
 separate rows using `BODY FORMAT JSON`.
 
-```sql
+```mzsql
 -- Webhook source that parses request bodies as NDJSON.
 CREATE SOURCE webhook_source_ndjson FROM WEBHOOK
 BODY FORMAT JSON;
@@ -326,7 +326,7 @@ POST 'webhook_source_ndjson'
   { 'event_type': 'bar' }
 ```
 
-```sql
+```mzsql
 SELECT COUNT(body) FROM webhook_source_ndjson;
 ----
 2
@@ -355,7 +355,7 @@ source.
 To store the sensitive credentials and make them reusable across multiple
 `CREATE SOURCE` statements, use [secrets](https://materialize.com/docs/sql/create-secret/).
 
-```sql
+```mzsql
 CREATE SECRET basic_hook_auth AS 'Basic <base64_auth>';
 ```
 
@@ -365,7 +365,7 @@ After a successful secret creation, you can use the same secret to create
 different webhooks with the same basic authentication to check if a request is
 valid.
 
-```sql
+```mzsql
 CREATE SOURCE webhook_with_basic_auth
 FROM WEBHOOK
     BODY FORMAT JSON

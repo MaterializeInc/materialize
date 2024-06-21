@@ -125,7 +125,7 @@ that overrides `binlog_expire_logs_seconds` and is set to `NULL` by default.
 Materialize ingests the raw replication stream data for all (or a specific set
 of) tables in your upstream MySQL database.
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
   FOR ALL TABLES;
@@ -137,7 +137,7 @@ When you define a source, Materialize will automatically:
    initial, snapshot-based sync of the tables before it starts ingesting change
    events.
 
-    ```sql
+    ```mzsql
     SHOW SOURCES;
     ```
 
@@ -167,7 +167,7 @@ replicating `schema1.table_1` and `schema2.table_1`. Use the `FOR TABLES`
 clause to provide aliases for each upstream table, in such cases, or to specify
 an alternative destination schema in Materialize.
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
   FOR TABLES (schema1.table_1 AS s1_table_1, schema2.table_1 AS s2_table_1);
@@ -194,7 +194,7 @@ Field              | Type                                                    | D
 
 And can be queried using:
 
-```sql
+```mzsql
 SELECT transaction_id
 FROM <src_name>_progress;
 ```
@@ -267,7 +267,7 @@ truncated while replicated, the whole source becomes inaccessible and will not
 produce any data until it is recreated. Instead, remove all rows from a table
 using an unqualified `DELETE`.
 
-```sql
+```mzsql
 DELETE FROM t;
 ```
 
@@ -292,7 +292,7 @@ Once created, a connection is **reusable** across multiple `CREATE SOURCE`
 statements. For more details on creating connections, check the
 [`CREATE CONNECTION`](/sql/create-connection/#mysql) documentation page.
 
-```sql
+```mzsql
 CREATE SECRET mysqlpass AS '<MYSQL_PASSWORD>';
 
 CREATE CONNECTION mysql_connection TO MYSQL (
@@ -309,7 +309,7 @@ through an SSH bastion host.
 
 {{< tabs tabID="1" >}}
 {{< tab "SSH tunnel">}}
-```sql
+```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST 'bastion-host',
     PORT 22,
@@ -317,7 +317,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 );
 ```
 
-```sql
+```mzsql
 CREATE CONNECTION mysql_connection TO MYSQL (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
     SSH TUNNEL ssh_connection
@@ -335,7 +335,7 @@ an SSH bastion server to accept connections from Materialize, check
 
 _Create subsources for all tables in MySQL_
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
     FROM MYSQL CONNECTION mysql_connection
     FOR ALL TABLES;
@@ -343,7 +343,7 @@ CREATE SOURCE mz_source
 
 _Create subsources for all tables from specific schemas in MySQL_
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
   FOR SCHEMAS (mydb, project);
@@ -351,7 +351,7 @@ CREATE SOURCE mz_source
 
 _Create subsources for specific tables in MySQL_
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
   FOR TABLES (mydb.table_1, mydb.table_2 AS alias_table_2);
@@ -364,7 +364,7 @@ by Materialize, use the `TEXT COLUMNS` option to decode data as `text` for the
 affected columns. This option expects the upstream fully-qualified names of the
 replicated table and column (i.e. as defined in your MySQL database).
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection (
     TEXT COLUMNS (mydb.table_1.column_of_unsupported_type)
@@ -378,7 +378,7 @@ MySQL doesn't provide a way to filter out columns from the replication stream.
 To exclude specific upstream columns from being ingested, use the `IGNORE
 COLUMNS` option.
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection (
     IGNORE COLUMNS (mydb.table_1.column_to_ignore)
@@ -393,7 +393,7 @@ the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
 subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
 the subsource back to the source.
 
-```sql
+```mzsql
 -- List all subsources in mz_source
 SHOW SUBSOURCES ON mz_source;
 

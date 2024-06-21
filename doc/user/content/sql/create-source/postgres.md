@@ -82,7 +82,7 @@ To avoid creating multiple replication slots in the upstream PostgreSQL database
 and minimize the required bandwidth, Materialize ingests the raw replication
 stream data for some specific set of tables in your publication.
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR ALL TABLES;
@@ -97,7 +97,7 @@ When you define a source, Materialize will automatically:
     `materialize_` for easy identification, and can be looked up in
     `mz_internal.mz_postgres_sources`.
 
-    ```sql
+    ```mzsql
     SELECT id, replication_slot FROM mz_internal.mz_postgres_sources;
     ```
 
@@ -108,7 +108,7 @@ When you define a source, Materialize will automatically:
     ```
 1. Create a **subsource** for each original table in the publication.
 
-    ```sql
+    ```mzsql
     SHOW SOURCES;
     ```
 
@@ -164,7 +164,7 @@ replicating `schema1.table_1` and `schema2.table_1`. Use the `FOR TABLES`
 clause to provide aliases for each upstream table, in such cases, or to specify
 an alternative destination schema in Materialize.
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR TABLES (schema1.table_1 AS s1_table_1, schema2_table_1 AS s2_table_1);
@@ -185,7 +185,7 @@ Field          | Type                                     | Meaning
 
 And can be queried using:
 
-```sql
+```mzsql
 SELECT lsn
 FROM <src_name>_progress;
 ```
@@ -271,7 +271,7 @@ truncated while replicated, the whole source becomes inaccessible and will not
 produce any data until it is recreated. Instead, remove all rows from a table
 using an unqualified `DELETE`.
 
-```sql
+```mzsql
 DELETE FROM t;
 ```
 
@@ -317,7 +317,7 @@ Once created, a connection is **reusable** across multiple `CREATE SOURCE`
 statements. For more details on creating connections, check the
 [`CREATE CONNECTION`](/sql/create-connection/#postgresql) documentation page.
 
-```sql
+```mzsql
 CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
 
 CREATE CONNECTION pg_connection TO POSTGRES (
@@ -337,14 +337,14 @@ through an AWS PrivateLink service or an SSH bastion host.
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
 
-```sql
+```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')
 );
 ```
 
-```sql
+```mzsql
 CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
 
 CREATE CONNECTION pg_connection TO POSTGRES (
@@ -363,7 +363,7 @@ check [this guide](/ops/network-security/privatelink/).
 
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
-```sql
+```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST 'bastion-host',
     PORT 22,
@@ -371,7 +371,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 );
 ```
 
-```sql
+```mzsql
 CREATE CONNECTION pg_connection TO POSTGRES (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
     PORT 5432,
@@ -391,7 +391,7 @@ an SSH bastion server to accept connections from Materialize, check
 
 _Create subsources for all tables included in the PostgreSQL publication_
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
     FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
     FOR ALL TABLES;
@@ -400,7 +400,7 @@ CREATE SOURCE mz_source
 _Create subsources for all tables from specific schemas included in the
  PostgreSQL publication_
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR SCHEMAS (public, project);
@@ -408,7 +408,7 @@ CREATE SOURCE mz_source
 
 _Create subsources for specific tables included in the PostgreSQL publication_
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR TABLES (table_1, table_2 AS alias_table_2);
@@ -421,7 +421,7 @@ unsupported by Materialize, use the `TEXT COLUMNS` option to decode data as
 `text` for the affected columns. This option expects the upstream names of the
 replicated table and column (i.e. as defined in your PostgreSQL database).
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (
     PUBLICATION 'mz_source',
@@ -436,7 +436,7 @@ the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
 subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
 the subsource back to the source.
 
-```sql
+```mzsql
 -- List all subsources in mz_source
 SHOW SUBSOURCES ON mz_source;
 
