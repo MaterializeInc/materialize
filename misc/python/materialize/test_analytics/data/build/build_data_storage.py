@@ -66,7 +66,7 @@ class BuildDataStorage(BaseDataStorage):
             """
         )
 
-        self.database_connector.execute_updates(sql_statements)
+        self.database_connector.add_update_statements(sql_statements)
 
     def insert_build_job(
         self,
@@ -139,7 +139,7 @@ class BuildDataStorage(BaseDataStorage):
             """
         )
 
-        self.database_connector.execute_updates(sql_statements)
+        self.database_connector.add_update_statements(sql_statements)
 
     def update_build_job_success(
         self,
@@ -156,4 +156,4 @@ class BuildDataStorage(BaseDataStorage):
             """
         )
 
-        self.database_connector.execute_updates(sql_statements)
+        self.database_connector.add_update_statements(sql_statements)

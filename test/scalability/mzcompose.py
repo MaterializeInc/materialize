@@ -597,6 +597,7 @@ def upload_results_to_test_analytics(
             results=result_entries,
         )
 
+        test_analytics.submit_updates()
         print("Uploaded results.")
     except Exception as e:
         # An error during an upload must never cause the build to fail

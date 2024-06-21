@@ -323,7 +323,16 @@ and finds associated open GitHub issues in Materialize repository.""",
         # An error during an upload must never cause the build to fail
         print(f"Uploading results failed! {e}")
 
-    return annotate_logged_errors(args.log_files, test_analytics_db)
+    return_code = annotate_logged_errors(args.log_files, test_analytics_db)
+
+    if test_analytics_db is not None:
+        try:
+            test_analytics_db.submit_updates()
+        except Exception as e:
+            # An error during an upload must never cause the build to fail
+            print(f"Uploading results failed! {e}")
+
+    return return_code
 
 
 def annotate_errors(

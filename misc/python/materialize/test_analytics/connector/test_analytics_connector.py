@@ -31,6 +31,7 @@ class DatabaseConnector:
     def __init__(self, config: MzDbConfig, log_sql: bool):
         self._connection = self._create_connection(config)
         self._cursor = self._create_cursor(config, self._connection)
+        self.update_statements = []
         self._log_sql = log_sql
         self._read_only = False
 
@@ -67,19 +68,22 @@ class DatabaseConnector:
         )
         return int(self._cursor.fetchall()[0][0])
 
-    def execute_updates(self, sql_statements: list[str]) -> None:
-        if len(sql_statements) == 0:
+    def add_update_statements(self, sql_statements: list[str]) -> None:
+        self.update_statements.extend(sql_statements)
+
+    def submit_update_statements(self) -> None:
+        if len(self.update_statements) == 0:
             return
 
         if self._read_only:
             print("Skipping updates to test_analytics due to read-only mode!")
             return
 
-        last_executed_sql = sql_statements[0]
+        last_executed_sql = self.update_statements[0]
 
         try:
             self._execute_sql("BEGIN;")
-            for sql in sql_statements:
+            for sql in self.update_statements:
                 sql = dedent(sql)
                 last_executed_sql = sql
                 self._execute_sql(sql)
@@ -92,6 +96,8 @@ class DatabaseConnector:
 
             error_msg = f"Failed to write to test analytics database! Cause: {e}"
             raise TestAnalyticsUploadError(error_msg, sql=last_executed_sql)
+        finally:
+            self.update_statements = []
 
     def _execute_sql(self, sql: str) -> None:
         if self._log_sql:

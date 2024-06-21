@@ -30,13 +30,20 @@ class TestAnalyticsDb:
 
     def __init__(self, config: MzDbConfig):
         self.config = config
-        database_connector = DatabaseConnector(config, log_sql=True)
-        self._disable_writer_if_on_unsupported_version(database_connector)
+        self.database_connector = DatabaseConnector(config, log_sql=True)
+        self._disable_writer_if_on_unsupported_version(self.database_connector)
 
-        self.builds = BuildDataStorage(database_connector, TEST_ANALYTICS_DATA_VERSION)
-        self.scalability_results = ScalabilityFrameworkResultStorage(database_connector)
-        self.benchmark_results = FeatureBenchmarkResultStorage(database_connector)
-        self.build_annotations = BuildAnnotationStorage(database_connector)
+        self.builds = BuildDataStorage(
+            self.database_connector, TEST_ANALYTICS_DATA_VERSION
+        )
+        self.scalability_results = ScalabilityFrameworkResultStorage(
+            self.database_connector
+        )
+        self.benchmark_results = FeatureBenchmarkResultStorage(self.database_connector)
+        self.build_annotations = BuildAnnotationStorage(self.database_connector)
+
+    def submit_updates(self) -> None:
+        self.database_connector.submit_update_statements()
 
     def _disable_writer_if_on_unsupported_version(
         self, database_connector: DatabaseConnector

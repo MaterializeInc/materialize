@@ -65,4 +65,4 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                 """
             )
 
-        self.database_connector.execute_updates(sql_statements)
+        self.database_connector.add_update_statements(sql_statements)
