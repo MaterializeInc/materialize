@@ -6539,6 +6539,7 @@ version = "0.0.0"
 dependencies = [
  "ahash",
  "differential-dataflow",
+ "either",
  "futures-util",
  "lgalloc",
  "mz-ore",
