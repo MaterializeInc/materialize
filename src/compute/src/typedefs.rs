@@ -39,10 +39,10 @@ pub(crate) mod spines {
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::implementations::{Layout, Update};
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+    use mz_timely_util::containers::stack::StackWrapper;
     use timely::container::columnation::{Columnation, TimelyStack};
     use timely::container::flatcontainer::{Containerized, FlatStack, Push, Region};
 
-    use crate::containers::stack::StackWrapper;
     use crate::row_spine::OffsetOptimized;
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
