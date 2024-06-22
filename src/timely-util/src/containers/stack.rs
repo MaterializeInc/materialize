@@ -10,17 +10,15 @@
 //! A chunked columnar container based on the columnation library. It stores the local
 //! portion in region-allocated data, too, which is different to the `TimelyStack` type.
 
+use std::cell::Cell;
 use std::collections::Bound;
 use std::ops::{Index, RangeBounds};
 use std::sync::atomic::AtomicBool;
 
 use differential_dataflow::trace::implementations::BatchContainer;
 use either::Either;
-use timely::container::{PushInto, SizableContainer};
-use timely::{
-    container::columnation::{Columnation, Region, TimelyStack},
-    Container,
-};
+use timely::container::columnation::{Columnation, Region, TimelyStack};
+use timely::container::{Container, ContainerBuilder, PushInto, SizableContainer};
 
 use crate::containers::array::Array;
 
@@ -214,6 +212,44 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> PushInto<&T> for Stack
 impl<T: Columnation> Default for StackWrapper<T> {
     fn default() -> Self {
         Self::with_capacity(0)
+    }
+}
+
+/// A Stacked container builder that keep track of container memory usage.
+#[derive(Default)]
+pub struct AccountedStackBuilder<CB> {
+    bytes: Cell<usize>,
+    builder: CB,
+}
+
+impl<T, CB> ContainerBuilder for AccountedStackBuilder<CB>
+where
+    T: Clone + Columnation + 'static,
+    CB: ContainerBuilder<Container = StackWrapper<T>>,
+{
+    type Container = StackWrapper<T>;
+
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        let container = self.builder.extract()?;
+        let mut new_bytes = 0;
+        container.heap_size(|_, cap| new_bytes += cap);
+        self.bytes.set(self.bytes.get() + new_bytes);
+        Some(container)
+    }
+
+    fn finish(&mut self) -> Option<&mut Self::Container> {
+        let container = self.builder.finish()?;
+        let mut new_bytes = 0;
+        container.heap_size(|_, cap| new_bytes += cap);
+        self.bytes.set(self.bytes.get() + new_bytes);
+        Some(container)
+    }
+}
+
+impl<T, CB: PushInto<T>> PushInto<T> for AccountedStackBuilder<CB> {
+    #[inline]
+    fn push_into(&mut self, item: T) {
+        self.builder.push_into(item);
     }
 }
 
