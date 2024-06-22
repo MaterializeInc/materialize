@@ -1974,6 +1974,7 @@ impl CatalogState {
                 disk,
                 billed_as,
                 internal,
+                pending,
             } => {
                 if allowed_availability_zones.is_some() && availability_zone.is_some() {
                     return Err(Error {
@@ -2005,6 +2006,7 @@ impl CatalogState {
                     disk,
                     billed_as,
                     internal,
+                    pending,
                 })
             }
         };

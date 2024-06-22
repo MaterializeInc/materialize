@@ -287,6 +287,8 @@ pub struct ManagedReplicaLocation {
     pub availability_zones: ManagedReplicaAvailabilityZones,
     /// Whether the replica needs scratch disk space.
     pub disk: bool,
+    /// Whether the repelica is pending reconfiguration
+    pub pending: bool,
 }
 
 impl ManagedReplicaLocation {

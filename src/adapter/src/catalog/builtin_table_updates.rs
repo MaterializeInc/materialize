@@ -350,6 +350,7 @@ impl CatalogState {
                 disk,
                 billed_as: _,
                 internal,
+                pending: _,
             }) => (Some(&**size), Some(*disk), Some(az.as_str()), *internal),
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
@@ -358,6 +359,7 @@ impl CatalogState {
                 disk,
                 billed_as: _,
                 internal,
+                pending: _,
             }) => (Some(&**size), Some(*disk), None, *internal),
             _ => (None, None, None, false),
         };

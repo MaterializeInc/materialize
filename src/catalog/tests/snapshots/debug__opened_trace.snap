@@ -598,6 +598,7 @@ Trace {
                                             disk: false,
                                             internal: false,
                                             billed_as: None,
+                                            pending: false,
                                         },
                                     ),
                                 ),

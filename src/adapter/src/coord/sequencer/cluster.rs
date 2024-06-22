@@ -182,6 +182,7 @@ impl Coordinator {
             disk,
             internal: false,
             size: size.clone(),
+            pending: false,
         };
 
         let logging = if let Some(config) = compute.introspection {
@@ -309,6 +310,7 @@ impl Coordinator {
                         disk,
                         internal,
                         size: size.clone(),
+                        pending: false,
                     };
                     (compute, location)
                 }
@@ -439,6 +441,7 @@ impl Coordinator {
                     disk,
                     internal,
                     size,
+                    pending: false,
                 };
                 (compute, location)
             }
