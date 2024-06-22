@@ -19,6 +19,7 @@ pub mod activator;
 pub mod antichain;
 pub mod builder_async;
 pub mod capture;
+pub mod containers;
 pub mod event;
 pub mod operator;
 pub mod order;

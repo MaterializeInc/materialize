@@ -278,7 +278,7 @@ impl ComputeState {
 
         let chunked_stack = ENABLE_CHUNKED_STACK.get(config);
         info!("using chunked stack: {chunked_stack}");
-        crate::containers::stack::use_chunked_stack(chunked_stack);
+        mz_timely_util::containers::stack::use_chunked_stack(chunked_stack);
     }
 
     /// Returns the cc or non-cc version of "dataflow_max_inflight_bytes", as
