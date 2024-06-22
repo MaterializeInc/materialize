@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicBool;
 
 use differential_dataflow::trace::implementations::BatchContainer;
 use either::Either;
-use timely::container::PushInto;
+use timely::container::{PushInto, SizableContainer};
 use timely::{
     container::columnation::{Columnation, Region, TimelyStack},
     Container,
@@ -169,6 +169,30 @@ impl<T: Clone + Columnation + 'static> Container for StackWrapper<T> {
     }
 }
 
+impl<T: Clone + Columnation + 'static> SizableContainer for StackWrapper<T> {
+    fn capacity(&self) -> usize {
+        match self {
+            StackWrapper::Legacy(l) => l.capacity(),
+            StackWrapper::Chunked(c) => c.capacity(),
+        }
+    }
+
+    fn preferred_capacity() -> usize {
+        if ENABLE_CHUNKED_STACK.load(std::sync::atomic::Ordering::Relaxed) {
+            <ChunkedStack<T> as SizableContainer>::preferred_capacity()
+        } else {
+            <TimelyStack<T> as SizableContainer>::preferred_capacity()
+        }
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        match self {
+            StackWrapper::Legacy(l) => l.reserve(additional),
+            StackWrapper::Chunked(c) => c.reserve(additional),
+        }
+    }
+}
+
 impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> PushInto<T> for StackWrapper<T> {
     fn push_into(&mut self, item: T) {
         match self {
@@ -225,6 +249,11 @@ impl<T: Columnation> ChunkedStack<T> {
         }
     }
 
+    /// The capacity of the local array.
+    pub fn capacity(&self) -> usize {
+        self.local.capacity() * Self::CHUNK
+    }
+
     /// Ensures `Self` can absorb `items` without further allocations.
     ///
     /// The argument `items` may be cloned and iterated multiple times.
@@ -274,7 +303,7 @@ impl<T: Columnation> ChunkedStack<T> {
     /// Estimate the memory capacity in bytes.
     #[inline]
     pub fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
-        let size_of = std::mem::size_of::<T>();
+        let size_of = std::mem::size_of::<Array<T>>();
         callback(self.local.len() * size_of, self.local.capacity() * size_of);
         for local in &self.local {
             local.heap_size(&mut callback);
@@ -405,6 +434,21 @@ impl<T: Columnation + 'static> Container for ChunkedStack<T> {
 
     fn drain(&mut self) -> Self::DrainIter<'_> {
         self.range(..)
+    }
+}
+
+impl<T: Columnation + 'static> SizableContainer for ChunkedStack<T> {
+    fn capacity(&self) -> usize {
+        self.capacity()
+    }
+
+    fn preferred_capacity() -> usize {
+        timely::container::buffer::default_capacity::<T>()
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        let additional_chunks = (additional + Self::CHUNK - 1) / Self::CHUNK;
+        self.local.reserve(additional_chunks);
     }
 }
 
