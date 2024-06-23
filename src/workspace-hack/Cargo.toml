@@ -94,7 +94,7 @@ prost-types = { version = "0.11.9" }
 quote = { version = "1.0.36" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "1259d66a7c4d83f09152aac49a73b5b976fa75ca", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.7.0" }
 regex-syntax-3b31131e45eafb45 = { package = "regex-syntax", version = "0.6.28" }
 regex-syntax-c38e5c1d305a1b54 = { package = "regex-syntax", version = "0.8.3" }
@@ -219,7 +219,7 @@ prost-types = { version = "0.11.9" }
 quote = { version = "1.0.36" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "1259d66a7c4d83f09152aac49a73b5b976fa75ca", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.7.0" }
 regex-syntax-3b31131e45eafb45 = { package = "regex-syntax", version = "0.6.28" }
 regex-syntax-c38e5c1d305a1b54 = { package = "regex-syntax", version = "0.8.3" }
