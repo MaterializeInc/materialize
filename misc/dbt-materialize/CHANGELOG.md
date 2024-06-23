@@ -2,6 +2,7 @@
 
 ## 1.8.2 - 2024-06-21
 
+<<<<<<< HEAD
 * Add support for sink cutover to the blue/green deployment workflow [#27557](https://github.com/MaterializeInc/materialize/pull/27557).
   Sinks **must** be created in a **dedicated schema and cluster**.
 
@@ -13,6 +14,9 @@
   Before, these clusters would be incorrectly recreated in the deployment
   environment with the `SCHEDULE` option set to `manual` (instead of
   `on-refresh`).
+=======
+* Enable cross-database references ([#27686](https://github.com/MaterializeInc/materialize/pull/27686)). Although cross-database references are not supported in `dbt-postgres`, databases in Materialize are purely used for namespacing, and therefore do not present the same constraint.
+>>>>>>> ab14c7ceb6 (Update misc/dbt-materialize/CHANGELOG.md)
 
 ## 1.8.1 - 2024-06-08
 
