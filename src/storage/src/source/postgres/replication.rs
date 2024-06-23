@@ -90,6 +90,7 @@ use mz_postgres_util::simple_query_opt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
+use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
@@ -119,7 +120,6 @@ use crate::metrics::source::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, TransientError};
 use crate::source::types::ProgressStatisticsUpdate;
-use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
 /// Postgres epoch is 2000-01-01T00:00:00Z
@@ -147,7 +147,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     metrics: PgSourceMetrics,
 ) -> (
-    Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
+    Collection<G, (usize, Result<Row, DataflowError>), Diff>,
     Stream<G, Infallible>,
     Stream<G, ProgressStatisticsUpdate>,
     Stream<G, ReplicationError>,
