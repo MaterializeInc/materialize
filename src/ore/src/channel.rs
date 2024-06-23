@@ -26,6 +26,8 @@ use tokio::sync::oneshot;
 
 use crate::metrics::PromLabelsExt;
 
+pub mod trigger;
+
 /// Extensions for the receiving end of asynchronous channels.
 #[async_trait]
 pub trait ReceiverExt<T: Send> {
