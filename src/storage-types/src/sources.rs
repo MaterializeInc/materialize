@@ -488,6 +488,10 @@ impl mz_persist_types::Codec64 for MzOffset {
     }
 }
 
+impl columnation::Columnation for MzOffset {
+    type InnerRegion = columnation::CopyRegion<MzOffset>;
+}
+
 impl RustType<ProtoMzOffset> for MzOffset {
     fn into_proto(&self) -> ProtoMzOffset {
         ProtoMzOffset {

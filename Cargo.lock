@@ -6381,6 +6381,7 @@ dependencies = [
  "aws-types",
  "base64 0.13.1",
  "bytes",
+ "columnation",
  "criterion",
  "dec",
  "derivative",
