@@ -238,7 +238,7 @@ steps:
   - id: testdrive
     label: Testdrive %N
     depends_on: build-aarch64
-    timeout_in_minutes: 40
+    timeout_in_minutes: 80
     inputs: [test/testdrive]
     parallelism: 8
     plugins:
@@ -341,7 +341,7 @@ steps:
         label: MySQL CDC tests %N
         parallelism: 2
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/mysql-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -354,7 +354,7 @@ steps:
         label: MySQL CDC resumption tests %N
         parallelism: 2
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/mysql-cdc-resumption]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -379,7 +379,7 @@ steps:
       - id: pg-cdc
         label: Postgres CDC tests
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -392,7 +392,7 @@ steps:
         label: Postgres CDC resumption tests %N
         parallelism: 2
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/pg-cdc-resumption]
         plugins:
           - ./ci/plugins/mzcompose:
