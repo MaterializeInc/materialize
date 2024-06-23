@@ -17,12 +17,15 @@ cargo about generate ci/deploy/licenses.hbs > misc/www/licenses.html
 
 aws s3 cp --recursive misc/www/ s3://materialize-dev-website/
 
-bin/doc
+# We set `noindex` on our rustdocs to avoid burning crawl budget [1]
+# or diverting search results to internal docs rather than public-facing
+# content. Additionally, the private items docs have many broken links
+# that would actively harm our SEO score.
+#
+# [1]: https://developers.google.com/search/blog/2017/01/what-crawl-budget-means-for-googlebot
+RUSTDOCFLAGS="--html-in-header $PWD/ci/deploy/noindex.html" bin/doc
 aws s3 sync --size-only target-xcompile/doc/ s3://materialize-dev-website/api/rust
 
-# Documenting private items causes broken links in many crates we don't control.
-# So exclude all the pages from search engine indexes to avoid harming our
-# SEO score with a number of broken links.
 RUSTDOCFLAGS="--html-in-header $PWD/ci/deploy/noindex.html" bin/doc --document-private-items
 aws s3 sync --size-only target-xcompile/doc/ s3://materialize-dev-website/api/rust-private
 
