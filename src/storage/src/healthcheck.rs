@@ -970,6 +970,7 @@ mod tests {
 
     // The below is ALL test infrastructure for the above
 
+    use timely::container::CapacityContainerBuilder;
     use timely::dataflow::operators::exchange::Exchange;
     use timely::dataflow::Scope;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -1174,7 +1175,7 @@ mod tests {
         mut input: UnboundedReceiver<TestUpdate>,
     ) -> Stream<G, HealthStatusMessage> {
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope.clone());
-        let (mut output_handle, output) = iterator.new_output();
+        let (mut output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
         let index = scope.index();
         iterator.build(|mut caps| async move {

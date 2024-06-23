@@ -20,7 +20,7 @@ use std::task::{Context, Poll, Waker};
 
 use futures_util::task::ArcWake;
 use timely::communication::{Message, Pull, Push};
-use timely::container::{CapacityContainerBuilder, ContainerBuilder};
+use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::ParallelizationContract;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::counter::Counter as PushCounter;
@@ -34,7 +34,7 @@ use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
-use timely::{Container, Data, PartialOrder};
+use timely::{Container, PartialOrder};
 
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<G: Scope> {
@@ -295,16 +295,20 @@ where
     }
 }
 
-impl<'a, T, D, P> AsyncOutputHandle<T, CapacityContainerBuilder<Vec<D>>, P>
+impl<'a, T, C, P> AsyncOutputHandle<T, CapacityContainerBuilder<C>, P>
 where
     T: Timestamp,
-    D: Data,
-    P: Push<Bundle<T, Vec<D>>> + 'static,
+    C: Container,
+    P: Push<Bundle<T, C>> + 'static,
 {
     #[allow(clippy::unused_async)]
-    pub async fn give<C: CapabilityTrait<T>>(&mut self, cap: &C, data: D) {
+    pub async fn give<CP, D>(&mut self, cap: &CP, data: D)
+    where
+        CP: CapabilityTrait<T>,
+        CapacityContainerBuilder<C>: PushInto<D>,
+    {
         let mut handle = self.handle.borrow_mut();
-        cap.session(&mut handle).give(data);
+        cap.session(&mut handle).push_into(data);
     }
 }
 
