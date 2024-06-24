@@ -296,10 +296,10 @@ impl<'a> DataflowBuilder<'a> {
         // we can retrieve monotonicity information from the parent source.
         match &source.data_source {
             DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc.desc.monotonic(),
+            DataSourceDesc::Webhook { .. } => true,
             DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Progress
-            | DataSourceDesc::Webhook { .. } => false,
+            | DataSourceDesc::Progress => false,
         }
     }
 
