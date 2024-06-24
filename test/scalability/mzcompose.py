@@ -557,46 +557,45 @@ def upload_results_to_test_analytics(
     if not buildkite.is_in_buildkite():
         return
 
-    try:
-        head_target_endpoint = _get_head_target_endpoint(endpoints)
+    head_target_endpoint = _get_head_target_endpoint(endpoints)
 
-        if head_target_endpoint is None:
-            print(
-                "Not uploading results because not HEAD version included in endpoints"
-            )
-            return
+    if head_target_endpoint is None:
+        print("Not uploading results because not HEAD version included in endpoints")
+        return
 
-        endpoint_version_info = head_target_endpoint.try_load_version()
-        results_of_endpoint = benchmark_result.df_total_by_endpoint_name_and_workload[
-            endpoint_version_info
-        ]
+    endpoint_version_info = head_target_endpoint.try_load_version()
+    results_of_endpoint = benchmark_result.df_total_by_endpoint_name_and_workload[
+        endpoint_version_info
+    ]
 
-        test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
-        test_analytics.builds.insert_build_job(was_successful=was_successful)
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    test_analytics.builds.add_build_job(was_successful=was_successful)
 
-        result_entries = []
+    result_entries = []
 
-        for workload_name, result in results_of_endpoint.items():
-            workload_version = benchmark_result.workload_version_by_name[workload_name]
-            workload_group = benchmark_result.workload_group_by_name[workload_name]
+    for workload_name, result in results_of_endpoint.items():
+        workload_version = benchmark_result.workload_version_by_name[workload_name]
+        workload_group = benchmark_result.workload_group_by_name[workload_name]
 
-            for index, row in result.data.iterrows():
-                result_entries.append(
-                    scalability_framework_result_storage.ScalabilityFrameworkResultEntry(
-                        workload_name=workload_name,
-                        workload_group=workload_group,
-                        workload_version=str(workload_version),
-                        concurrency=row[df_totals_cols.CONCURRENCY],
-                        count=row[df_totals_cols.COUNT],
-                        tps=row[df_totals_cols.TPS],
-                    )
+        for index, row in result.data.iterrows():
+            result_entries.append(
+                scalability_framework_result_storage.ScalabilityFrameworkResultEntry(
+                    workload_name=workload_name,
+                    workload_group=workload_group,
+                    workload_version=str(workload_version),
+                    concurrency=row[df_totals_cols.CONCURRENCY],
+                    count=row[df_totals_cols.COUNT],
+                    tps=row[df_totals_cols.TPS],
                 )
+            )
 
-        test_analytics.scalability_results.insert_result(
-            framework_version=SCALABILITY_FRAMEWORK_VERSION,
-            results=result_entries,
-        )
+    test_analytics.scalability_results.add_result(
+        framework_version=SCALABILITY_FRAMEWORK_VERSION,
+        results=result_entries,
+    )
 
+    try:
+        test_analytics.submit_updates()
         print("Uploaded results.")
     except Exception as e:
         # An error during an upload must never cause the build to fail
