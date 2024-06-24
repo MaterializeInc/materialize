@@ -420,6 +420,7 @@ pub struct CopyToContext {
 pub struct PeekStageLinearizeTimestamp {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
+    max_query_result_size: Option<u64>,
     source_ids: BTreeSet<GlobalId>,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
@@ -433,6 +434,7 @@ pub struct PeekStageLinearizeTimestamp {
 pub struct PeekStageRealTimeRecency {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
+    max_query_result_size: Option<u64>,
     source_ids: BTreeSet<GlobalId>,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
@@ -447,6 +449,7 @@ pub struct PeekStageRealTimeRecency {
 pub struct PeekStageTimestampReadHold {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
+    max_query_result_size: Option<u64>,
     source_ids: BTreeSet<GlobalId>,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
@@ -462,6 +465,7 @@ pub struct PeekStageTimestampReadHold {
 pub struct PeekStageOptimize {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
+    max_query_result_size: Option<u64>,
     source_ids: BTreeSet<GlobalId>,
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
@@ -476,6 +480,7 @@ pub struct PeekStageOptimize {
 pub struct PeekStageFinish {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
+    max_query_result_size: Option<u64>,
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,

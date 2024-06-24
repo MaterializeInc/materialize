@@ -2213,6 +2213,7 @@ impl Coordinator {
                         target_cluster,
                         None,
                         ExplainContext::Pushdown,
+                        Some(ctx.session().vars().max_query_result_size()),
                     ),
                     ctx
                 );
@@ -2577,6 +2578,7 @@ impl Coordinator {
                 copy_to: None,
             },
             TargetCluster::Active,
+            None,
         )
         .await;
 
