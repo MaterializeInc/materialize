@@ -10,17 +10,15 @@
 //! A chunked columnar container based on the columnation library. It stores the local
 //! portion in region-allocated data, too, which is different to the `TimelyStack` type.
 
+use std::cell::Cell;
 use std::collections::Bound;
 use std::ops::{Index, RangeBounds};
 use std::sync::atomic::AtomicBool;
 
 use differential_dataflow::trace::implementations::BatchContainer;
 use either::Either;
-use timely::container::PushInto;
-use timely::{
-    container::columnation::{Columnation, Region, TimelyStack},
-    Container,
-};
+use timely::container::columnation::{Columnation, Region, TimelyStack};
+use timely::container::{Container, ContainerBuilder, PushInto, SizableContainer};
 
 use crate::containers::array::Array;
 
@@ -169,6 +167,30 @@ impl<T: Clone + Columnation + 'static> Container for StackWrapper<T> {
     }
 }
 
+impl<T: Clone + Columnation + 'static> SizableContainer for StackWrapper<T> {
+    fn capacity(&self) -> usize {
+        match self {
+            StackWrapper::Legacy(l) => l.capacity(),
+            StackWrapper::Chunked(c) => c.capacity(),
+        }
+    }
+
+    fn preferred_capacity() -> usize {
+        if ENABLE_CHUNKED_STACK.load(std::sync::atomic::Ordering::Relaxed) {
+            <ChunkedStack<T> as SizableContainer>::preferred_capacity()
+        } else {
+            <TimelyStack<T> as SizableContainer>::preferred_capacity()
+        }
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        match self {
+            StackWrapper::Legacy(l) => l.reserve(additional),
+            StackWrapper::Chunked(c) => c.reserve(additional),
+        }
+    }
+}
+
 impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> PushInto<T> for StackWrapper<T> {
     fn push_into(&mut self, item: T) {
         match self {
@@ -190,6 +212,44 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> PushInto<&T> for Stack
 impl<T: Columnation> Default for StackWrapper<T> {
     fn default() -> Self {
         Self::with_capacity(0)
+    }
+}
+
+/// A Stacked container builder that keep track of container memory usage.
+#[derive(Default)]
+pub struct AccountedStackBuilder<CB> {
+    bytes: Cell<usize>,
+    builder: CB,
+}
+
+impl<T, CB> ContainerBuilder for AccountedStackBuilder<CB>
+where
+    T: Clone + Columnation + 'static,
+    CB: ContainerBuilder<Container = StackWrapper<T>>,
+{
+    type Container = StackWrapper<T>;
+
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        let container = self.builder.extract()?;
+        let mut new_bytes = 0;
+        container.heap_size(|_, cap| new_bytes += cap);
+        self.bytes.set(self.bytes.get() + new_bytes);
+        Some(container)
+    }
+
+    fn finish(&mut self) -> Option<&mut Self::Container> {
+        let container = self.builder.finish()?;
+        let mut new_bytes = 0;
+        container.heap_size(|_, cap| new_bytes += cap);
+        self.bytes.set(self.bytes.get() + new_bytes);
+        Some(container)
+    }
+}
+
+impl<T, CB: PushInto<T>> PushInto<T> for AccountedStackBuilder<CB> {
+    #[inline]
+    fn push_into(&mut self, item: T) {
+        self.builder.push_into(item);
     }
 }
 
@@ -223,6 +283,11 @@ impl<T: Columnation> ChunkedStack<T> {
             inner: T::InnerRegion::default(),
             length: 0,
         }
+    }
+
+    /// The capacity of the local array.
+    pub fn capacity(&self) -> usize {
+        self.local.capacity() * Self::CHUNK
     }
 
     /// Ensures `Self` can absorb `items` without further allocations.
@@ -274,7 +339,7 @@ impl<T: Columnation> ChunkedStack<T> {
     /// Estimate the memory capacity in bytes.
     #[inline]
     pub fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
-        let size_of = std::mem::size_of::<T>();
+        let size_of = std::mem::size_of::<Array<T>>();
         callback(self.local.len() * size_of, self.local.capacity() * size_of);
         for local in &self.local {
             local.heap_size(&mut callback);
@@ -405,6 +470,21 @@ impl<T: Columnation + 'static> Container for ChunkedStack<T> {
 
     fn drain(&mut self) -> Self::DrainIter<'_> {
         self.range(..)
+    }
+}
+
+impl<T: Columnation + 'static> SizableContainer for ChunkedStack<T> {
+    fn capacity(&self) -> usize {
+        self.capacity()
+    }
+
+    fn preferred_capacity() -> usize {
+        timely::container::buffer::default_capacity::<T>()
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        let additional_chunks = (additional + Self::CHUNK - 1) / Self::CHUNK;
+        self.local.reserve(additional_chunks);
     }
 }
 
