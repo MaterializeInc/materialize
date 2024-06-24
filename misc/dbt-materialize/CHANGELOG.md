@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-* Add `create_cluster` and `drop_cluster` macros to manage the creation and
-  deletion of clusters, respectively in CI/CD workflows.
+* Add the `create_cluster` and `drop_cluster` macros, which allow managing the
+  creation and deletion of clusters in workflows requiring transient
+  infrastructure (e.g. CI/CD).
 
 ## 1.8.1 - 2024-06-08
 
