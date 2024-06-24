@@ -42,26 +42,34 @@ Indexes:
 public
 information_schema
 mz_catalog
+mz_catalog_unstable
 mz_unsafe
 mz_internal
+mz_introspection
 pg_catalog
+
 > SHOW SCHEMAS
 name
 ------------------
 information_schema
 public
 mz_catalog
+mz_catalog_unstable
 mz_unsafe
 mz_internal
+mz_introspection
 pg_catalog
+
 $ psql-execute command=\dn
-\     List of schemas
-    Name     |   Owner
--------------+-----------
- mz_catalog  | mz_system
- mz_internal | mz_system
- mz_unsafe   | mz_system
- public      | mz_system
+\         List of schemas
+        Name         |   Owner
+---------------------+-----------
+ mz_catalog          | mz_system
+ mz_catalog_unstable | mz_system
+ mz_internal         | mz_system
+ mz_introspection    | mz_system
+ mz_unsafe           | mz_system
+ public              | mz_system
 
 
 $ psql-execute command="\dn mz_catalog"
@@ -72,12 +80,14 @@ $ psql-execute command="\dn mz_catalog"
 
 
 $ psql-execute command="\dn mz_*"
-\     List of schemas
-    Name     |   Owner
--------------+-----------
- mz_catalog  | mz_system
- mz_internal | mz_system
- mz_unsafe   | mz_system
+\         List of schemas
+        Name         |   Owner
+---------------------+-----------
+ mz_catalog          | mz_system
+ mz_catalog_unstable | mz_system
+ mz_internal         | mz_system
+ mz_introspection    | mz_system
+ mz_unsafe           | mz_system
 
 # What objects do we have by default?
 > SHOW OBJECTS
@@ -93,7 +103,9 @@ public
 s
 information_schema
 mz_catalog
+mz_catalog_unstable
 mz_internal
+mz_introspection
 mz_unsafe
 pg_catalog
 
@@ -182,7 +194,9 @@ name
 public
 information_schema
 mz_catalog
+mz_catalog_unstable
 mz_internal
+mz_introspection
 mz_unsafe
 pg_catalog
 
@@ -195,7 +209,9 @@ public
 s
 information_schema
 mz_catalog
+mz_catalog_unstable
 mz_internal
+mz_introspection
 mz_unsafe
 pg_catalog
 
@@ -223,7 +239,9 @@ public
 s
 information_schema
 mz_catalog
+mz_catalog_unstable
 mz_internal
+mz_introspection
 mz_unsafe
 pg_catalog
 > CREATE VIEW v2 AS SELECT 2
@@ -531,6 +549,14 @@ mz_storage_usage
 mz_timezone_abbreviations
 mz_timezone_names
 
+# Check default sources, tables, and views in mz_catalog_unstable.
+
+> SHOW SOURCES FROM mz_catalog_unstable
+
+> SHOW TABLES FROM mz_catalog_unstable
+
+> SHOW VIEWS FROM mz_catalog_unstable
+
 # Check default sources, tables, and views in mz_internal.
 
 > SHOW SOURCES FROM mz_internal
@@ -703,6 +729,14 @@ pg_namespace_all_databases
 pg_description_all_databases
 pg_attrdef_all_databases
 pg_attribute_all_databases
+
+# Check default sources, tables, and views in mz_introspection.
+
+> SHOW SOURCES FROM mz_introspection
+
+> SHOW TABLES FROM mz_introspection
+
+> SHOW VIEWS FROM mz_introspection
 
 > SET database = materialize
 

@@ -991,10 +991,10 @@ statement ok
 CREATE SCHEMA green;
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-blue  u7
-green  u8
+blue  u9
+green  u10
 public  u3
 
 statement ok
@@ -1007,10 +1007,10 @@ statement ok
 COMMIT;
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-blue  u8
-green  u7
+blue  u10
+green  u9
 public  u3
 
 statement ok
@@ -1026,10 +1026,10 @@ statement ok
 ROLLBACK;
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-blue  u8
-green  u7
+blue  u10
+green  u9
 public  u3
 
 statement ok
@@ -1052,10 +1052,10 @@ statement ok
 ROLLBACK;
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-blue  u8
-green  u7
+blue  u10
+green  u9
 public  u3
 
 statement ok
@@ -1080,10 +1080,10 @@ statement ok
 COMMIT;
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-green  u7
-orange  u8
+green  u9
+orange  u10
 public  u3
 
 statement ok
@@ -1096,10 +1096,10 @@ statement ok
 COMMIT;
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-green  u7
-orange  u8
+green  u9
+orange  u10
 public  u3
 
 statement ok
@@ -1117,10 +1117,10 @@ COMMIT;
 # Transaction should be rolled back and nothing should change.
 
 query TT
-SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%' ORDER BY name;
 ----
-green  u7
-orange  u8
+green  u9
+orange  u10
 public  u3
 
 statement ok

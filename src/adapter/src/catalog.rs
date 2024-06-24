@@ -854,24 +854,28 @@ impl Catalog {
         self.state.get_schema(database_spec, schema_spec, conn_id)
     }
 
-    pub fn get_mz_catalog_schema_id(&self) -> &SchemaId {
+    pub fn get_mz_catalog_schema_id(&self) -> SchemaId {
         self.state.get_mz_catalog_schema_id()
     }
 
-    pub fn get_pg_catalog_schema_id(&self) -> &SchemaId {
+    pub fn get_pg_catalog_schema_id(&self) -> SchemaId {
         self.state.get_pg_catalog_schema_id()
     }
 
-    pub fn get_information_schema_id(&self) -> &SchemaId {
+    pub fn get_information_schema_id(&self) -> SchemaId {
         self.state.get_information_schema_id()
     }
 
-    pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
+    pub fn get_mz_internal_schema_id(&self) -> SchemaId {
         self.state.get_mz_internal_schema_id()
     }
 
-    pub fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
+    pub fn get_mz_unsafe_schema_id(&self) -> SchemaId {
         self.state.get_mz_unsafe_schema_id()
+    }
+
+    pub fn system_schema_ids(&self) -> impl Iterator<Item = SchemaId> + '_ {
+        self.state.system_schema_ids()
     }
 
     pub fn get_database(&self, id: &DatabaseId) -> &Database {
@@ -1405,8 +1409,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
             UInt64 => "uint8".into(),
             ty => {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
-                let pg_catalog_schema =
-                    SchemaSpecifier::Id(self.state.get_pg_catalog_schema_id().clone());
+                let pg_catalog_schema = SchemaSpecifier::Id(self.state.get_pg_catalog_schema_id());
 
                 let res = if self
                     .effective_search_path(true)
@@ -1595,23 +1598,16 @@ impl SessionCatalog for ConnCatalog<'_> {
             .collect()
     }
 
-    fn get_mz_internal_schema_id(&self) -> &SchemaId {
+    fn get_mz_internal_schema_id(&self) -> SchemaId {
         self.state().get_mz_internal_schema_id()
     }
 
-    fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
+    fn get_mz_unsafe_schema_id(&self) -> SchemaId {
         self.state().get_mz_unsafe_schema_id()
     }
 
-    fn is_system_schema(&self, schema: &str) -> bool {
-        self.state.is_system_schema(schema)
-    }
-
-    fn is_system_schema_specifier(&self, schema: &SchemaSpecifier) -> bool {
-        match schema {
-            SchemaSpecifier::Temporary => false,
-            SchemaSpecifier::Id(id) => self.state.is_system_schema_id(id),
-        }
+    fn is_system_schema_specifier(&self, schema: SchemaSpecifier) -> bool {
+        self.state.is_system_schema_specifier(schema)
     }
 
     fn resolve_role(
@@ -2003,9 +1999,7 @@ mod tests {
                     input: QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
-                            schema_spec: SchemaSpecifier::Id(
-                                catalog.get_pg_catalog_schema_id().clone(),
-                            ),
+                            schema_spec: SchemaSpecifier::Id(catalog.get_pg_catalog_schema_id()),
                         },
                         item: "numeric".to_string(),
                     },
@@ -2024,9 +2018,7 @@ mod tests {
                     input: QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
-                            schema_spec: SchemaSpecifier::Id(
-                                catalog.get_mz_catalog_schema_id().clone(),
-                            ),
+                            schema_spec: SchemaSpecifier::Id(catalog.get_mz_catalog_schema_id()),
                         },
                         item: "mz_array_types".to_string(),
                     },
@@ -2104,11 +2096,11 @@ mod tests {
         Catalog::with_debug(|catalog| async move {
             let mz_catalog_schema = (
                 ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
+                SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id()),
             );
             let pg_catalog_schema = (
                 ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(catalog.state().get_pg_catalog_schema_id().clone()),
+                SchemaSpecifier::Id(catalog.state().get_pg_catalog_schema_id()),
             );
             let mz_temp_schema = (
                 ResolvedDatabaseSpecifier::Ambient,

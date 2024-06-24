@@ -267,6 +267,18 @@ impl<'a> Transaction<'a> {
         Ok((id, oid))
     }
 
+    pub fn insert_system_schema(
+        &mut self,
+        schema_id: u64,
+        schema_name: &str,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+        oid: u32,
+    ) -> Result<(), CatalogError> {
+        let id = SchemaId::System(schema_id);
+        self.insert_schema(id, None, schema_name.to_string(), owner_id, privileges, oid)
+    }
+
     pub(crate) fn insert_schema(
         &mut self,
         schema_id: SchemaId,
@@ -1686,6 +1698,14 @@ impl<'a> Transaction<'a> {
 
     pub fn get_system_object_mappings(&self) -> impl Iterator<Item = SystemObjectMapping> {
         self.system_gid_mapping
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
+    pub fn get_schemas(&self) -> impl Iterator<Item = Schema> {
+        self.schemas
             .items()
             .clone()
             .into_iter()
