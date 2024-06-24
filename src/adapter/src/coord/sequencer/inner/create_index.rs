@@ -284,6 +284,7 @@ impl Coordinator {
             dependency_ids: BTreeSet::from_iter(std::iter::once(*on)),
             cluster_id: Some(*cluster_id),
             replica_id: None,
+            create_sql: Some(plan.index.create_sql.clone()),
             role_metadata: session.role_metadata().clone(),
         };
 

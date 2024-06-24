@@ -486,7 +486,7 @@ impl Coordinator {
         // because we always look up/populate a connection's state after
         // committing to the catalog, so are guaranteed to see the connection's
         // most recent version.
-        if plan_validity.check(self.catalog()).is_err() {
+        if plan_validity.check(self.catalog(), ctx.session()).is_err() {
             self.handle_execute_inner(original_stmt, params, ctx).await;
             return;
         }
@@ -571,7 +571,7 @@ impl Coordinator {
         //
         // WARNING: If we support `ALTER SECRET`, we'll need to also check
         // for connectors that were altered while we were purifying.
-        if let Err(e) = plan_validity.check(self.catalog()) {
+        if let Err(e) = plan_validity.check(self.catalog(), ctx.session()) {
             let _ = self.secrets_controller.delete(connection_gid).await;
             return ctx.retire(Err(e));
         }
@@ -613,7 +613,7 @@ impl Coordinator {
         //
         // WARNING: If we support `ALTER SECRET`, we'll need to also check
         // for connectors that were altered while we were purifying.
-        if let Err(e) = plan_validity.check(self.catalog()) {
+        if let Err(e) = plan_validity.check(self.catalog(), ctx.session()) {
             return ctx.retire(Err(e));
         }
 
@@ -641,7 +641,7 @@ impl Coordinator {
             match ready {
                 Deferred::Plan(mut ready) => {
                     ready.ctx.session_mut().grant_write_lock(write_lock_guard);
-                    if let Err(e) = ready.validity.check(self.catalog()) {
+                    if let Err(e) = ready.validity.check(self.catalog(), ready.ctx.session()) {
                         ready.ctx.retire(Err(e))
                     } else {
                         // Write statements never need to track resolved IDs (NOTE: This is not the

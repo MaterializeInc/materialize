@@ -136,6 +136,7 @@ macro_rules! guard_write_critical_section {
                         dependency_ids: $dependency_ids,
                         cluster_id: None,
                         replica_id: None,
+                        create_sql: None,
                         role_metadata,
                     },
                 }));

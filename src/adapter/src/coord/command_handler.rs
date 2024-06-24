@@ -691,6 +691,8 @@ impl Coordinator {
                         dependency_ids: resolved_ids.0,
                         cluster_id,
                         replica_id: None,
+                        // TODO(jkosh44) This has some create_sql statement.
+                        create_sql: None,
                         role_metadata: ctx.session().role_metadata().clone(),
                     };
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.

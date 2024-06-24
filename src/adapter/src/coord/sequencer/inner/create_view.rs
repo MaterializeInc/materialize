@@ -266,6 +266,7 @@ impl Coordinator {
             dependency_ids: expr_depends_on.clone(),
             cluster_id: None,
             replica_id: None,
+            create_sql: Some(plan.view.create_sql.clone()),
             role_metadata: session.role_metadata().clone(),
         };
 

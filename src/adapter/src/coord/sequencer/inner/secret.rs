@@ -98,6 +98,7 @@ impl Coordinator {
             dependency_ids: BTreeSet::new(),
             cluster_id: None,
             replica_id: None,
+            create_sql: Some(plan.secret.create_sql.clone()),
             role_metadata: session.role_metadata().clone(),
         };
         Ok(SecretStage::CreateEnsure(CreateSecretEnsure {
@@ -243,6 +244,7 @@ impl Coordinator {
             dependency_ids: BTreeSet::new(),
             cluster_id: None,
             replica_id: None,
+            create_sql: None,
             role_metadata: ctx.session().role_metadata().clone(),
         };
         let stage = SecretStage::Alter(AlterSecret { validity, plan });
@@ -281,6 +283,7 @@ impl Coordinator {
             dependency_ids: BTreeSet::from_iter(std::iter::once(id)),
             cluster_id: None,
             replica_id: None,
+            create_sql: None,
             role_metadata: ctx.session().role_metadata().clone(),
         };
         let stage = SecretStage::RotateKeysEnsure(RotateKeysSecretEnsure { validity, id });

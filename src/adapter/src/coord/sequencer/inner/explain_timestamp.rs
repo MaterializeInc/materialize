@@ -101,6 +101,7 @@ impl Coordinator {
             dependency_ids: plan.raw_plan.depends_on(),
             cluster_id: Some(cluster_id),
             replica_id: None,
+            create_sql: None,
             role_metadata: session.role_metadata().clone(),
         };
         Ok(ExplainTimestampStage::Optimize(ExplainTimestampOptimize {

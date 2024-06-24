@@ -180,7 +180,7 @@ impl Coordinator {
             // when cancel_enabled may have been true on an earlier stage.
             self.staged_cancellation.remove(ctx.session.conn_id());
         }
-        return_if_err!(stage.validity().check(self.catalog()), ctx);
+        return_if_err!(stage.validity().check(self.catalog(), ctx.session()), ctx);
         loop {
             let cancel_enabled = stage.cancel_enabled();
             let next = stage
@@ -680,6 +680,11 @@ impl Coordinator {
                     Err(err) => Err(err.into()),
                 };
 
+                let create_sql = match &result {
+                    Ok(plan) => Some(plan.connection.create_sql.clone()),
+                    Err(_) => None,
+                };
+
                 // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
                 let result = internal_cmd_tx.send(Message::CreateConnectionValidationReady(
                     CreateConnectionValidationReady {
@@ -691,6 +696,7 @@ impl Coordinator {
                             dependency_ids: resolved_ids.0,
                             cluster_id: None,
                             replica_id: None,
+                            create_sql,
                             role_metadata,
                         },
                         otel_ctx,
@@ -3059,6 +3065,7 @@ impl Coordinator {
             dependency_ids: BTreeSet::from_iter([plan.sink.from]),
             cluster_id: Some(plan.in_cluster),
             replica_id: None,
+            create_sql: Some(plan.sink.create_sql.clone()),
             role_metadata: ctx.session().role_metadata().clone(),
         };
 
@@ -3101,11 +3108,19 @@ impl Coordinator {
     #[instrument]
     pub async fn sequence_alter_sink_finish(&mut self, mut ctx: AlterSinkReadyContext) {
         ctx.otel_ctx.attach_as_parent();
-        match ctx.plan_validity.check(self.catalog()) {
-            Ok(()) => {}
-            Err(err) => {
-                ctx.retire(Err(err));
-                return;
+        {
+            let AlterSinkReadyContext {
+                ctx: ctx_inner,
+                plan_validity,
+                ..
+            } = &mut ctx;
+            let ctx_inner = ctx_inner.as_ref().expect("TODO(jkosh44)");
+            match plan_validity.check(self.catalog(), ctx_inner.session()) {
+                Ok(()) => {}
+                Err(err) => {
+                    ctx.retire(Err(err));
+                    return;
+                }
             }
         }
 
@@ -3328,6 +3343,11 @@ impl Coordinator {
                         Err(err) => Err(err.into()),
                     };
 
+                    let create_sql = match &result {
+                        Ok(conn) => Some(conn.create_sql.clone()),
+                        Err(_) => None,
+                    };
+
                     // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
                     let result = internal_cmd_tx.send(Message::AlterConnectionValidationReady(
                         AlterConnectionValidationReady {
@@ -3339,6 +3359,7 @@ impl Coordinator {
                                 dependency_ids,
                                 cluster_id: None,
                                 replica_id: None,
+                                create_sql,
                                 role_metadata,
                             },
                             otel_ctx,

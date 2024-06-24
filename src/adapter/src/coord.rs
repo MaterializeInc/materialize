@@ -108,7 +108,7 @@ use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::task::{spawn, JoinHandle};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
@@ -122,7 +122,7 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
-use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, Params, PlanContext, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
@@ -150,7 +150,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::active_compute_sink::ActiveComputeSink;
-use crate::catalog::{BuiltinTableUpdate, Catalog};
+use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
@@ -806,12 +806,13 @@ pub struct PlanValidity {
     dependency_ids: BTreeSet<GlobalId>,
     cluster_id: Option<ComputeInstanceId>,
     replica_id: Option<ReplicaId>,
+    create_sql: Option<String>,
     role_metadata: RoleMetadata,
 }
 
 impl PlanValidity {
     /// Returns an error if the current catalog no longer has all dependencies.
-    fn check(&mut self, catalog: &Catalog) -> Result<(), AdapterError> {
+    fn check(&mut self, catalog: &Catalog, session: &Session) -> Result<(), AdapterError> {
         if self.transient_revision == catalog.transient_revision() {
             return Ok(());
         }
@@ -845,6 +846,16 @@ impl PlanValidity {
                 )));
             }
         }
+
+        if let Some(create_sql) = &self.create_sql {
+            let wall_time = to_datetime((catalog.config().now)());
+            let pcx = PlanContext::new(wall_time);
+            let conn_catalog = catalog.state().for_session(session);
+            if let Err(e) = CatalogState::parse_plan(create_sql, Some(&pcx), &conn_catalog) {
+                return Err(AdapterError::ChangedPlan(e.to_string()));
+            }
+        }
+
         if catalog
             .try_get_role(&self.role_metadata.current_role)
             .is_none()

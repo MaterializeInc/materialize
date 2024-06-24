@@ -362,6 +362,7 @@ impl Coordinator {
             dependency_ids: source_ids.clone(),
             cluster_id: Some(cluster.id()),
             replica_id: target_replica,
+            create_sql: None,
             role_metadata: session.role_metadata().clone(),
         };
 
