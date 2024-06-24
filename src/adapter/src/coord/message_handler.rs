@@ -41,9 +41,7 @@ use crate::coord::{
     AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
-use crate::session::Session;
 use crate::telemetry::{EventDetails, SegmentClientExt};
-use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
@@ -752,19 +750,13 @@ impl Coordinator {
                 new_process_status,
             );
 
-            self.catalog_transact(
-                None::<&Session>,
-                vec![
-                    catalog::Op::WeirdBuiltinTableUpdates {
-                        builtin_table_update: builtin_table_retraction,
-                    },
-                    catalog::Op::WeirdBuiltinTableUpdates {
-                        builtin_table_update: builtin_table_addition,
-                    },
-                ],
-            )
-            .await
-            .unwrap_or_terminate("updating cluster status cannot fail");
+            let builtin_table_updates = vec![builtin_table_retraction, builtin_table_addition];
+
+            self.builtin_table_update()
+                .execute(builtin_table_updates)
+                .await
+                .instrument(info_span!("coord::message_cluster_event::table_updates"))
+                .await;
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");
