@@ -1594,9 +1594,32 @@ impl<'a> SubsourceResolver {
     }
 }
 
+/// A decoder for [`Row`]s within [`SourceData`].
+///
+/// This type exists as a wrapper around [`RowColumnarDecoder`] to handle the
+/// case where the [`RelationDesc`] we're encoding with has no columns. See
+/// [`SourceDataRowColumnarEncoder`] for more details.
+#[derive(Debug)]
+pub enum SourceDataRowColumnarDecoder {
+    Row(RowColumnarDecoder),
+    EmptyRow,
+}
+
+impl SourceDataRowColumnarDecoder {
+    pub fn decode(&self, idx: usize, row: &mut Row) {
+        match self {
+            SourceDataRowColumnarDecoder::Row(decoder) => decoder.decode(idx, row),
+            SourceDataRowColumnarDecoder::EmptyRow => {
+                // Create a packer just to clear the Row.
+                row.packer();
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SourceDataColumnarDecoder {
-    row_decoder: RowColumnarDecoder,
+    row_decoder: SourceDataRowColumnarDecoder,
     err_decoder: BinaryArray,
 }
 
@@ -1612,16 +1635,25 @@ impl SourceDataColumnarDecoder {
             anyhow::bail!("SourceData should only have two fields, found {arrays:?}");
         }
 
-        let rows = arrays[0]
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .ok_or_else(|| anyhow::anyhow!("expected StructArray, found {:?}", arrays[0]))?;
         let errs = arrays[1]
             .as_any()
             .downcast_ref::<BinaryArray>()
             .ok_or_else(|| anyhow::anyhow!("expected BinaryArray, found {:?}", arrays[1]))?;
 
-        let row_decoder = RowColumnarDecoder::new(rows.clone(), desc)?;
+        let row_decoder = match arrays[0].data_type() {
+            arrow::datatypes::DataType::Struct(_) => {
+                let rows = arrays[0]
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("expected StructArray, found {:?}", arrays[0])
+                    })?;
+                let decoder = RowColumnarDecoder::new(rows.clone(), desc)?;
+                SourceDataRowColumnarDecoder::Row(decoder)
+            }
+            arrow::datatypes::DataType::Null => SourceDataRowColumnarDecoder::EmptyRow,
+            other => anyhow::bail!("expected Struct or Null Array, found {other:?}"),
+        };
 
         Ok(SourceDataColumnarDecoder {
             row_decoder,
@@ -1632,8 +1664,11 @@ impl SourceDataColumnarDecoder {
 
 impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
     fn decode(&self, idx: usize, val: &mut SourceData) {
-        let row_null = self.row_decoder.is_null(idx);
         let err_null = self.err_decoder.is_null(idx);
+        let row_null = match &self.row_decoder {
+            SourceDataRowColumnarDecoder::Row(decoder) => decoder.is_null(idx),
+            SourceDataRowColumnarDecoder::EmptyRow => !err_null,
+        };
 
         match (row_null, err_null) {
             (true, false) => {
@@ -1660,25 +1695,60 @@ impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
     }
 
     fn is_null(&self, idx: usize) -> bool {
-        let row_null = self.row_decoder.is_null(idx);
         let err_null = self.err_decoder.is_null(idx);
+        let row_null = match &self.row_decoder {
+            SourceDataRowColumnarDecoder::Row(decoder) => decoder.is_null(idx),
+            SourceDataRowColumnarDecoder::EmptyRow => !err_null,
+        };
+        assert!(!err_null || !row_null, "SourceData should never be null!");
 
-        let is_null = row_null && err_null;
-        debug_assert!(!is_null);
+        false
+    }
+}
 
-        is_null
+/// An encoder for [`Row`]s within [`SourceData`].
+///
+/// This type exists as a wrapper around [`RowColumnarEncoder`] to support
+/// encoding empty [`Row`]s. A [`RowColumnarEncoder`] finishes as a
+/// [`StructArray`] which is required to have at least one column, and thus
+/// cannot support empty [`Row`]s.
+#[derive(Debug)]
+pub enum SourceDataRowColumnarEncoder {
+    Row(RowColumnarEncoder),
+    EmptyRow,
+}
+
+impl SourceDataRowColumnarEncoder {
+    pub fn append(&mut self, row: &Row) {
+        match self {
+            SourceDataRowColumnarEncoder::Row(encoder) => encoder.append(row),
+            SourceDataRowColumnarEncoder::EmptyRow => assert_eq!(row.iter().count(), 0),
+        }
+    }
+
+    pub fn append_null(&mut self) {
+        match self {
+            SourceDataRowColumnarEncoder::Row(encoder) => encoder.append_null(),
+            SourceDataRowColumnarEncoder::EmptyRow => (),
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct SourceDataColumnarEncoder {
-    row_encoder: RowColumnarEncoder,
+    row_encoder: SourceDataRowColumnarEncoder,
     err_encoder: BinaryBuilder,
 }
 
 impl SourceDataColumnarEncoder {
     pub fn new(desc: &RelationDesc) -> Self {
-        let row_encoder = RowColumnarEncoder::new(desc);
+        let row_encoder = match RowColumnarEncoder::new(desc) {
+            Some(encoder) => SourceDataRowColumnarEncoder::Row(encoder),
+            None => {
+                assert!(desc.typ().columns().is_empty());
+                SourceDataRowColumnarEncoder::EmptyRow
+            }
+        };
         let err_encoder = BinaryBuilder::new();
 
         SourceDataColumnarEncoder {
@@ -1718,14 +1788,17 @@ impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
             mut err_encoder,
         } = self;
 
-        let row_column = row_encoder.finish();
         let err_column = BinaryBuilder::finish(&mut err_encoder);
+        let row_column: Arc<dyn Array> = match row_encoder {
+            SourceDataRowColumnarEncoder::Row(encoder) => Arc::new(encoder.finish()),
+            SourceDataRowColumnarEncoder::EmptyRow => Arc::new(NullArray::new(err_column.len())),
+        };
 
         let fields = vec![
             Field::new("ok", row_column.data_type().clone(), true),
             Field::new("err", err_column.data_type().clone(), true),
         ];
-        let arrays: Vec<Arc<dyn Array>> = vec![Arc::new(row_column), Arc::new(err_column)];
+        let arrays: Vec<Arc<dyn Array>> = vec![row_column, Arc::new(err_column)];
 
         StructArray::new(Fields::from(fields), arrays, None)
     }

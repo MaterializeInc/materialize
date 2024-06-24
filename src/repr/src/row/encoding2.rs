@@ -615,10 +615,10 @@ impl DatumColumnEncoder {
                 let offsets = OffsetBuffer::<i32>::from_lengths(lengths.iter().copied());
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
 
-                let key_field =
-                    Arc::new(Field::new("key", keys.data_type().clone(), nulls.is_some()));
-                let val_field =
-                    Arc::new(Field::new("val", vals.data_type().clone(), nulls.is_some()));
+                // The keys and values in a Map can never be null, instead a
+                // field being null is maintained by the higher level MapArray.
+                let key_field = Arc::new(Field::new("key", keys.data_type().clone(), false));
+                let val_field = Arc::new(Field::new("val", vals.data_type().clone(), false));
                 let fields = Fields::from(vec![Arc::clone(&key_field), Arc::clone(&val_field)]);
                 let entries = StructArray::new(fields, vec![Arc::new(keys), vals], None);
 
@@ -980,7 +980,8 @@ impl Schema2<Row> for RelationDesc {
     }
 
     fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
-        Ok(RowColumnarEncoder::new(self))
+        RowColumnarEncoder::new(self)
+            .ok_or_else(|| anyhow::anyhow!("Cannot encode a RelationDesc with no columns"))
     }
 }
 
@@ -992,8 +993,10 @@ pub struct RowColumnarDecoder {
 }
 
 impl RowColumnarDecoder {
-    /// Creates a [`RowColumnarDecoder`] that decodes from the provided [`StructArray`] if the
-    /// schema of the [`StructArray`] matches that of the provided [`RelationDesc`].
+    /// Creates a [`RowColumnarDecoder`] that decodes from the provided [`StructArray`].
+    ///
+    /// Returns an error if the schema of the [`StructArray`] does not match
+    /// the provided [`RelationDesc`].
     pub fn new(col: StructArray, desc: &RelationDesc) -> Result<Self, anyhow::Error> {
         let inner_columns = col.columns();
         let desc_columns = desc.typ().columns();
@@ -1045,8 +1048,21 @@ pub struct RowColumnarEncoder {
 }
 
 impl RowColumnarEncoder {
-    pub fn new(desc: &RelationDesc) -> Self {
-        let encoders = desc
+    /// Creates a [`RowColumnarEncoder`] for the provided [`RelationDesc`].
+    ///
+    /// Returns `None` if the provided [`RelationDesc`] has no columns.
+    ///
+    /// # Note
+    /// Internally we represent a [`Row`] as a [`StructArray`] which is
+    /// required to have at least one field. Instead of handling this case by
+    /// adding some special "internal" column we let a higher level encoder
+    /// (e.g. `SourceDataColumnarEncoder`) handle this case.
+    pub fn new(desc: &RelationDesc) -> Option<Self> {
+        if desc.typ().columns().is_empty() {
+            return None;
+        }
+
+        let encoders: Vec<_> = desc
             .typ()
             .columns()
             .iter()
@@ -1059,13 +1075,14 @@ impl RowColumnarEncoder {
                 }
             })
             .collect();
-        let col_names = desc.iter_names().map(|name| name.as_str().into()).collect();
+        let col_names: Vec<_> = desc.iter_names().map(|name| name.as_str().into()).collect();
+        assert_eq!(encoders.len(), col_names.len());
 
-        RowColumnarEncoder {
+        Some(RowColumnarEncoder {
             encoders,
             col_names,
             nullability: BooleanBufferBuilder::new(100),
-        }
+        })
     }
 }
 
