@@ -85,6 +85,7 @@ impl Coordinator {
             cluster_id: Some(plan.id.clone()),
             replica_id: None,
             role_metadata: session.role_metadata().clone(),
+            ddl: true,
         };
         Ok(ClusterStage::Alter(AlterCluster { validity, plan }))
     }

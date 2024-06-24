@@ -829,6 +829,7 @@ pub struct PlanValidity {
     cluster_id: Option<ComputeInstanceId>,
     replica_id: Option<ReplicaId>,
     role_metadata: RoleMetadata,
+    ddl: bool,
 }
 
 impl PlanValidity {
@@ -837,6 +838,11 @@ impl PlanValidity {
         if self.transient_revision == catalog.transient_revision() {
             return Ok(());
         }
+
+        if self.ddl {
+            return Err(AdapterError::DDLTransactionRace);
+        }
+
         // If the transient revision changed, we have to recheck. If successful, bump the revision
         // so next check uses the above fast path.
         if let Some(cluster_id) = self.cluster_id {

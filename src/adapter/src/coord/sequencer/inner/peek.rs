@@ -374,6 +374,7 @@ impl Coordinator {
             cluster_id: Some(cluster.id()),
             replica_id: target_replica,
             role_metadata: session.role_metadata().clone(),
+            ddl: true,
         };
 
         Ok(PeekStage::LinearizeTimestamp(PeekStageLinearizeTimestamp {

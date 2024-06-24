@@ -102,6 +102,7 @@ impl Coordinator {
             cluster_id: Some(cluster_id),
             replica_id: None,
             role_metadata: session.role_metadata().clone(),
+            ddl: false,
         };
         Ok(ExplainTimestampStage::Optimize(ExplainTimestampOptimize {
             validity,

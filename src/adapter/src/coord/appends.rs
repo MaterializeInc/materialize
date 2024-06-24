@@ -137,6 +137,7 @@ macro_rules! guard_write_critical_section {
                         cluster_id: None,
                         replica_id: None,
                         role_metadata,
+                        ddl: false,
                     },
                 }));
                 return;

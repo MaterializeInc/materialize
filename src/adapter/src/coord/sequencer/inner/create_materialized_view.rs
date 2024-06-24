@@ -360,6 +360,7 @@ impl Coordinator {
             cluster_id: Some(*cluster_id),
             replica_id: None,
             role_metadata: session.role_metadata().clone(),
+            ddl: true,
         };
 
         // Check whether we can read all inputs at all the REFRESH AT times.
