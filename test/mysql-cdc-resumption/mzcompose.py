@@ -450,6 +450,8 @@ def corrupt_bin_log_and_add_sub_source(c: Composition) -> None:
 
 
 def _corrupt_bin_log(c: Composition) -> None:
+    run_testdrive_files(c, "wait-for-snapshot.td")
+
     c.kill("materialized")
 
     mysql_conn = create_mysql_connection(c)
