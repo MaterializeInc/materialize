@@ -10,8 +10,6 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-alter system set enable_mysql_source = true
 
 #
 # Test ALTER TABLE -- source will error out for tables which existed when the source was created

@@ -14,17 +14,17 @@
 #
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = false
+ALTER SYSTEM SET max_mysql_connections = 0
 
 ! CREATE CONNECTION mysq TO MYSQL (
     HOST mysql,
     USER root,
     PASSWORD SECRET mysqlpass
   )
-contains: Create a MySQL connection or source is not supported
+contains:creating MySQL Connection would violate max_mysql_connections limit (desired: 1, limit: 0, current: 0)
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
+ALTER SYSTEM SET max_mysql_connections = 1000
 
 #
 # Success create

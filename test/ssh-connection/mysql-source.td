@@ -9,8 +9,6 @@
 
 # Test creating a MySQL source using SSH
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 

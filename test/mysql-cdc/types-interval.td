@@ -9,8 +9,6 @@
 
 # MySQL specifies that pg type INTERVAL is mapped to TIME in MySQL.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 #
 # Test the INTERVAL type

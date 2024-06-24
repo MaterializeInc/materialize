@@ -17,8 +17,6 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
 
 > CREATE CONNECTION mysqc TO MYSQL (
     HOST mysql,
