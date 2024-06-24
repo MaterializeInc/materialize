@@ -17,7 +17,7 @@ use arrow::array::{BinaryArray, FixedSizeBinaryArray, StringArray};
 use chrono::{DateTime, NaiveTime};
 use dec::OrderedDecimal;
 use mz_persist_types::columnar::FixedSizeCodec;
-use mz_persist_types::stats::bytes::{AtomicBytesStats, AtomicBytesStatsKind, BytesStats};
+use mz_persist_types::stats::bytes::{BytesStats, FixedSizeBytesStats, FixedSizeBytesStatsKind};
 use mz_persist_types::stats::json::{JsonMapElementStats, JsonStats};
 use mz_persist_types::stats::primitive::PrimitiveStats;
 use mz_persist_types::stats::{ColumnStatKinds, ColumnStats, PrimitiveStatsVariants};
@@ -35,7 +35,7 @@ use crate::adt::timestamp::CheckedTimestamp;
 use crate::row::ProtoDatum;
 use crate::{Datum, Row, ScalarType};
 
-/// Returns a `(lower, upper)` bound from the provided [`ColumnStatsKinds`], if applicable.
+/// Returns a `(lower, upper)` bound from the provided [`ColumnStatKinds`], if applicable.
 pub fn col_values<'a>(
     typ: &ScalarType,
     stats: &'a ColumnStatKinds,
@@ -92,10 +92,10 @@ pub fn col_values<'a>(
         ),
         (
             ScalarType::Numeric { .. },
-            ColumnStatKinds::Bytes(BytesStats::Atomic(AtomicBytesStats {
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(FixedSizeBytesStats {
                 lower,
                 upper,
-                kind: Some(AtomicBytesStatsKind::PackedNumeric),
+                kind: FixedSizeBytesStatsKind::PackedNumeric,
             })),
         ) => {
             let lower = PackedNumeric::from_bytes(lower)
@@ -131,7 +131,7 @@ pub fn col_values<'a>(
                 .upper()
                 .map(|x| Datum::Date(Date::from_pg_epoch(x).expect("failed to roundtrip Date"))),
         ),
-        (ScalarType::Time, ColumnStatKinds::Bytes(BytesStats::Atomic(stats))) => {
+        (ScalarType::Time, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
             let lower = PackedNaiveTime::from_bytes(&stats.lower)
                 .expect("failed to roundtrip NaiveTime")
                 .into_value();
@@ -181,7 +181,7 @@ pub fn col_values<'a>(
                 .upper()
                 .map(|x| Datum::MzTimestamp(crate::Timestamp::from(x))),
         ),
-        (ScalarType::Interval, ColumnStatKinds::Bytes(BytesStats::Atomic(stats))) => {
+        (ScalarType::Interval, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
             let lower = PackedInterval::from_bytes(&stats.lower)
                 .map(|x| x.into_value())
                 .expect("failed to roundtrip Interval");
@@ -190,7 +190,7 @@ pub fn col_values<'a>(
                 .expect("failed to roundtrip Interval");
             (Some(Datum::Interval(lower)), Some(Datum::Interval(upper)))
         }
-        (ScalarType::Uuid, ColumnStatKinds::Bytes(BytesStats::Atomic(stats))) => {
+        (ScalarType::Uuid, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
             let lower = Uuid::from_slice(&stats.lower).expect("failed to roundtrip Uuid");
             let upper = Uuid::from_slice(&stats.upper).expect("failed to roundtrip Uuid");
             (Some(Datum::Uuid(lower)), Some(Datum::Uuid(upper)))
@@ -266,10 +266,10 @@ impl ColumnarStatsBuilder<OrderedDecimal<Numeric>> for NumericStatsBuilder {
     where
         Self::FinishedStats: Sized,
     {
-        BytesStats::Atomic(AtomicBytesStats {
+        BytesStats::FixedSize(FixedSizeBytesStats {
             lower: PackedNumeric::from_value(self.lower.0).as_bytes().to_vec(),
             upper: PackedNumeric::from_value(self.upper.0).as_bytes().to_vec(),
-            kind: Some(AtomicBytesStatsKind::PackedNumeric),
+            kind: FixedSizeBytesStatsKind::PackedNumeric,
         })
     }
 }
@@ -335,10 +335,10 @@ impl ColumnarStatsBuilder<NaiveTime> for NaiveTimeStatsBuilder {
     where
         Self::FinishedStats: Sized,
     {
-        BytesStats::Atomic(AtomicBytesStats {
+        BytesStats::FixedSize(FixedSizeBytesStats {
             lower: PackedNaiveTime::from_value(self.lower).as_bytes().to_vec(),
             upper: PackedNaiveTime::from_value(self.upper).as_bytes().to_vec(),
-            kind: Some(AtomicBytesStatsKind::PackedTime),
+            kind: FixedSizeBytesStatsKind::PackedTime,
         })
     }
 }
@@ -404,10 +404,10 @@ impl ColumnarStatsBuilder<Interval> for IntervalStatsBuilder {
     where
         Self::FinishedStats: Sized,
     {
-        BytesStats::Atomic(AtomicBytesStats {
+        BytesStats::FixedSize(FixedSizeBytesStats {
             lower: PackedInterval::from_value(self.lower).as_bytes().to_vec(),
             upper: PackedInterval::from_value(self.upper).as_bytes().to_vec(),
-            kind: Some(AtomicBytesStatsKind::PackedInterval),
+            kind: FixedSizeBytesStatsKind::PackedInterval,
         })
     }
 }
@@ -465,10 +465,10 @@ impl ColumnarStatsBuilder<Uuid> for UuidStatsBuilder {
     where
         Self::FinishedStats: Sized,
     {
-        BytesStats::Atomic(AtomicBytesStats {
+        BytesStats::FixedSize(FixedSizeBytesStats {
             lower: self.lower.as_bytes().to_vec(),
             upper: self.upper.as_bytes().to_vec(),
-            kind: Some(AtomicBytesStatsKind::Uuid),
+            kind: FixedSizeBytesStatsKind::Uuid,
         })
     }
 }

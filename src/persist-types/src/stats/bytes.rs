@@ -65,11 +65,11 @@ impl RustType<ProtoAtomicBytesStats> for AtomicBytesStats {
 #[derive(Debug, Clone)]
 pub struct FixedSizeBytesStats {
     /// See [PrimitiveStats::lower]
-    lower: Vec<u8>,
+    pub lower: Vec<u8>,
     /// See [PrimitiveStats::upper]
-    upper: Vec<u8>,
+    pub upper: Vec<u8>,
     /// The kind of data these stats represent.
-    kind: FixedSizeBytesStatsKind,
+    pub kind: FixedSizeBytesStatsKind,
 }
 
 impl FixedSizeBytesStats {
