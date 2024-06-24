@@ -20,7 +20,7 @@ _schema&lowbar;name_ | The schema to show connections from. If omitted, connecti
 
 ## Examples
 
-```sql
+```mzsql
 SHOW CONNECTIONS;
 ```
 
@@ -31,7 +31,7 @@ SHOW CONNECTIONS;
  postgres_connection | postgres
 ```
 
-```sql
+```mzsql
 SHOW CONNECTIONS LIKE 'kafka%';
 ```
 

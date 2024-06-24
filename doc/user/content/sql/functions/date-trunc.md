@@ -25,7 +25,7 @@ _val_ | [`timestamp`], [`timestamp with time zone`], [`interval`] | The value yo
 
 ## Examples
 
-```sql
+```mzsql
 SELECT date_trunc('hour', TIMESTAMP '2019-11-26 15:56:46.241150') AS hour_trunc;
 ```
 ```nofmt
@@ -34,7 +34,7 @@ SELECT date_trunc('hour', TIMESTAMP '2019-11-26 15:56:46.241150') AS hour_trunc;
  2019-11-26 15:00:00.000000000
 ```
 
-```sql
+```mzsql
 SELECT date_trunc('year', TIMESTAMP '2019-11-26 15:56:46.241150') AS year_trunc;
 ```
 ```nofmt
@@ -43,7 +43,7 @@ SELECT date_trunc('year', TIMESTAMP '2019-11-26 15:56:46.241150') AS year_trunc;
  2019-01-01 00:00:00.000000000
 ```
 
-```sql
+```mzsql
 SELECT date_trunc('millennium', INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS millennium_trunc;
 ```
 ```nofmt

@@ -35,7 +35,7 @@ Name     | Values                 | Default value | Description
 
 #### Subscribing to a view with binary output
 
-```sql
+```mzsql
 COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
 ```
 
@@ -156,7 +156,7 @@ Materialize type | Arrow extension name | [Arrow type](https://github.com/apache
 {{< tabs >}}
 {{< tab "Parquet">}}
 
-```sql
+```mzsql
 COPY some_view TO 's3://mz-to-snow/parquet/'
 WITH (
     AWS CONNECTION = aws_role_assumption,
@@ -168,7 +168,7 @@ WITH (
 
 {{< tab "CSV">}}
 
-```sql
+```mzsql
 COPY some_view TO 's3://mz-to-snow/csv/'
 WITH (
     AWS CONNECTION = aws_role_assumption,

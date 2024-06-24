@@ -61,10 +61,10 @@ current configuration parameter defaults for a role, see [`mz_role_parameters`](
 
 #### Altering the attributes of a role
 
-```sql
+```mzsql
 ALTER ROLE rj INHERIT;
 ```
-```sql
+```mzsql
 SELECT name, inherit FROM mz_roles WHERE name = 'rj';
 ```
 ```nofmt
@@ -73,7 +73,7 @@ rj  true
 
 #### Setting configuration parameters for a role
 
-```sql
+```mzsql
 SHOW cluster;
 quickstart
 
@@ -93,7 +93,7 @@ quickstart
 ```
 
 ##### Non-inheritance
-```sql
+```mzsql
 CREATE ROLE team;
 CREATE ROLE member;
 

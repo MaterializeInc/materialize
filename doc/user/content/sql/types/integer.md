@@ -90,7 +90,7 @@ From | Required context
 
 ## Examples
 
-```sql
+```mzsql
 SELECT 123::integer AS int_v;
 ```
 ```nofmt
@@ -101,7 +101,7 @@ SELECT 123::integer AS int_v;
 
 <hr/>
 
-```sql
+```mzsql
 SELECT 1.23::integer AS int_v;
 ```
 ```nofmt

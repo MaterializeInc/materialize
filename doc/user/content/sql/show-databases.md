@@ -20,10 +20,10 @@ menu:
 
 ## Examples
 
-```sql
+```mzsql
 CREATE DATABASE my_db;
 ```
-```sql
+```mzsql
 SHOW DATABASES;
 ```
 ```nofmt

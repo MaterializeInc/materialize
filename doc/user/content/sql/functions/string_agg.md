@@ -42,14 +42,14 @@ Instead, we recommend that you materialize all components required for the
 `string_agg` on top of that. That pattern is illustrated in the following
 statements:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
 CREATE VIEW bar AS SELECT string_agg(foo_view.bar, ',');
 ```
 
 ## Examples
 
-```sql
+```mzsql
 SELECT string_agg(column1, column2)
 FROM (
     VALUES ('z', ' !'), ('a', ' @'), ('m', ' #')
@@ -63,7 +63,7 @@ FROM (
 
 Note that in the following example, the `ORDER BY` of the subquery feeding into `string_agg` gets ignored.
 
-```sql
+```mzsql
 SELECT column1, column2
 FROM (
     VALUES ('z', ' !'), ('a', ' @'), ('m', ' #')
@@ -77,7 +77,7 @@ FROM (
  a       |  @
 ```
 
-```sql
+```mzsql
 SELECT string_agg(column1, column2)
 FROM (
     SELECT column1, column2
@@ -92,6 +92,6 @@ FROM (
  a #m !z
 ```
 
-```sql
+```mzsql
 SELECT string_agg(b, ',' ORDER BY a DESC) FROM table;
 ```

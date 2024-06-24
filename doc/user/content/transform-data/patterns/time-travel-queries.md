@@ -129,7 +129,7 @@ state). This will allow you to resume using the retained history upstream.
 1. The first time you start the subscription, run the following
 continuous query against Materialize in your application code:
 
-   ```sql
+   ```mzsql
    SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT true);
    ```
 
@@ -146,7 +146,7 @@ is complete, so you can:
 1. To resume the subscription in subsequent restarts,
 use the following continuous query against Materialize in your application code:
 
-   ```sql
+   ```mzsql
    SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT false) AS OF <last_progress_mz_timestamp>;
    ```
 
@@ -185,7 +185,7 @@ To set a history retention period for an object, use the `RETAIN HISTORY`
 option, which accepts positive [interval](/sql/types/interval/) values
 (e.g. `'1hr'`):
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW winning_bids
 WITH (RETAIN HISTORY FOR '1hr') AS
 SELECT auction_id,
@@ -200,7 +200,7 @@ WHERE end_time < mz_now();
 
 To adjust the history retention period for an object, use `ALTER`:
 
-```sql
+```mzsql
 ALTER MATERIALIZED VIEW winning_bids SET (RETAIN HISTORY FOR '2hr');
 ```
 
@@ -209,7 +209,7 @@ ALTER MATERIALIZED VIEW winning_bids SET (RETAIN HISTORY FOR '2hr');
 To see what history retention period has been configured for an object,
 look up the object in the [`mz_internal.mz_history_retention_strategies`](/sql/system-catalog/mz_internal/#mz_history_retention_strategies) catalog table.
 
-```sql
+```mzsql
 SELECT
     d.name AS database_name,
     s.name AS schema_name,
@@ -234,6 +234,6 @@ WHERE mv.name = 'winning_bids';
 
 To disable history retention, reset the `RETAIN HISTORY` option:
 
-```sql
+```mzsql
 ALTER MATERIALIZED VIEW winning_bids RESET (RETAIN HISTORY);
 ```

@@ -53,7 +53,7 @@ _origin_ | Must be the same as _source_ | Align bins to this value.
 
 ## Examples
 
-```sql
+```mzsql
 SELECT
   date_bin(
     '15 minutes',
@@ -67,7 +67,7 @@ SELECT
  2001-02-16 20:35:00
 ```
 
-```sql
+```mzsql
 SELECT
   str,
   "interval",

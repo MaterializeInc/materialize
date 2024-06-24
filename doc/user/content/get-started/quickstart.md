@@ -45,7 +45,7 @@ purchase items only to quickly resell them for profit.
 1. Let's start by kicking off the built-in [auction load generator](/sql/create-source/load-generator/#auction), so you have some data to work
 with.
 
-    ```sql
+    ```mzsql
     CREATE SOURCE auction_house
     FROM LOAD GENERATOR AUCTION
     (TICK INTERVAL '1s', AS OF 100000)
@@ -53,7 +53,7 @@ with.
     ```
 1. Use the [`SHOW SOURCES`](/sql/show-sources/) command to get an idea of the data being generated:
 
-    ```sql
+    ```mzsql
     SHOW SOURCES;
     ```
     <p></p>
@@ -75,7 +75,7 @@ with.
 
 1. Before moving on, get a sense for the data you'll be working with:
 
-    ```sql
+    ```mzsql
     SELECT * FROM auctions LIMIT 1;
     ```
     <p></p>
@@ -86,7 +86,7 @@ with.
       1 |   1824 | Best Pizza in Town | 2023-09-10 21:24:54.838+00
     ```
 
-    ```sql
+    ```mzsql
     SELECT * FROM bids LIMIT 1;
     ```
     <p></p>
@@ -107,7 +107,7 @@ with.
 joins data from `auctions` and `bids` to get the bid with the highest `amount`
 for each auction at its `end_time`.
 
-    ```sql
+    ```mzsql
     CREATE VIEW winning_bids AS
     SELECT DISTINCT ON (auctions.id) bids.*, auctions.item, auctions.seller
     FROM auctions, bids
@@ -130,7 +130,7 @@ for each auction at its `end_time`.
 yet! Querying the view re-runs the embedded statement, which comes at some cost
 on growing amounts of data.
 
-    ```sql
+    ```mzsql
     SELECT * FROM winning_bids
     WHERE item = 'Best Pizza in Town'
     ORDER BY bid_time DESC;
@@ -142,7 +142,7 @@ on growing amounts of data.
 1. Next, try creating several indexes on the `winning_bids` view using columns
 that can help optimize operations like point lookups and joins.
 
-    ```sql
+    ```mzsql
     CREATE INDEX wins_by_item ON winning_bids (item);
     CREATE INDEX wins_by_bidder ON winning_bids (buyer);
     CREATE INDEX wins_by_seller ON winning_bids (seller);
@@ -156,7 +156,7 @@ that can help optimize operations like point lookups and joins.
 indexes (e.g., with a point lookup), things should be a whole lot more
 interactive.
 
-    ```sql
+    ```mzsql
     SELECT * FROM winning_bids WHERE item = 'Best Pizza in Town' ORDER BY bid_time DESC;
     ```
 
@@ -172,7 +172,7 @@ interactive.
 1. Create a view that detects when a user wins an auction as a bidder, and then
 is identified as a seller for an item at a higher price.
 
-    ```sql
+    ```mzsql
     CREATE VIEW fraud_activity AS
     SELECT w2.seller,
            w2.item AS seller_item,
@@ -191,7 +191,7 @@ is identified as a seller for an item at a higher price.
 
     Aha! You can now catch any auction flippers in real time, based on the results of this view.
 
-    ```sql
+    ```mzsql
     SELECT * FROM fraud_activity LIMIT 100;
     ```
 
@@ -205,7 +205,7 @@ is identified as a seller for an item at a higher price.
 1. Create a [**table**](/sql/create-table/) that allows you to manually flag
 fraudulent accounts.
 
-    ```sql
+    ```mzsql
     CREATE TABLE fraud_accounts (id bigint);
     ```
 
@@ -215,7 +215,7 @@ fraudulent accounts.
 1. To see results change over time, let's `SUBSCRIBE` to a query that returns
 the Top 5 auction winners, overall.
 
-   ```sql
+   ```mzsql
    SUBSCRIBE TO (
      SELECT buyer, count(*)
      FROM winning_bids
@@ -232,7 +232,7 @@ the Top 5 auction winners, overall.
 the `SUBSCRIBE`, and mark them as fraudulent by adding them to the
 `fraud_accounts` table.
 
-   ```sql
+   ```mzsql
    INSERT INTO fraud_accounts VALUES (<id>);
    ```
 
@@ -256,7 +256,7 @@ operational use case: profit & loss alerts.
 
 1. Create a view to track the sales and purchases of each auction house user.
 
-    ```sql
+    ```mzsql
     CREATE VIEW funds_movement AS
     SELECT id, SUM(credits) as credits, SUM(debits) as debits
     FROM (
@@ -277,13 +277,13 @@ operational use case: profit & loss alerts.
 spot that results are correct and consistent. As an example, the total credit
 and total debit amounts should always add up.
 
-    ```sql
+    ```mzsql
     SELECT SUM(credits), SUM(debits) FROM funds_movement;
     ```
 
     You can also `SUBSCRIBE` to this query, and watch the sums change in lock step as auctions close.
 
-    ```sql
+    ```mzsql
     SUBSCRIBE TO (
         SELECT SUM(credits), SUM(debits) FROM funds_movement
     );
@@ -297,7 +297,7 @@ As the auction house operator, you should now have a high degree of confidence t
 
 Once you’re done exploring the auction house source, remember to clean up your environment:
 
-```sql
+```mzsql
 DROP SOURCE auction_house CASCADE;
 
 DROP TABLE fraud_accounts;

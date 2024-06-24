@@ -18,7 +18,7 @@ _source&lowbar;name_ | The source you want use. You can find available source na
 
 ## Examples
 
-```sql
+```mzsql
 SHOW CREATE SOURCE market_orders_raw;
 ```
 

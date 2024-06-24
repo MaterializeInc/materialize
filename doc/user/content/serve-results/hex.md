@@ -41,7 +41,7 @@ This guide walks you through the steps required to use the collaborative data no
 1. Create a new SQL cell.
 
 2. Inside the cell, select the new **Materialize** connection and paste the following query:
-    ```sql
+    ```mzsql
     SELECT
         number,
         row_num

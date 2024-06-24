@@ -124,7 +124,7 @@ databases, or schemas. To modify the default privileges available to all other
 roles in a Materialize region, you can use the [`ALTER DEFAULT PRIVILEGES`](/sql/alter-default-privileges/)
 command.
 
-```sql
+```mzsql
 # Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
 SHOW ROLES;
 
@@ -151,7 +151,7 @@ decide to roll out a RBAC strategy for your Materialize organization.
 As an alternative, you can approximate the set of privileges of a _superuser_ by
 instead modifying the default privileges to be wildly permissive:
 
-```sql
+```mzsql
 -- Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
 SHOW ROLES;
 
@@ -192,7 +192,7 @@ If your Materialize user base is small and you don't expect it to grow
 significantly over time, you can grant and revoke privileges directly to/from
 user roles.
 
-```sql
+```mzsql
 -- Use SHOW ROLES to list existing roles in the system.
 SHOW ROLES;
 
@@ -222,7 +222,7 @@ As an example, Data Engineers might need a larger scope of permissions to create
 and evolve the data model, while Data Analysts might only need read permissions
 to query Materialize using BI tools.
 
-```sql
+```mzsql
 -- Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
 SHOW ROLES;
 
@@ -283,7 +283,7 @@ roles from inheriting it. This means that users have to explicitly run e.g.,
 `SET ROLE production` before being able to run any commands in the specified
 environment.
 
-```sql
+```mzsql
 -- Step 1: create the dev and prod roles
 CREATE ROLE dev;
 CREATE ROLE prod NOINHERIT;

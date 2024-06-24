@@ -60,13 +60,13 @@ binary logging.
    reasonable value. To check the current value of the [`binlog retention hours`](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-stored-proc-configuring.html#mysql_rds_set_configuration-usage-notes.binlog-retention-hours)
    configuration parameter, connect to your RDS instance and run:
 
-   ```sql
+   ```mysql
    CALL mysql.rds_show_configuration;
    ```
 
    If the value returned is `NULL`, or less than `168` (i.e. 7 days), run:
 
-   ```sql
+   ```mysql
    CALL mysql.rds_set_configuration('binlog retention hours', 168);
    ```
 
@@ -78,12 +78,12 @@ binary logging.
 1. To validate that all configuration parameters are set to the expected values
    after the above configuration changes, run:
 
-    ```sql
+    ```mysql
     -- Validate "binlog retention hours" configuration parameter
     CALL mysql.rds_show_configuration;
     ```
 
-    ```sql
+    ```mysql
     -- Validate parameter group configuration parameters
     SHOW VARIABLES WHERE variable_name IN (
       'log_bin',
@@ -125,7 +125,7 @@ Select the option that works best for you.
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
-    ```sql
+    ```mzsql
     SELECT * FROM mz_egress_ips;
     ```
 
@@ -171,7 +171,7 @@ configuration of resources for an SSH tunnel. For more details, see the
        SQL client connected to Materialize, get the static egress IP addresses for
        the Materialize region you are running in:
 
-       ```sql
+       ```mzsql
        SELECT * FROM mz_egress_ips;
        ```
 
@@ -232,12 +232,12 @@ available(also for PostgreSQL)."
 
 ## Step 6. Check the ingestion status
 
-{{% postgres-direct/check-the-ingestion-status %}}
+{{% mysql-direct/check-the-ingestion-status %}}
 
 ## Step 7. Right-size the cluster
 
-{{% postgres-direct/right-size-the-cluster %}}
+{{% mysql-direct/right-size-the-cluster %}}
 
 ## Next steps
 
-{{% postgres-direct/next-steps %}}
+{{% mysql-direct/next-steps %}}

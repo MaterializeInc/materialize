@@ -6,7 +6,7 @@ accordingly.
 1. Still in a SQL client connected to Materialize, use the [`ALTER CLUSTER`](/sql/alter-cluster/)
    command to downsize the cluster to `100cc`:
 
-    ```sql
+    ```mzsql
     ALTER CLUSTER ingest_mysql SET (SIZE '100cc');
     ```
 
@@ -16,7 +16,7 @@ accordingly.
 1. Use the [`SHOW CLUSTER REPLICAS`](/sql/show-cluster-replicas/) command to
    check the status of the new replica:
 
-    ```sql
+    ```mzsql
     SHOW CLUSTER REPLICAS WHERE cluster = 'ingest_mysql';
     ```
     <p></p>

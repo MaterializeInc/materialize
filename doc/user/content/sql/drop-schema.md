@@ -27,24 +27,24 @@ Before you can drop a schema, you must [drop all sources](../drop-source) and
 ## Example
 
 ### Remove a schema with no dependent objects
-```sql
+```mzsql
 SHOW SOURCES FROM my_schema;
 ```
 ```nofmt
 my_file_source
 ```
-```sql
+```mzsql
 DROP SCHEMA my_schema;
 ```
 
 ### Remove a schema with dependent objects
-```sql
+```mzsql
 SHOW SOURCES FROM my_schema;
 ```
 ```nofmt
 my_file_source
 ```
-```sql
+```mzsql
 DROP SCHEMA my_schema CASCADE;
 ```
 
@@ -52,16 +52,16 @@ DROP SCHEMA my_schema CASCADE;
 
 You can use either of the following commands:
 
-- ```sql
+- ```mzsql
   DROP SCHEMA my_schema;
   ```
-- ```sql
+- ```mzsql
   DROP SCHEMA my_schema RESTRICT;
   ```
 
 ### Do not issue an error if attempting to remove a nonexistent schema
 
-```sql
+```mzsql
 DROP SCHEMA IF EXISTS my_schema;
 ```
 

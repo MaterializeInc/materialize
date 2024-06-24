@@ -33,7 +33,7 @@ This can be used to allow multiple CDC sources, or a CDC source and system time 
 
 For example, to create two CDC sources that are joinable:
 
-```sql
+```mzsql
 CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker');
 
 CREATE SOURCE source_1
@@ -58,7 +58,7 @@ the `mz_epoch_ms` timeline.
 You **must** ensure that the `time` field's units are milliseconds since the Unix epoch.
 Joining this source to other system time sources will result in query delays until the timestamps being received are close to wall-clock `now()`.
 
-```sql
+```mzsql
 CREATE SOURCE source_3
   FROM KAFKA CONDITION kafka_conn (TOPIC 'topic-3')
   FORMAT AVRO USING SCHEMA 'schema'

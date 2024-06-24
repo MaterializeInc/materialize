@@ -9,7 +9,7 @@ status of the snapshotting process.
    [`mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses)
    table to check the overall status of your source:
 
-    ```sql
+    ```mzsql
     WITH
       source_ids AS
       (SELECT id FROM mz_sources WHERE name = 'mz_source')
@@ -37,7 +37,7 @@ status of the snapshotting process.
 2. Once the source is running, use the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
    table to check the status of the initial snapshot:
 
-    ```sql
+    ```mzsql
     WITH
       source_ids AS
       (SELECT id FROM mz_sources WHERE name = 'mz_source')

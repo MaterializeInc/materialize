@@ -70,7 +70,7 @@ custom type's properties.
 
 ### Custom `list`
 
-```sql
+```mzsql
 CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 
 SELECT '{1,2}'::int4_list::text AS custom_list;
@@ -83,7 +83,7 @@ SELECT '{1,2}'::int4_list::text AS custom_list;
 
 ### Nested custom `list`
 
-```sql
+```mzsql
 CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list);
 
 SELECT '{{1,2}}'::int4_list_list::text AS custom_nested_list;
@@ -96,7 +96,7 @@ SELECT '{{1,2}}'::int4_list_list::text AS custom_nested_list;
 
 ### Custom `map`
 
-```sql
+```mzsql
 CREATE TYPE int4_map AS MAP (KEY TYPE = text, VALUE TYPE = int4);
 
 SELECT '{a=>1}'::int4_map::text AS custom_map;
@@ -109,7 +109,7 @@ SELECT '{a=>1}'::int4_map::text AS custom_map;
 
 ### Nested custom `map`
 
-```sql
+```mzsql
 CREATE TYPE int4_map_map AS MAP (KEY TYPE = text, VALUE TYPE = int4_map);
 
 SELECT '{a=>{a=>1}}'::int4_map_map::text AS custom_nested_map;
@@ -121,7 +121,7 @@ SELECT '{a=>{a=>1}}'::int4_map_map::text AS custom_nested_map;
 ```
 
 ### Custom `row` type
-```sql
+```mzsql
 CREATE TYPE row_type AS (a int, b text);
 SELECT ROW(1, 'a')::row_type as custom_row_type;
 ```
@@ -132,7 +132,7 @@ custom_row_type
 ```
 
 ### Nested `row` type
-```sql
+```mzsql
 CREATE TYPE nested_row_type AS (a row_type, b float8);
 SELECT ROW(ROW(1, 'a'), 2.3)::nested_row_type AS custom_nested_row_type;
 ```

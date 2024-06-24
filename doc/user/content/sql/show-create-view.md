@@ -18,7 +18,7 @@ _view&lowbar;name_ | The view you want to use. You can find available view names
 
 ## Examples
 
-```sql
+```mzsql
 SHOW CREATE VIEW my_view;
 ```
 ```nofmt

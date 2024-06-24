@@ -27,7 +27,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
 
-```sql
+```mzsql
 CREATE CLUSTER webhooks_cluster (SIZE = '25cc');
 
 SET CLUSTER = webhooks_cluster;
@@ -37,7 +37,7 @@ SET CLUSTER = webhooks_cluster;
 
 To validate requests between HubSpot and Materialize, you must create a [secret](/sql/create-secret/):
 
-```sql
+```mzsql
 CREATE SECRET hubspot_webhook_secret AS '<secret_value>';
 ```
 
@@ -51,7 +51,7 @@ in Materialize to ingest data from HubSpot. By default, the source will be
 created in the active cluster; to use a different cluster, use the `IN
 CLUSTER` clause.
 
-```sql
+```mzsql
 CREATE SOURCE hubspot_source
   FROM WEBHOOK
     BODY FORMAT JSON
@@ -159,7 +159,7 @@ HubSpot, you can now query the incoming data:
 
 1. Use SQL queries to inspect and analyze the incoming data:
 
-    ```sql
+    ```mzsql
     SELECT * FROM hubspot_source LIMIT 10;
     ```
 
@@ -171,7 +171,7 @@ Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
 top of your webhook source that uses [`jsonb` operators](/sql/types/jsonb/#operators)
 to map the individual fields to columns with the required data types.
 
-```sql
+```mzsql
 CREATE VIEW parse_hubspot AS SELECT
     body->>'city' AS city,
     body->>'firstname' AS firstname,

@@ -22,7 +22,7 @@ Field | Use
 
 ## Example
 
-```sql
+```mzsql
 EXECUTE a ('a', 'b', 1 + 2)
 ```
 

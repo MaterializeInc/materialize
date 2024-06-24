@@ -16,7 +16,7 @@ cluster configured in Materialize.
 
 ## Examples
 
-```sql
+```mzsql
 SHOW CLUSTER REPLICAS;
 ```
 
@@ -27,7 +27,7 @@ SHOW CLUSTER REPLICAS;
  quickstart    | r1      | 25cc   | t     |
 ```
 
-```sql
+```mzsql
 SHOW CLUSTER REPLICAS WHERE cluster = 'quickstart';
 ```
 

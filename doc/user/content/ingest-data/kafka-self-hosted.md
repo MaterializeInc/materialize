@@ -67,7 +67,7 @@ endpoint service (step 5).
 In Materialize, create a source connection that uses the SSH tunnel connection
 you configured in the previous section:
 
-```sql
+```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
   BROKER 'broker1:9092',
   SSH TUNNEL ssh_connection
@@ -82,7 +82,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
-    ```sql
+    ```mzsql
     SELECT * FROM mz_egress_ips;
     ```
 
@@ -92,7 +92,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 1. Create a [Kafka connection](/sql/create-connection/#kafka) that references
    your Kafka cluster:
 
-    ```sql
+    ```mzsql
     CREATE SECRET kafka_password AS '<your-password>';
 
     CREATE CONNECTION kafka_connection TO KAFKA (
@@ -112,7 +112,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 The Kafka connection created in the previous section can then be reused across
 multiple [`CREATE SOURCE`](/sql/create-source/kafka/) statements:
 
-```sql
+```mzsql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT JSON;

@@ -48,7 +48,7 @@ Field    | Meaning
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 ```nofmt
@@ -57,7 +57,7 @@ SHOW SOURCES;
  postgres
  kafka
 ```
-```sql
+```mzsql
 SHOW SUBSOURCES ON pg;
 ```
 ```nofmt
@@ -67,7 +67,7 @@ SHOW SUBSOURCES ON pg;
  table1_in_postgres | subsource
  table2_in_postgres | subsource
 ```
-```sql
+```mzsql
 SHOW SUBSOURCES ON kafka;
 ```
 ```nofmt

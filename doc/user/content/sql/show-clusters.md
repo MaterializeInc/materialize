@@ -92,7 +92,7 @@ The following characteristics apply to the `mz_system` cluster:
 
 ## Examples
 
-```sql
+```mzsql
 SET CLUSTER = mz_catalog_server;
 
 SHOW CLUSTERS;
@@ -109,7 +109,7 @@ SHOW CLUSTERS;
  mz_support           |
 ```
 
-```sql
+```mzsql
 SHOW CLUSTERS LIKE 'auction_%';
 ```
 

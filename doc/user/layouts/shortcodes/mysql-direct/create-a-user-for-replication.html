@@ -6,7 +6,7 @@ user for Materialize with sufficient privileges to manage replication.
 
 1. Create a dedicated user for Materialize, if you don't already have one:
 
-   ```sql
+   ```mysql
    CREATE USER 'materialize'@'%' IDENTIFIED BY '<password>';
 
    ALTER USER 'materialize'@'%' REQUIRE SSL;
@@ -14,7 +14,7 @@ user for Materialize with sufficient privileges to manage replication.
 
 1. Grant the user permission to manage replication:
 
-   ```sql
+   ```mysql
    GRANT SELECT, RELOAD, SHOW DATABASES, REPLICATION SLAVE, REPLICATION CLIENT, LOCK TABLES ON *.* TO 'materialize'@'%';
    ```
 
@@ -24,6 +24,6 @@ user for Materialize with sufficient privileges to manage replication.
 
 1. Apply the changes:
 
-   ```sql
+   ```mysql
    FLUSH PRIVILEGES;
    ```

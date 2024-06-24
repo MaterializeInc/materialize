@@ -67,7 +67,7 @@ You can explicitly [cast](../../functions/cast) [`text`](../text) to `bytea`.
 Unless a `text` value is a [hex-formatted](#hex-format) string, casting to
 `bytea` will encode characters using UTF-8:
 
-```sql
+```mzsql
 SELECT 'hello 👋'::bytea;
 ```
 ```text
@@ -80,7 +80,7 @@ The reverse, however, is not true. Casting a `bytea` value to `text` will not
 decode UTF-8 bytes into characters. Instead, the cast unconditionally produces a
 [hex-formatted](#hex-format) string:
 
-```sql
+```mzsql
 SELECT '\x68656c6c6f20f09f918b'::bytea::text
 ```
 ```text
@@ -92,10 +92,10 @@ SELECT '\x68656c6c6f20f09f918b'::bytea::text
 To decode UTF-8 bytes into characters, use the
 [`convert_from`](../../functions#convert_from) function instead of casting:
 
-```sql
+```mzsql
 SELECT convert_from('\x68656c6c6f20f09f918b', 'utf8') AS text;
 ```
-```sql
+```mzsql
   text
 ---------
  hello 👋
@@ -104,7 +104,7 @@ SELECT convert_from('\x68656c6c6f20f09f918b', 'utf8') AS text;
 ## Examples
 
 
-```sql
+```mzsql
 SELECT '\xDEADBEEF'::bytea AS bytea_val;
 ```
 ```nofmt
@@ -115,7 +115,7 @@ SELECT '\xDEADBEEF'::bytea AS bytea_val;
 
 <hr>
 
-```sql
+```mzsql
 SELECT '\000'::bytea AS bytea_val;
 ```
 ```nofmt

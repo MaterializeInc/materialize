@@ -15,7 +15,7 @@ menu:
 
 ## Examples
 
-```sql
+```mzsql
 SHOW ROLES;
 ```
 ```nofmt
@@ -25,7 +25,7 @@ SHOW ROLES;
  mike@ko.sh
 ```
 
-```sql
+```mzsql
 SHOW ROLES LIKE 'jo%';
 ```
 ```nofmt
@@ -34,7 +34,7 @@ SHOW ROLES LIKE 'jo%';
  joe@ko.sh
 ```
 
-```sql
+```mzsql
 SHOW ROLES WHERE name = 'mike@ko.sh';
 ```
 ```nofmt

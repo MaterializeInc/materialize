@@ -38,7 +38,7 @@ Field | Meaning
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 ```nofmt
@@ -48,7 +48,7 @@ SHOW SOURCES;
  my_postgres_source | postgres |       | c2
 ```
 
-```sql
+```mzsql
 SHOW SOURCES IN CLUSTER c2;
 ```
 ```nofmt

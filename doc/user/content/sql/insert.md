@@ -43,7 +43,7 @@ To insert data into a table, execute an `INSERT` statement where the `VALUES` cl
 is followed by a list of tuples. Each tuple in the `VALUES` clause must have a value
 for each column in the table. If a column is nullable, a `NULL` value may be provided.
 
-```sql
+```mzsql
 CREATE TABLE t (a int, b text NOT NULL);
 
 INSERT INTO t VALUES (1, 'a'), (NULL, 'b');
@@ -60,7 +60,7 @@ is nullable. `NULL` values may not be inserted into column `b`, which is not nul
 
 You may also insert data using a column specification.
 
-```sql
+```mzsql
 CREATE TABLE t (a int, b text NOT NULL);
 
 INSERT INTO t (b, a) VALUES ('a', 1), ('b', NULL);
@@ -76,7 +76,7 @@ SELECT * FROM t;
 
 You can also insert the values returned from `SELECT` statements:
 
-```sql
+```mzsql
 CREATE TABLE s (a text);
 
 INSERT INTO s VALUES ('c');

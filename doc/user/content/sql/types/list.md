@@ -61,7 +61,7 @@ The name of a list type is the name of its element type followed by `list`, e.g.
 
 You can construct lists using the `LIST` expression:
 
-```sql
+```mzsql
 SELECT LIST[1, 2, 3];
 ```
 ```nofmt
@@ -72,7 +72,7 @@ SELECT LIST[1, 2, 3];
 
 You can nest `LIST` constructors to create layered lists:
 
-```sql
+```mzsql
 SELECT LIST[LIST['a', 'b'], LIST['c']];
 ```
 ```nofmt
@@ -83,7 +83,7 @@ SELECT LIST[LIST['a', 'b'], LIST['c']];
 
 You can also elide the `LIST` keyword from the interior list expressions:
 
-```sql
+```mzsql
 SELECT LIST[['a', 'b'], ['c']];
 ```
 ```nofmt
@@ -96,7 +96,7 @@ Alternatively, you can construct a list from the results of a subquery. The
 subquery must return a single column. Note that, in this form of the `LIST`
 expression, parentheses are used rather than square brackets.
 
-```sql
+```mzsql
 SELECT LIST(SELECT x FROM test0 WHERE x > 0 ORDER BY x DESC LIMIT 3);
 ```
 ```nofmt
@@ -124,7 +124,7 @@ You can access elements of lists through:
 To access an individual element of list, you can “index” into it using brackets
 (`[]`) and 1-index element positions:
 
-```sql
+```mzsql
 SELECT LIST[['a', 'b'], ['c']][1];
 ```
 ```nofmt
@@ -135,7 +135,7 @@ SELECT LIST[['a', 'b'], ['c']][1];
 
 Indexing operations can be chained together to descend the list’s layers:
 
-```sql
+```mzsql
 SELECT LIST[['a', 'b'], ['c']][1][2];
 ```
 ```nofmt
@@ -147,7 +147,7 @@ SELECT LIST[['a', 'b'], ['c']][1][2];
 If the index is invalid (either less than 1 or greater than the maximum index),
 lists return _NULL_.
 
-```sql
+```mzsql
 SELECT LIST[['a', 'b'], ['c']][1][5] AS exceed_index;
 ```
 ```nofmt
@@ -160,7 +160,7 @@ Lists have types based on their layers (unlike arrays' dimension), and error if
 you attempt to index a non-list element (i.e. indexing past the list’s last
 layer):
 
-```sql
+```mzsql
 SELECT LIST[['a', 'b'], ['c']][1][2][3];
 ```
 ```nofmt
@@ -172,7 +172,7 @@ ERROR:  cannot subscript type string
 To access contiguous ranges of a list, you can slice it using `[first index :
 last index]`, using 1-indexed positions:
 
-```sql
+```mzsql
 SELECT LIST[1,2,3,4,5][2:4] AS two_to_four;
 ```
 ```nofmt
@@ -184,7 +184,7 @@ SELECT LIST[1,2,3,4,5][2:4] AS two_to_four;
 You can omit the first index to use the first value in the list, and omit the
 last index to use all elements remaining in the list.
 
-```sql
+```mzsql
 SELECT LIST[1,2,3,4,5][:3] AS one_to_three;
 ```
 ```nofmt
@@ -193,7 +193,7 @@ SELECT LIST[1,2,3,4,5][:3] AS one_to_three;
  {1,2,3}
 ```
 
-```sql
+```mzsql
 SELECT LIST[1,2,3,4,5][3:] AS three_to_five;
 ```
 ```nofmt
@@ -205,7 +205,7 @@ SELECT LIST[1,2,3,4,5][3:] AS three_to_five;
 If the first index exceeds the list's maximum index, the operation returns an
 empty list:
 
-```sql
+```mzsql
 SELECT LIST[1,2,3,4,5][10:] AS exceed_index;
 ```
 ```nofmt
@@ -217,7 +217,7 @@ SELECT LIST[1,2,3,4,5][10:] AS exceed_index;
 If the last index exceeds the list’s maximum index, the operation returns all
 remaining elements up to its final element.
 
-```sql
+```mzsql
 SELECT LIST[1,2,3,4,5][2:10] AS two_to_end;
 ```
 ```nofmt
@@ -230,7 +230,7 @@ Performing successive slices behaves more like a traditional programming
 language taking slices of an array, rather than PostgreSQL's slicing, which
 descends into each layer.
 
-```sql
+```mzsql
 SELECT LIST[1,2,3,4,5][2:][2:3] AS successive;
 ```
 ```nofmt
@@ -258,7 +258,7 @@ backslashes and double quotes are backslash-escaped.
 The following example demonstrates the output format and includes many of the
 aforementioned special cases.
 
-```sql
+```mzsql
 SELECT LIST[['a', 'white space'], [NULL, ''], ['escape"m\e', 'nUlL']];
 ```
 ```nofmt
@@ -283,7 +283,7 @@ The text you cast must:
     For example, to cast `text` to a `date list`, you use `date`'s `text`
     representation:
 
-    ```sql
+    ```mzsql
     SELECT '{2001-02-03, 2004-05-06}'::date list as date_list;
     ```
 
@@ -305,7 +305,7 @@ The text you cast must:
 
     For example:
 
-    ```sql
+    ```mzsql
     SELECT '{
         "{brackets}",
         "\"quotes\"",
@@ -365,7 +365,7 @@ their dimension. For example, arrays of `text` are all of type `text[]` and 1D,
 example, in a two-layer list, each of the first layer’s lists can be of a
 different length:
 
-```sql
+```mzsql
 SELECT LIST[[1,2], [3]] AS ragged_list;
 ```
 ```
@@ -380,7 +380,7 @@ This is known as a "ragged list."
 example, if the first element in a 2D list has a length of 2, all subsequent
 members must also have a length of 2.
 
-```sql
+```mzsql
 SELECT ARRAY[[1,2], [3]] AS ragged_array;
 ```
 ```
@@ -392,7 +392,7 @@ ERROR:  number of array elements (3) does not match declared cardinality (4)
 When indexed, lists return a value with one less layer than the indexed list.
 For example, indexing a two-layer list returns a one-layer list.
 
-```sql
+```mzsql
 SELECT LIST[['foo'],['bar']][1] AS indexing;
 ```
 ```
@@ -404,7 +404,7 @@ SELECT LIST[['foo'],['bar']][1] AS indexing;
 Attempting to index twice into a `text list` (i.e. a one-layer list), fails
 because you cannot index `text`.
 
-```sql
+```mzsql
 SELECT LIST['foo'][1][2];
 ```
 ```
@@ -467,7 +467,7 @@ You can [cast](../../functions/cast) the following types to `list`:
 
 ### Literals
 
-```sql
+```mzsql
 SELECT LIST[[1.5, NULL],[2.25]];
 ```
 ```nofmt
@@ -478,7 +478,7 @@ SELECT LIST[[1.5, NULL],[2.25]];
 
 ### Casting between lists
 
-```sql
+```mzsql
 SELECT LIST[[1.5, NULL],[2.25]]::int list list;
 ```
 ```nofmt
@@ -489,7 +489,7 @@ SELECT LIST[[1.5, NULL],[2.25]]::int list list;
 
 ### Casting to text
 
-```sql
+```mzsql
 SELECT LIST[[1.5, NULL],[2.25]]::text;
 ```
 ```nofmt
@@ -501,7 +501,7 @@ SELECT LIST[[1.5, NULL],[2.25]]::text;
 Despite the fact that the output looks the same as the above examples, it is, in
 fact, `text`.
 
-```sql
+```mzsql
 SELECT length(LIST[[1.5, NULL],[2.25]]::text);
 ```
 ```nofmt
@@ -512,7 +512,7 @@ SELECT length(LIST[[1.5, NULL],[2.25]]::text);
 
 ### Casting from text
 
-```sql
+```mzsql
 SELECT '{{1.5,NULL},{2.25}}'::numeric(38,2) list list AS text_to_list;
 ```
 ```nofmt
