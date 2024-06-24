@@ -1618,15 +1618,49 @@ mod tests {
         for row in &rows {
             encoder.append(row);
         }
-        let col = encoder.finish();
+        let (col, stats) = encoder.finish();
+
+        // Get the lower and upper bounds from our stats.
+        let stats = stats.some.cols.get("a").unwrap();
+        let (lower, upper) = crate::stats2::col_values(&ty.scalar_type, &stats.values);
 
         let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col).unwrap();
 
-        let mut rnd_row = Row::default();
-        for (idx, og_row) in rows.into_iter().enumerate() {
-            decoder.decode(idx, &mut rnd_row);
-            assert_eq!(og_row, rnd_row);
+        let mut null_count = 0;
+        for (idx, datum) in datums.into_iter().enumerate() {
+            decoder.decode(idx, &mut row);
+            let rnd_datum = row.unpack_first();
+            assert_eq!(datum, rnd_datum);
+
+            // Assert our stat bounds are correct.
+            if datum.is_null() {
+                null_count += 1;
+            } else if lower.is_some() || upper.is_some() {
+                if let Some(lower) = lower {
+                    assert!(rnd_datum >= lower, "{rnd_datum:?} is not >= {lower:?}");
+                }
+                if let Some(upper) = upper {
+                    assert!(rnd_datum <= upper, "{rnd_datum:?} is not <= {upper:?}");
+                }
+            } else {
+                match &ty.scalar_type {
+                    // JSON stats are handled separately.
+                    ScalarType::Jsonb => (),
+                    // We don't collect stats for these types.
+                    ScalarType::AclItem
+                    | ScalarType::MzAclItem
+                    | ScalarType::Range { .. }
+                    | ScalarType::Array(_)
+                    | ScalarType::Map { .. }
+                    | ScalarType::List { .. }
+                    | ScalarType::Record { .. }
+                    | ScalarType::Int2Vector => (),
+                    other => panic!("should have collected stats for {other:?}"),
+                }
+            }
         }
+
+        assert_eq!(stats.nulls.map_or(0, |n| n.count), null_count);
     }
 
     #[mz_ore::test]
@@ -1729,7 +1763,7 @@ mod tests {
 
         encoder.append(&og_row);
         encoder.append(&og_row_2);
-        let col = encoder.finish();
+        let (col, _stats) = encoder.finish();
 
         let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
 
@@ -1768,7 +1802,7 @@ mod tests {
         }
 
         encoder.append(&og_row);
-        let col = encoder.finish();
+        let (col, _stats) = encoder.finish();
 
         let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
         let mut rnd_row = Row::default();
@@ -1813,7 +1847,7 @@ mod tests {
 
         encoder.append(&og_row);
         encoder.append(&null_row);
-        let col = encoder.finish();
+        let (col, _stats) = encoder.finish();
 
         let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
         let mut rnd_row = Row::default();
