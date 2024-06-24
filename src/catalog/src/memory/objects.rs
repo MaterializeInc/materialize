@@ -348,6 +348,54 @@ impl Cluster {
             ClusterVariant::Unmanaged => None,
         }
     }
+
+    pub fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
+        let name = self.name.clone();
+        let variant = match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged {
+                size,
+                availability_zones,
+                logging,
+                replication_factor,
+                disk,
+                optimizer_feature_overrides,
+                schedule,
+            }) => {
+                let introspection = match logging {
+                    ReplicaLogging {
+                        log_logging,
+                        interval: Some(interval),
+                    } => Some(ComputeReplicaIntrospectionConfig {
+                        debugging: *log_logging,
+                        interval: interval.clone(),
+                    }),
+                    ReplicaLogging {
+                        log_logging: _,
+                        interval: None,
+                    } => None,
+                };
+                let compute = ComputeReplicaConfig { introspection };
+                CreateClusterVariant::Managed(CreateClusterManagedPlan {
+                    replication_factor: replication_factor.clone(),
+                    size: size.clone(),
+                    availability_zones: availability_zones.clone(),
+                    compute,
+                    disk: disk.clone(),
+                    optimizer_feature_overrides: optimizer_feature_overrides.clone(),
+                    schedule: schedule.clone(),
+                })
+            }
+            ClusterVariant::Unmanaged => {
+                // Unmanaged clusters are deprecated, so hopefully we can remove
+                // them before we have to implement this.
+                return Err(PlanError::Unsupported {
+                    feature: "SHOW CREATE for unmanaged clusters".to_string(),
+                    issue_no: Some(15435),
+                });
+            }
+        };
+        Ok(CreateClusterPlan { name, variant })
+    }
 }
 
 impl From<Cluster> for durable::Cluster {
@@ -402,57 +450,6 @@ impl UpdateFrom<durable::Cluster> for Cluster {
         self.owner_id = owner_id;
         self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
         self.config = config.into();
-    }
-}
-
-// TODO(jkosh44) Make this infallible and convert to `From`.
-impl TryFrom<&Cluster> for CreateClusterPlan {
-    type Error = PlanError;
-
-    fn try_from(cluster: &Cluster) -> Result<Self, Self::Error> {
-        let name = cluster.name.clone();
-        let variant = match &cluster.config.variant {
-            ClusterVariant::Managed(ClusterVariantManaged {
-                size,
-                availability_zones,
-                logging,
-                replication_factor,
-                disk,
-                optimizer_feature_overrides,
-                schedule,
-            }) => {
-                let introspection = match logging {
-                    ReplicaLogging {
-                        log_logging,
-                        interval: Some(interval),
-                    } => Some(ComputeReplicaIntrospectionConfig {
-                        debugging: *log_logging,
-                        interval: interval.clone(),
-                    }),
-                    ReplicaLogging {
-                        log_logging: _,
-                        interval: None,
-                    } => None,
-                };
-                let compute = ComputeReplicaConfig { introspection };
-                CreateClusterVariant::Managed(CreateClusterManagedPlan {
-                    replication_factor: replication_factor.clone(),
-                    size: size.clone(),
-                    availability_zones: availability_zones.clone(),
-                    compute,
-                    disk: disk.clone(),
-                    optimizer_feature_overrides: optimizer_feature_overrides.clone(),
-                    schedule: schedule.clone(),
-                })
-            }
-            ClusterVariant::Unmanaged => {
-                return Err(PlanError::Unsupported {
-                    feature: "SHOW CREATE for unmanaged clusters".to_string(),
-                    issue_no: Some(15435),
-                });
-            }
-        };
-        Ok(CreateClusterPlan { name, variant })
     }
 }
 
@@ -2268,7 +2265,7 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
     }
 
     fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
-        self.try_into()
+        self.try_to_plan()
     }
 }
 
