@@ -11,7 +11,9 @@
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
 from materialize.mz_version import MzVersion
-from materialize.test_analytics.connector.test_analytics_connector import DatabaseConnector
+from materialize.test_analytics.connector.test_analytics_connector import (
+    DatabaseConnector,
+)
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 
 
