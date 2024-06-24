@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
 use std::fmt::{self, Debug};
 
 use arrow::array::{Array, BinaryArray, BooleanArray, PrimitiveArray, StringArray};
@@ -21,9 +20,8 @@ use serde::Serialize;
 use crate::columnar::Data;
 use crate::dyn_struct::ValidityRef;
 use crate::stats::{
-    proto_bytes_stats, proto_dyn_stats, proto_primitive_stats, ColumnStats, DynStats, OptionStats,
-    ProtoBytesStats, ProtoDynStats, ProtoPrimitiveBytesStats, ProtoPrimitiveStats, StatsFrom,
-    TrimStats,
+    proto_primitive_stats, BytesStats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats,
+    OptionStats, ProtoPrimitiveBytesStats, ProtoPrimitiveStats, StatsFrom, TrimStats,
 };
 use crate::timestamp::try_parse_monotonic_iso8601_timestamp;
 
@@ -113,7 +111,7 @@ pub fn truncate_string(x: &str, max_len: usize, bound: TruncateBound) -> Option<
 }
 
 /// Statistics about a primitive non-optional column.
-#[cfg_attr(any(test), derive(Clone))]
+#[derive(Copy, Clone)]
 pub struct PrimitiveStats<T> {
     /// An inclusive lower bound on the data contained in the column.
     ///
@@ -150,49 +148,46 @@ impl Debug for PrimitiveStats<Vec<u8>> {
 
 impl<T: Serialize> DynStats for PrimitiveStats<T>
 where
-    PrimitiveStats<T>: RustType<ProtoPrimitiveStats> + Send + Sync + 'static,
+    PrimitiveStats<T>: RustType<ProtoPrimitiveStats>
+        + Into<PrimitiveStatsVariants>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn into_proto(&self) -> ProtoDynStats {
-        ProtoDynStats {
-            option: None,
-            kind: Some(proto_dyn_stats::Kind::Primitive(RustType::into_proto(self))),
-        }
-    }
     fn debug_json(&self) -> serde_json::Value {
         let l = serde_json::to_value(&self.lower).expect("valid json");
         let u = serde_json::to_value(&self.upper).expect("valid json");
         serde_json::json!({"lower": l, "upper": u})
     }
+
+    fn into_columnar_stats(self) -> ColumnarStats {
+        ColumnarStats {
+            nulls: None,
+            values: ColumnStatKinds::Primitive(self.into()),
+        }
+    }
 }
 
 impl DynStats for PrimitiveStats<Vec<u8>> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn into_proto(&self) -> ProtoDynStats {
-        ProtoDynStats {
-            option: None,
-            kind: Some(proto_dyn_stats::Kind::Bytes(ProtoBytesStats {
-                kind: Some(proto_bytes_stats::Kind::Primitive(RustType::into_proto(
-                    self,
-                ))),
-            })),
-        }
-    }
     fn debug_json(&self) -> serde_json::Value {
         serde_json::json!({
             "lower": hex::encode(&self.lower),
             "upper": hex::encode(&self.upper),
         })
     }
+
+    fn into_columnar_stats(self) -> ColumnarStats {
+        ColumnarStats {
+            nulls: None,
+            values: ColumnStatKinds::Bytes(BytesStats::Primitive(self)),
+        }
+    }
 }
 
 /// This macro implements the [`ColumnStats`] trait for all variants of [`PrimitiveStats`].
 macro_rules! stats_primitive {
-    ($data:ty, $ref:ident) => {
+    ($data:ty, $ref:ident, $variant:ident) => {
         impl ColumnStats<$data> for PrimitiveStats<$data> {
             fn lower<'a>(&'a self) -> Option<<$data as Data>::Ref<'a>> {
                 Some(self.lower.$ref())
@@ -202,6 +197,17 @@ macro_rules! stats_primitive {
             }
             fn none_count(&self) -> usize {
                 0
+            }
+            fn downcast(stats: &super::ColumnarStats) -> Option<Self>
+            where
+                Self: Sized,
+            {
+                match stats.non_null_values()? {
+                    ColumnStatKinds::Primitive(PrimitiveStatsVariants::$variant(prim)) => {
+                        Some(prim.clone())
+                    }
+                    _ => None,
+                }
             }
         }
 
@@ -215,23 +221,41 @@ macro_rules! stats_primitive {
             fn none_count(&self) -> usize {
                 self.none
             }
+            fn downcast(stats: &super::ColumnarStats) -> Option<Self>
+            where
+                Self: Sized,
+            {
+                let prim = match &stats.values {
+                    ColumnStatKinds::Primitive(PrimitiveStatsVariants::$variant(prim)) => prim,
+                    _ => return None,
+                };
+                Some(OptionStats {
+                    some: prim.clone(),
+                    none: stats.nulls.as_ref().map_or(0, |n| n.count),
+                })
+            }
+        }
+
+        impl From<PrimitiveStats<$data>> for PrimitiveStatsVariants {
+            fn from(value: PrimitiveStats<$data>) -> Self {
+                PrimitiveStatsVariants::$variant(value)
+            }
         }
     };
 }
 
-stats_primitive!(bool, clone);
-stats_primitive!(u8, clone);
-stats_primitive!(u16, clone);
-stats_primitive!(u32, clone);
-stats_primitive!(u64, clone);
-stats_primitive!(i8, clone);
-stats_primitive!(i16, clone);
-stats_primitive!(i32, clone);
-stats_primitive!(i64, clone);
-stats_primitive!(f32, clone);
-stats_primitive!(f64, clone);
-stats_primitive!(Vec<u8>, as_slice);
-stats_primitive!(String, as_str);
+stats_primitive!(bool, clone, Bool);
+stats_primitive!(u8, clone, U8);
+stats_primitive!(u16, clone, U16);
+stats_primitive!(u32, clone, U32);
+stats_primitive!(u64, clone, U64);
+stats_primitive!(i8, clone, I8);
+stats_primitive!(i16, clone, I16);
+stats_primitive!(i32, clone, I32);
+stats_primitive!(i64, clone, I64);
+stats_primitive!(f32, clone, F32);
+stats_primitive!(f64, clone, F64);
+stats_primitive!(String, as_str, String);
 
 impl StatsFrom<BooleanBuffer> for PrimitiveStats<bool> {
     fn stats_from(col: &BooleanBuffer, validity: ValidityRef) -> Self {
@@ -508,7 +532,7 @@ impl TrimStats for ProtoPrimitiveBytesStats {
 }
 
 /// Enum wrapper around [`PrimitiveStats`] for each variant that we support.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PrimitiveStatsVariants {
     /// [`bool`]
     Bool(PrimitiveStats<bool>),
@@ -537,17 +561,6 @@ pub enum PrimitiveStatsVariants {
 }
 
 impl DynStats for PrimitiveStatsVariants {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn into_proto(&self) -> ProtoDynStats {
-        ProtoDynStats {
-            option: None,
-            kind: Some(proto_dyn_stats::Kind::Primitive(RustType::into_proto(self))),
-        }
-    }
-
     fn debug_json(&self) -> serde_json::Value {
         use PrimitiveStatsVariants::*;
 
@@ -564,6 +577,13 @@ impl DynStats for PrimitiveStatsVariants {
             F32(stats) => stats.debug_json(),
             F64(stats) => stats.debug_json(),
             String(stats) => stats.debug_json(),
+        }
+    }
+
+    fn into_columnar_stats(self) -> ColumnarStats {
+        ColumnarStats {
+            nulls: None,
+            values: ColumnStatKinds::Primitive(self),
         }
     }
 }
@@ -652,31 +672,6 @@ impl RustType<ProtoPrimitiveStats> for PrimitiveStatsVariants {
         Ok(stats)
     }
 }
-
-/// Small macro to help us convert `PrimitiveStats<T>` into
-/// [`PrimitiveStatsVariants`].
-macro_rules! primitive_stats_from {
-    ($native:ty, $variant:ident) => {
-        impl From<PrimitiveStats<$native>> for PrimitiveStatsVariants {
-            fn from(value: PrimitiveStats<$native>) -> Self {
-                PrimitiveStatsVariants::$variant(value)
-            }
-        }
-    };
-}
-
-primitive_stats_from!(bool, Bool);
-primitive_stats_from!(u8, U8);
-primitive_stats_from!(u16, U16);
-primitive_stats_from!(u32, U32);
-primitive_stats_from!(u64, U64);
-primitive_stats_from!(i8, I8);
-primitive_stats_from!(i16, I16);
-primitive_stats_from!(i32, I32);
-primitive_stats_from!(i64, I64);
-primitive_stats_from!(f32, F32);
-primitive_stats_from!(f64, F64);
-primitive_stats_from!(String, String);
 
 /// Returns a [`Strategy`] for generating arbitrary [`PrimitiveStats`].
 pub(crate) fn any_primitive_stats<T>() -> impl Strategy<Value = PrimitiveStats<T>>

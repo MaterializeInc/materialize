@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
 use std::collections::BTreeMap;
 
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
@@ -19,13 +18,13 @@ use serde::ser::{SerializeMap, SerializeStruct};
 use crate::columnar::Data;
 use crate::dyn_struct::{DynStruct, DynStructCol, ValidityRef};
 use crate::stats::{
-    any_box_dyn_stats, proto_dyn_stats, ColumnStats, DynStats, OptionStats, ProtoDynStats,
-    ProtoStructStats, StatsFrom, TrimStats,
+    any_columnar_stats, proto_dyn_stats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats,
+    OptionStats, ProtoStructStats, StatsFrom, TrimStats,
 };
 
 /// Statistics about a column of a struct type with a uniform schema (the same
 /// columns and associated `T: Data` types in each instance of the struct).
-#[derive(Arbitrary, Default)]
+#[derive(Arbitrary, Default, Clone)]
 pub struct StructStats {
     /// The count of structs in the column.
     pub len: usize,
@@ -34,7 +33,7 @@ pub struct StructStats {
     /// This will often be all of the columns, but it's not guaranteed. Persist
     /// reserves the right to prune statistics about some or all of the columns.
     #[proptest(strategy = "any_struct_stats_cols()")]
-    pub cols: BTreeMap<String, Box<dyn DynStats>>,
+    pub cols: BTreeMap<String, ColumnarStats>,
 }
 
 impl std::fmt::Debug for StructStats {
@@ -54,15 +53,6 @@ impl serde::Serialize for StructStats {
 }
 
 impl DynStats for StructStats {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn into_proto(&self) -> ProtoDynStats {
-        ProtoDynStats {
-            option: None,
-            kind: Some(proto_dyn_stats::Kind::Struct(RustType::into_proto(self))),
-        }
-    }
     fn debug_json(&self) -> serde_json::Value {
         let mut cols = serde_json::Map::new();
         cols.insert("len".to_owned(), self.len.into());
@@ -71,6 +61,12 @@ impl DynStats for StructStats {
         }
         cols.into()
     }
+    fn into_columnar_stats(self) -> ColumnarStats {
+        ColumnarStats {
+            nulls: None,
+            values: ColumnStatKinds::Struct(self),
+        }
+    }
 }
 
 impl StructStats {
@@ -78,11 +74,11 @@ impl StructStats {
     ///
     /// This will often be all of the columns, but it's not guaranteed. Persist
     /// reserves the right to prune statistics about some or all of the columns.
-    pub fn col<T: Data>(&self, name: &str) -> Result<Option<&T::Stats>, String> {
+    pub fn col<T: Data>(&self, name: &str) -> Result<Option<T::Stats>, String> {
         let Some(stats) = self.cols.get(name) else {
             return Ok(None);
         };
-        match stats.as_any().downcast_ref() {
+        match stats.downcast::<T>() {
             Some(x) => Ok(Some(x)),
             None => Err(format!(
                 "expected stats type {} got {}",
@@ -105,6 +101,15 @@ impl ColumnStats<DynStruct> for StructStats {
     fn none_count(&self) -> usize {
         0
     }
+    fn downcast(stats: &ColumnarStats) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        match stats.non_null_values()? {
+            ColumnStatKinds::Struct(inner) => Some(inner.clone()),
+            _ => None,
+        }
+    }
 }
 
 impl ColumnStats<Option<DynStruct>> for OptionStats<StructStats> {
@@ -116,6 +121,19 @@ impl ColumnStats<Option<DynStruct>> for OptionStats<StructStats> {
     }
     fn none_count(&self) -> usize {
         self.none
+    }
+    fn downcast(stats: &ColumnarStats) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let inner = match &stats.values {
+            ColumnStatKinds::Struct(inner) => inner,
+            _ => return None,
+        };
+        Some(OptionStats {
+            some: inner.clone(),
+            none: stats.nulls.as_ref().map_or(0, |n| n.count),
+        })
     }
 }
 
@@ -140,7 +158,7 @@ impl RustType<ProtoStructStats> for StructStats {
             cols: self
                 .cols
                 .iter()
-                .map(|(k, v)| (k.into_proto(), v.into_proto()))
+                .map(|(k, v)| (k.into_proto(), RustType::into_proto(v)))
                 .collect(),
         }
     }
@@ -173,7 +191,7 @@ impl TrimStats for ProtoStructStats {
     }
 }
 
-struct DynStatsCols<'a>(&'a BTreeMap<String, Box<dyn DynStats>>);
+struct DynStatsCols<'a>(&'a BTreeMap<String, ColumnarStats>);
 
 impl serde::Serialize for DynStatsCols<'_> {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -187,9 +205,8 @@ impl serde::Serialize for DynStatsCols<'_> {
 }
 
 /// Returns a [`Strategy`] for generating arbitrary [`StructStats`].
-pub(crate) fn any_struct_stats_cols() -> impl Strategy<Value = BTreeMap<String, Box<dyn DynStats>>>
-{
-    proptest::collection::btree_map(any::<String>(), any_box_dyn_stats(), 1..5)
+pub(crate) fn any_struct_stats_cols() -> impl Strategy<Value = BTreeMap<String, ColumnarStats>> {
+    proptest::collection::btree_map(any::<String>(), any_columnar_stats(), 1..5)
 }
 
 #[cfg(test)]
@@ -198,7 +215,7 @@ mod tests {
 
     use super::*;
     use crate::stats::primitive::PrimitiveStats;
-    use crate::stats::trim_to_budget;
+    use crate::stats::{trim_to_budget, BytesStats, ColumnNullStats, ColumnStatKinds};
 
     #[mz_ore::test]
     fn struct_trim_to_budget() {
@@ -207,10 +224,14 @@ mod tests {
             let cols = cols
                 .iter()
                 .map(|(key, cost)| {
-                    let stats: Box<dyn DynStats> = Box::new(PrimitiveStats {
+                    let stats = BytesStats::Primitive(PrimitiveStats {
                         lower: vec![],
                         upper: vec![0u8; *cost],
                     });
+                    let stats = ColumnarStats {
+                        nulls: None,
+                        values: ColumnStatKinds::Bytes(stats),
+                    };
                     ((*key).to_owned(), stats)
                 })
                 .collect();
@@ -240,19 +261,23 @@ mod tests {
     // Confirm that fields are being trimmed from largest to smallest.
     #[mz_ore::test]
     fn trim_order_regression() {
-        fn dyn_stats(lower: &'static str, upper: &'static str) -> Box<dyn DynStats> {
-            Box::new(PrimitiveStats {
+        fn column_stats(lower: &'static str, upper: &'static str) -> ColumnarStats {
+            let stats = PrimitiveStats {
                 lower: lower.to_owned(),
                 upper: upper.to_owned(),
-            })
+            };
+            ColumnarStats {
+                nulls: None,
+                values: ColumnStatKinds::Primitive(stats.into()),
+            }
         }
         let stats = StructStats {
             len: 2,
             cols: BTreeMap::from([
-                ("foo".to_owned(), dyn_stats("a", "b")),
+                ("foo".to_owned(), column_stats("a", "b")),
                 (
                     "bar".to_owned(),
-                    dyn_stats("aaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaab"),
+                    column_stats("aaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaab"),
                 ),
             ]),
         };
@@ -271,15 +296,17 @@ mod tests {
     // "err", and the real columns are all nested under "ok".
     #[mz_ore::test]
     fn stats_trim_to_budget_regression_recursion() {
-        fn str_stats(n: usize, l: &str, u: &str) -> Box<dyn DynStats> {
-            let stats: Box<dyn DynStats> = Box::new(OptionStats {
-                none: n,
-                some: PrimitiveStats {
-                    lower: l.to_owned(),
-                    upper: u.to_owned(),
-                },
-            });
-            stats
+        fn str_stats(n: usize, l: &str, u: &str) -> ColumnarStats {
+            ColumnarStats {
+                nulls: Some(ColumnNullStats { count: n }),
+                values: ColumnStatKinds::Primitive(
+                    PrimitiveStats {
+                        lower: l.to_owned(),
+                        upper: u.to_owned(),
+                    }
+                    .into(),
+                ),
+            }
         }
 
         const BIG: usize = 100;
@@ -297,7 +324,13 @@ mod tests {
             len: 2,
             cols: BTreeMap::from([
                 ("err".to_owned(), str_stats(2, "", "")),
-                ("ok".to_owned(), Box::new(StructStats { len: 2, cols })),
+                (
+                    "ok".to_owned(),
+                    ColumnarStats {
+                        nulls: None,
+                        values: ColumnStatKinds::Struct(StructStats { len: 2, cols }),
+                    },
+                ),
             ]),
         };
         let mut proto_stats = RustType::into_proto(&source_data_stats);

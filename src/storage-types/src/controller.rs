@@ -461,7 +461,7 @@ impl TxnsCodec for TxnsCodecRow {
     }
 
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
-        fn col<'a, T: Data>(stats: &'a StructStats, col: &str) -> Option<&'a T::Stats> {
+        fn col<'a, T: Data>(stats: &'a StructStats, col: &str) -> Option<T::Stats> {
             stats
                 .col::<T>(col)
                 .map_err(|err| error!("unexpected stats type for col {}: {}", col, err))

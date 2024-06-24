@@ -17,7 +17,7 @@ use arrow::array::Array;
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::{ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType, OpaqueData};
 use crate::dyn_struct::{DynStruct, ValidityRef};
-use crate::stats::{DynStats, StatsFrom};
+use crate::stats::{ColumnarStats, DynStats, StatsFrom};
 
 /// A type-erased [crate::columnar::Data::Col].
 #[derive(Debug, Clone)]
@@ -67,13 +67,14 @@ impl DynColumnRef {
 
     /// Computes statistics on this column using the default implementation of
     /// `T::Stats::From`.
-    pub fn stats_default(&self, validity: ValidityRef) -> Box<dyn DynStats> {
+    pub fn stats_default(&self, validity: ValidityRef) -> ColumnarStats {
         struct StatsDataFn<'a>(&'a DynColumnRef, ValidityRef);
-        impl DataFn<Result<Box<dyn DynStats>, String>> for StatsDataFn<'_> {
-            fn call<T: Data>(self, _cfg: &T::Cfg) -> Result<Box<dyn DynStats>, String> {
+        impl DataFn<Result<ColumnarStats, String>> for StatsDataFn<'_> {
+            fn call<T: Data>(self, _cfg: &T::Cfg) -> Result<ColumnarStats, String> {
                 let StatsDataFn(col, validity) = self;
                 let col = col.downcast_ref::<T>()?;
-                Ok(Box::new(T::Stats::stats_from(col, validity)))
+                let stats = T::Stats::stats_from(col, validity);
+                Ok(stats.into_columnar_stats())
             }
         }
         self.0

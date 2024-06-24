@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
 use std::fmt::Debug;
 
 use arrow::array::BinaryArray;
@@ -19,13 +18,12 @@ use crate::dyn_struct::ValidityRef;
 use crate::stats::json::{any_json_stats, JsonStats};
 use crate::stats::primitive::{any_primitive_vec_u8_stats, PrimitiveStats};
 use crate::stats::{
-    proto_bytes_stats, proto_dyn_stats, ColumnStats, DynStats, OptionStats, ProtoAtomicBytesStats,
-    ProtoBytesStats, ProtoDynStats, StatsFrom, TrimStats,
+    proto_bytes_stats, ColumnStatKinds, ColumnStats, ColumnarStats, DynStats, OptionStats,
+    ProtoAtomicBytesStats, ProtoBytesStats, StatsFrom, TrimStats,
 };
 
 /// `PrimitiveStats<Vec<u8>>` that cannot safely be trimmed.
-#[derive(Debug)]
-#[cfg_attr(any(test), derive(Clone))]
+#[derive(Debug, Clone)]
 pub struct AtomicBytesStats {
     /// See [PrimitiveStats::lower]
     pub lower: Vec<u8>,
@@ -59,6 +57,7 @@ impl RustType<ProtoAtomicBytesStats> for AtomicBytesStats {
 }
 
 /// Statistics about a column of `Vec<u8>`.
+#[derive(Clone)]
 pub enum BytesStats {
     Primitive(PrimitiveStats<Vec<u8>>),
     Json(JsonStats),
@@ -72,17 +71,6 @@ impl Debug for BytesStats {
 }
 
 impl DynStats for BytesStats {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn into_proto(&self) -> ProtoDynStats {
-        ProtoDynStats {
-            option: None,
-            kind: Some(proto_dyn_stats::Kind::Bytes(RustType::into_proto(self))),
-        }
-    }
-
     fn debug_json(&self) -> serde_json::Value {
         match self {
             BytesStats::Primitive(x) => x.debug_json(),
@@ -90,25 +78,41 @@ impl DynStats for BytesStats {
             BytesStats::Atomic(x) => x.debug_json(),
         }
     }
+
+    fn into_columnar_stats(self) -> ColumnarStats {
+        ColumnarStats {
+            nulls: None,
+            values: ColumnStatKinds::Bytes(self),
+        }
+    }
 }
 
 impl ColumnStats<Vec<u8>> for BytesStats {
     fn lower<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
         match self {
-            BytesStats::Primitive(x) => x.lower(),
+            BytesStats::Primitive(x) => Some(x.lower.as_slice()),
             BytesStats::Json(_) => None,
             BytesStats::Atomic(x) => Some(&x.lower),
         }
     }
     fn upper<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
         match self {
-            BytesStats::Primitive(x) => x.upper(),
+            BytesStats::Primitive(x) => Some(x.upper.as_slice()),
             BytesStats::Json(_) => None,
             BytesStats::Atomic(x) => Some(&x.upper),
         }
     }
     fn none_count(&self) -> usize {
         0
+    }
+    fn downcast(stats: &ColumnarStats) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        match stats.non_null_values()? {
+            ColumnStatKinds::Bytes(bytes) => Some(bytes.clone()),
+            _ => None,
+        }
     }
 }
 
@@ -121,6 +125,19 @@ impl ColumnStats<Option<Vec<u8>>> for OptionStats<BytesStats> {
     }
     fn none_count(&self) -> usize {
         self.none
+    }
+    fn downcast(stats: &ColumnarStats) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let inner = match &stats.values {
+            ColumnStatKinds::Bytes(s) => s,
+            _ => return None,
+        };
+        Some(OptionStats {
+            some: inner.clone(),
+            none: stats.nulls.as_ref().map_or(0, |n| n.count),
+        })
     }
 }
 
