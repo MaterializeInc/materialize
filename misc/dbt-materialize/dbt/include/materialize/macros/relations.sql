@@ -14,9 +14,8 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- Most of this macro is direct copies of the PostgreSQL counterpart.
--- Here we have included a minor change to fix the following error:
--- column "referenced_schema.name" must appear in the GROUP BY clause or be used in an aggregate function
+-- Due to a PostgreSQL compatibility issue in processing aliases in the GROUP BY
+-- clause, we must override this macro.
 -- See: https://github.com/dbt-labs/dbt-postgres/blob/main/dbt/include/postgres/macros/relations.sql
 
 {% macro materialize__get_relations() -%}
