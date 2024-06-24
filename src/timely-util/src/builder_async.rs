@@ -22,8 +22,6 @@ use futures_util::task::ArcWake;
 use timely::communication::{Message, Pull, Push};
 use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::ParallelizationContract;
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::counter::Counter as PushCounter;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
@@ -190,45 +188,6 @@ pub enum Event<T: Timestamp, C, D> {
     Progress(Antichain<T>),
 }
 
-// TODO: delete and use CapabilityTrait instead once TimelyDataflow/timely-dataflow#512 gets merged
-pub trait CapabilityTrait<T: Timestamp> {
-    fn session<'a, CB, P>(
-        &'a self,
-        handle: &'a mut OutputHandleCore<'_, T, CB, P>,
-    ) -> Session<'a, T, CB, PushCounter<T, CB::Container, P>>
-    where
-        CB: ContainerBuilder,
-        P: Push<Bundle<T, CB::Container>>;
-}
-
-impl<T: Timestamp> CapabilityTrait<T> for InputCapability<T> {
-    #[inline]
-    fn session<'a, CB, P>(
-        &'a self,
-        handle: &'a mut OutputHandleCore<'_, T, CB, P>,
-    ) -> Session<'a, T, CB, PushCounter<T, CB::Container, P>>
-    where
-        CB: ContainerBuilder,
-        P: Push<Bundle<T, CB::Container>>,
-    {
-        handle.session_with_builder(self)
-    }
-}
-
-impl<T: Timestamp> CapabilityTrait<T> for Capability<T> {
-    #[inline]
-    fn session<'a, CB, P>(
-        &'a self,
-        handle: &'a mut OutputHandleCore<'_, T, CB, P>,
-    ) -> Session<'a, T, CB, PushCounter<T, CB::Container, P>>
-    where
-        CB: ContainerBuilder,
-        P: Push<Bundle<T, CB::Container>>,
-    {
-        handle.session_with_builder(self)
-    }
-}
-
 pub struct AsyncOutputHandle<
     T: Timestamp,
     CB: ContainerBuilder,
@@ -248,12 +207,9 @@ where
     P: Push<Bundle<T, C>> + 'static,
 {
     #[inline]
-    pub fn give_container<Cap>(&mut self, cap: &Cap, container: &mut C)
-    where
-        Cap: CapabilityTrait<T>,
-    {
+    pub fn give_container(&mut self, cap: &Capability<T>, container: &mut C) {
         let mut handle = self.handle.borrow_mut();
-        cap.session(&mut handle).give_container(container);
+        handle.session_with_builder(cap).give_container(container);
     }
 }
 
@@ -300,13 +256,12 @@ where
     C: Container,
     P: Push<Bundle<T, C>> + 'static,
 {
-    pub fn give<CP, D>(&mut self, cap: &CP, data: D)
+    pub fn give<D>(&mut self, cap: &Capability<T>, data: D)
     where
-        CP: CapabilityTrait<T>,
         CapacityContainerBuilder<C>: PushInto<D>,
     {
         let mut handle = self.handle.borrow_mut();
-        cap.session(&mut handle).push_into(data);
+        handle.session_with_builder(cap).give(data);
     }
 }
 
