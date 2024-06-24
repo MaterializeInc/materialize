@@ -34,6 +34,8 @@ class DatabaseConnector:
         self.update_statements = []
         self._log_sql = log_sql
         self._read_only = False
+        # Note that transactions in mz do not allow to mix read and write statements (INSERT INTO ... SELECT FROM ...)
+        self._use_transaction = False
 
     def _create_connection(self, autocommit: bool = False) -> Connection:
         connection = pg8000.connect(
@@ -84,15 +86,20 @@ class DatabaseConnector:
         last_executed_sql = self.update_statements[0]
 
         try:
-            self._execute_sql(cursor, "BEGIN;")
+            if self._use_transaction:
+                self._execute_sql(cursor, "BEGIN;")
+
             for sql in self.update_statements:
                 sql = dedent(sql)
                 last_executed_sql = sql
                 self._execute_sql(cursor, sql)
-            self._execute_sql(cursor, "COMMIT;")
+
+            if self._use_transaction:
+                self._execute_sql(cursor, "COMMIT;")
         except Exception as e:
             try:
-                self._execute_sql(cursor, "ROLLBACK;")
+                if self._use_transaction:
+                    self._execute_sql(cursor, "ROLLBACK;")
             except:
                 pass
 
