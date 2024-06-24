@@ -83,7 +83,7 @@
     join schema as dependent_schema on relationships.dependent_schema_id=dependent_schema.id
     join schema as referenced_schema on relationships.referenced_schema_id=referenced_schema.id
     group by referenced_schema.name, relationships.referenced_name, dependent_schema.name, relationships.dependent_name
-    order by referenced_schema.name, relationships.referenced_name, dependent_schema.name, relationships.dependent_name;
+    order by referenced_schema, referenced_name, dependent_schema, dependent_name;
   {%- endcall -%}
 
   {{ return(load_result('relations').table) }}
