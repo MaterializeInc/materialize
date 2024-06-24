@@ -1744,6 +1744,15 @@ pub struct Coordinator {
     /// meant for use during development of read-only clusters and 0dt upgrades
     /// and should go away once we have proper orchestration during upgrades.
     read_only_controllers: bool,
+
+    /// Updates to builtin tables that are being buffered while we are in
+    /// read-only mode. We apply these all at once when coming out of read-only
+    /// mode.
+    ///
+    /// This is a `Some` while in read-only mode and will be replaced by a
+    /// `None` when we transition out of read-only mode and write out any
+    /// buffered updates.
+    buffered_builtin_table_updates: Option<Vec<BuiltinTableUpdate>>,
 }
 
 impl Coordinator {
@@ -2134,9 +2143,19 @@ impl Coordinator {
             ),
         );
 
-        let builtin_updates_fut = self
-            .bootstrap_builtin_tables(&entries, builtin_table_updates)
-            .await;
+        let builtin_updates_fut = if self.controller.read_only() {
+            info!("coordinator init: stashing builtin table updates while in read-only mode");
+
+            self.buffered_builtin_table_updates
+                .as_mut()
+                .expect("in read-only mode")
+                .append(&mut builtin_table_updates);
+
+            futures::future::ready(()).boxed()
+        } else {
+            self.bootstrap_builtin_tables(&entries, builtin_table_updates)
+                .await
+        };
 
         // Destructure Self so we can do some concurrent work.
         let Self {
@@ -2244,7 +2263,6 @@ impl Coordinator {
             .builtin_table_update()
             .execute(builtin_table_updates)
             .await;
-
         builtin_updates_fut
     }
 
@@ -2911,6 +2929,10 @@ impl Coordinator {
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     _ = self.advance_timelines_interval.tick() => {
+                        if self.controller.read_only() {
+                            tracing::info!("not advancing timelines in read-only mode");
+                            continue;
+                        }
                         let span = info_span!(parent: None, "coord::advance_timelines_interval");
                         span.follows_from(Span::current());
                         Message::GroupCommitInitiate(span, None)
@@ -3521,6 +3543,7 @@ pub fn serve(
                     connection_watch_sets: BTreeMap::new(),
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
                     read_only_controllers,
+                    buffered_builtin_table_updates: Some(Vec::new()),
                 };
                 let bootstrap = handle.block_on(async {
                     coord

@@ -230,14 +230,36 @@ impl Coordinator {
                 }
 
                 Command::ControllerAllowWrites { tx } => {
-                    let init_ts = self.get_local_write_ts().await.timestamp;
-                    self.controller.allow_writes(Some(init_ts)).await;
-                    let _ = tx.send(Ok(true));
+                    self.handle_allow_writes(tx).await;
                 }
             }
         }
         .instrument(debug_span!("handle_command"))
         .boxed_local()
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn handle_allow_writes(&mut self, tx: oneshot::Sender<Result<bool, anyhow::Error>>) {
+        if !self.controller.read_only() {
+            let _ = tx.send(Ok(false));
+            return;
+        }
+
+        let init_ts = self.get_local_write_ts().await.timestamp;
+        self.controller.allow_writes(Some(init_ts)).await;
+
+        let builtin_table_updates = self
+            .buffered_builtin_table_updates
+            .take()
+            .expect("in read-only mode");
+
+        let entries: Vec<_> = self.catalog().entries().cloned().collect();
+
+        self.bootstrap_builtin_tables(&entries, builtin_table_updates)
+            .await
+            .await;
+
+        let _ = tx.send(Ok(true));
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -302,9 +324,21 @@ impl Coordinator {
                 self.begin_session_for_statement_logging(&conn);
                 self.active_conns.insert(conn_id.clone(), conn);
 
-                // Note: Do NOT await the notify here, we pass this back to whatever requested the
-                // startup to prevent blocking the Coordinator on a builtin table update.
-                let notify = self.builtin_table_update().defer(vec![update]);
+                let notify = if self.controller.read_only() {
+                    self.buffered_builtin_table_updates
+                        .as_mut()
+                        .expect("in read-only mode")
+                        .push(update);
+
+                    futures::future::ready(()).boxed()
+                } else {
+                    // Note: Do NOT await the notify here, we pass this back to
+                    // whatever requested the startup to prevent blocking the
+                    // Coordinator on a builtin table update.
+                    let notify = self.builtin_table_update().defer(vec![update]);
+
+                    notify
+                };
 
                 let resp = Ok(StartupResponse {
                     role_id,
@@ -1060,7 +1094,15 @@ impl Coordinator {
         // closed at once, which occurs regularly in some workflows.
         let update = self.catalog().state().pack_session_update(&conn, -1);
         let update = self.catalog().state().resolve_builtin_table_update(update);
-        let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
+
+        if self.controller.read_only() {
+            self.buffered_builtin_table_updates
+                .as_mut()
+                .expect("in read-only mode")
+                .push(update);
+        } else {
+            let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
+        };
     }
 
     /// Returns the necessary metadata for appending to a webhook source, and a channel to send
