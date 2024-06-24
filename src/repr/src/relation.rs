@@ -580,9 +580,7 @@ impl Arbitrary for RelationDesc {
             (1, Just(128..256)),
         ]);
 
-        num_columns
-            .prop_flat_map(|num_cols| arb_relation_desc(num_cols))
-            .boxed()
+        num_columns.prop_flat_map(arb_relation_desc).boxed()
     }
 }
 

@@ -1453,13 +1453,13 @@ mod tests {
 
     #[track_caller]
     fn roundtrip_rows(desc: &RelationDesc, rows: Vec<Row>) {
-        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
+        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(desc).unwrap();
         for row in &rows {
-            encoder.append(&row);
+            encoder.append(row);
         }
         let col = encoder.finish();
 
-        let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
+        let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col).unwrap();
 
         let mut rnd_row = Row::default();
         for (idx, og_row) in rows.into_iter().enumerate() {
