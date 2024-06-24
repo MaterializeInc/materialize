@@ -247,9 +247,8 @@ where
     C: Container,
     P: Push<Bundle<T, C>> + 'static,
 {
-    #[allow(clippy::unused_async)]
     #[inline]
-    pub async fn give_container<Cap>(&mut self, cap: &Cap, container: &mut C)
+    pub fn give_container<Cap>(&mut self, cap: &Cap, container: &mut C)
     where
         Cap: CapabilityTrait<T>,
     {
@@ -301,8 +300,7 @@ where
     C: Container,
     P: Push<Bundle<T, C>> + 'static,
 {
-    #[allow(clippy::unused_async)]
-    pub async fn give<CP, D>(&mut self, cap: &CP, data: D)
+    pub fn give<CP, D>(&mut self, cap: &CP, data: D)
     where
         CP: CapabilityTrait<T>,
         CapacityContainerBuilder<C>: PushInto<D>,
