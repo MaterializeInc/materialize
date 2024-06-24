@@ -591,7 +591,11 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/show_clusters.slt",
     }
     tests_no_auto_index_selects = {
+        # pg_typeof contains public schema name in views
+        "test/sqllogictest/cast.slt",
         "test/sqllogictest/map.slt",
+        # pg_typeof contains public schema name in views
+        "test/sqllogictest/typeof.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)
