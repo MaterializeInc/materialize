@@ -40,6 +40,7 @@ pub mod optimize;
 pub mod refresh_schedule;
 pub mod role_id;
 pub mod stats;
+pub mod stats2;
 pub mod strconv;
 pub mod timestamp;
 pub mod url;
