@@ -25,6 +25,16 @@ SERVICES = [
     Alpine(),
     Materialized(),
     MySql(),
+    MySql(
+        name="mysql-replica-1",
+        version=MySql.DEFAULT_VERSION,
+        additional_args=create_mysql_server_args(server_id="2", is_master=False),
+    ),
+    MySql(
+        name="mysql-replica-2",
+        version=MySql.DEFAULT_VERSION,
+        additional_args=create_mysql_server_args(server_id="3", is_master=False),
+    ),
     Toxiproxy(),
     Testdrive(
         no_reset=True,
@@ -171,6 +181,13 @@ def workflow_master_changes(c: Composition) -> None:
             f"--var=mysql-replication-master-host={host_data_master}",
             "configure-replica.td",
             mysql_host="mysql-replica-2",
+        )
+        # wait for mysql-replica-2 to replicate the current state
+        time.sleep(15)
+        run_testdrive_files(
+            c,
+            f"--var=mysql-source-host={host_for_mz_source}",
+            "verify-mysql-source-select-all.td",
         )
         # create source pointing to mysql-replica-2
         run_testdrive_files(
