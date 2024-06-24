@@ -1492,13 +1492,13 @@ steps:
     agents:
       queue: linux-aarch64
 
-  - id: read-only-cluster
-    label: Read-only cluster
+  - id: 0dt
+    label: Zero downtime
     depends_on: build-aarch64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: read-only-cluster
+          composition: 0dt
     agents:
       queue: linux-aarch64
 

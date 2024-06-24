@@ -47,7 +47,7 @@ pub struct DeploymentState {
 }
 
 impl DeploymentState {
-    /// Creates a new `LeaderState` for a deployment. The
+    /// Creates a new `LeaderState` for a deployment.
     ///
     /// Returns the state and a handle to the state.
     pub fn new() -> (DeploymentState, DeploymentStateHandle) {

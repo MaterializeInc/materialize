@@ -35,7 +35,7 @@ use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::{StorageError, TxnWalTablesImpl};
 
 use crate::builtin::BuiltinLog;
-use crate::durable::initialize::{SYSTEM_CONFIG_SYNCED_KEY, TXN_WAL_TABLES};
+use crate::durable::initialize::{ENABLE_0DT_DEPLOYMENT, SYSTEM_CONFIG_SYNCED_KEY, TXN_WAL_TABLES};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
@@ -1591,6 +1591,15 @@ impl<'a> Transaction<'a> {
         self.set_config(TXN_WAL_TABLES.into(), Some(u64::from(value)))
     }
 
+    /// Updates the catalog `enable_0dt_deployment` "config" value to
+    /// match the `enable_0dt_deployment` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with Launch Darkly,
+    /// but use it in boot before Launch Darkly is available.
+    pub fn set_enable_0dt_deployment(&mut self, value: bool) -> Result<(), CatalogError> {
+        self.set_config(ENABLE_0DT_DEPLOYMENT.into(), Some(u64::from(value)))
+    }
+
     /// Removes the catalog `txn_wal_tables` "config" value to
     /// match the `txn_wal_tables` "system var" value.
     ///
@@ -1598,6 +1607,15 @@ impl<'a> Transaction<'a> {
     /// but use it in boot before Launch Darkly is available.
     pub fn reset_txn_wal_tables(&mut self) -> Result<(), CatalogError> {
         self.set_config(TXN_WAL_TABLES.into(), None)
+    }
+
+    /// Removes the catalog `enable_0dt_deployment` "config" value to
+    /// match the `enable_0dt_deployment` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with LaunchDarkly,
+    /// but use it in boot before LaunchDarkly is available.
+    pub fn reset_enable_0dt_deployment(&mut self) -> Result<(), CatalogError> {
+        self.set_config(ENABLE_0DT_DEPLOYMENT.into(), None)
     }
 
     /// Updates the catalog `system_config_synced` "config" value to true.

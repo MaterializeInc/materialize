@@ -41,7 +41,10 @@
 //!
 //! [^1] "Configuration" here means "command-line flags". Most settings in an
 //! environment are changeable at runtime via LaunchDarkly feature flags, but
-//! occasionally
+//! occasionally we have settings that are only changeable via command-line
+//! flags to `environmentd`. Changing these flags requires a process restart,
+//! and performing that process restart without incurring unavailability
+//! requires this deployment infrastructure.
 
 pub mod preflight;
 pub mod state;
