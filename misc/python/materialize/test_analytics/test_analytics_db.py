@@ -13,6 +13,9 @@ from materialize.test_analytics.connector.test_analytics_connector import (
     DatabaseConnector,
 )
 from materialize.test_analytics.data.build.build_data_storage import BuildDataStorage
+from materialize.test_analytics.data.build.build_history_analysis import (
+    BuildHistoryAnalysis,
+)
 from materialize.test_analytics.data.build_annotation.build_annotation_storage import (
     BuildAnnotationStorage,
 )
@@ -42,6 +45,7 @@ class TestAnalyticsDb:
         )
         self.benchmark_results = FeatureBenchmarkResultStorage(self.database_connector)
         self.build_annotations = BuildAnnotationStorage(self.database_connector)
+        self.build_history = BuildHistoryAnalysis(self.database_connector)
 
     def submit_updates(self) -> None:
         """

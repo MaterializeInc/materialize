@@ -76,7 +76,7 @@ WITH MUTUALLY RECURSIVE data (build_id TEXT, pipeline TEXT, build_number INT, bu
     AND d.predecessor_build_number > b2.build_number
     INNER JOIN build_job bj2
     ON b2.build_id = bj2.build_id
-    WHERE d.predecessor_index <= 5
+    WHERE d.predecessor_index < 10
     AND bj2.is_latest_retry = TRUE
     GROUP BY
         d.build_id,
@@ -98,7 +98,8 @@ SELECT
     d.predecessor_build_number AS predecessor_build_number,
     pred_b.build_id AS predecessor_build_id,
     pred_bj.build_job_id AS predecessor_build_job_id,
-    pred_bj.success AS predecessor_build_step_success
+    pred_bj.success AS predecessor_build_step_success,
+    pred_bj.is_latest_retry AS predecessor_is_latest_retry
 FROM
     data d
 INNER JOIN build pred_b
@@ -108,5 +109,23 @@ INNER JOIN build_job pred_bj
 ON pred_b.build_id = pred_bj.build_id
 AND d.build_step_key = pred_bj.build_step_key
 WHERE d.predecessor_index <> 0
-AND pred_bj.is_latest_retry = TRUE
+;
+
+CREATE OR REPLACE VIEW v_most_recent_build_job AS
+SELECT
+    b.pipeline,
+    b.branch,
+    b.build_id,
+    bj.build_job_id,
+    bj.build_step_id,
+    bj.build_step_key,
+    bj.shard_index,
+    bj.success
+FROM build_job bj
+INNER JOIN build b
+    ON bj.build_id = b.build_id
+INNER JOIN v_most_recent_build mrb
+    ON b.pipeline = mrb.pipeline
+    AND b.build_number = mrb.highest_build_number
+WHERE bj.is_latest_retry = TRUE
 ;
