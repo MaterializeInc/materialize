@@ -279,6 +279,11 @@ pub enum Message<T = mz_repr::Timestamp> {
         span: Span,
         stage: SecretStage,
     },
+    ClusterStageReady {
+        ctx: ExecuteContext,
+        span: Span,
+        stage: ClusterStage,
+    },
     ExplainTimestampStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -342,6 +347,7 @@ impl Message {
             }
             Message::SubscribeStageReady { .. } => "subscribe_stage_ready",
             Message::SecretStageReady { .. } => "secret_stage_ready",
+            Message::ClusterStageReady { .. } => "cluster_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
@@ -620,6 +626,17 @@ pub struct ExplainTimestampFinish {
     source_ids: BTreeSet<GlobalId>,
     when: QueryWhen,
     real_time_recency_ts: Option<Timestamp>,
+}
+
+#[derive(Debug)]
+pub enum ClusterStage {
+    Alter(AlterCluster),
+}
+
+#[derive(Debug)]
+pub struct AlterCluster {
+    validity: PlanValidity,
+    plan: plan::AlterClusterPlan,
 }
 
 #[derive(Debug)]
