@@ -663,7 +663,7 @@ def get_failures_on_main(test_analytics: TestAnalyticsDb) -> BuildHistory:
 
         if len(build_history.last_build_step_outcomes) < 5:
             print(
-                "Loading build history from test analytics did not provide enough data"
+                f"Loading build history from test analytics did not provide enough data ({len(build_history.last_build_step_outcomes)} entries)"
             )
         else:
             return build_history
