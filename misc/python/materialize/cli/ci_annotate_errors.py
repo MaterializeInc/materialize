@@ -57,7 +57,7 @@ ERROR_RE = re.compile(
     | has\ overflowed\ its\ stack
     | internal\ error:
     | \*\ FATAL:
-    | fatal: # used in frontegg-mock
+    | (^|\ )fatal: # used in frontegg-mock
     | [Oo]ut\ [Oo]f\ [Mm]emory
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
