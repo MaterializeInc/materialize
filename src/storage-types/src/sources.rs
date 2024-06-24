@@ -17,7 +17,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{Array, BinaryArray, BinaryBuilder, StructArray};
+use arrow::array::{Array, BinaryArray, BinaryBuilder, NullArray, StructArray};
 use arrow::datatypes::{Field, Fields};
 use bytes::BufMut;
 use itertools::EitherOrBoth::Both;
@@ -34,8 +34,8 @@ use mz_persist_types::stats::StatsFn;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
-    ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow, RelationDesc, Row,
-    RowColumnarDecoder, RowColumnarEncoder, RowDecoder, RowEncoder,
+    arb_row_for_relation, ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow,
+    RelationDesc, Row, RowColumnarDecoder, RowColumnarEncoder, RowDecoder, RowEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
 use proptest::collection::vec;
@@ -1199,6 +1199,22 @@ impl Codec for SourceData {
     }
 }
 
+/// Given a [`RelationDesc`] returns an arbitrary [`SourceData`].
+pub fn arb_source_data_for_relation_desc(desc: &RelationDesc) -> impl Strategy<Value = SourceData> {
+    let row_strat = arb_row_for_relation(desc).no_shrink();
+
+    proptest::strategy::Union::new_weighted(vec![
+        (50, row_strat.prop_map(|row| SourceData(Ok(row))).boxed()),
+        (
+            1,
+            any::<DataflowError>()
+                .prop_map(|err| SourceData(Err(err)))
+                .no_shrink()
+                .boxed(),
+        ),
+    ])
+}
+
 /// An implementation of [PartEncoder] for [SourceData].
 ///
 /// This mostly delegates the encoding logic to [RowEncoder], but flatmaps in
@@ -1821,9 +1837,10 @@ impl Schema2<SourceData> for RelationDesc {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use mz_repr::{arb_datum_for_scalar, ScalarType};
     use proptest::prelude::*;
-    use proptest::strategy::ValueTree;
+    use proptest::strategy::{Union, ValueTree};
 
     use crate::errors::EnvelopeError;
 
@@ -1887,6 +1904,85 @@ mod tests {
             // The proptest! macro interferes with rustfmt.
             let datums = datums.iter().map(Datum::from);
             scalar_type_parquet_roundtrip(ty, datums);
+        });
+    }
+
+    #[track_caller]
+    fn roundtrip_source_data(desc: RelationDesc, datas: Vec<SourceData>) {
+        let mut encoder = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
+        for data in &datas {
+            encoder.append(data);
+        }
+        let col = encoder.finish();
+
+        // Encode to Parquet.
+        let mut buf = Vec::new();
+        let fields = Fields::from(vec![Field::new("k", col.data_type().clone(), false)]);
+        let arrays: Vec<Arc<dyn Array>> = vec![Arc::new(col)];
+        mz_persist_types::parquet::encode_arrays(&mut buf, fields, arrays).unwrap();
+
+        // Decode from Parquet.
+        let buf = Bytes::from(buf);
+        let mut reader = mz_persist_types::parquet::decode_arrays(buf).unwrap();
+        let maybe_batch = reader.next();
+
+        // If we didn't encode any data then our record_batch will be empty.
+        let Some(record_batch) = maybe_batch else {
+            assert!(datas.is_empty());
+            return;
+        };
+        let record_batch = record_batch.unwrap();
+
+        assert_eq!(record_batch.columns().len(), 1);
+        let rnd_col = &record_batch.columns()[0];
+        let rnd_col = rnd_col
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap()
+            .clone();
+
+        // Read back all of our data and assert it roundtrips.
+        let mut rnd_data = SourceData(Ok(Row::default()));
+        let decoder = <RelationDesc as Schema2<SourceData>>::decoder(&desc, rnd_col).unwrap();
+        for (idx, og_data) in datas.into_iter().enumerate() {
+            decoder.decode(idx, &mut rnd_data);
+            assert_eq!(og_data, rnd_data);
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn all_source_data_roundtrips() {
+        let num_rows = Union::new_weighted(vec![
+            (500, Just(0..8)),
+            (50, Just(8..32)),
+            (10, Just(32..128)),
+            (5, Just(128..512)),
+            (3, Just(512..2048)),
+            (1, Just(2048..8192)),
+        ]);
+
+        let strat = (any::<RelationDesc>(), num_rows).prop_flat_map(|(desc, num_rows)| {
+            proptest::collection::vec(arb_source_data_for_relation_desc(&desc), num_rows)
+                .prop_map(move |datas| (desc.clone(), datas))
+        });
+
+        proptest!(|((desc, source_datas) in strat)| {
+            roundtrip_source_data(desc, source_datas);
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn empty_relation_desc_roundtrips() {
+        let empty = RelationDesc::empty();
+        let strat = proptest::collection::vec(arb_source_data_for_relation_desc(&empty), 0..8)
+            .prop_map(move |datas| (empty.clone(), datas));
+
+        // Note: This case should be covered by the `all_source_data_roundtrips` test above, but
+        // it's a special case that we explicitly want to exercise.
+        proptest!(|((desc, source_datas) in strat)| {
+            roundtrip_source_data(desc, source_datas);
         });
     }
 

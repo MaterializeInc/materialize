@@ -3601,6 +3601,9 @@ impl Arbitrary for ScalarType {
             Just(ScalarType::RegClass).boxed(),
             Just(ScalarType::Int2Vector).boxed(),
         ])
+        // None of the leaf ScalarTypes types are really "simpler" than others
+        // so don't waste time trying to shrink.
+        .no_shrink()
         .boxed();
 
         // There are a limited set of types we support in ranges.

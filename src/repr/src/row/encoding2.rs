@@ -1441,32 +1441,30 @@ mod tests {
 
     use super::*;
     use crate::adt::array::ArrayDimension;
-    use crate::{arb_datum_for_column, ColumnName, ColumnType};
+    use crate::relation::arb_relation_desc;
+    use crate::{arb_datum_for_column, arb_row_for_relation, ColumnName, ColumnType};
 
     #[track_caller]
-    fn roundtrip_datum<'a>(ty: ColumnType, datums: impl Iterator<Item = Datum<'a>>) {
+    fn roundtrip_datum<'a>(ty: ColumnType, datum: impl Iterator<Item = Datum<'a>>) {
         let desc = RelationDesc::empty().with_column("a", ty);
+        let rows = datum.map(|d| Row::pack_slice(&[d])).collect();
+        roundtrip_rows(&desc, rows)
+    }
+
+    #[track_caller]
+    fn roundtrip_rows(desc: &RelationDesc, rows: Vec<Row>) {
         let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
-
-        let mut row = Row::default();
-        let datums: Vec<_> = datums.collect();
-
-        for d in &datums {
-            row.packer().push(d);
+        for row in &rows {
             encoder.append(&row);
         }
         let col = encoder.finish();
 
         let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
 
-        for (idx, datum) in datums.into_iter().enumerate() {
-            // Creating a packer clears the row.
-            row.packer();
-
-            decoder.decode(idx, &mut row);
-            let rnd_datum = row.unpack_first();
-
-            assert_eq!(datum, rnd_datum);
+        let mut rnd_row = Row::default();
+        for (idx, og_row) in rows.into_iter().enumerate() {
+            decoder.decode(idx, &mut rnd_row);
+            assert_eq!(og_row, rnd_row);
         }
     }
 
@@ -1481,6 +1479,26 @@ mod tests {
         proptest!(|((ty, datums) in strat)| {
             roundtrip_datum(ty.clone(), datums.iter().map(Datum::from));
         })
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn proptest_non_empty_relation_descs() {
+        let strat = arb_relation_desc(1..8).prop_flat_map(|desc| {
+            proptest::collection::vec(arb_row_for_relation(&desc), 0..8)
+                .prop_map(move |rows| (desc.clone(), rows))
+        });
+
+        proptest!(|((desc, rows) in strat)| {
+            roundtrip_rows(&desc, rows)
+        })
+    }
+
+    #[mz_ore::test]
+    fn empty_relation_desc_returns_error() {
+        let empty_desc = RelationDesc::empty();
+        let result = <RelationDesc as Schema2<Row>>::encoder(&empty_desc);
+        assert!(result.is_err());
     }
 
     #[mz_ore::test]
