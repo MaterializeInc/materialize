@@ -25,7 +25,13 @@ from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 class BuildHistoryAnalysis(BaseDataStorage):
 
     def get_recent_build_job_failures(
-        self, pipeline: str, branch: str, step_key: str, parallel_job_index: int | None
+        self,
+        pipeline: str,
+        branch: str,
+        step_key: str,
+        parallel_job_index: int | None,
+        max_entries: int = 5,
+        include_retries: bool = True,
     ) -> BuildHistory:
         shard_index_comparison = (
             f"shard_index = {parallel_job_index}"
@@ -56,6 +62,10 @@ class BuildHistoryAnalysis(BaseDataStorage):
         if len(rows) == 1:
             build_job_id = rows[0][0]
 
+            retry_filter = ""
+            if not include_retries:
+                retry_filter = "AND predecessor_is_latest_retry = TRUE"
+
             rows = self.query_data(
                 dedent(
                     f"""
@@ -67,8 +77,10 @@ class BuildHistoryAnalysis(BaseDataStorage):
                         v_build_job_success
                     WHERE
                         build_job_id = '{build_job_id}'
+                        {retry_filter}
                     ORDER BY
                         predecessor_index ASC
+                    LIMIT {max_entries}
                     """
                 ),
             )
