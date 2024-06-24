@@ -52,8 +52,8 @@ use mz_ore::str::StrExt;
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
-    PG_CATALOG_SCHEMA, SYSTEM_SCHEMAS, UNSTABLE_SCHEMAS,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_SCHEMA,
+    MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA, SYSTEM_SCHEMAS, UNSTABLE_SCHEMAS,
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc};
@@ -1173,7 +1173,7 @@ impl CatalogState {
         let mut index_name = QualifiedItemName {
             qualifiers: ItemQualifiers {
                 database_spec: ResolvedDatabaseSpecifier::Ambient,
-                schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id()),
+                schema_spec: SchemaSpecifier::Id(self.get_mz_introspection_schema_id()),
             },
             item: index_name.clone(),
         };
@@ -1381,6 +1381,10 @@ impl CatalogState {
 
     pub fn get_mz_internal_schema_id(&self) -> SchemaId {
         self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA]
+    }
+
+    pub fn get_mz_introspection_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[MZ_INTROSPECTION_SCHEMA]
     }
 
     pub fn get_mz_unsafe_schema_id(&self) -> SchemaId {
