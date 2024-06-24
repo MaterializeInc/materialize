@@ -67,3 +67,25 @@ GROUP BY
     b.branch,
     b.pipeline
 ;
+
+-- This view can only consider steps that were uploaded to the database.
+CREATE OR REPLACE VIEW v_build_success AS
+SELECT
+    b.pipeline,
+    b.branch,
+    b.build_id,
+    b.build_number,
+    -- only considers the latest retry
+    SUM(CASE WHEN bj.success OR NOT bj.is_latest_retry THEN 0 ELSE 1 END) > 0 AS has_failed_steps,
+    -- only considers the latest retry
+    SUM(CASE WHEN bj.success OR NOT bj.is_latest_retry THEN 0 ELSE 1 END) AS count_failed_steps,
+    -- considers all retry instances
+    SUM(CASE WHEN bj.success THEN 0 ELSE 1 END) > 0 AS has_any_failed_jobs
+FROM build b
+INNER JOIN build_job bj
+ON b.build_id = bj.build_id
+GROUP BY
+    b.pipeline,
+    b.branch,
+    b.build_id,
+    b.build_number;
