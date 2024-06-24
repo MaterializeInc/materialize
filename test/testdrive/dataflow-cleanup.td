@@ -23,17 +23,17 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 
 > CREATE CLUSTER test REPLICAS (r1 (SIZE '1', INTROSPECTION INTERVAL '10ms'))
 > SET cluster = test
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
 false
 
 # Verify that an index dataflow is cleaned up when the index is dropped.
 
 > CREATE TABLE t (a int)
 > CREATE INDEX test_index ON t (a)
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
 true
 > DROP INDEX test_index
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
 false
 
 # Verify that an index dataflow is cleaned up when its input advances to the
@@ -47,19 +47,19 @@ false
 1000
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
 false
 > DROP INDEX test_index
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
 false
 
 # Verify that an MV dataflow is cleaned up when the MV is dropped.
 
 > CREATE MATERIALIZED VIEW test_mv AS SELECT a FROM t
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
 true
 > DROP MATERIALIZED VIEW test_mv
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
 false
 
 # Verify that an MV dataflow is cleaned up when its input advances to the
@@ -72,10 +72,10 @@ false
 1000
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
 false
 > DROP MATERIALIZED VIEW test_mv
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
 false
 
 # Regression test for https://github.com/MaterializeInc/materialize/issues/16326
@@ -101,8 +101,8 @@ false
 true
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
-> SELECT count(*) FROM mz_internal.mz_dataflow_operators
+> SELECT count(*) FROM mz_introspection.mz_dataflow_operators
 0
 > DROP MATERIALIZED VIEW q14
-> SELECT count(*)  FROM mz_internal.mz_dataflow_operators
+> SELECT count(*)  FROM mz_introspection.mz_dataflow_operators
 0

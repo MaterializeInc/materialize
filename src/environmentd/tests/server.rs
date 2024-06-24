@@ -934,7 +934,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
     assert_eq!(
         client1
             .query_one(
-                "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
+                "SELECT count(*) FROM mz_introspection.mz_dataflow_operators",
                 &[]
             )
             .unwrap()
@@ -948,7 +948,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
             .retry(|_state| {
                 let count: i64 = client2
                     .query_one(
-                        "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
+                        "SELECT count(*) FROM mz_introspection.mz_dataflow_operators",
                         &[],
                     )
                     .map_err(|_| ())
@@ -974,7 +974,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
         .retry(|_state| {
             let count: i64 = client1
                 .query_one(
-                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
+                    "SELECT count(*) FROM mz_introspection.mz_dataflow_operators",
                     &[],
                 )
                 .map_err(|_| ())
@@ -1046,7 +1046,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
             }
             let count: i64 = client
                 .query_one(
-                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
+                    "SELECT count(*) FROM mz_introspection.mz_dataflow_operators",
                     &[],
                 )
                 .map_err(|_| ())
@@ -1075,7 +1075,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
             }
             let count: i64 = client
                 .query_one(
-                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
+                    "SELECT count(*) FROM mz_introspection.mz_dataflow_operators",
                     &[],
                 )
                 .map_err(|_| ())

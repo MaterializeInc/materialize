@@ -247,7 +247,7 @@ SELECT count(*) FROM mz_materialized_views WHERE name = 'mv'
 
 # mz_scheduling_elapsed_raw, a log source, is optimized away, but should still count as a dependency
 query error db error: ERROR: materialized view objects cannot depend on log sources
-CREATE MATERIALIZED VIEW mv AS SELECT (SELECT 1 FROM mz_internal.mz_scheduling_elapsed_raw WHERE FALSE);
+CREATE MATERIALIZED VIEW mv AS SELECT (SELECT 1 FROM mz_introspection.mz_scheduling_elapsed_raw WHERE FALSE);
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_table_keys = true
@@ -469,7 +469,7 @@ mv_primary_idx  mv  quickstart {?column?}
 # Test: Creating materialized views that depend on log sources is forbidden.
 
 statement error materialized view objects cannot depend on log sources
-CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT id, name FROM mz_internal.mz_dataflow_operators;
+CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT id, name FROM mz_introspection.mz_dataflow_operators;
 
 
 # Test: Attempting to use view commands on materialized views gives helpful errors.

@@ -2146,9 +2146,9 @@ ALTER SCHEMA mz_catalog OWNER TO mz_system
 db error: ERROR: cannot alter schema mz_catalog because it is required by the database system
 
 simple conn=mz_system,user=mz_system
-ALTER VIEW mz_internal.mz_dataflow_operators OWNER TO mz_system
+ALTER VIEW mz_introspection.mz_dataflow_operators OWNER TO mz_system
 ----
-db error: ERROR: cannot alter item mz_internal.mz_dataflow_operators because it is required by the database system
+db error: ERROR: cannot alter item mz_introspection.mz_dataflow_operators because it is required by the database system
 
 simple conn=mz_system,user=mz_system
 ALTER TABLE mz_views OWNER TO mz_system
