@@ -17,7 +17,7 @@ use std::fmt::Debug;
 
 use differential_dataflow::Collection;
 use mz_repr::{Diff, Row};
-use mz_storage_types::errors::{DecodeError, SourceErrorDetails};
+use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
@@ -82,7 +82,7 @@ pub trait SourceRender {
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -128,21 +128,4 @@ pub struct DecodeResult<FromTime> {
     pub metadata: Row,
     /// The original timestamp of this message
     pub from_time: FromTime,
-}
-
-/// A structured error for `SourceReader::get_next_message` implementors.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceReaderError {
-    pub inner: SourceErrorDetails,
-}
-
-impl SourceReaderError {
-    /// This is an unclassified but definite error. This is typically only appropriate
-    /// when the error is permanently fatal for the source... some critical invariant
-    /// is violated or data is corrupted, for example.
-    pub fn other_definite(e: anyhow::Error) -> SourceReaderError {
-        SourceReaderError {
-            inner: SourceErrorDetails::Other(format!("{}", e)),
-        }
-    }
 }

@@ -25,7 +25,7 @@
 // https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
 
-use crate::source::types::{SourceMessage, SourceReaderError};
+use crate::source::types::SourceMessage;
 
 pub mod generator;
 mod kafka;

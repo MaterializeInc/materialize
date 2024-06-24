@@ -15,7 +15,7 @@ use bytes::BufMut;
 use mz_expr::EvalError;
 use mz_kafka_util::client::TunnelingClientContext;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, Row};
+use mz_repr::Row;
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -336,29 +336,18 @@ impl Display for UpsertError {
 /// This should _not_ include transient source errors, like connection issues or misconfigurations.
 #[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct SourceError {
-    pub source_id: GlobalId,
     pub error: SourceErrorDetails,
-}
-
-impl SourceError {
-    pub fn new(source_id: GlobalId, error: SourceErrorDetails) -> SourceError {
-        SourceError { source_id, error }
-    }
 }
 
 impl RustType<ProtoSourceError> for SourceError {
     fn into_proto(&self) -> ProtoSourceError {
         ProtoSourceError {
-            source_id: Some(self.source_id.into_proto()),
             error: Some(self.error.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoSourceError) -> Result<Self, TryFromProtoError> {
         Ok(SourceError {
-            source_id: proto
-                .source_id
-                .into_rust_if_some("ProtoSourceError::source_id")?,
             error: proto.error.into_rust_if_some("ProtoSourceError::error")?,
         })
     }
@@ -366,7 +355,6 @@ impl RustType<ProtoSourceError> for SourceError {
 
 impl Display for SourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: ", self.source_id)?;
         self.error.fmt(f)
     }
 }
@@ -765,7 +753,6 @@ mod columnation {
                 DataflowError::SourceError(err) => {
                     let err: &SourceError = &*err;
                     let err = SourceError {
-                        source_id: err.source_id,
                         error: match &err.error {
                             SourceErrorDetails::Initialization(string) => {
                                 SourceErrorDetails::Initialization(self.string_region.copy(string))

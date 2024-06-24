@@ -147,6 +147,7 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{simple_query_opt, PostgresError};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
+use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
@@ -165,7 +166,6 @@ use crate::metrics::source::postgres::PgSnapshotMetrics;
 use crate::source::postgres::replication::RewindRequest;
 use crate::source::postgres::{verify_schema, DefiniteError, ReplicationError, TransientError};
 use crate::source::types::ProgressStatisticsUpdate;
-use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -177,7 +177,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<(CastType, MirScalarExpr)>)>,
     metrics: PgSnapshotMetrics,
 ) -> (
-    Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
+    Collection<G, (usize, Result<Row, DataflowError>), Diff>,
     Stream<G, RewindRequest>,
     Stream<G, ProgressStatisticsUpdate>,
     Stream<G, ReplicationError>,
