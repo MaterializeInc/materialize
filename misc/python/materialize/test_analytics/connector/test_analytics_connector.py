@@ -75,7 +75,7 @@ class DatabaseConnector:
         if len(self.update_statements) == 0:
             return
 
-        cursor = self._create_cursor()
+        cursor = self._create_cursor(autocommit=not self._use_transaction)
 
         self._disable_if_on_unsupported_version(cursor)
 
