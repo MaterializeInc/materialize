@@ -221,6 +221,7 @@ The level of support for these tools will improve as we extend the coverage of `
 | Meltano       | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
 | Airbyte       | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
 | Striim Cloud  | {{< supportLevel beta >}}        | See the [Striim Cloud guide](/integrations/striim/) for a step-by-step breakdown of the integration         |             |
+| Estuary Flow  | {{< supportLevel beta >}}        | See the [Estaury Flow guide](/integrations/estuary-flow/) for a step-by-step breakdown of the integration |
 
 ### Business Intelligence (BI)
 
