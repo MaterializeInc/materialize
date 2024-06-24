@@ -10,11 +10,15 @@
 //! Preflight checks for deployments.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use mz_catalog::durable::{BootstrapArgs, CatalogError, Metrics, OpenableDurableCatalogState};
+use mz_ore::halt;
 use mz_persist_client::PersistClient;
 use mz_sql::catalog::EnvironmentId;
+use tokio::time;
+use tracing::info;
 
 use crate::deployment::state::DeploymentState;
 use crate::BUILD_INFO;
@@ -109,5 +113,85 @@ pub async fn preflight_legacy(
         Ok(openable_adapter_storage)
     } else {
         mz_ore::halt!("Server started with requested generation {deploy_generation} but catalog was already at {catalog_generation:?}. Deploy generations must increase monotonically");
+    }
+}
+
+/// Perform a 0dt preflight check.
+///
+/// Returns the openable adapter storage to use and whether or not to boot in
+/// read only mode.
+pub async fn preflight_0dt(
+    PreflightInput {
+        boot_ts,
+        environment_id,
+        persist_client,
+        bootstrap_default_cluster_replica_size,
+        bootstrap_role,
+        deploy_generation,
+        deployment_state,
+        mut openable_adapter_storage,
+        catalog_metrics,
+    }: PreflightInput,
+) -> Result<(Box<dyn OpenableDurableCatalogState>, bool), anyhow::Error> {
+    info!(%deploy_generation, "performing 0dt preflight checks");
+
+    if !openable_adapter_storage.is_initialized().await? {
+        info!("catalog not initialized; booting as leader with writes allowed");
+        deployment_state.set_is_leader();
+        return Ok((openable_adapter_storage, false));
+    }
+
+    let catalog_generation = openable_adapter_storage.get_deployment_generation().await?;
+    info!(%catalog_generation, "catalog initialized");
+    if catalog_generation < deploy_generation {
+        info!("this deployment is a new generation; booting in read only mode");
+
+        // Spawn a background task to handle promotion to leader.
+        mz_ore::task::spawn(|| "preflight_0dt", async move {
+            // Simulate waiting for readiness to promote by waiting for a
+            // fixed 30s.
+            // TODO(benesch): actually wait for clusters to hydrate.
+            info!("waiting to be ready to promote");
+            time::sleep(Duration::from_secs(30)).await;
+
+            // Announce that we're ready to promote.
+            let promoted = deployment_state.set_ready_to_promote();
+            info!("announced as ready to promote; waiting for promotion");
+            promoted.await;
+
+            // Take over the catalog.
+            info!("promoted; attempting takeover");
+            let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+                persist_client,
+                environment_id.organization_id(),
+                BUILD_INFO.semver_version(),
+                Arc::clone(&catalog_metrics),
+            )
+            .await
+            .expect("failed to fence out old deployment"); // TODO(benesch): retry instead?
+            openable_adapter_storage
+                .open(
+                    boot_ts,
+                    &BootstrapArgs {
+                        default_cluster_replica_size: bootstrap_default_cluster_replica_size,
+                        bootstrap_role,
+                    },
+                    deploy_generation,
+                    None,
+                )
+                .await
+                .expect("failed to fence out out deployment"); // TODO(benesch): retry instead?
+
+            // Reboot as the leader.
+            halt!("fenced out old deployment; rebooting as leader")
+        });
+
+        Ok((openable_adapter_storage, true))
+    } else if catalog_generation == deploy_generation {
+        info!("this deployment is the current generation; booting with writes allowed");
+        deployment_state.set_is_leader();
+        Ok((openable_adapter_storage, false))
+    } else {
+        halt!("this deployment has been fenced out");
     }
 }

@@ -54,7 +54,6 @@ class Materialized(Service):
         sanity_restart: bool = True,
         platform: str | None = None,
         healthcheck: list[str] | None = None,
-        read_only_controllers: bool = False,
     ) -> None:
         if name is None:
             name = "materialized"
@@ -110,9 +109,6 @@ class Materialized(Service):
 
         if unsafe_mode:
             command += ["--unsafe-mode"]
-
-        if read_only_controllers:
-            command += ["--read-only-controllers"]
 
         if not environment_id:
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID

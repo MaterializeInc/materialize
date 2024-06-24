@@ -27,6 +27,7 @@ use derivative::Derivative;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::load_remote_system_parameters;
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
+use mz_adapter_types::dyncfgs::ENABLE_0DT_DEPLOYMENT;
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
@@ -40,6 +41,7 @@ use mz_ore::tracing::TracingHandle;
 use mz_ore::{instrument, task};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::StorageUsageClient;
+use mz_repr::strconv;
 use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
@@ -177,10 +179,6 @@ pub struct Config {
     // === Testing options. ===
     /// A now generation function for mocking time.
     pub now: NowFn,
-    /// Whether or not to start controllers in read-only mode. This is only
-    /// meant for use during development of read-only clusters and 0dt upgrades
-    /// and should go away once we have proper orchestration during upgrades.
-    pub read_only_controllers: bool,
 }
 
 /// Configuration for network listeners.
@@ -362,7 +360,40 @@ impl Listeners {
         )
         .await?;
 
+        // Determine whether we should perform a 0dt deployment.
+        let enable_0dt_deployment = {
+            let default = config
+                .system_parameter_defaults
+                .get(ENABLE_0DT_DEPLOYMENT.name())
+                .map(|x| {
+                    strconv::parse_bool(x).map_err(|err| {
+                        anyhow!(
+                            "failed to parse default for {}: {}",
+                            ENABLE_0DT_DEPLOYMENT.name(),
+                            err
+                        )
+                    })
+                })
+                .transpose()?;
+            let ld = get_ld_value("enable_0dt_deployment", &remote_system_parameters, |x| {
+                strconv::parse_bool(x).map_err(|x| x.to_string())
+            })?;
+            let catalog = openable_adapter_storage.get_enable_0dt_deployment().await?;
+            let computed = catalog.or(ld).or(default).unwrap_or(false);
+            info!(
+                %computed,
+                ?default,
+                ?ld,
+                ?catalog,
+                "determined value for enable_0dt_deployment system parameter",
+            );
+            computed
+        };
+
         // Perform preflight checks.
+        //
+        // Preflight checks determine whether to boot in read-only mode or not.
+        let mut read_only = false;
         let preflight_config = PreflightInput {
             boot_ts,
             environment_id: config.environment_id.clone(),
@@ -376,24 +407,40 @@ impl Listeners {
             openable_adapter_storage,
             catalog_metrics: Arc::clone(&config.catalog_config.metrics),
         };
-        // TODO(benesch): perform 0dt preflight checks instead if a 0dt feature flag is
-        // enabled.
-        let openable_adapter_storage =
-            deployment::preflight::preflight_legacy(preflight_config).await?;
+        if enable_0dt_deployment {
+            (openable_adapter_storage, read_only) =
+                deployment::preflight::preflight_0dt(preflight_config).await?;
+        } else {
+            openable_adapter_storage =
+                deployment::preflight::preflight_legacy(preflight_config).await?;
+        };
 
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
             bootstrap_role: config.bootstrap_role,
         };
 
-        let mut adapter_storage = openable_adapter_storage
-            .open(
-                boot_ts,
-                &bootstrap_args,
-                config.controller.deploy_generation,
-                None,
-            )
-            .await?;
+        let mut adapter_storage = if read_only {
+            // TODO: behavior of migrations when booting in savepoint mode is
+            // not well defined.
+            openable_adapter_storage
+                .open_savepoint(
+                    boot_ts,
+                    &bootstrap_args,
+                    config.controller.deploy_generation,
+                    None,
+                )
+                .await?
+        } else {
+            openable_adapter_storage
+                .open(
+                    boot_ts,
+                    &bootstrap_args,
+                    config.controller.deploy_generation,
+                    None,
+                )
+                .await?
+        };
 
         let txn_wal_tables_current_ld =
             get_ld_value(TXN_WAL_TABLES.name(), &remote_system_parameters, |x| {
@@ -449,12 +496,12 @@ impl Listeners {
             txn_wal_tables = value;
         }
         info!(
-            "persist_txn_tables value of {} computed from default {:?} catalog {:?} LD {:?} and flag {:?}",
-            txn_wal_tables,
-            txn_wal_tables_default,
-            txn_wal_tables_stash_ld,
-            txn_wal_tables_current_ld,
-            config.txn_wal_tables_cli,
+            computed = %txn_wal_tables,
+            default = ?txn_wal_tables_default,
+            catalog = ?txn_wal_tables_stash_ld,
+            ld = ?txn_wal_tables_current_ld,
+            cli = ?config.txn_wal_tables_cli,
+            "determined value for persist_txn_tables system parameter",
         );
 
         // Initialize adapter.
@@ -497,7 +544,7 @@ impl Listeners {
             webhook_concurrency_limit: webhook_concurrency_limit.clone(),
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
-            read_only_controllers: config.read_only_controllers,
+            read_only_controllers: read_only,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;

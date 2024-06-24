@@ -1080,7 +1080,6 @@ impl<'a> RunnerInner<'a> {
             internal_console_redirect_url: None,
             txn_wal_tables_cli: Some(TxnWalTablesImpl::Lazy),
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
-            read_only_controllers: false,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
