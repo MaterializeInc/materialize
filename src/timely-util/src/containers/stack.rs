@@ -176,11 +176,7 @@ impl<T: Clone + Columnation + 'static> SizableContainer for StackWrapper<T> {
     }
 
     fn preferred_capacity() -> usize {
-        if ENABLE_CHUNKED_STACK.load(std::sync::atomic::Ordering::Relaxed) {
-            <ChunkedStack<T> as SizableContainer>::preferred_capacity()
-        } else {
-            <TimelyStack<T> as SizableContainer>::preferred_capacity()
-        }
+        timely::container::buffer::default_capacity::<T>()
     }
 
     fn reserve(&mut self, additional: usize) {
