@@ -50,11 +50,11 @@ use mz_sql::session::vars::{
     ConnectionCounter, DropConnection, Value, Var, VarInput, WELCOME_MESSAGE,
 };
 use openssl::ssl::Ssl;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde_json::json;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{oneshot, watch};
 use tokio_openssl::SslStream;
 use tower::limit::GlobalConcurrencyLimitLayer;
@@ -62,6 +62,7 @@ use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
+use crate::deployment::state::DeploymentStateHandle;
 use crate::http::sql::SqlError;
 use crate::BUILD_INFO;
 
@@ -242,8 +243,7 @@ pub struct InternalHttpConfig {
     pub metrics_registry: MetricsRegistry,
     pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
-    pub promote_leader: oneshot::Sender<()>,
-    pub ready_to_promote: oneshot::Receiver<()>,
+    pub deployment_state_handle: DeploymentStateHandle,
     pub internal_console_redirect_url: Option<String>,
 }
 
@@ -251,123 +251,36 @@ pub struct InternalHttpServer {
     router: Router,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LeaderStatusResponse {
-    pub status: LeaderStatus,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LeaderStatus {
-    /// The current leader returns this. It shouldn't need to know that another instance is attempting to update it.
-    IsLeader,
-    /// The new pod should return this status until it is ready to become the leader, or it has determined that it cannot proceed.
-    Initializing,
-    /// Once we receive this status, we can tell it to become the leader and migrate the EIP.
-    ReadyToPromote,
-}
-
-#[derive(Debug)]
-pub enum LeaderState {
-    IsLeader,
-    Initializing {
-        // Invariant: promote_leader is Some in Initializing and ReadyToPromote: we need
-        // to be able to move them from one state to the other and to access it by value
-        // without the fiddly work of moving the state in and out of LeaderState mutex.
-        promote_leader: Option<oneshot::Sender<()>>,
-        ready_to_promote: oneshot::Receiver<()>,
-    },
-    ReadyToPromote {
-        // Same invariant as Initializing
-        promote_leader: Option<oneshot::Sender<()>>,
-    },
-}
-
-fn state_to_status(state: &LeaderState) -> LeaderStatus {
-    match state {
-        LeaderState::IsLeader => LeaderStatus::IsLeader,
-        LeaderState::Initializing { .. } => LeaderStatus::Initializing,
-        LeaderState::ReadyToPromote { .. } => LeaderStatus::ReadyToPromote,
-    }
-}
-
 pub async fn handle_leader_status(
-    State(state): State<Arc<Mutex<LeaderState>>>,
+    State(deployment_state_handle): State<DeploymentStateHandle>,
 ) -> impl IntoResponse {
-    let mut leader_state = state.lock().expect("lock poisoned");
-    match &mut *leader_state {
-        LeaderState::IsLeader => (),
-        LeaderState::Initializing {
-            promote_leader,
-            ready_to_promote,
-        } => {
-            match ready_to_promote.try_recv() {
-                Ok(_) => {
-                    assert!(promote_leader.is_some(), "invariant");
-                    *leader_state = LeaderState::ReadyToPromote {
-                        promote_leader: promote_leader.take(),
-                    };
-                }
-                Err(TryRecvError::Empty) => {
-                    // Continue waiting.
-                }
-                Err(TryRecvError::Closed) => {
-                    *leader_state = LeaderState::IsLeader; // server has started, it is the leader now
-                }
-            }
-        }
-        LeaderState::ReadyToPromote { .. } => (),
-    }
-    let status = state_to_status(&leader_state);
-    drop(leader_state);
-    (
-        StatusCode::OK,
-        Json(serde_json::json!(LeaderStatusResponse { status })),
-    )
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BecomeLeaderResponse {
-    pub result: BecomeLeaderResult,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum BecomeLeaderResult {
-    Success, // 200 http status: also return this if we are already the leader
-    Failure {
-        // 500 http status if called when not `ReadyToPromote`.
-        message: String,
-    },
+    let status = deployment_state_handle.status();
+    (StatusCode::OK, Json(json!({ "status": status })))
 }
 
 pub async fn handle_leader_promote(
-    State(state): State<Arc<Mutex<LeaderState>>>,
+    State(deployment_state_handle): State<DeploymentStateHandle>,
 ) -> impl IntoResponse {
-    let mut leader_state = state.lock().expect("lock poisoned");
-
-    match &mut *leader_state {
-        LeaderState::IsLeader => (),
-        LeaderState::Initializing { .. } => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!(BecomeLeaderResult::Failure {
-                    message: "Not ready to promote, still initializing".into(),
-                })),
-            );
+    match deployment_state_handle.try_promote() {
+        Ok(()) => {
+            // TODO(benesch): the body here is redundant. Should just return
+            // 204.
+            let status = StatusCode::OK;
+            let body = Json(json!({
+                "result": "Success",
+            }));
+            (status, body)
         }
-        LeaderState::ReadyToPromote { promote_leader } => {
-            // even if send fails it means the server has started and we're already the leader
-            let _ = promote_leader.take().expect("invariant").send(());
+        Err(()) => {
+            // TODO(benesch): the nesting here is redundant given the error
+            // code. Should just return the `{"message": "..."}` object.
+            let status = StatusCode::BAD_REQUEST;
+            let body = Json(json!({
+                "result": {"Failure": {"message": "cannot promote leader while initializing"}},
+            }));
+            (status, body)
         }
     }
-    // We're either already the leader or should be if we reach this.
-    *leader_state = LeaderState::IsLeader;
-    drop(leader_state);
-    (
-        StatusCode::OK,
-        Json(serde_json::json!(BecomeLeaderResponse {
-            result: BecomeLeaderResult::Success,
-        })),
-    )
 }
 
 impl InternalHttpServer {
@@ -376,8 +289,7 @@ impl InternalHttpServer {
             metrics_registry,
             adapter_client_rx,
             active_connection_count,
-            promote_leader,
-            ready_to_promote,
+            deployment_state_handle,
             internal_console_redirect_url,
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
@@ -483,10 +395,7 @@ impl InternalHttpServer {
         let leader_router = Router::new()
             .route("/api/leader/status", routing::get(handle_leader_status))
             .route("/api/leader/promote", routing::post(handle_leader_promote))
-            .with_state(Arc::new(Mutex::new(LeaderState::Initializing {
-                promote_leader: Some(promote_leader),
-                ready_to_promote,
-            })));
+            .with_state(deployment_state_handle);
 
         let router = router
             .merge(ws_router)

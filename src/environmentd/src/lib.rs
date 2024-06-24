@@ -46,18 +46,19 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::{ConnectionCounter, Var, TXN_WAL_TABLES};
 use mz_storage_types::controller::TxnWalTablesImpl;
 use tokio::sync::oneshot;
-use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
 use tracing::{info, info_span, Instrument};
 
+use crate::deployment::state::DeploymentState;
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 
+pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
+
+mod deployment;
 pub mod http;
 mod telemetry;
 #[cfg(feature = "test")]
 pub mod test_util;
-
-pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 
@@ -304,8 +305,7 @@ impl Listeners {
 
         let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0, 0)));
 
-        let (ready_to_promote_tx, ready_to_promote_rx) = oneshot::channel();
-        let (promote_leader_tx, promote_leader_rx) = oneshot::channel();
+        let (deployment_state, deployment_state_handle) = DeploymentState::new();
 
         // Start the internal HTTP server.
         //
@@ -319,8 +319,7 @@ impl Listeners {
                 metrics_registry: config.metrics_registry.clone(),
                 adapter_client_rx: internal_http_adapter_client_rx,
                 active_connection_count: Arc::clone(&active_connection_count),
-                promote_leader: promote_leader_tx,
-                ready_to_promote: ready_to_promote_rx,
+                deployment_state_handle,
                 internal_console_redirect_url: config.internal_console_redirect_url,
             });
             mz_server_core::serve(internal_http_conns, internal_http_server, None)
@@ -414,18 +413,10 @@ impl Listeners {
                     }
                 }
 
-                if let Err(()) = ready_to_promote_tx.send(()) {
-                    return Err(anyhow!(
-                        "internal http server closed its end of ready_to_promote"
-                    ));
-                }
+                let promoted = deployment_state.set_ready_to_promote();
 
                 tracing::info!("Waiting for user to promote this envd to leader");
-                if let Err(RecvError { .. }) = promote_leader_rx.await {
-                    return Err(anyhow!(
-                        "internal http server closed its end of promote_leader"
-                    ));
-                }
+                promoted.await;
 
                 openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
                     persist_client,
@@ -436,6 +427,7 @@ impl Listeners {
                 .await?;
             } else if catalog_generation == deploy_generation {
                 tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
+                deployment_state.set_is_leader();
             } else {
                 mz_ore::halt!("Server started with requested generation {deploy_generation} but catalog was already at {catalog_generation:?}. Deploy generations must increase monotonically");
             }
