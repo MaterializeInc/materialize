@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 import pymysql
+from pg8000 import Cursor
 
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition
@@ -102,7 +103,11 @@ def workflow_bin_log_manipulations(c: Composition) -> None:
     with c.override(
         Materialized(sanity_restart=False),
     ):
-        scenarios = [reset_master_gtid, corrupt_bin_log]
+        scenarios = [
+            reset_master_gtid,
+            corrupt_bin_log_to_stall_source,
+            corrupt_bin_log_and_add_sub_source,
+        ]
         for scenario in scenarios:
             print(f"--- Running scenario {scenario.__name__}")
             initialize(c)
@@ -416,11 +421,36 @@ def reset_master_gtid(c: Composition) -> None:
     )
 
 
-def corrupt_bin_log(c: Composition) -> None:
+def corrupt_bin_log_to_stall_source(c: Composition) -> None:
     """
     Switch off mz, modify data in mysql, and purge the bin-log so that mz hasn't seen all entries in the replication
     stream.
     """
+    _corrupt_bin_log(c)
+
+    run_testdrive_files(
+        c,
+        "verify-source-stalled.td",
+    )
+
+
+def corrupt_bin_log_and_add_sub_source(c: Composition) -> None:
+    """
+    Corrupt the bin log, add a sub source, and expect it to be working.
+    """
+
+    _corrupt_bin_log(c)
+
+    run_testdrive_files(
+        c,
+        "populate-table-t3.td",
+        "alter-source-add-subsource.td",
+        "verify-t3.td",
+    )
+
+
+def _corrupt_bin_log(c: Composition) -> None:
+    run_testdrive_files(c, "wait-for-snapshot.td")
 
     c.kill("materialized")
 
@@ -430,19 +460,18 @@ def corrupt_bin_log(c: Composition) -> None:
     with mysql_conn.cursor() as cur:
         cur.execute("INSERT INTO public.t1 VALUES (1, 'text')")
 
-        cur.execute("FLUSH BINARY LOGS")
-        time.sleep(2)
-        cur.execute("PURGE BINARY LOGS BEFORE now()")
-        cur.execute("FLUSH BINARY LOGS")
+        _purge_bin_logs(cur)
 
         cur.execute("INSERT INTO public.t1 VALUES (2, 'text')")
 
     c.up("materialized")
 
-    run_testdrive_files(
-        c,
-        "verify-source-stalled.td",
-    )
+
+def _purge_bin_logs(cur: Cursor) -> None:
+    cur.execute("FLUSH BINARY LOGS")
+    time.sleep(2)
+    cur.execute("PURGE BINARY LOGS BEFORE now()")
+    cur.execute("FLUSH BINARY LOGS")
 
 
 def transaction_with_rollback(c: Composition) -> None:
