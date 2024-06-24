@@ -20,6 +20,7 @@ use std::task::{Context, Poll, Waker};
 
 use futures_util::task::ArcWake;
 use timely::communication::{Message, Pull, Push};
+use timely::container::columnation::Columnation;
 use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::ParallelizationContract;
 use timely::dataflow::channels::pushers::Tee;
@@ -33,6 +34,8 @@ use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
 use timely::{Container, PartialOrder};
+
+use crate::containers::stack::{AccountedStackBuilder, StackWrapper};
 
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<G: Scope> {
@@ -262,6 +265,37 @@ where
     {
         let mut handle = self.handle.borrow_mut();
         handle.session_with_builder(cap).give(data);
+    }
+}
+
+impl<T, D, P>
+    AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<StackWrapper<D>>>, P>
+where
+    D: timely::Data + Columnation,
+    T: Timestamp,
+    P: Push<Bundle<T, StackWrapper<D>>>,
+{
+    pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
+
+    /// Provides one record at the time specified by the capability. This method will automatically
+    /// yield back to timely after [Self::MAX_OUTSTANDING_BYTES] have been produced.
+    pub async fn give_fueled<D2>(&mut self, cap: &Capability<T>, data: D2)
+    where
+        StackWrapper<D>: PushInto<D2>,
+    {
+        let should_yield = {
+            let mut handle = self.handle.borrow_mut();
+            let mut session = handle.session_with_builder(cap);
+            session.push_into(data);
+            let should_yield = session.builder().bytes.get() > Self::MAX_OUTSTANDING_BYTES;
+            if should_yield {
+                session.builder().bytes.set(0);
+            }
+            should_yield
+        };
+        if should_yield {
+            tokio::task::yield_now().await;
+        }
     }
 }
 
