@@ -564,9 +564,7 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
                             value_decoder.log_successes(n_successes);
                         }
 
-                        output_handle
-                            .give_container(&cap, &mut output_container)
-                            .await;
+                        output_handle.give_container(&cap, &mut output_container);
                     }
                     AsyncEvent::Progress(frontier) => cap_set.downgrade(frontier.iter()),
                 }

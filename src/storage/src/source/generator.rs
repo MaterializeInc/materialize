@@ -225,15 +225,13 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 
         if !config.responsible_for(()) {
             // Emit 0, to mark this worker as having started up correctly.
-            stats_output
-                .give(
-                    &stats_cap,
-                    ProgressStatisticsUpdate::SteadyState {
-                        offset_known: 0,
-                        offset_committed: 0,
-                    },
-                )
-                .await;
+            stats_output.give(
+                &stats_cap,
+                ProgressStatisticsUpdate::SteadyState {
+                    offset_known: 0,
+                    offset_committed: 0,
+                },
+            );
             return;
         }
 
@@ -290,7 +288,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                     // generate a significant amount of data that will overwhelm the dataflow.
                     // Since those are not required downstream we eagerly ignore them here.
                     if resume_offset <= offset {
-                        data_output.give(&cap, (message, offset, diff)).await;
+                        data_output.give(&cap, (message, offset, diff));
                     }
                 }
                 Event::Progress(Some(offset)) => {
@@ -334,19 +332,17 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                         // we are not going to implement snapshot progress statistics for them
                         // right now, but will come back to it.
                         if let Some(offset_committed) = offset_committed {
-                            stats_output
-                                .give(
-                                    &stats_cap,
-                                    ProgressStatisticsUpdate::SteadyState {
-                                        // technically we could have _known_ a larger offset
-                                        // than the one that has been committed, but we can
-                                        // never recover that known amount on restart, so we
-                                        // just advance these in lock step.
-                                        offset_known: offset_committed,
-                                        offset_committed,
-                                    },
-                                )
-                                .await;
+                            stats_output.give(
+                                &stats_cap,
+                                ProgressStatisticsUpdate::SteadyState {
+                                    // technically we could have _known_ a larger offset
+                                    // than the one that has been committed, but we can
+                                    // never recover that known amount on restart, so we
+                                    // just advance these in lock step.
+                                    offset_known: offset_committed,
+                                    offset_committed,
+                                },
+                            );
                         }
                     }
                 }

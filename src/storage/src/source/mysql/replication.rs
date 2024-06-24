@@ -398,8 +398,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             &mut repl_context,
                             &cur_gtid,
                             &mut row_event_buffer,
-                        )
-                        .await?;
+                        )?;
 
                         // Advance the frontier up to the point right before this GTID, since we
                         // might still see other events that are part of this same GTID, such as

@@ -181,15 +181,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         // but having done no snapshotting. Otherwise leave
                         // this not filled in (no snapshotting is occurring in this instance of
                         // the dataflow).
-                        stats_output
-                            .give(
-                                &stats_cap[0],
-                                ProgressStatisticsUpdate::Snapshot {
-                                    records_known: 0,
-                                    records_staged: 0,
-                                },
-                            )
-                            .await;
+                        stats_output.give(
+                            &stats_cap[0],
+                            ProgressStatisticsUpdate::Snapshot {
+                                records_known: 0,
+                                records_staged: 0,
+                            },
+                        );
                     }
                     return Ok(());
                 } else {
@@ -364,16 +362,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 for (table, err) in errored_tables {
                     let (output_index, _) = reader_snapshot_table_info.get(table).unwrap();
                     // Publish the error for this table and stop ingesting it
-                    raw_handle
-                        .give(
-                            &data_cap_set[0],
-                            (
-                                (*output_index, Err(err.clone())),
-                                GtidPartition::minimum(),
-                                1,
-                            ),
-                        )
-                        .await;
+                    raw_handle.give(
+                        &data_cap_set[0],
+                        (
+                            (*output_index, Err(err.clone())),
+                            GtidPartition::minimum(),
+                            1,
+                        ),
+                    );
                     trace!(%id, "timely-{worker_id} stopping snapshot of table {table} \
                                     due to schema mismatch");
                     removed_tables.push(table.clone());
@@ -392,15 +388,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 )
                 .await?;
 
-                stats_output
-                    .give(
-                        &stats_cap[0],
-                        ProgressStatisticsUpdate::Snapshot {
-                            records_known: snapshot_total,
-                            records_staged: 0,
-                        },
-                    )
-                    .await;
+                stats_output.give(
+                    &stats_cap[0],
+                    ProgressStatisticsUpdate::Snapshot {
+                        records_known: snapshot_total,
+                        records_staged: 0,
+                    },
+                );
 
                 // This worker has nothing else to do
                 if reader_snapshot_table_info.is_empty() {
@@ -427,25 +421,21 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             }
                             Err(err) => Err(err)?,
                         };
-                        raw_handle
-                            .give(
-                                &data_cap_set[0],
-                                ((*output_index, event), GtidPartition::minimum(), 1),
-                            )
-                            .await;
+                        raw_handle.give(
+                            &data_cap_set[0],
+                            ((*output_index, event), GtidPartition::minimum(), 1),
+                        );
                         count += 1;
                         snapshot_staged += 1;
                         // TODO(guswynn): does this 1000 need to be configurable?
                         if snapshot_staged % 1000 == 0 {
-                            stats_output
-                                .give(
-                                    &stats_cap[0],
-                                    ProgressStatisticsUpdate::Snapshot {
-                                        records_known: snapshot_total,
-                                        records_staged: snapshot_staged,
-                                    },
-                                )
-                                .await;
+                            stats_output.give(
+                                &stats_cap[0],
+                                ProgressStatisticsUpdate::Snapshot {
+                                    records_known: snapshot_total,
+                                    records_staged: snapshot_staged,
+                                },
+                            );
                         }
                     }
                     trace!(%id, "timely-{worker_id} snapshotted {count} records from \
@@ -464,7 +454,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         table: table.clone(),
                         snapshot_upper: snapshot_gtid_frontier.clone(),
                     };
-                    rewinds_handle.give(&rewind_cap_set[0], req).await;
+                    rewinds_handle.give(&rewind_cap_set[0], req);
                 }
                 *rewind_cap_set = CapabilitySet::new();
 
@@ -473,15 +463,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                  bigger than records staged {snapshot_staged}");
                     snapshot_staged = snapshot_total;
                 }
-                stats_output
-                    .give(
-                        &stats_cap[0],
-                        ProgressStatisticsUpdate::Snapshot {
-                            records_known: snapshot_total,
-                            records_staged: snapshot_staged,
-                        },
-                    )
-                    .await;
+                stats_output.give(
+                    &stats_cap[0],
+                    ProgressStatisticsUpdate::Snapshot {
+                        records_known: snapshot_total,
+                        records_staged: snapshot_staged,
+                    },
+                );
                 Ok(())
             })
         });

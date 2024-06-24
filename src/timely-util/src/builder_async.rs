@@ -656,7 +656,7 @@ impl<G: Scope> OperatorBuilder<G> {
                 .map(CapabilitySet::from_elem)
                 .collect::<Vec<_>>();
             if let Err(err) = constructor(&mut *caps).await {
-                error_output.give(&error_cap, Rc::new(err)).await;
+                error_output.give(&error_cap, Rc::new(err));
                 drop(error_cap);
                 // IMPORTANT: wedge this operator until the button is pressed. Returning would drop
                 // the capabilities and could produce incorrect progress statements.
@@ -777,7 +777,7 @@ mod test {
                         Event::Data(cap, data) => {
                             for item in data.iter().copied() {
                                 tokio::task::yield_now().await;
-                                output.give(&cap, item).await;
+                                output.give(&cap, item);
                             }
                         }
                         Event::Progress(_frontier) => {}

@@ -924,7 +924,7 @@ where
 
                 // Emit the data at the given time, and update the frontier and capabilities
                 // to just beyond the part.
-                data_output.give(&cap_set.delayed(&time), part).await;
+                data_output.give(&cap_set.delayed(&time), part);
 
                 if let Some(metrics) = &metrics {
                     metrics.emitted_bytes.inc_by(u64::cast_from(byte_size))
@@ -1419,9 +1419,7 @@ mod tests {
                 let time = element.0.clone();
                 let part = element.1;
                 last = Some((time, Subtime(0)));
-                output_handle
-                    .give(&capability.as_ref().unwrap().delayed(&last.unwrap()), part)
-                    .await;
+                output_handle.give(&capability.as_ref().unwrap().delayed(&last.unwrap()), part);
             }
             if let Some(last) = last {
                 capability

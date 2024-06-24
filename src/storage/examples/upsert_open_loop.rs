@@ -814,7 +814,7 @@ where
                         .map(|((key, value), _ts, _diff)| (key.to_vec(), value.to_vec()))
                         .collect_vec();
 
-                    output.give_container(&cap, &mut batch).await;
+                    output.give_container(&cap, &mut batch);
                 }
             }
         }
@@ -980,10 +980,10 @@ where
                 if let Some(previous_v) = previous_v {
                     // we might be able to avoid this extra key clone here,
                     // if we really tried
-                    output.give(*cap, (k.clone(), previous_v, -1)).await;
+                    output.give(*cap, (k.clone(), previous_v, -1));
                 }
                 // we don't do deletes right now
-                output.give(*cap, (k, v, 1)).await;
+                output.give(*cap, (k, v, 1));
             }
 
             // Discard entries, capabilities for complete times.
@@ -1029,10 +1029,10 @@ where
                         if let Some(previous_v) = previous_v {
                             // we might be able to avoid this extra key clone here,
                             // if we really tried
-                            output.give(&cap, (k.clone(), previous_v, -1)).await;
+                            output.give(&cap, (k.clone(), previous_v, -1));
                         }
                         // we don't do deletes right now
-                        output.give(&cap, (k, v, 1)).await;
+                        output.give(&cap, (k, v, 1));
                     }
                 }
                 AsyncEvent::Progress(_new_frontier) => (),

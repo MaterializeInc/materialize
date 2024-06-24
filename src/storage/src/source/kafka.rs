@@ -308,20 +308,18 @@ impl SourceRender for KafkaSourceConnection {
                         ),
                         None,
                     );
-                    health_output
-                        .give(
-                            &health_cap,
-                            HealthStatusMessage {
-                                index: 0,
-                                namespace: if matches!(e, ContextCreationError::Ssh(_)) {
-                                    StatusNamespace::Ssh
-                                } else {
-                                    Self::STATUS_NAMESPACE.clone()
-                                },
-                                update,
+                    health_output.give(
+                        &health_cap,
+                        HealthStatusMessage {
+                            index: 0,
+                            namespace: if matches!(e, ContextCreationError::Ssh(_)) {
+                                StatusNamespace::Ssh
+                            } else {
+                                Self::STATUS_NAMESPACE.clone()
                             },
-                        )
-                        .await;
+                            update,
+                        },
+                    );
                     // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
                     // Returning would incorrectly present to the remap operator as progress to the
                     // empty frontier which would be incorrectly recorded to the remap shard.
@@ -549,7 +547,7 @@ impl SourceRender for KafkaSourceConnection {
                             )),
                         }));
                         let time = data_cap.time().clone();
-                        data_output.give(&data_cap, ((0, Err(err)), time, 1)).await;
+                        data_output.give(&data_cap, ((0, Err(err)), time, 1));
                         return;
                     }
 
@@ -566,7 +564,7 @@ impl SourceRender for KafkaSourceConnection {
                                     )),
                                 }));
                                 let time = data_cap.time().clone();
-                                data_output.give(&data_cap, ((0, Err(err)), time, 1)).await;
+                                data_output.give(&data_cap, ((0, Err(err)), time, 1));
                                 return;
                             }
                         }
@@ -643,16 +641,14 @@ impl SourceRender for KafkaSourceConnection {
                                 reader.source_name, reader.topic_name, e
                             );
                             let status = HealthStatusUpdate::stalled(error, None);
-                            health_output
-                                .give(
-                                    &health_cap,
-                                    HealthStatusMessage {
-                                        index: 0,
-                                        namespace: Self::STATUS_NAMESPACE.clone(),
-                                        update: status,
-                                    },
-                                )
-                                .await;
+                            health_output.give(
+                                &health_cap,
+                                HealthStatusMessage {
+                                    index: 0,
+                                    namespace: Self::STATUS_NAMESPACE.clone(),
+                                    update: status,
+                                },
+                            );
                         }
                         Ok(message) => {
                             let (message, ts) =
@@ -665,7 +661,7 @@ impl SourceRender for KafkaSourceConnection {
                                         error: SourceErrorDetails::Other(format!("{}", e)),
                                     }))
                                 });
-                                data_output.give(part_cap, ((0, msg), time, diff)).await;
+                                data_output.give(part_cap, ((0, msg), time, diff));
                             }
                         }
                     }
@@ -690,7 +686,7 @@ impl SourceRender for KafkaSourceConnection {
                                         error: SourceErrorDetails::Other(format!("{}", e)),
                                     }))
                                 });
-                                data_output.give(part_cap, ((0, msg), time, diff)).await;
+                                data_output.give(part_cap, ((0, msg), time, diff));
                             }
                             Ok(None) => continue,
                             Err(err) => {
@@ -708,16 +704,14 @@ impl SourceRender for KafkaSourceConnection {
                                     ),
                                     None,
                                 );
-                                health_output
-                                    .give(
-                                        &health_cap,
-                                        HealthStatusMessage {
-                                            index: 0,
-                                            namespace: Self::STATUS_NAMESPACE.clone(),
-                                            update: status,
-                                        },
-                                    )
-                                    .await;
+                                health_output.give(
+                                    &health_cap,
+                                    HealthStatusMessage {
+                                        index: 0,
+                                        namespace: Self::STATUS_NAMESPACE.clone(),
+                                        update: status,
+                                    },
+                                );
                             }
                         }
                     }
@@ -767,28 +761,24 @@ impl SourceRender for KafkaSourceConnection {
                     (health_status.kafka.take(), health_status.ssh.take())
                 };
                 if let Some(status) = kafka_status {
-                    health_output
-                        .give(
-                            &health_cap,
-                            HealthStatusMessage {
-                                index: 0,
-                                namespace: Self::STATUS_NAMESPACE.clone(),
-                                update: status,
-                            },
-                        )
-                        .await;
+                    health_output.give(
+                        &health_cap,
+                        HealthStatusMessage {
+                            index: 0,
+                            namespace: Self::STATUS_NAMESPACE.clone(),
+                            update: status,
+                        },
+                    );
                 }
                 if let Some(status) = ssh_status {
-                    health_output
-                        .give(
-                            &health_cap,
-                            HealthStatusMessage {
-                                index: 0,
-                                namespace: StatusNamespace::Ssh,
-                                update: status,
-                            },
-                        )
-                        .await;
+                    health_output.give(
+                        &health_cap,
+                        HealthStatusMessage {
+                            index: 0,
+                            namespace: StatusNamespace::Ssh,
+                            update: status,
+                        },
+                    );
                 }
 
                 // If we have a new `offset_known` from the partition metadata thread, and
@@ -807,27 +797,23 @@ impl SourceRender for KafkaSourceConnection {
                     }
                 };
                 if let Some((offset_known, offset_committed)) = progress_statistics {
-                    stats_output
-                        .give(
-                            &stats_cap,
-                            ProgressStatisticsUpdate::SteadyState {
-                                offset_committed,
-                                offset_known,
-                            },
-                        )
-                        .await;
+                    stats_output.give(
+                        &stats_cap,
+                        ProgressStatisticsUpdate::SteadyState {
+                            offset_committed,
+                            offset_known,
+                        },
+                    );
                 }
 
                 if let (Some(snapshot_total), true) = (snapshot_total, is_snapshotting) {
-                    stats_output
-                        .give(
-                            &stats_cap,
-                            ProgressStatisticsUpdate::Snapshot {
-                                records_known: snapshot_total,
-                                records_staged: snapshot_staged,
-                            },
-                        )
-                        .await;
+                    stats_output.give(
+                        &stats_cap,
+                        ProgressStatisticsUpdate::Snapshot {
+                            records_known: snapshot_total,
+                            records_staged: snapshot_staged,
+                        },
+                    );
 
                     if snapshot_total == snapshot_staged {
                         is_snapshotting = false;
