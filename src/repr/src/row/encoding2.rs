@@ -971,6 +971,7 @@ impl DatumColumnDecoder {
 
 impl Schema2<Row> for RelationDesc {
     type ArrowColumn = arrow::array::StructArray;
+    type Statistics = OptionStats<StructStats>;
 
     type Decoder = RowColumnarDecoder;
     type Encoder = RowColumnarEncoder;
@@ -1088,6 +1089,7 @@ impl RowColumnarEncoder {
 
 impl ColumnEncoder<Row> for RowColumnarEncoder {
     type FinishedColumn = StructArray;
+    type FinishedStats = OptionStats<StructStats>;
 
     fn append(&mut self, val: &Row) {
         for (datum, encoder) in val.iter().zip(self.encoders.iter_mut()) {
@@ -1103,7 +1105,7 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
         self.nullability.append(false);
     }
 
-    fn finish(self) -> Self::FinishedColumn {
+    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats) {
         let RowColumnarEncoder {
             encoders,
             col_names,
@@ -1111,18 +1113,32 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
             ..
         } = self;
 
-        let (arrays, fields): (Vec<_>, Vec<_>) = col_names
+        let (arrays, fields, stats): (Vec<_>, Vec<_>, Vec<_>) = col_names
             .iter()
             .zip(encoders.into_iter())
             .map(|(name, encoder)| {
-                let array = encoder.encoder.finish();
-                let field = Field::new(name.as_ref(), array.data_type().clone(), encoder.nullable);
-                (array, field)
-            })
-            .unzip();
-        let null_buffer = NullBuffer::from(BooleanBuffer::from(nullability));
+                let nullable = encoder.nullable;
+                let (array, stats) = encoder.finish();
+                let stats = (name.to_string(), stats);
+                let field = Field::new(name.as_ref(), array.data_type().clone(), nullable);
 
-        StructArray::new(Fields::from(fields), arrays, Some(null_buffer))
+                (array, field, stats)
+            })
+            .multiunzip();
+
+        let null_buffer = NullBuffer::from(BooleanBuffer::from(nullability));
+        let length = null_buffer.len();
+
+        let array = StructArray::new(Fields::from(fields), arrays, Some(null_buffer));
+        let stats = OptionStats {
+            none: array.logical_nulls().map_or(0, |n| n.null_count()),
+            some: StructStats {
+                len: length,
+                cols: stats.into_iter().collect(),
+            },
+        };
+
+        (array, stats)
     }
 }
 

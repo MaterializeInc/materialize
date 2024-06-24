@@ -30,7 +30,8 @@ use mz_persist_types::dyn_col::DynColumnMut;
 use mz_persist_types::dyn_struct::{
     DynStruct, DynStructCfg, DynStructMut, ValidityMut, ValidityRef,
 };
-use mz_persist_types::stats::StatsFn;
+use mz_persist_types::stats::{DynStats, PrimitiveStats, StatsFn, StructStats};
+use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
@@ -1757,6 +1758,9 @@ pub struct SourceDataColumnarEncoder {
 }
 
 impl SourceDataColumnarEncoder {
+    const OK_COLUMN_NAME: &'static str = "ok";
+    const ERR_COLUMN_NAME: &'static str = "err";
+
     pub fn new(desc: &RelationDesc) -> Self {
         let row_encoder = match RowColumnarEncoder::new(desc) {
             Some(encoder) => SourceDataRowColumnarEncoder::Row(encoder),
@@ -1776,6 +1780,7 @@ impl SourceDataColumnarEncoder {
 
 impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
     type FinishedColumn = StructArray;
+    type FinishedStats = StructStats;
 
     #[inline]
     fn append(&mut self, val: &SourceData) {
@@ -1794,34 +1799,53 @@ impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
 
     #[inline]
     fn append_null(&mut self) {
-        self.row_encoder.append_null();
-        self.err_encoder.append_null();
+        panic!("appending a null into SourceDataColumnarEncoder is not supported");
     }
 
-    fn finish(self) -> Self::FinishedColumn {
+    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats) {
         let SourceDataColumnarEncoder {
             row_encoder,
             mut err_encoder,
         } = self;
 
         let err_column = BinaryBuilder::finish(&mut err_encoder);
+        let err_stats = PrimitiveStats::<Vec<u8>>::from_column(&err_column);
         let row_column: Arc<dyn Array> = match row_encoder {
             SourceDataRowColumnarEncoder::Row(encoder) => Arc::new(encoder.finish()),
             SourceDataRowColumnarEncoder::EmptyRow => Arc::new(NullArray::new(err_column.len())),
         };
 
+        let stats = [
+            (
+                Self::OK_COLUMN_NAME.to_string(),
+                row_stats.into_columnar_stats(),
+            ),
+            (
+                Self::ERR_COLUMN_NAME.to_string(),
+                err_stats.into_columnar_stats(),
+            ),
+        ];
+        let stats = StructStats {
+            len: row_column.len(),
+            cols: stats.into_iter().map(|(name, s)| (name, s)).collect(),
+        };
+
+        assert_eq!(row_column.len(), err_column.len());
+
         let fields = vec![
-            Field::new("ok", row_column.data_type().clone(), true),
-            Field::new("err", err_column.data_type().clone(), true),
+            Field::new(Self::OK_COLUMN_NAME, row_column.data_type().clone(), true),
+            Field::new(Self::ERR_COLUMN_NAME, err_column.data_type().clone(), true),
         ];
         let arrays: Vec<Arc<dyn Array>> = vec![row_column, Arc::new(err_column)];
+        let array = StructArray::new(Fields::from(fields), arrays, None);
 
-        StructArray::new(Fields::from(fields), arrays, None)
+        (array, stats)
     }
 }
 
 impl Schema2<SourceData> for RelationDesc {
     type ArrowColumn = StructArray;
+    type Statistics = StructStats;
 
     type Decoder = SourceDataColumnarDecoder;
     type Encoder = SourceDataColumnarEncoder;
