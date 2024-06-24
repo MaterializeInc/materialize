@@ -43,4 +43,5 @@
 //! environment are changeable at runtime via LaunchDarkly feature flags, but
 //! occasionally
 
+pub mod preflight;
 pub mod state;
