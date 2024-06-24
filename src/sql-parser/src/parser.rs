@@ -2201,12 +2201,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_error_policy_option(&mut self) -> Result<SourceErrorPolicy, ParserError> {
-        if self.parse_keyword(INLINE) {
-            Ok(SourceErrorPolicy::Inline)
-        } else if self.parse_keyword(PROPAGATE) {
-            Ok(SourceErrorPolicy::Propagate)
-        } else {
-            self.expected(self.peek_pos(), "INLINE, or PROPAGATE", self.peek_token())
+        match self.expect_one_of_keywords(&[INLINE])? {
+            INLINE => Ok(SourceErrorPolicy::Inline),
+            _ => unreachable!(),
         }
     }
 
@@ -2221,11 +2218,12 @@ impl<'a> Parser<'a> {
                 // we should extract this into a helper function.
                 self.expect_keywords(&[VALUE, DECODING, ERRORS])?;
                 let _ = self.consume_token(&Token::Eq);
-                self.expect_token(&Token::LParen)?;
-
+                let open_inner = self.consume_token(&Token::LParen);
                 let value_decode_err_policy =
                     self.parse_comma_separated(Parser::parse_source_error_policy_option)?;
-                self.expect_token(&Token::RParen)?;
+                if open_inner {
+                    self.expect_token(&Token::RParen)?;
+                }
                 self.expect_token(&Token::RParen)?;
                 value_decode_err_policy
             } else {

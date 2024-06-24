@@ -523,7 +523,7 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
     upsert_envelope: UpsertEnvelope,
 ) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, FromTime), Diff> {
     let mut row_buf = Row::default();
-    input.flat_map(move |result| {
+    input.map(move |result| {
         let from_time = result.from_time;
 
         let key = match result.key {
@@ -536,17 +536,8 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
         let key = match key {
             Ok(key) => key,
             err @ Err(_) => match result.value {
-                // The return types here are weird so they can match the actual return type of the closure
-                Some(_) => {
-                    return None.into_iter().chain(
-                        Some((UpsertKey::from_key(err.as_ref()), Some(err), from_time)).into_iter(),
-                    )
-                }
-                None => {
-                    return None.into_iter().chain(
-                        Some((UpsertKey::from_key(err.as_ref()), None, from_time)).into_iter(),
-                    )
-                }
+                Some(_) => return (UpsertKey::from_key(err.as_ref()), Some(err), from_time),
+                None => return (UpsertKey::from_key(err.as_ref()), None, from_time),
             },
         };
 
@@ -557,13 +548,11 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
             | UpsertStyle::Default(KeyEnvelope::Flattened)
             | UpsertStyle::ValueErrInline {
                 key_envelope: KeyEnvelope::Flattened,
-                ..
             } => key,
             // named
             UpsertStyle::Default(KeyEnvelope::Named(_))
             | UpsertStyle::ValueErrInline {
                 key_envelope: KeyEnvelope::Named(_),
-                ..
             } => {
                 if key.iter().nth(1).is_none() {
                     key
@@ -575,7 +564,6 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
             UpsertStyle::Default(KeyEnvelope::None)
             | UpsertStyle::ValueErrInline {
                 key_envelope: KeyEnvelope::None,
-                ..
             } => unreachable!(),
         };
 
@@ -583,22 +571,20 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
 
         let metadata = result.metadata;
 
-        // Generate the value row to present. The outer option represents whether we should produce
-        // a row at all, and the inner option is part of the data model for the output collection.
-        let value = match &result.value {
-            Some(Ok(row)) => match upsert_envelope.style {
+        let value = match result.value {
+            Some(Ok(ref row)) => match upsert_envelope.style {
                 UpsertStyle::Debezium { after_idx } => match row.iter().nth(after_idx).unwrap() {
                     Datum::List(after) => {
                         row_buf.packer().extend(after.iter().chain(metadata.iter()));
-                        Some(Some(Ok(row_buf.clone())))
+                        Some(Ok(row_buf.clone()))
                     }
-                    Datum::Null => Some(None),
+                    Datum::Null => None,
                     d => panic!("type error: expected record, found {:?}", d),
                 },
                 UpsertStyle::Default(_) => {
                     let mut packer = row_buf.packer();
                     packer.extend(key_row.iter().chain(row.iter()).chain(metadata.iter()));
-                    Some(Some(Ok(row_buf.clone())))
+                    Some(Ok(row_buf.clone()))
                 }
                 UpsertStyle::ValueErrInline { .. } => {
                     let mut packer = row_buf.packer();
@@ -608,12 +594,10 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
                     // The 'error' column is null
                     packer.push(Datum::Null);
                     packer.extend(metadata.iter());
-                    Some(Some(Ok(row_buf.clone())))
+                    Some(Ok(row_buf.clone()))
                 }
             },
             Some(Err(inner)) => {
-                // We only produce a row here if we are inlining errors. Otherwise, an actual error
-                // row will be produced below.
                 match upsert_envelope.style {
                     UpsertStyle::ValueErrInline { .. } => {
                         // inline the error in the data output
@@ -628,31 +612,19 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
                             iter::once(Datum::String(&err_string)).chain(iter::once(Datum::Null)),
                         );
                         packer.extend(metadata.iter());
-                        Some(Some(Ok(row_buf.clone())))
+                        Some(Ok(row_buf.clone()))
                     }
-                    _ => None,
+                    _ => Some(Err(UpsertError::Value(UpsertValueError {
+                        for_key: key_row,
+                        inner,
+                        is_legacy_dont_touch_it: false,
+                    }))),
                 }
             }
-            None => Some(None),
+            None => None,
         };
 
-        // Generate an error row if needed. The outer option represents whether we should produce
-        // a row at all, and the inner option is part of the data model for the output collection.
-        let err_value = match result.value {
-            Some(Err(err)) if upsert_envelope.style.propagate_errors() => {
-                Some(Some(Err(UpsertError::Value(UpsertValueError {
-                    for_key: key_row,
-                    inner: err,
-                    is_legacy_dont_touch_it: false,
-                }))))
-            }
-            _ => None,
-        };
-
-        err_value
-            .map(|err| (key.clone(), err, from_time.clone()))
-            .into_iter()
-            .chain(value.map(|val| (key, val, from_time)).into_iter())
+        (key, value, from_time)
     })
 }
 

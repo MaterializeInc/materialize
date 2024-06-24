@@ -147,12 +147,8 @@ pub enum UpsertStyle {
     Debezium { after_idx: usize },
     /// `ENVELOPE UPSERT`, where any decoded value will get packed into a ScalarType::Record
     /// named `value`, and any decode errors will get serialized into a ScalarType::Record
-    /// named `error`. The error will be propagated to the error stream if `propagate_errors`
-    /// is set. The key shape depends on the independent `KeyEnvelope`.
-    ValueErrInline {
-        key_envelope: KeyEnvelope,
-        propagate_errors: bool,
-    },
+    /// named `error`. The key shape depends on the independent `KeyEnvelope`.
+    ValueErrInline { key_envelope: KeyEnvelope },
 }
 
 impl RustType<ProtoUpsertStyle> for UpsertStyle {
@@ -164,13 +160,11 @@ impl RustType<ProtoUpsertStyle> for UpsertStyle {
                 UpsertStyle::Debezium { after_idx } => Kind::Debezium(ProtoDebezium {
                     after_idx: after_idx.into_proto(),
                 }),
-                UpsertStyle::ValueErrInline {
-                    key_envelope,
-                    propagate_errors,
-                } => Kind::ValueErrorInline(ProtoValueErrInline {
-                    key_envelope: Some(key_envelope.into_proto()),
-                    propagate_errors: *propagate_errors,
-                }),
+                UpsertStyle::ValueErrInline { key_envelope } => {
+                    Kind::ValueErrorInline(ProtoValueErrInline {
+                        key_envelope: Some(key_envelope.into_proto()),
+                    })
+                }
             }),
         }
     }
@@ -192,22 +186,8 @@ impl RustType<ProtoUpsertStyle> for UpsertStyle {
                         TryFromProtoError::missing_field("ProtoValueErrInline::key_envelope")
                     })?
                     .into_rust()?,
-                propagate_errors: e.propagate_errors,
             },
         })
-    }
-}
-
-impl UpsertStyle {
-    /// Returns whether this style should propagate errors to the error stream
-    pub fn propagate_errors(&self) -> bool {
-        match self {
-            UpsertStyle::Default(_) => true,
-            UpsertStyle::Debezium { .. } => true,
-            UpsertStyle::ValueErrInline {
-                propagate_errors, ..
-            } => *propagate_errors,
-        }
     }
 }
 

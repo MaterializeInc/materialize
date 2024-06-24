@@ -639,20 +639,7 @@ val2:[1,2,
 
 > CREATE CLUSTER inline_error_cluster SIZE '${arg.default-storage-size}';
 
-# This source will not inline errors and should propagate them
-> CREATE SOURCE value_decode_error
-  IN CLUSTER inline_error_cluster
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-inline-value-errors-1-${testdrive.seed}')
-  KEY FORMAT TEXT
-  VALUE FORMAT JSON
-  ENVELOPE UPSERT (VALUE DECODING ERRORS = (PROPAGATE));
-
-! SELECT * FROM value_decode_error
-contains:Envelope error: Upsert: Value error: Bytes: Failed to decode JSON:
-
-> DROP SOURCE value_decode_error
-
-# This source will inline errors only
+# This source will inline errors and not propagate them
 > CREATE SOURCE value_decode_error
   IN CLUSTER inline_error_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-inline-value-errors-1-${testdrive.seed}')

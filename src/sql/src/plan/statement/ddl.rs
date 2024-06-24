@@ -1222,18 +1222,11 @@ pub fn plan_create_source(
             if key_envelope == KeyEnvelope::None {
                 key_envelope = get_unnamed_key_envelope(key_encoding)?;
             }
-            // If the value decode error policy is not set or is just set to PROPAGATE
-            // then we can use the default upsert style.
-            let style = if value_decode_err_policy.is_empty()
-                || value_decode_err_policy == &[SourceErrorPolicy::Propagate]
-            {
+            // If the value decode error policy is not set we use the default upsert style.
+            let style = if value_decode_err_policy.is_empty() {
                 UpsertStyle::Default(key_envelope)
             } else if value_decode_err_policy.contains(&SourceErrorPolicy::Inline) {
-                UpsertStyle::ValueErrInline {
-                    key_envelope,
-                    propagate_errors: value_decode_err_policy
-                        .contains(&SourceErrorPolicy::Propagate),
-                }
+                UpsertStyle::ValueErrInline { key_envelope }
             } else {
                 bail_unsupported!("ENVELOPE UPSERT with unsupported value decode error policy")
             };

@@ -51,7 +51,6 @@ message ProtoUpsertStyle {
 
     message ProtoValueErrInline {
         ProtoKeyEnvelope key_envelope = 1;
-        bool propagate_errors = 2;
     }
 
     oneof kind {

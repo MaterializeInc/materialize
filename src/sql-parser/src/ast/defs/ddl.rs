@@ -546,7 +546,6 @@ impl_display!(SourceIncludeMetadata);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SourceErrorPolicy {
     Inline,
-    Propagate,
 }
 
 impl AstDisplay for SourceErrorPolicy {
@@ -554,9 +553,6 @@ impl AstDisplay for SourceErrorPolicy {
         match self {
             Self::Inline => {
                 f.write_str("INLINE");
-            }
-            Self::Propagate => {
-                f.write_str("PROPAGATE");
             }
         }
     }
