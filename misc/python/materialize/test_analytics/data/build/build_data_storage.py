@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize import buildkite
+from materialize import buildkite, git
 from materialize.buildkite import BuildkiteEnvVar
 from materialize.mz_version import MzVersion
 from materialize.test_analytics.connector.test_analytics_connector import (
@@ -29,6 +29,9 @@ class BuildDataStorage(BaseDataStorage):
         build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
         branch = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BRANCH)
         commit_hash = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_COMMIT)
+        main_ancestor_commit_hash = git.get_common_ancestor_commit(
+            remote=git.get_remote(), branch="main", fetch_branch=True
+        )
         mz_version = MzVersion.parse_cargo()
         build_url = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_URL)
 
@@ -42,6 +45,7 @@ class BuildDataStorage(BaseDataStorage):
                build_id,
                branch,
                commit_hash,
+               main_ancestor_commit_hash,
                mz_version,
                date,
                build_url,
@@ -54,6 +58,7 @@ class BuildDataStorage(BaseDataStorage):
               '{build_id}',
               '{branch}',
               '{commit_hash}',
+              '{main_ancestor_commit_hash}',
               '{mz_version}',
               now(),
               '{build_url}',
