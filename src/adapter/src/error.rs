@@ -229,6 +229,9 @@ pub enum AdapterError {
     UnreadableSinkCollection,
     /// User sessions have been blocked.
     UserSessionsDisallowed,
+    /// Something attempted a write (to catalog, storage, tables, etc.) while in
+    /// read-only mode.
+    ReadOnly,
 }
 
 impl AdapterError {
@@ -540,6 +543,9 @@ impl AdapterError {
             AdapterError::RtrDropFailure(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnreadableSinkCollection => SqlState::from_code("MZ009"),
             AdapterError::UserSessionsDisallowed => SqlState::from_code("MZ010"),
+            // In read-only mode all transactions are implicitly read-only
+            // transactions.
+            AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
         }
     }
 
@@ -769,6 +775,7 @@ impl fmt::Display for AdapterError {
                 write!(f, "collection is not readable at any time")
             }
             AdapterError::UserSessionsDisallowed => write!(f, "login blocked"),
+            AdapterError::ReadOnly => write!(f, "cannot write in read-only mode"),
         }
     }
 }

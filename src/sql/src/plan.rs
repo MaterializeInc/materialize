@@ -425,6 +425,35 @@ impl Plan {
             Plan::AlterRetainHistory(_) => "alter retain history",
         }
     }
+
+    /// Returns `true` iff this `Plan` is allowed to be executed in read-only
+    /// mode.
+    ///
+    /// We use an explicit allow-list, to avoid future additions automatically
+    /// falling into the `true` category.
+    pub fn allowed_in_read_only(&self) -> bool {
+        match self {
+            Plan::SetTransaction(_) => true,
+            Plan::StartTransaction(_) => true,
+            Plan::CommitTransaction(_) => true,
+            Plan::AbortTransaction(_) => true,
+            Plan::Select(_) => true,
+            Plan::EmptyQuery => true,
+            Plan::ShowAllVariables => true,
+            Plan::ShowCreate(_) => true,
+            Plan::ShowColumns(_) => true,
+            Plan::ShowVariable(_) => true,
+            Plan::InspectShard(_) => true,
+            Plan::Subscribe(_) => true,
+            Plan::CopyTo(_) => true,
+            Plan::ExplainPlan(_) => true,
+            Plan::ExplainPushdown(_) => true,
+            Plan::ExplainTimestamp(_) => true,
+            Plan::ExplainSinkSchema(_) => true,
+            Plan::ValidateConnection(_) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]
