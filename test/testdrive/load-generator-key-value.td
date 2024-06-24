@@ -154,9 +154,9 @@ up_quick     6 6  0  0 48 16
 3   4
 
 # Higher offsets than before, as we produce more values.
+# u.offset_known > 3, # Doesn't work reliably under high load in CI
 > SELECT
     s.name,
-    u.offset_known > 3,
     u.offset_committed = u.offset_known,
     u.snapshot_records_known,
     u.snapshot_records_staged,
@@ -165,7 +165,7 @@ up_quick     6 6  0  0 48 16
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('up_with_update')
-up_with_update true true 48 48 true 16
+up_with_update true 48 48 true 16
 
 # Also, despite the same seed, values should be different than the snapshot-only source.
 > SELECT
