@@ -10,13 +10,17 @@
 # run.py — build and run a core service or test.
 
 import argparse
+import atexit
 import os
 import shlex
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
+import time
 import uuid
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 import psutil
@@ -270,47 +274,44 @@ def main() -> int:
     else:
         raise UIError(f"unknown program {args.program}")
 
+    # Ensure we're running in our own process group, then arrange to kill any
+    # processes running in our process group when we exit. This avoids leaking
+    # "grandchild" processes--e.g., if we spawn an `environmentd` process that
+    # in turn spawns `clusterd` processes, and then `environmentd` panics, we
+    # want to clean up those `clusterd` processes before we exit.
+    #
+    # This isn't foolproof. If this script itself crashes, that can leak
+    # processes. The subprocess can also intentionally daemonize (i.e., move to
+    # another process group) to evade our detection. But this catches the vast
+    # majority of cases and is simple to reason about.
+    os.setpgid(0, 0)
+    atexit.register(_kill_pgrp)
+
     print(f"$ {' '.join(command)}")
-    # We go through a dance here familiar to shell authors where both
-    # the parent and child try to put the child into its own process
-    # group.  (See the comments in jobs.c:make_child() in bash, for
-    # example, which further cite the POSIX Rationale.)  We will later
-    # kill this group, which catches children like clusterd which
-    # outlive their parent (and hence, their PPID is 1; but their PGID
-    # remains the child's).  We also put the child into the foreground
-    # to ensure signals, such as SIGINT from ^C and SIGQUIT from ^\,
-    # are delivered to it, rather than to us.
-    child_pid = os.fork()
-    assert child_pid >= 0
-    if child_pid == 0:
-        try:
-            os.setsid()
-            os.setpgid(os.getpid(), os.getpid())
-        except OSError:
-            pass
-        _set_foreground_process(os.getpid())
-        os.execvpe(command[0], command, env)
 
-    try:
-        os.setpgid(child_pid, child_pid)
-    except OSError:
-        pass
-    (_, ws) = os.wait()
-    try:
-        os.killpg(child_pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    exit(os.waitstatus_to_exitcode(ws))
+    if args.program == "environmentd":
+        # Automatically restart `environmentd` after it halts, but not more than
+        # once every 5s to prevent hot loops. This simulates what happens when
+        # running in Kubernetes, which restarts failed `environmentd` process
+        # automatically. (We don't restart after a panic, since panics are
+        # generally unexpected and we don't want to inadvertently hide them
+        # during local development.)
+        while True:
+            last_start_time = datetime.now()
+            proc = subprocess.run(command, env=env)
+            if proc.returncode == 2:
+                wait = max(
+                    timedelta(seconds=5) - (datetime.now() - last_start_time),
+                    timedelta(seconds=0),
+                )
+                print(f"environmentd halted; will restart in {wait.total_seconds()}s")
+                time.sleep(wait.total_seconds())
+            else:
+                break
+    else:
+        proc = subprocess.run(command, env=env)
 
-
-def _set_foreground_process(pid: int) -> None:
-    # Conventionally, stderr is used for this purpose as the
-    # least-likely stream to be redirected in an interactive context.
-    if not os.isatty(sys.stderr.fileno()):
-        return
-    signal.signal(signal.SIGTTOU, signal.SIG_IGN)
-    with open(os.ttyname(sys.stderr.fileno()), "w") as tty:
-        os.tcsetpgrp(tty.fileno(), os.getpgrp())
+    exit(proc.returncode)
 
 
 def _build(
@@ -418,6 +419,14 @@ def _handle_lingering_services(kill: bool = False) -> None:
                     )
         except psutil.NoSuchProcess:
             continue
+
+
+def _kill_pgrp() -> None:
+    # Send a SIGTERM to all processes in our process group while ignoring
+    # SIGTERM ourselves.
+    handler = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    os.killpg(0, signal.SIGTERM)
+    signal.signal(signal.SIGTERM, handler)
 
 
 if __name__ == "__main__":
