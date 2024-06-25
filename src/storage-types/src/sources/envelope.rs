@@ -459,22 +459,13 @@ fn compute_envelope_value_desc(
                 ColumnType {
                     nullable: true,
                     scalar_type: ScalarType::Record {
-                        fields: vec![
-                            (
-                                "description".into(),
-                                ColumnType {
-                                    nullable: true,
-                                    scalar_type: ScalarType::String,
-                                },
-                            ),
-                            (
-                                "code".into(),
-                                ColumnType {
-                                    nullable: true,
-                                    scalar_type: ScalarType::String,
-                                },
-                            ),
-                        ],
+                        fields: vec![(
+                            "description".into(),
+                            ColumnType {
+                                nullable: true,
+                                scalar_type: ScalarType::String,
+                            },
+                        )],
                         custom_id: None,
                     },
                 },

@@ -648,8 +648,8 @@ val2:[1,2,
   ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE));
 
 > SELECT key, value::text, error::text FROM value_decode_error
-val1 <null> "(\"Bytes: Failed to decode JSON: {\"\"a\"\":,\"\"c\"\":\"\"d\"\"} (original bytes: [7b, 22, 61, 22, 3a, 2c, 22, 63, 22, 3a, 22, 64, 22, 7d])\",)"
-val2 <null> "(\"Bytes: Failed to decode JSON: [1,2, (original bytes: [5b, 31, 2c, 32, 2c])\",)"
+val1 <null> "(\"Bytes: Failed to decode JSON: {\"\"a\"\":,\"\"c\"\":\"\"d\"\"} (original bytes: [7b, 22, 61, 22, 3a, 2c, 22, 63, 22, 3a, 22, 64, 22, 7d])\")"
+val2 <null> "(\"Bytes: Failed to decode JSON: [1,2, (original bytes: [5b, 31, 2c, 32, 2c])\")"
 
 # replace the bad values with good ones
 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=inline-value-errors-1

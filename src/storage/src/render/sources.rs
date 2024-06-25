@@ -606,11 +606,8 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
                         packer.extend(key_row.iter());
                         // The 'value' column is null
                         packer.push(Datum::Null);
-                        // The 'error' column is a record with 'description' and 'code' columns
-                        // TODO(roshan): What should go into the 'code' column?
-                        packer.push_list(
-                            iter::once(Datum::String(&err_string)).chain(iter::once(Datum::Null)),
-                        );
+                        // The 'error' column is a record with a 'description' column
+                        packer.push_list(iter::once(Datum::String(&err_string)));
                         packer.extend(metadata.iter());
                         Some(Ok(row_buf.clone()))
                     }
