@@ -18,6 +18,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use futures::stream::{BoxStream, StreamExt};
+use futures::{Future, FutureExt};
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_compute_client::controller::{
     ComputeControllerTimestamp, ComputeReplicaConfig, ComputeReplicaLogging,
@@ -36,6 +37,7 @@ use mz_ore::instrument;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
+use mz_storage_types::instances::StorageInstanceId;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -321,6 +323,19 @@ pub struct CreateReplicaConfig {
     pub config: ReplicaConfig,
 }
 
+/// A intermediate struct to hold info about a replica, to avoid a large tuple.
+pub struct ReplicaInfo {
+    replica_id: ReplicaId,
+    compute_config: ComputeReplicaConfig,
+    storage_location: ClusterReplicaLocation,
+    compute_location: ClusterReplicaLocation,
+    metrics_task_join_handle: Option<AbortOnDropHandle<()>>,
+}
+
+pub struct InitializedReplicasToken {
+    info: BTreeMap<StorageInstanceId, Vec<ReplicaInfo>>,
+}
+
 impl<T> Controller<T>
 where
     T: ComputeControllerTimestamp,
@@ -351,32 +366,32 @@ where
         self.compute.drop_instance(id);
     }
 
+    pub async fn create_replicas(
+        &mut self,
+        replicas: Vec<CreateReplicaConfig>,
+        enable_worker_core_affinity: bool,
+    ) -> Result<(), anyhow::Error> {
+        let tokens = self
+            .initialize_replicas(replicas, enable_worker_core_affinity)
+            .await?;
+        self.register_replicas(tokens)
+    }
+
     /// Creates a replica of the specified cluster with the specified identifier
     /// and configuration.
     ///
     /// This method is NOT idempotent; It can fail between processing of different
     /// replicas and leave the controller in an inconsistent state. It is almost
     /// always wrong to do anything but abort the process on `Err`.
-    pub async fn create_replicas(
+    pub fn initialize_replicas(
         &mut self,
         replicas: Vec<CreateReplicaConfig>,
         enable_worker_core_affinity: bool,
-    ) -> Result<(), anyhow::Error> {
-        /// A intermediate struct to hold info about a replica, to avoid
-        /// a large tuple.
-        struct ReplicaInfo {
-            replica_id: ReplicaId,
-            compute_config: ComputeReplicaConfig,
-            storage_location: ClusterReplicaLocation,
-            compute_location: ClusterReplicaLocation,
-            metrics_task_join_handle: Option<AbortOnDropHandle<()>>,
-        }
-
-        // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
-        // this stream cannot all have exclusive access.
+    ) -> impl Future<Output = Result<InitializedReplicasToken, anyhow::Error>> + 'static {
         let this = &*self;
-        let mut replica_stream = futures::stream::iter(replicas)
-            .map(|config| async move {
+        let provision_replica_tasks: Vec<_> = replicas
+            .into_iter()
+            .map(|config| {
                 let CreateReplicaConfig {
                     cluster_id,
                     replica_id,
@@ -406,70 +421,80 @@ where
                             workers,
                         };
 
-                        Ok::<_, anyhow::Error>((
-                            cluster_id,
-                            ReplicaInfo {
-                                replica_id,
-                                compute_config: config.compute,
-                                storage_location,
-                                compute_location,
-                                metrics_task_join_handle: None,
-                            },
-                        ))
+                        async move {
+                            Ok::<_, anyhow::Error>((
+                                cluster_id,
+                                ReplicaInfo {
+                                    replica_id,
+                                    compute_config: config.compute,
+                                    storage_location,
+                                    compute_location,
+                                    metrics_task_join_handle: None,
+                                },
+                            ))
+                        }
+                        .boxed()
                     }
                     ReplicaLocation::Managed(m) => {
                         let workers = m.allocation.workers;
-                        let (service, metrics_task_join_handle) = this
-                            .provision_replica(
-                                cluster_id,
-                                replica_id,
-                                role,
-                                m,
-                                enable_worker_core_affinity,
-                            )
-                            .await?;
-                        let storage_location = ClusterReplicaLocation {
-                            ctl_addrs: service.addresses("storagectl"),
-                            dataflow_addrs: service.addresses("storage"),
-                            workers,
-                        };
-                        let compute_location = ClusterReplicaLocation {
-                            ctl_addrs: service.addresses("computectl"),
-                            dataflow_addrs: service.addresses("compute"),
-                            workers,
-                        };
-                        Ok((
+                        let provision_fut = this.provision_replica(
                             cluster_id,
-                            ReplicaInfo {
-                                replica_id,
-                                compute_config: config.compute,
-                                storage_location,
-                                compute_location,
-                                metrics_task_join_handle: Some(metrics_task_join_handle),
+                            replica_id,
+                            role,
+                            m,
+                            enable_worker_core_affinity,
+                        );
+                        let replica_task = mz_ore::task::spawn(
+                            || format!("provision-{cluster_id}-{replica_id}"),
+                            async move {
+                                let (service, metrics_task_join_handle) = provision_fut.await?;
+                                let storage_location = ClusterReplicaLocation {
+                                    ctl_addrs: service.addresses("storagectl"),
+                                    dataflow_addrs: service.addresses("storage"),
+                                    workers,
+                                };
+                                let compute_location = ClusterReplicaLocation {
+                                    ctl_addrs: service.addresses("computectl"),
+                                    dataflow_addrs: service.addresses("compute"),
+                                    workers,
+                                };
+                                Ok((
+                                    cluster_id,
+                                    ReplicaInfo {
+                                        replica_id,
+                                        compute_config: config.compute,
+                                        storage_location,
+                                        compute_location,
+                                        metrics_task_join_handle: Some(metrics_task_join_handle),
+                                    },
+                                ))
                             },
-                        ))
+                        );
+
+                        async move { replica_task.await? }.boxed()
                     }
                 }
             })
-            // TODO(guswynn): make this configurable.
-            .buffer_unordered(50);
+            .collect();
 
-        // _Usually_ `try_collect` and `collect` are the only safe ways to process a
-        // `buffer_unordered`, but if we ensure we don't do
-        // any async work in this loop, we are fine.
-        //
-        // If we do do async work in the loop, we could starve the stream itself of
-        // polls, which can cause errors.
-        // See the docs in `mz_storage_client::controller` for more info.
-        let mut replicas: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        while let Some(res) = replica_stream.next().await {
-            let (cluster_id, replica_info) = res?;
+        async move {
+            let provisioned_replicas =
+                futures::future::try_join_all(provision_replica_tasks).await?;
 
-            replicas.entry(cluster_id).or_default().push(replica_info);
+            let mut replicas: BTreeMap<_, Vec<_>> = BTreeMap::new();
+            for (cluster_id, replica_info) in provisioned_replicas {
+                replicas.entry(cluster_id).or_default().push(replica_info);
+            }
+
+            Ok(InitializedReplicasToken { info: replicas })
         }
-        drop(replica_stream);
+    }
 
-        for (cluster_id, replicas) in replicas {
+    pub fn register_replicas(
+        &mut self,
+        tokens: InitializedReplicasToken,
+    ) -> Result<(), anyhow::Error> {
+        for (cluster_id, replicas) in tokens.info {
             let last_replica = replicas.last().unwrap();
             // We only connect to the last replica (chosen arbitrarily)
             // for storage, until we support multi-replica storage objects
@@ -638,15 +663,17 @@ where
 
         Box::pin(stream)
     }
+
     /// Provisions a replica with the service orchestrator.
-    async fn provision_replica(
+    fn provision_replica(
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         role: ClusterRole,
         location: ManagedReplicaLocation,
         enable_worker_core_affinity: bool,
-    ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
+    ) -> impl Future<Output = Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error>> + 'static
+    {
         let service_name = ReplicaServiceName {
             cluster_id,
             replica_id,
@@ -664,130 +691,126 @@ where
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let txn_wal_tables = self.txn_wal_tables;
         let secrets_args = self.secrets_args.to_flags();
-        let service = self
-            .orchestrator
-            .ensure_service(
-                &service_name,
-                ServiceConfig {
-                    image: self.clusterd_image.clone(),
-                    init_container_image: self.init_container_image.clone(),
-                    args: &|assigned| {
-                        let mut args = vec![
-                            format!(
-                                "--storage-controller-listen-addr={}",
-                                assigned["storagectl"]
-                            ),
-                            format!(
-                                "--compute-controller-listen-addr={}",
-                                assigned["computectl"]
-                            ),
-                            format!("--internal-http-listen-addr={}", assigned["internal-http"]),
-                            format!("--opentelemetry-resource=cluster_id={}", cluster_id),
-                            format!("--opentelemetry-resource=replica_id={}", replica_id),
-                            format!("--persist-pubsub-url={}", persist_pubsub_url),
-                            format!("--persist-txn-tables={}", txn_wal_tables),
-                            format!("--environment-id={}", environment_id),
-                        ];
-                        if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
-                            args.push(format!(
-                                "--aws-external-id-prefix={}",
-                                aws_external_id_prefix
-                            ));
-                        }
-                        if let Some(aws_connection_role_arn) = &aws_connection_role_arn {
-                            args.push(format!(
-                                "--aws-connection-role-arn={}",
-                                aws_connection_role_arn
-                            ));
-                        }
-                        if let Some(memory_limit) = location.allocation.memory_limit {
-                            args.push(format!(
-                                "--announce-memory-limit={}",
-                                memory_limit.0.as_u64()
-                            ));
-                        }
-                        if location.allocation.cpu_exclusive && enable_worker_core_affinity {
-                            args.push("--worker-core-affinity".into());
-                        }
-                        if is_cluster_size_v2(&location.size) {
-                            args.push("--is-cluster-size-v2".into());
-                        }
+        let location_ = location.clone();
 
-                        args.extend(secrets_args.clone());
+        let config = ServiceConfig {
+            image: self.clusterd_image.clone(),
+            init_container_image: self.init_container_image.clone(),
+            args: Arc::new(move |assigned| {
+                let mut args = vec![
+                    format!(
+                        "--storage-controller-listen-addr={}",
+                        assigned["storagectl"]
+                    ),
+                    format!(
+                        "--compute-controller-listen-addr={}",
+                        assigned["computectl"]
+                    ),
+                    format!("--internal-http-listen-addr={}", assigned["internal-http"]),
+                    format!("--opentelemetry-resource=cluster_id={}", cluster_id),
+                    format!("--opentelemetry-resource=replica_id={}", replica_id),
+                    format!("--persist-pubsub-url={}", persist_pubsub_url),
+                    format!("--persist-txn-tables={}", txn_wal_tables),
+                    format!("--environment-id={}", environment_id),
+                ];
+                if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
+                    args.push(format!(
+                        "--aws-external-id-prefix={}",
+                        aws_external_id_prefix
+                    ));
+                }
+                if let Some(aws_connection_role_arn) = &aws_connection_role_arn {
+                    args.push(format!(
+                        "--aws-connection-role-arn={}",
+                        aws_connection_role_arn
+                    ));
+                }
+                if let Some(memory_limit) = location_.allocation.memory_limit {
+                    args.push(format!(
+                        "--announce-memory-limit={}",
+                        memory_limit.0.as_u64()
+                    ));
+                }
+                if location_.allocation.cpu_exclusive && enable_worker_core_affinity {
+                    args.push("--worker-core-affinity".into());
+                }
+                if is_cluster_size_v2(&location_.size) {
+                    args.push("--is-cluster-size-v2".into());
+                }
 
-                        args
-                    },
-                    ports: vec![
-                        ServicePort {
-                            name: "storagectl".into(),
-                            port_hint: 2100,
-                        },
-                        // To simplify the changes to tests, the port
-                        // chosen here is _after_ the compute ones.
-                        // TODO(petrosagg): fix the numerical ordering here
-                        ServicePort {
-                            name: "storage".into(),
-                            port_hint: 2103,
-                        },
-                        ServicePort {
-                            name: "computectl".into(),
-                            port_hint: 2101,
-                        },
-                        ServicePort {
-                            name: "compute".into(),
-                            port_hint: 2102,
-                        },
-                        ServicePort {
-                            name: "internal-http".into(),
-                            port_hint: 6878,
-                        },
-                    ],
-                    cpu_limit: location.allocation.cpu_limit,
-                    memory_limit: location.allocation.memory_limit,
-                    scale: location.allocation.scale,
-                    labels: BTreeMap::from([
-                        ("replica-id".into(), replica_id.to_string()),
-                        ("cluster-id".into(), cluster_id.to_string()),
-                        ("type".into(), "cluster".into()),
-                        ("replica-role".into(), role_label.into()),
-                        ("workers".into(), location.allocation.workers.to_string()),
-                        ("size".into(), location.size.to_string()),
-                    ]),
-                    availability_zones: match location.availability_zones {
-                        ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
-                        ManagedReplicaAvailabilityZones::FromReplica(az) => az.map(|z| vec![z]),
-                    },
-                    // This provides the orchestrator with some label selectors that
-                    // are used to constraint the scheduling of replicas, based on
-                    // its internal configuration.
-                    other_replicas_selector: vec![
-                        LabelSelector {
-                            label_name: "cluster-id".to_string(),
-                            logic: LabelSelectionLogic::Eq {
-                                value: cluster_id.to_string(),
-                            },
-                        },
-                        // Select other replicas (but not oneself)
-                        LabelSelector {
-                            label_name: "replica-id".into(),
-                            logic: LabelSelectionLogic::NotEq {
-                                value: replica_id.to_string(),
-                            },
-                        },
-                    ],
-                    replicas_selector: vec![LabelSelector {
-                        label_name: "cluster-id".to_string(),
-                        // Select ALL replicas.
-                        logic: LabelSelectionLogic::Eq {
-                            value: cluster_id.to_string(),
-                        },
-                    }],
-                    disk_limit: location.allocation.disk_limit,
-                    disk: location.disk,
-                    node_selector: location.allocation.selectors,
+                args.extend(secrets_args.clone());
+
+                args
+            }),
+            ports: vec![
+                ServicePort {
+                    name: "storagectl".into(),
+                    port_hint: 2100,
                 },
-            )
-            .await?;
+                // To simplify the changes to tests, the port
+                // chosen here is _after_ the compute ones.
+                // TODO(petrosagg): fix the numerical ordering here
+                ServicePort {
+                    name: "storage".into(),
+                    port_hint: 2103,
+                },
+                ServicePort {
+                    name: "computectl".into(),
+                    port_hint: 2101,
+                },
+                ServicePort {
+                    name: "compute".into(),
+                    port_hint: 2102,
+                },
+                ServicePort {
+                    name: "internal-http".into(),
+                    port_hint: 6878,
+                },
+            ],
+            cpu_limit: location.allocation.cpu_limit,
+            memory_limit: location.allocation.memory_limit,
+            scale: location.allocation.scale,
+            labels: BTreeMap::from([
+                ("replica-id".into(), replica_id.to_string()),
+                ("cluster-id".into(), cluster_id.to_string()),
+                ("type".into(), "cluster".into()),
+                ("replica-role".into(), role_label.into()),
+                ("workers".into(), location.allocation.workers.to_string()),
+                ("size".into(), location.size.to_string()),
+            ]),
+            availability_zones: match location.availability_zones {
+                ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
+                ManagedReplicaAvailabilityZones::FromReplica(az) => az.map(|z| vec![z]),
+            },
+            // This provides the orchestrator with some label selectors that
+            // are used to constraint the scheduling of replicas, based on
+            // its internal configuration.
+            other_replicas_selector: vec![
+                LabelSelector {
+                    label_name: "cluster-id".to_string(),
+                    logic: LabelSelectionLogic::Eq {
+                        value: cluster_id.to_string(),
+                    },
+                },
+                // Select other replicas (but not oneself)
+                LabelSelector {
+                    label_name: "replica-id".into(),
+                    logic: LabelSelectionLogic::NotEq {
+                        value: replica_id.to_string(),
+                    },
+                },
+            ],
+            replicas_selector: vec![LabelSelector {
+                label_name: "cluster-id".to_string(),
+                // Select ALL replicas.
+                logic: LabelSelectionLogic::Eq {
+                    value: cluster_id.to_string(),
+                },
+            }],
+            disk_limit: location.allocation.disk_limit,
+            disk: location.disk,
+            node_selector: location.allocation.selectors,
+        };
 
         let metrics_task = mz_ore::task::spawn(|| format!("replica-metrics-{replica_id}"), {
             let tx = self.metrics_tx.clone();
@@ -818,7 +841,14 @@ where
             }
         });
 
-        Ok((service, metrics_task.abort_on_drop()))
+        // Clone the orchestrator so we can return a `'static Future` that can be spawned onto a
+        // runtime or await-ed from a different task.
+        let orchestrator = Arc::clone(&self.orchestrator);
+
+        async move {
+            let service = orchestrator.ensure_service(&service_name, config).await?;
+            Ok((service, metrics_task.abort_on_drop()))
+        }
     }
 
     /// Deprovisions a replica with the service orchestrator.

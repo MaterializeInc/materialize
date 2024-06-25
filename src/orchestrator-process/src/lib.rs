@@ -362,7 +362,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             disk,
             disk_limit: _,
             node_selector: _,
-        }: ServiceConfig<'_>,
+        }: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let full_id = format!("{}-{}", self.namespace, id);
 
@@ -421,7 +421,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         scratch_dir: scratch_dir.clone(),
                         i,
                         image: image.clone(),
-                        args,
+                        args: Arc::clone(&args),
                         ports,
                         memory_limit,
                         cpu_limit,
@@ -718,13 +718,13 @@ impl NamespacedProcessOrchestrator {
     }
 }
 
-struct ServiceProcessConfig<'a> {
+struct ServiceProcessConfig {
     id: String,
     run_dir: PathBuf,
     scratch_dir: Option<PathBuf>,
     i: usize,
     image: String,
-    args: &'a (dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync),
+    args: Arc<dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync>,
     ports: Vec<ServiceProcessPort>,
     disk: bool,
     memory_limit: Option<MemoryLimit>,
