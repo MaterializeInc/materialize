@@ -110,7 +110,7 @@ It's important to note that this only applies to basic queries against **a
 single** source, materialized view or table, with no ordering, filters or
 offsets.
 
-```sql
+```mzsql
 SELECT <column list or *>
 FROM <source, materialized view or table>
 LIMIT <25 or less>;
@@ -125,7 +125,7 @@ to get the execution plan for the query, and validate that it starts with
 Use temporal flters to filter results on a timestamp column that correlates with
 the insertion or update time of each row. For example:
 
-```sql
+```mzsql
 WHERE mz_now() <= event_ts + INTERVAL '1hr'
 ```
 
@@ -187,7 +187,7 @@ The measure of cluster busyness is CPU. You can monitor CPU usage in the
 the **"Clusters"** tab in the navigation bar, and clicking into the cluster.
 You can also grab CPU usage from the system catalog using SQL:
 
-```sql
+```mzsql
 SELECT cru.cpu_percent
 FROM mz_internal.mz_cluster_replica_utilization cru
 LEFT JOIN mz_catalog.mz_cluster_replicas cr ON cru.replica_id = cr.id

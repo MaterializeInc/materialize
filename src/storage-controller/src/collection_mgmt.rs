@@ -55,16 +55,16 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 use futures::{Future, FutureExt};
-use itertools::Itertools;
 use mz_ore::channel::ReceiverExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
+use mz_ore::vec::VecExt;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::client::{TimestamplessUpdate, Update};
-use mz_storage_client::controller::MonotonicAppender;
+use mz_storage_client::controller::{MonotonicAppender, StorageWriteOp};
 use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp};
@@ -79,10 +79,16 @@ const CHANNEL_CAPACITY: usize = 4096;
 // Default rate at which we advance the uppers of managed collections.
 const DEFAULT_TICK_MS: u64 = 1_000;
 
-type WriteChannel<T> = mpsc::Sender<(
+/// A channel for sending writes to a differential collection.
+type DifferentialWriteChannel<T> =
+    mpsc::Sender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>;
+
+/// A channel for sending writes to an append-only collection.
+type AppendOnlyWriteChannel<T> = mpsc::Sender<(
     Vec<(Row, Diff)>,
     oneshot::Sender<Result<(), StorageError<T>>>,
 )>;
+
 type WriteTask = AbortOnDropHandle<()>;
 type ShutdownSender = oneshot::Sender<()>;
 
@@ -97,14 +103,14 @@ where
     /// internal _desired_ collection. The `CollectionManager` continually makes
     /// sure that collection contents (in persist) match the desired state.
     differential_collections:
-        Arc<Mutex<BTreeMap<GlobalId, (WriteChannel<T>, WriteTask, ShutdownSender)>>>,
+        Arc<Mutex<BTreeMap<GlobalId, (DifferentialWriteChannel<T>, WriteTask, ShutdownSender)>>>,
 
     /// Collections that we only append to using blind-writes.
     ///
     /// Every write succeeds at _some_ timestamp, and we never check what the
     /// actual contents of the collection (in persist) are.
     append_only_collections:
-        Arc<Mutex<BTreeMap<GlobalId, (WriteChannel<T>, WriteTask, ShutdownSender)>>>,
+        Arc<Mutex<BTreeMap<GlobalId, (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender)>>>,
     write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
     /// Amount of time we'll wait before sending a batch of inserts to Persist, for user
     /// collections.
@@ -296,15 +302,15 @@ where
         }
     }
 
-    /// Updates the desired collection state of the collection identified by
+    /// Updates the desired collection state of the differential collection identified by
     /// `id`. The underlying persist shard will reflect this change at
     /// _some_point. Does not wait for the change to complete.
     ///
     /// # Panics
     /// - If `id` does not belong to a differential collection.
     /// - If the collection closed.
-    pub(super) async fn update_desired(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        if !updates.is_empty() {
+    pub(super) async fn differential_write(&self, id: GlobalId, op: StorageWriteOp) {
+        if !op.is_empty_append() {
             // Get the update channel in a block to make sure the Mutex lock is scoped.
             let update_tx = {
                 let guard = self
@@ -317,8 +323,18 @@ where
 
             // Specifically _do not_ wait for the append to complete, just for it to be sent.
             let (tx, _rx) = oneshot::channel();
-            update_tx.send((updates, tx)).await.expect("rx hung up");
+            update_tx.send((op, tx)).await.expect("rx hung up");
         }
+    }
+
+    /// Appends the given `updates` to the differential collection identified by `id`.
+    ///
+    /// # Panics
+    /// - If `id` does not belong to a differential collection.
+    /// - If the collection closed.
+    pub(super) async fn differential_append(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+        self.differential_write(id, StorageWriteOp::Append { updates })
+            .await
     }
 
     /// Returns a [`MonotonicAppender`] that can be used to monotonically append updates to the
@@ -369,10 +385,7 @@ where
     upper_tick_interval: tokio::time::Interval,
 
     /// Receiver for write commands. These change our desired state.
-    cmd_rx: mpsc::Receiver<(
-        Vec<(Row, i64)>,
-        oneshot::Sender<Result<(), StorageError<T>>>,
-    )>,
+    cmd_rx: mpsc::Receiver<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>,
 
     /// We have to shut down when receiving from this.
     shutdown_rx: oneshot::Receiver<()>,
@@ -415,7 +428,7 @@ where
         write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
         read_handle_fn: R,
         now: NowFn,
-    ) -> (WriteChannel<T>, WriteTask, ShutdownSender) {
+    ) -> (DifferentialWriteChannel<T>, WriteTask, ShutdownSender) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -560,10 +573,7 @@ where
 
     async fn handle_updates(
         &mut self,
-        batch: Vec<(
-            Vec<(Row, i64)>,
-            oneshot::Sender<Result<(), StorageError<T>>>,
-        )>,
+        batch: Vec<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>,
     ) -> ControlFlow<String> {
         // Put in place _some_ rate limiting.
         let batch_duration_ms = STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
@@ -588,12 +598,11 @@ where
         // 13`, `t + 23`, ... which resetting the interval accomplishes.
         self.upper_tick_interval.reset();
 
-        let (rows, responders): (Vec<_>, Vec<_>) = batch.into_iter().unzip();
-
-        let rows = rows.into_iter().flatten().collect_vec();
-
-        self.to_write.extend(rows.iter().cloned());
-        self.desired.extend(rows.iter().cloned());
+        let mut responders = Vec::with_capacity(batch.len());
+        for (op, tx) in batch {
+            self.apply_write_op(op);
+            responders.push(tx);
+        }
 
         // TODO: Maybe don't do it every time?
         consolidation::consolidate(&mut self.desired);
@@ -608,6 +617,21 @@ where
         tokio::time::sleep_until(min_time_to_complete).await;
 
         ControlFlow::Continue(())
+    }
+
+    /// Apply the given write operation to the `desired`/`to_write` state.
+    fn apply_write_op(&mut self, op: StorageWriteOp) {
+        match op {
+            StorageWriteOp::Append { updates } => {
+                self.desired.extend_from_slice(&updates);
+                self.to_write.extend(updates);
+            }
+            StorageWriteOp::Delete { filter } => {
+                let to_delete = self.desired.drain_filter_swapping(|(row, _)| filter(row));
+                let retractions = to_delete.map(|(row, diff)| (row, -diff));
+                self.to_write.extend(retractions);
+            }
+        }
     }
 
     /// Attempt to write what is currently in [Self::to_write] to persist,
@@ -790,7 +814,7 @@ fn append_only_write_task<T>(
     write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
     user_batch_duration_ms: Arc<AtomicU64>,
     now: NowFn,
-) -> (WriteChannel<T>, WriteTask, ShutdownSender)
+) -> (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender)
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {

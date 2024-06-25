@@ -102,13 +102,14 @@ use mz_ore::future::InTask;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, Row};
+use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::types::ProgressStatisticsUpdate;
-use crate::source::{RawSourceCreationConfig, SourceReaderError};
+use crate::source::RawSourceCreationConfig;
 
 use super::schemas::verify_schemas;
 use super::{
@@ -124,7 +125,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     subsources: Vec<SubsourceInfo>,
     metrics: MySqlSnapshotMetrics,
 ) -> (
-    Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
+    Collection<G, (usize, Result<Row, DataflowError>), Diff>,
     Stream<G, RewindRequest>,
     Stream<G, ProgressStatisticsUpdate>,
     Stream<G, ReplicationError>,

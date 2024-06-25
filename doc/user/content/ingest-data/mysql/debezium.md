@@ -34,7 +34,7 @@ As _root_:
 
 1. Check the `log_bin` and `binlog_format` settings:
 
-    ```sql
+    ```mysql
     SHOW VARIABLES
     WHERE variable_name IN ('log_bin', 'binlog_format');
     ```
@@ -51,7 +51,7 @@ As _root_:
 1. Grant enough privileges to the replication user to ensure Debezium can
    operate in the database:
 
-    ```sql
+    ```mysql
     GRANT SELECT, RELOAD, SHOW DATABASES, REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO "user";
 
     FLUSH PRIVILEGES;
@@ -191,7 +191,7 @@ information about upstream database operations, like the `before` and `after`
 values for each record. To create a source that interprets the
 [Debezium envelope](/sql/create-source/kafka/#using-debezium) in Materialize:
 
-```sql
+```mzsql
 CREATE SOURCE kafka_repl
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'dbserver1.db1.table1')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -213,7 +213,7 @@ Any materialized view defined on top of this source will be incrementally
 updated as new change events stream in through Kafka, as a result of `INSERT`,
 `UPDATE` and `DELETE` operations in the original MySQL database.
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW cnt_table1 AS
     SELECT field1,
            COUNT(*) AS cnt

@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use chrono::{DateTime, NaiveDateTime};
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
@@ -27,7 +26,9 @@ use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
-use mz_storage_types::errors::ContextCreationError;
+use mz_storage_types::errors::{
+    ContextCreationError, DataflowError, SourceError, SourceErrorDetails,
+};
 use mz_storage_types::sources::kafka::{
     KafkaMetadataKind, KafkaSourceConnection, KafkaTimestamp, RangeBound,
 };
@@ -55,7 +56,7 @@ use tracing::{error, info, trace, warn};
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
 use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
-use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 #[derive(Default)]
 struct HealthStatus {
@@ -160,7 +161,7 @@ impl SourceRender for KafkaSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -541,10 +542,12 @@ impl SourceRender for KafkaSourceConnection {
                     if !PartialOrder::less_equal(data_cap.time(), &future_ts) {
                         let prev_pid_count = prev_pid_info.map(|info| info.len()).unwrap_or(0);
                         let pid_count = partitions.len();
-                        let err = SourceReaderError::other_definite(anyhow!(
-                            "topic was recreated: partition \
+                        let err = DataflowError::SourceError(Box::new(SourceError {
+                            error: SourceErrorDetails::Other(format!(
+                                "topic was recreated: partition \
                                      count regressed from {prev_pid_count} to {pid_count}"
-                        ));
+                            )),
+                        }));
                         let time = data_cap.time().clone();
                         data_output.give(&data_cap, ((0, Err(err)), time, 1)).await;
                         return;
@@ -555,12 +558,13 @@ impl SourceRender for KafkaSourceConnection {
                         for (pid, prev_watermarks) in prev_pid_info {
                             let watermarks = &partitions[&pid];
                             if !(prev_watermarks.high <= watermarks.high) {
-                                let err = SourceReaderError::other_definite(anyhow!(
-                                    "topic was recreated: high watermark of \
+                                let err = DataflowError::SourceError(Box::new(SourceError {
+                                    error: SourceErrorDetails::Other(format!(
+                                        "topic was recreated: high watermark of \
                                         partition {pid} regressed from {} to {}",
-                                    prev_watermarks.high,
-                                    watermarks.high
-                                ));
+                                        prev_watermarks.high, watermarks.high
+                                    )),
+                                }));
                                 let time = data_cap.time().clone();
                                 data_output.give(&data_cap, ((0, Err(err)), time, 1)).await;
                                 return;
@@ -656,8 +660,11 @@ impl SourceRender for KafkaSourceConnection {
                             if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
                                 let pid = time.interval().singleton().unwrap().unwrap_exact();
                                 let part_cap = &reader.partition_capabilities[pid].data;
-                                let msg =
-                                    msg.map_err(|e| SourceReaderError::other_definite(e.into()));
+                                let msg = msg.map_err(|e| {
+                                    DataflowError::SourceError(Box::new(SourceError {
+                                        error: SourceErrorDetails::Other(format!("{}", e)),
+                                    }))
+                                });
                                 data_output.give(part_cap, ((0, msg), time, diff)).await;
                             }
                         }
@@ -678,8 +685,11 @@ impl SourceRender for KafkaSourceConnection {
                             Ok(Some((msg, time, diff))) => {
                                 let pid = time.interval().singleton().unwrap().unwrap_exact();
                                 let part_cap = &reader.partition_capabilities[pid].data;
-                                let msg =
-                                    msg.map_err(|e| SourceReaderError::other_definite(e.into()));
+                                let msg = msg.map_err(|e| {
+                                    DataflowError::SourceError(Box::new(SourceError {
+                                        error: SourceErrorDetails::Other(format!("{}", e)),
+                                    }))
+                                });
                                 data_output.give(part_cap, ((0, msg), time, diff)).await;
                             }
                             Ok(None) => continue,

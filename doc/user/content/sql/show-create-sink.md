@@ -18,7 +18,7 @@ _sink&lowbar;name_ | The sink you want use. You can find available sink names th
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SINKS
 ```
 
@@ -28,7 +28,7 @@ SHOW SINKS
  my_view_sink
 ```
 
-```sql
+```mzsql
 SHOW CREATE SINK my_view_sink;
 ```
 

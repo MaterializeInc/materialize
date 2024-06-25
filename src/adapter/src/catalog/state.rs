@@ -53,7 +53,7 @@ use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
-    PG_CATALOG_SCHEMA,
+    PG_CATALOG_SCHEMA, SYSTEM_SCHEMAS, UNSTABLE_SCHEMAS,
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc};
@@ -505,11 +505,8 @@ impl CatalogState {
     ///
     /// Only stable items can be used as dependencies of other catalog items.
     fn is_stable(&self, id: GlobalId) -> bool {
-        let mz_internal_id = self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA];
-        match &self.get_entry(&id).name().qualifiers.schema_spec {
-            SchemaSpecifier::Temporary => true,
-            SchemaSpecifier::Id(id) => *id != mz_internal_id,
-        }
+        let spec = self.get_entry(&id).name().qualifiers.schema_spec;
+        !self.is_unstable_schema_specifier(spec)
     }
 
     pub(super) fn check_unstable_dependencies(&self, item: &CatalogItem) -> Result<(), Error> {
@@ -610,15 +607,8 @@ impl CatalogState {
     /// - If more than one system schema has an entry named `name`.
     pub(super) fn get_system_type(&self, name: &str) -> &CatalogEntry {
         let mut res = None;
-        for system_schema in &[
-            PG_CATALOG_SCHEMA,
-            INFORMATION_SCHEMA,
-            MZ_CATALOG_SCHEMA,
-            MZ_INTERNAL_SCHEMA,
-            MZ_UNSAFE_SCHEMA,
-        ] {
-            let schema_id = &self.ambient_schemas_by_name[*system_schema];
-            let schema = &self.ambient_schemas_by_id[schema_id];
+        for schema_id in self.system_schema_ids() {
+            let schema = &self.ambient_schemas_by_id[&schema_id];
             if let Some(global_id) = schema.types.get(name) {
                 match res {
                     None => res = Some(self.get_entry(global_id)),
@@ -1183,7 +1173,7 @@ impl CatalogState {
         let mut index_name = QualifiedItemName {
             qualifiers: ItemQualifiers {
                 database_spec: ResolvedDatabaseSpecifier::Ambient,
-                schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id().clone()),
+                schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id()),
             },
             item: index_name.clone(),
         };
@@ -1377,46 +1367,57 @@ impl CatalogState {
             .into_first()
     }
 
-    pub fn get_mz_catalog_schema_id(&self) -> &SchemaId {
-        &self.ambient_schemas_by_name[MZ_CATALOG_SCHEMA]
+    pub fn get_mz_catalog_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[MZ_CATALOG_SCHEMA]
     }
 
-    pub fn get_pg_catalog_schema_id(&self) -> &SchemaId {
-        &self.ambient_schemas_by_name[PG_CATALOG_SCHEMA]
+    pub fn get_pg_catalog_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[PG_CATALOG_SCHEMA]
     }
 
-    pub fn get_information_schema_id(&self) -> &SchemaId {
-        &self.ambient_schemas_by_name[INFORMATION_SCHEMA]
+    pub fn get_information_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[INFORMATION_SCHEMA]
     }
 
-    pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
-        &self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA]
+    pub fn get_mz_internal_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA]
     }
 
-    pub fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
-        &self.ambient_schemas_by_name[MZ_UNSAFE_SCHEMA]
+    pub fn get_mz_unsafe_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[MZ_UNSAFE_SCHEMA]
     }
 
-    pub fn is_system_schema(&self, schema: &str) -> bool {
-        schema == MZ_CATALOG_SCHEMA
-            || schema == PG_CATALOG_SCHEMA
-            || schema == INFORMATION_SCHEMA
-            || schema == MZ_INTERNAL_SCHEMA
-            || schema == MZ_UNSAFE_SCHEMA
+    pub fn system_schema_ids(&self) -> impl Iterator<Item = SchemaId> + '_ {
+        SYSTEM_SCHEMAS
+            .iter()
+            .map(|name| self.ambient_schemas_by_name[*name])
     }
 
-    pub fn is_system_schema_id(&self, id: &SchemaId) -> bool {
-        id == self.get_mz_catalog_schema_id()
-            || id == self.get_pg_catalog_schema_id()
-            || id == self.get_information_schema_id()
-            || id == self.get_mz_internal_schema_id()
-            || id == self.get_mz_unsafe_schema_id()
+    pub fn is_system_schema_id(&self, id: SchemaId) -> bool {
+        self.system_schema_ids().contains(&id)
     }
 
-    pub fn is_system_schema_specifier(&self, spec: &SchemaSpecifier) -> bool {
+    pub fn is_system_schema_specifier(&self, spec: SchemaSpecifier) -> bool {
         match spec {
             SchemaSpecifier::Temporary => false,
             SchemaSpecifier::Id(id) => self.is_system_schema_id(id),
+        }
+    }
+
+    pub fn unstable_schema_ids(&self) -> impl Iterator<Item = SchemaId> + '_ {
+        UNSTABLE_SCHEMAS
+            .iter()
+            .map(|name| self.ambient_schemas_by_name[*name])
+    }
+
+    pub fn is_unstable_schema_id(&self, id: SchemaId) -> bool {
+        self.unstable_schema_ids().contains(&id)
+    }
+
+    pub fn is_unstable_schema_specifier(&self, spec: SchemaSpecifier) -> bool {
+        match spec {
+            SchemaSpecifier::Temporary => false,
+            SchemaSpecifier::Id(id) => self.is_unstable_schema_id(id),
         }
     }
 
@@ -1675,11 +1676,11 @@ impl CatalogState {
         let default_schemas = [
             (
                 ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
+                SchemaSpecifier::Id(self.get_mz_catalog_schema_id()),
             ),
             (
                 ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(self.get_pg_catalog_schema_id().clone()),
+                SchemaSpecifier::Id(self.get_pg_catalog_schema_id()),
             ),
         ];
         for schema in default_schemas.into_iter() {

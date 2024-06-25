@@ -21,7 +21,7 @@ _target&lowbar;name_ | The target [identifier](/sql/identifiers) of the item you
 
 Swapping two items is useful for a blue/green deployment
 
-```sql
+```mzsql
 CREATE SCHEMA blue;
 CREATE TABLE blue.numbers (n int);
 

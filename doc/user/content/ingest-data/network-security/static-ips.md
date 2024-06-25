@@ -44,9 +44,11 @@ a region. We make every effort to provide advance notice of such changes.
 
 Show the static egress IPs associated with a region:
 
-```sql
+```mzsql
 SELECT * FROM mz_egress_ips;
 ```
+
+<p></p>
 
 ```nofmt
    egress_ip

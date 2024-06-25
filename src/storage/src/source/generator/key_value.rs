@@ -13,6 +13,7 @@ use differential_dataflow::{AsCollection, Collection};
 use futures::stream::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row};
+use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::KeyValueLoadGenerator;
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
@@ -25,7 +26,7 @@ use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::ProgressStatisticsUpdate;
-use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 pub fn render<G: Scope<Timestamp = MzOffset>>(
     key_value: KeyValueLoadGenerator,
@@ -34,7 +35,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+    Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
     Option<Stream<G, Infallible>>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
@@ -323,7 +324,7 @@ impl TransactionalSnapshotProducer {
         value_buffer: &'a mut Vec<u8>,
     ) -> impl Iterator<
         Item = (
-            (usize, Result<SourceMessage, SourceReaderError>),
+            (usize, Result<SourceMessage, DataflowError>),
             MzOffset,
             Diff,
         ),
@@ -447,7 +448,7 @@ impl UpdateProducer {
         u64,
         impl Iterator<
                 Item = (
-                    (usize, Result<SourceMessage, SourceReaderError>),
+                    (usize, Result<SourceMessage, DataflowError>),
                     MzOffset,
                     Diff,
                 ),

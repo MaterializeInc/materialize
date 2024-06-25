@@ -22,7 +22,7 @@ _data_type_name_ | The name of the type to remove.
 ## Examples
 
 ### Remove a type with no dependent objects
-```sql
+```mzsql
 CREATE TYPE int4_map AS MAP (KEY TYPE = text, VALUE TYPE = int4);
 
 SHOW TYPES;
@@ -34,7 +34,7 @@ SHOW TYPES;
 (1 row)
 ```
 
-```sql
+```mzsql
 DROP TYPE int4_map;
 
 SHOW TYPES;
@@ -51,7 +51,7 @@ By default, `DROP TYPE` will not remove a type with dependent objects. The **CAS
 
 In the example below, the **CASCADE** switch removes `int4_list`, `int4_list_list` (which depends on `int4_list`), and the table *t*, which has a column of data type `int4_list`.
 
-```sql
+```mzsql
 CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 
 CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list);
@@ -68,7 +68,7 @@ SHOW TYPES;
 (2 rows)
 ```
 
-```sql
+```mzsql
 DROP TYPE int4_list CASCADE;
 
 SHOW TYPES;
@@ -86,16 +86,16 @@ ERROR:  unknown catalog item 't'
 
 You can use either of the following commands:
 
-- ```sql
+- ```mzsql
   DROP TYPE int4_list;
   ```
-- ```sql
+- ```mzsql
   DROP TYPE int4_list RESTRICT;
   ```
 
 ### Do not issue an error if attempting to remove a nonexistent type
 
-```sql
+```mzsql
 DROP TYPE IF EXISTS int4_list;
 ```
 

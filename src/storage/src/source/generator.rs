@@ -13,6 +13,7 @@ use std::time::Duration;
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use mz_repr::{Diff, Row};
+use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{
     Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
 };
@@ -24,7 +25,7 @@ use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
-use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod auction;
 mod counter;
@@ -131,7 +132,7 @@ impl GeneratorKind {
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -173,7 +174,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -199,7 +200,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     required_exports: usize,
 ) -> (
-    Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+    Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
     Option<Stream<G, Infallible>>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,

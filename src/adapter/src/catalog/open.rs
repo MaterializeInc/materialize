@@ -44,7 +44,7 @@ use mz_ore::instrument;
 use mz_ore::now::to_datetime;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
-use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
+use mz_repr::namespaces::is_unstable_schema;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
@@ -109,7 +109,6 @@ impl BuiltinMigrationMetadata {
 pub enum CatalogItemRebuilder {
     SystemSource(CatalogItem),
     Object {
-        id: GlobalId,
         sql: String,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
@@ -134,7 +133,6 @@ impl CatalogItemRebuilder {
                 .ast;
             mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, ancestor_ids);
             Self::Object {
-                id,
                 sql: create_stmt.to_ast_string_stable(),
                 is_retained_metrics_object: entry.item().is_retained_metrics_object(),
                 custom_logical_compaction_window: entry.item().custom_logical_compaction_window(),
@@ -146,7 +144,6 @@ impl CatalogItemRebuilder {
         match self {
             Self::SystemSource(item) => item,
             Self::Object {
-                id: _,
                 sql,
                 is_retained_metrics_object,
                 custom_logical_compaction_window,
@@ -350,7 +347,7 @@ impl Catalog {
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
                 // Throw the existing item updates away because they may have been re-written in
                 // the migration.
-                let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), diff: StateDiff::Addition}).collect();
+                let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), ts: config.boot_ts, diff: StateDiff::Addition}).collect();
                 let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
                 builtin_table_updates.extend(builtin_table_update);
             } else {
@@ -650,6 +647,7 @@ impl Catalog {
                     kind: StateUpdateKind::AuditLog(mz_catalog::durable::objects::AuditLog {
                         event,
                     }),
+                    ts: boot_ts,
                     diff: StateDiff::Addition,
                 })
                 .collect();
@@ -675,6 +673,7 @@ impl Catalog {
                     kind: StateUpdateKind::StorageUsage(
                         mz_catalog::durable::objects::StorageUsage { metric },
                     ),
+                    ts: boot_ts,
                     diff: StateDiff::Addition,
                 })
                 .collect();
@@ -1024,23 +1023,23 @@ fn add_new_remove_old_builtin_items_migration(
         .into_iter()
         .map(|(_, system_object_mapping)| system_object_mapping.description)
         .collect();
-    // If you are 100% positive that it is safe to delete a system object outside the
-    // `mz_internal` schema, then add it to this set. Make sure that no prod environments are
+    // If you are 100% positive that it is safe to delete a system object outside any of the
+    // unstable schemas, then add it to this set. Make sure that no prod environments are
     // using this object and that the upgrade checker does not show any issues.
     //
     // Objects can be removed from this set after one release.
     let delete_exceptions: HashSet<SystemObjectDescription> = [].into();
     // TODO(jkosh44) Technically we could support changing the type of a builtin object outside
-    // of `mz_internal` (i.e. from a table to a view). However, builtin migrations don't currently
+    // of unstable schemas (i.e. from a table to a view). However, builtin migrations don't currently
     // handle that scenario correctly.
     assert!(
         deleted_system_objects
             .iter()
             .all(
-                |deleted_object| deleted_object.schema_name == MZ_INTERNAL_SCHEMA
+                |deleted_object| is_unstable_schema(&deleted_object.schema_name)
                     || delete_exceptions.contains(deleted_object)
             ),
-        "only mz_internal objects can be deleted, deleted objects: {:?}",
+        "only objects in unstable schemas can be deleted, deleted objects: {:?}",
         deleted_system_objects
     );
     txn.remove_system_object_mappings(deleted_system_objects)?;
@@ -1298,7 +1297,6 @@ mod builtin_migration_tests {
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::ClusterId;
     use mz_expr::MirRelationExpr;
-    use mz_ore::now::NOW_ZERO;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names::{
@@ -1479,7 +1477,7 @@ mod builtin_migration_tests {
     }
 
     async fn run_test_case(test_case: BuiltinMigrationTestCase) {
-        Catalog::with_debug(NOW_ZERO.clone(), |mut catalog| async move {
+        Catalog::with_debug(|mut catalog| async move {
             let mut id_mapping = BTreeMap::new();
             let mut name_mapping = BTreeMap::new();
             for entry in test_case.initial_state {

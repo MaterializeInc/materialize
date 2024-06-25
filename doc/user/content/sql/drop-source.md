@@ -25,27 +25,27 @@ _source&lowbar;name_ | The name of the source you want to remove.
 
 ### Remove a source with no dependent objects
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 ```nofmt
 ...
 my_source
 ```
-```sql
+```mzsql
 DROP SOURCE my_source;
 ```
 
 ### Remove a source with dependent objects
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 ```nofmt
 ...
 my_source
 ```
-```sql
+```mzsql
 DROP SOURCE my_source CASCADE;
 ```
 
@@ -53,16 +53,16 @@ DROP SOURCE my_source CASCADE;
 
 You can use either of the following commands:
 
-- ```sql
+- ```mzsql
   DROP SOURCE my_source;
   ```
-- ```sql
+- ```mzsql
   DROP SOURCE my_source RESTRICT;
   ```
 
 ### Do not issue an error if attempting to remove a nonexistent source
 
-```sql
+```mzsql
 DROP SOURCE IF EXISTS my_source;
 ```
 

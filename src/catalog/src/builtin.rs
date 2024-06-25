@@ -2496,6 +2496,11 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             }
             .nullable(true),
         )
+        .with_column("introspection_debugging", ScalarType::Bool.nullable(true))
+        .with_column(
+            "introspection_interval",
+            ScalarType::Interval.nullable(true),
+        )
         .with_key(vec![0]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],

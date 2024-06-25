@@ -113,7 +113,7 @@ define a bootstrap query in the connection initialization settings.
 1. Under **Bootstrap queries**, click **Configure** and add a new SQL query that
 sets the active cluster for the connection:
 
-    ```sql
+    ```mzsql
     SET cluster = other_cluster;
     ```
 

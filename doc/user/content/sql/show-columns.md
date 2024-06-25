@@ -44,7 +44,7 @@ object.
 
 ## Examples
 
-```sql
+```mzsql
 SHOW SOURCES;
 ```
 ```nofmt
@@ -52,7 +52,7 @@ SHOW SOURCES;
 ----------
 my_sources
 ```
-```sql
+```mzsql
 SHOW COLUMNS FROM my_source;
 ```
 ```nofmt

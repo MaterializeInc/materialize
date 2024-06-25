@@ -28,13 +28,13 @@ _connection&lowbar;name_ | The connection you want to drop. For available connec
 
 To drop an existing connection, run:
 
-```sql
+```mzsql
 DROP CONNECTION kafka_connection;
 ```
 
 To avoid issuing an error if the specified connection does not exist, use the `IF EXISTS` option:
 
-```sql
+```mzsql
 DROP CONNECTION IF EXISTS kafka_connection;
 ```
 
@@ -42,7 +42,7 @@ DROP CONNECTION IF EXISTS kafka_connection;
 
 If the connection has dependencies, Materialize will throw an error similar to:
 
-```sql
+```mzsql
 DROP CONNECTION kafka_connection;
 ```
 
@@ -53,7 +53,7 @@ ERROR:  cannot drop materialize.public.kafka_connection: still depended upon by 
 
 , and you'll have to explicitly ask to also remove any dependent objects using the `CASCADE` option:
 
-```sql
+```mzsql
 DROP CONNECTION kafka_connection CASCADE;
 ```
 

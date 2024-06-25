@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -96,22 +95,6 @@ pub trait StorageCollections: Debug {
         txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         init_ids: BTreeSet<GlobalId>,
         drop_ids: BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Resets the txns system to a set of invariants necessary for correctness.
-    ///
-    /// Must be called on boot before create_collections or the various appends.
-    /// This is true _regardless_ of whether the txn-wal feature is on or
-    /// not. See the big comment in the impl of the method for details. Ideally,
-    /// this would have just been folded into `Controller::new`, but it needs
-    /// the timestamp and there are boot dependency issues.
-    ///
-    /// TODO: This can be removed once we've flipped to the new txns system for
-    /// good and there is no possibility of the old code running concurrently
-    /// with the new code.
-    async fn init_txns(
-        &self,
-        init_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Update storage configuration with new parameters.
@@ -359,9 +342,6 @@ pub struct StorageCollectionsImpl<
 
     /// Whether to use the new txn-wal tables implementation or the legacy one.
     txns: TxnsWal<T>,
-    /// Whether we have run `txns_init` yet (required before create_collections
-    /// and the various flavors of append).
-    txns_init_run: Arc<AtomicBool>,
 
     /// Storage configuration parameters.
     config: Arc<Mutex<StorageConfiguration>>,
@@ -503,7 +483,6 @@ where
             finalized_shards,
             collections,
             txns,
-            txns_init_run: Arc::new(AtomicBool::new(false)),
             envd_epoch,
             config,
             persist_location,
@@ -1051,24 +1030,6 @@ where
         Ok(())
     }
 
-    /// See [crate::controller::StorageController::init_txns] and its
-    /// implementation.
-    async fn init_txns(
-        &self,
-        _init_ts: Self::Timestamp,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
-        assert_eq!(
-            self.txns_init_run.load(std::sync::atomic::Ordering::SeqCst),
-            false
-        );
-
-        // We don't initialize the txns system, the `StorageController` does
-        // that. All we care about is that initialization has been run.
-        self.txns_init_run
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        Ok(())
-    }
-
     fn update_parameters(&self, config_params: StorageParameters) {
         // We serialize the dyncfg updates in StorageParameters, but configure
         // persist separately.
@@ -1276,8 +1237,6 @@ where
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        assert!(self.txns_init_run.load(std::sync::atomic::Ordering::SeqCst));
-
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
         // 2. create an existing identifier with a new description.

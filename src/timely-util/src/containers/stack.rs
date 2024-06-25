@@ -10,19 +10,22 @@
 //! A chunked columnar container based on the columnation library. It stores the local
 //! portion in region-allocated data, too, which is different to the `TimelyStack` type.
 
+use std::cell::Cell;
 use std::collections::Bound;
 use std::ops::{Index, RangeBounds};
 use std::sync::atomic::AtomicBool;
 
 use differential_dataflow::trace::implementations::BatchContainer;
+use either::Either;
 use timely::container::columnation::{Columnation, Region, TimelyStack};
-use timely::container::PushInto;
+use timely::container::{Container, ContainerBuilder, PushInto, SizableContainer};
 
 use crate::containers::array::Array;
 
 static ENABLE_CHUNKED_STACK: AtomicBool = AtomicBool::new(false);
 
 /// A runtime-configurable wrapper around timely stacks and chunked stacks.
+#[derive(Clone)]
 pub enum StackWrapper<T: Columnation> {
     Legacy(TimelyStack<T>),
     Chunked(ChunkedStack<T>),
@@ -35,6 +38,15 @@ pub fn use_chunked_stack(enable: bool) {
 }
 
 impl<T: Columnation> StackWrapper<T> {
+    #[inline]
+    fn with_capacity(size: usize) -> Self {
+        if ENABLE_CHUNKED_STACK.load(std::sync::atomic::Ordering::Relaxed) {
+            Self::Chunked(ChunkedStack::with_capacity(size))
+        } else {
+            Self::Legacy(TimelyStack::with_capacity(size))
+        }
+    }
+
     /// Estimate the memory capacity in bytes.
     #[inline]
     pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
@@ -53,11 +65,7 @@ impl<T: Ord + Columnation + Clone + 'static> BatchContainer for StackWrapper<T> 
 
     #[inline]
     fn with_capacity(size: usize) -> Self {
-        if ENABLE_CHUNKED_STACK.load(std::sync::atomic::Ordering::Relaxed) {
-            Self::Chunked(ChunkedStack::with_capacity(size))
-        } else {
-            Self::Legacy(TimelyStack::with_capacity(size))
-        }
+        Self::with_capacity(size)
     }
 
     fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
@@ -78,7 +86,7 @@ impl<T: Ord + Columnation + Clone + 'static> BatchContainer for StackWrapper<T> 
                 // if the two inputs are different. This should only happen after
                 // toggling the flag at runtime, which mh@ assumes to be a rare
                 // event.
-                Self::with_capacity(cont1.len() + cont2.len())
+                Self::with_capacity(BatchContainer::len(cont1) + BatchContainer::len(cont2))
             }
         }
     }
@@ -105,8 +113,76 @@ impl<T: Ord + Columnation + Clone + 'static> BatchContainer for StackWrapper<T> 
 
     fn is_empty(&self) -> bool {
         match self {
-            StackWrapper::Legacy(stack) => stack.is_empty(),
+            StackWrapper::Legacy(stack) => BatchContainer::is_empty(stack),
             StackWrapper::Chunked(stack) => stack.is_empty(),
+        }
+    }
+}
+
+impl<T: Clone + Columnation + 'static> Container for StackWrapper<T> {
+    type ItemRef<'a> = &'a T where Self: 'a;
+    type Item<'a> = &'a T where Self: 'a;
+
+    fn len(&self) -> usize {
+        match self {
+            StackWrapper::Legacy(legacy) => legacy.len(),
+            StackWrapper::Chunked(chunked) => chunked.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            StackWrapper::Legacy(legacy) => legacy.is_empty(),
+            StackWrapper::Chunked(chunked) => chunked.is_empty(),
+        }
+    }
+
+    fn clear(&mut self) {
+        match self {
+            StackWrapper::Legacy(legacy) => legacy.clear(),
+            StackWrapper::Chunked(chunked) => chunked.clear(),
+        }
+    }
+
+    type Iter<'a> =
+        Either<<TimelyStack<T> as Container>::Iter<'a>, <ChunkedStack<T> as Container>::Iter<'a>>;
+
+    fn iter(&self) -> Self::Iter<'_> {
+        match self {
+            StackWrapper::Legacy(legacy) => Either::Left(legacy.iter()),
+            StackWrapper::Chunked(chunked) => Either::Right(chunked.iter()),
+        }
+    }
+
+    type DrainIter<'a> = Either<
+        <TimelyStack<T> as Container>::DrainIter<'a>,
+        <ChunkedStack<T> as Container>::DrainIter<'a>,
+    >;
+
+    fn drain(&mut self) -> Self::DrainIter<'_> {
+        match self {
+            StackWrapper::Legacy(legacy) => Either::Left(legacy.drain()),
+            StackWrapper::Chunked(chunked) => Either::Right(chunked.drain()),
+        }
+    }
+}
+
+impl<T: Clone + Columnation + 'static> SizableContainer for StackWrapper<T> {
+    fn capacity(&self) -> usize {
+        match self {
+            StackWrapper::Legacy(l) => l.capacity(),
+            StackWrapper::Chunked(c) => c.capacity(),
+        }
+    }
+
+    fn preferred_capacity() -> usize {
+        timely::container::buffer::default_capacity::<T>()
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        match self {
+            StackWrapper::Legacy(l) => l.reserve(additional),
+            StackWrapper::Chunked(c) => c.reserve(additional),
         }
     }
 }
@@ -126,6 +202,50 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> PushInto<&T> for Stack
             StackWrapper::Legacy(stack) => stack.copy(item),
             StackWrapper::Chunked(stack) => stack.push_into(item),
         }
+    }
+}
+
+impl<T: Columnation> Default for StackWrapper<T> {
+    fn default() -> Self {
+        Self::with_capacity(0)
+    }
+}
+
+/// A Stacked container builder that keep track of container memory usage.
+#[derive(Default)]
+pub struct AccountedStackBuilder<CB> {
+    bytes: Cell<usize>,
+    builder: CB,
+}
+
+impl<T, CB> ContainerBuilder for AccountedStackBuilder<CB>
+where
+    T: Clone + Columnation + 'static,
+    CB: ContainerBuilder<Container = StackWrapper<T>>,
+{
+    type Container = StackWrapper<T>;
+
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        let container = self.builder.extract()?;
+        let mut new_bytes = 0;
+        container.heap_size(|_, cap| new_bytes += cap);
+        self.bytes.set(self.bytes.get() + new_bytes);
+        Some(container)
+    }
+
+    fn finish(&mut self) -> Option<&mut Self::Container> {
+        let container = self.builder.finish()?;
+        let mut new_bytes = 0;
+        container.heap_size(|_, cap| new_bytes += cap);
+        self.bytes.set(self.bytes.get() + new_bytes);
+        Some(container)
+    }
+}
+
+impl<T, CB: PushInto<T>> PushInto<T> for AccountedStackBuilder<CB> {
+    #[inline]
+    fn push_into(&mut self, item: T) {
+        self.builder.push_into(item);
     }
 }
 
@@ -159,6 +279,11 @@ impl<T: Columnation> ChunkedStack<T> {
             inner: T::InnerRegion::default(),
             length: 0,
         }
+    }
+
+    /// The capacity of the local array.
+    pub fn capacity(&self) -> usize {
+        self.local.capacity() * Self::CHUNK
     }
 
     /// Ensures `Self` can absorb `items` without further allocations.
@@ -210,7 +335,7 @@ impl<T: Columnation> ChunkedStack<T> {
     /// Estimate the memory capacity in bytes.
     #[inline]
     pub fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
-        let size_of = std::mem::size_of::<T>();
+        let size_of = std::mem::size_of::<Array<T>>();
         callback(self.local.len() * size_of, self.local.capacity() * size_of);
         for local in &self.local {
             local.heap_size(&mut callback);
@@ -264,6 +389,23 @@ impl<T: Columnation> ChunkedStack<T> {
     pub fn is_empty(&self) -> bool {
         self.local.is_empty()
     }
+
+    /// Empties the collection.
+    pub fn clear(&mut self) {
+        for array in &mut self.local {
+            // SAFETY: All elements in `array` have their allocations in a region. We drop the
+            // region and forget the immediate values. We would try to drop region-allocated
+            // data through the objects in `array`, which is UB.
+            unsafe {
+                array.set_len(0);
+            }
+        }
+        // Important: Clear the region before dropping it to avoid double frees.
+        // Regions in columnation do not necessarily have a `Drop` implementation, so we need to
+        // make sure they release their contents before dropping.
+        self.inner.clear();
+        self.length = 0;
+    }
 }
 
 // The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
@@ -298,6 +440,50 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for Chu
     }
 }
 
+impl<T: Columnation + 'static> Container for ChunkedStack<T> {
+    type ItemRef<'a> = &'a T where Self: 'a;
+    type Item<'a> = &'a T where Self: 'a;
+
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.clear()
+    }
+
+    type Iter<'a> = Iter<'a, T>;
+
+    fn iter(&self) -> Self::Iter<'_> {
+        self.range(..)
+    }
+
+    type DrainIter<'a> = Iter<'a, T>;
+
+    fn drain(&mut self) -> Self::DrainIter<'_> {
+        self.range(..)
+    }
+}
+
+impl<T: Columnation + 'static> SizableContainer for ChunkedStack<T> {
+    fn capacity(&self) -> usize {
+        self.capacity()
+    }
+
+    fn preferred_capacity() -> usize {
+        timely::container::buffer::default_capacity::<T>()
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        let additional_chunks = (additional + Self::CHUNK - 1) / Self::CHUNK;
+        self.local.reserve(additional_chunks);
+    }
+}
+
 impl<T: Columnation> PushInto<&T> for ChunkedStack<T> {
     fn push_into(&mut self, item: &T) {
         self.copy(item);
@@ -315,6 +501,23 @@ impl<T: Columnation> Index<usize> for ChunkedStack<T> {
 impl<T: Columnation> Default for ChunkedStack<T> {
     fn default() -> Self {
         Self::with_capacity(0)
+    }
+}
+
+impl<T: Columnation> Clone for ChunkedStack<T> {
+    fn clone(&self) -> Self {
+        let mut new: Self = Default::default();
+        for item in self.range(..) {
+            new.copy(item);
+        }
+        new
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.clear();
+        for item in source.range(..) {
+            self.copy(item);
+        }
     }
 }
 
@@ -351,17 +554,6 @@ impl<'a, T: Columnation> Iterator for Iter<'a, T> {
 
 impl<T: Columnation> Drop for ChunkedStack<T> {
     fn drop(&mut self) {
-        for array in &mut self.local {
-            // SAFETY: All elements in `array` have their allocations in a region. We drop the
-            // region and forget the immediate values. We would try to drop region-allocated
-            // data through the objects in `array`, which is UB.
-            unsafe {
-                array.set_len(0);
-            }
-        }
-        // Important: Clear the region before dropping it to avoid double frees.
-        // Regions in columnation do not necessarily have a `Drop` implementation, so we need to
-        // make sure they release their contents before dropping.
-        self.inner.clear();
+        self.clear();
     }
 }

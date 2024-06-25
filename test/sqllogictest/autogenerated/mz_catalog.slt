@@ -90,6 +90,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 7  replication_factor  uint4
 8  disk  boolean
 9  availability_zones  list
+10  introspection_debugging  boolean
+11  introspection_interval  interval
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_columns' ORDER BY position

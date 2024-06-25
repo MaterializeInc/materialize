@@ -67,19 +67,19 @@ type for sources, views, and materialized views.
 
 ## Examples
 
-```sql
+```mzsql
 ALTER DEFAULT PRIVILEGES FOR ROLE mike GRANT SELECT ON TABLES TO joe;
 ```
 
-```sql
+```mzsql
 ALTER DEFAULT PRIVILEGES FOR ROLE interns IN DATABASE dev GRANT ALL PRIVILEGES ON TABLES TO intern_managers;
 ```
 
-```sql
+```mzsql
 ALTER DEFAULT PRIVILEGES FOR ROLE developers REVOKE USAGE ON SECRETS FROM project_managers;
 ```
 
-```sql
+```mzsql
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO managers;
 ```
 

@@ -22,7 +22,7 @@ change arbitrarily in future versions of Materialize.
 
 Note that the `FOR` keyword is required if the `PLAN` keyword is present. In other words, the following three statements are equivalent:
 
-```sql
+```mzsql
 EXPLAIN <explainee>;
 EXPLAIN PLAN FOR <explainee>;
 EXPLAIN OPTIMIZED PLAN FOR <explainee>;
@@ -283,35 +283,35 @@ Let's start with a simple join query that lists the total amounts bid per buyer.
 
 Explain the optimized plan as text:
 
-```sql
+```mzsql
 EXPLAIN
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
 ```
 
 Same as above, but a bit more verbose:
 
-```sql
+```mzsql
 EXPLAIN PLAN
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
 ```
 
 Same as above, but even more verbose:
 
-```sql
+```mzsql
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
 ```
 
 Same as above, but every sub-plan is annotated with its schema types:
 
-```sql
+```mzsql
 EXPLAIN WITH(types) FOR
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
 ```
 
 Explain the physical plan as text:
 
-```sql
+```mzsql
 EXPLAIN PHYSICAL PLAN FOR
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
 ```
@@ -320,7 +320,7 @@ SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP 
 
 Let's create a view with an index for the above query.
 
-```sql
+```mzsql
 -- create the view
 CREATE VIEW my_view AS
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
@@ -332,35 +332,35 @@ You can inspect the plan of the dataflow that will maintain your index with the 
 
 Explain the optimized plan as text:
 
-```sql
+```mzsql
 EXPLAIN
 INDEX my_view_idx;
 ```
 
 Same as above, but a bit more verbose:
 
-```sql
+```mzsql
 EXPLAIN PLAN FOR
 INDEX my_view_idx;
 ```
 
 Same as above, but even more verbose:
 
-```sql
+```mzsql
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 INDEX my_view_idx;
 ```
 
 Same as above, but every sub-plan is annotated with its schema types:
 
-```sql
+```mzsql
 EXPLAIN WITH(types) FOR
 INDEX my_view_idx;
 ```
 
 Explain the physical plan as text:
 
-```sql
+```mzsql
 EXPLAIN PHYSICAL PLAN FOR
 INDEX my_view_idx;
 ```
@@ -369,7 +369,7 @@ INDEX my_view_idx;
 
 Let's create a materialized view for the above `SELECT` query.
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW my_mat_view AS
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
 ```
@@ -378,35 +378,35 @@ You can inspect the plan of the dataflow that will maintain your view with the f
 
 Explain the optimized plan as text:
 
-```sql
+```mzsql
 EXPLAIN
 MATERIALIZED VIEW my_mat_view;
 ```
 
 Same as above, but a bit more verbose:
 
-```sql
+```mzsql
 EXPLAIN PLAN FOR
 MATERIALIZED VIEW my_mat_view;
 ```
 
 Same as above, but even more verbose:
 
-```sql
+```mzsql
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 MATERIALIZED VIEW my_mat_view;
 ```
 
 Same as above, but every sub-plan is annotated with its schema types:
 
-```sql
+```mzsql
 EXPLAIN WITH(types)
 MATERIALIZED VIEW my_mat_view;
 ```
 
 Explain the physical plan as text:
 
-```sql
+```mzsql
 EXPLAIN PHYSICAL PLAN FOR
 MATERIALIZED VIEW my_mat_view;
 ```

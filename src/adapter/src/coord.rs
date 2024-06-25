@@ -279,6 +279,11 @@ pub enum Message<T = mz_repr::Timestamp> {
         span: Span,
         stage: SecretStage,
     },
+    ClusterStageReady {
+        ctx: ExecuteContext,
+        span: Span,
+        stage: ClusterStage,
+    },
     ExplainTimestampStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -342,6 +347,7 @@ impl Message {
             }
             Message::SubscribeStageReady { .. } => "subscribe_stage_ready",
             Message::SecretStageReady { .. } => "secret_stage_ready",
+            Message::ClusterStageReady { .. } => "cluster_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
@@ -420,6 +426,7 @@ pub struct CopyToContext {
 pub struct PeekStageLinearizeTimestamp {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
+    max_query_result_size: Option<u64>,
     source_ids: BTreeSet<GlobalId>,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
@@ -433,6 +440,7 @@ pub struct PeekStageLinearizeTimestamp {
 pub struct PeekStageRealTimeRecency {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
+    max_query_result_size: Option<u64>,
     source_ids: BTreeSet<GlobalId>,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
@@ -447,6 +455,7 @@ pub struct PeekStageRealTimeRecency {
 pub struct PeekStageTimestampReadHold {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
+    max_query_result_size: Option<u64>,
     source_ids: BTreeSet<GlobalId>,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
@@ -462,6 +471,7 @@ pub struct PeekStageTimestampReadHold {
 pub struct PeekStageOptimize {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
+    max_query_result_size: Option<u64>,
     source_ids: BTreeSet<GlobalId>,
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
@@ -476,6 +486,7 @@ pub struct PeekStageOptimize {
 pub struct PeekStageFinish {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
+    max_query_result_size: Option<u64>,
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
@@ -615,6 +626,17 @@ pub struct ExplainTimestampFinish {
     source_ids: BTreeSet<GlobalId>,
     when: QueryWhen,
     real_time_recency_ts: Option<Timestamp>,
+}
+
+#[derive(Debug)]
+pub enum ClusterStage {
+    Alter(AlterCluster),
+}
+
+#[derive(Debug)]
+pub struct AlterCluster {
+    validity: PlanValidity,
+    plan: plan::AlterClusterPlan,
 }
 
 #[derive(Debug)]
@@ -2153,19 +2175,6 @@ impl Coordinator {
     /// storage collections, without needing to worry about dependency order.
     #[instrument]
     async fn bootstrap_storage_collections(&mut self) {
-        // Reset the txns and table shards to a known set of invariants.
-        //
-        // TODO: This can be removed once we've flipped to the new txns system
-        // for good and there is no possibility of the old code running
-        // concurrently with the new code.
-        let init_ts = self.get_local_write_ts().await.timestamp;
-        self.controller
-            .storage
-            .init_txns(init_ts)
-            .await
-            .unwrap_or_terminate("init_txns");
-        self.apply_local_write(init_ts).await;
-
         let catalog = self.catalog();
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);

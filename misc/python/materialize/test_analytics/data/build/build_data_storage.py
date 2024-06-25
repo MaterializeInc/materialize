@@ -8,10 +8,12 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize import buildkite
+from materialize import buildkite, git
 from materialize.buildkite import BuildkiteEnvVar
 from materialize.mz_version import MzVersion
-from materialize.test_analytics.connector.test_analytics_connector import DatabaseConnector
+from materialize.test_analytics.connector.test_analytics_connector import (
+    DatabaseConnector,
+)
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 
 
@@ -21,12 +23,15 @@ class BuildDataStorage(BaseDataStorage):
         super().__init__(database_connector)
         self.data_version = data_version
 
-    def insert_build(self) -> None:
+    def add_build(self) -> None:
         pipeline = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_PIPELINE_SLUG)
         build_number = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_NUMBER)
         build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
         branch = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BRANCH)
         commit_hash = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_COMMIT)
+        main_ancestor_commit_hash = git.get_common_ancestor_commit(
+            remote=git.get_remote(), branch="main", fetch_branch=True
+        )
         mz_version = MzVersion.parse_cargo()
         build_url = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_URL)
 
@@ -40,6 +45,7 @@ class BuildDataStorage(BaseDataStorage):
                build_id,
                branch,
                commit_hash,
+               main_ancestor_commit_hash,
                mz_version,
                date,
                build_url,
@@ -52,6 +58,7 @@ class BuildDataStorage(BaseDataStorage):
               '{build_id}',
               '{branch}',
               '{commit_hash}',
+              '{main_ancestor_commit_hash}',
               '{mz_version}',
               now(),
               '{build_url}',
@@ -66,18 +73,17 @@ class BuildDataStorage(BaseDataStorage):
             """
         )
 
-        self.database_connector.execute_updates(sql_statements)
+        self.database_connector.add_update_statements(sql_statements)
 
-    def insert_build_job(
+    def add_build_job(
         self,
         was_successful: bool,
-        include_insert_build: bool = True,
+        include_build: bool = True,
     ) -> None:
-        if include_insert_build:
-            self.insert_build()
+        if include_build:
+            self.add_build()
 
         build_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_ID)
-        build_url = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_URL)
         job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
         step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
         step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
@@ -139,7 +145,7 @@ class BuildDataStorage(BaseDataStorage):
             """
         )
 
-        self.database_connector.execute_updates(sql_statements)
+        self.database_connector.add_update_statements(sql_statements)
 
     def update_build_job_success(
         self,
@@ -156,4 +162,4 @@ class BuildDataStorage(BaseDataStorage):
             """
         )
 
-        self.database_connector.execute_updates(sql_statements)
+        self.database_connector.add_update_statements(sql_statements)

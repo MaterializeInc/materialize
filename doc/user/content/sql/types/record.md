@@ -41,7 +41,7 @@ You cannot cast from any other types to `record`.
 
 ## Examples
 
-```sql
+```mzsql
 SELECT ROW(1, 2) AS record;
 ```
 ```nofmt
@@ -52,7 +52,7 @@ SELECT ROW(1, 2) AS record;
 
 <hr>
 
-```sql
+```mzsql
 SELECT record, (record).f2 FROM (SELECT ROW(1, 2) AS record);
 ```
 ```nofmt
@@ -66,7 +66,7 @@ record | f2
 Forgetting to parenthesize the record expression in a field selection operation
 will result in errors like the following
 
-```sql
+```mzsql
 SELECT record.f2 FROM (SELECT ROW(1, 2) AS record);
 ```
 ```nofmt

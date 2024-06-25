@@ -20,14 +20,14 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::container::columnation::{Columnation, TimelyStack};
-use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
+use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::operator::{self, Operator};
-use timely::dataflow::operators::generic::{InputHandle, OperatorInfo, OutputHandleCore};
+use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputHandleCore};
 use timely::dataflow::operators::Capability;
-use timely::dataflow::{Scope, Stream, StreamCore};
+use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, Data, ExchangeData, PartialOrder};
 
@@ -36,10 +36,10 @@ use crate::builder_async::{
     OperatorBuilder as OperatorBuilderAsync,
 };
 
-/// Extension methods for timely [`Stream`]s.
-pub trait StreamExt<G, D1>
+/// Extension methods for timely [`StreamCore`]s.
+pub trait StreamExt<G, C1>
 where
-    D1: Data,
+    C1: Container,
     G: Scope,
 {
     /// Like `timely::dataflow::operators::generic::operator::Operator::unary`,
@@ -66,69 +66,66 @@ where
             OperatorInfo,
         ) -> Box<
             dyn FnMut(
-                    &mut InputHandle<G::Timestamp, D1, P::Puller>,
+                    &mut InputHandleCore<G::Timestamp, C1, P::Puller>,
                     &mut OutputHandleCore<G::Timestamp, DCB, Tee<G::Timestamp, DCB::Container>>,
                     &mut OutputHandleCore<G::Timestamp, ECB, Tee<G::Timestamp, ECB::Container>>,
                 ) + 'static,
         >,
-        P: ParallelizationContract<G::Timestamp, Vec<D1>>;
+        P: ParallelizationContract<G::Timestamp, C1>;
 
     /// Creates a new dataflow operator that partitions its input stream by a parallelization
     /// strategy pact, and repeatedly schedules logic, the future returned by the function passed
     /// as constructor. logic can read from the input stream, and write to the output stream.
-    fn unary_async<D2, P, B, BFut>(&self, pact: P, name: String, constructor: B) -> Stream<G, D2>
+    fn unary_async<CB, P, B, BFut>(
+        &self,
+        pact: P,
+        name: String,
+        constructor: B,
+    ) -> StreamCore<G, CB::Container>
     where
-        D2: Data,
+        CB: ContainerBuilder,
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
-            AsyncOutputHandle<
-                G::Timestamp,
-                CapacityContainerBuilder<Vec<D2>>,
-                Tee<G::Timestamp, Vec<D2>>,
-            >,
+            AsyncInputHandle<G::Timestamp, C1, ConnectedToOne>,
+            AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
         ) -> BFut,
         BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, Vec<D1>>;
+        P: ParallelizationContract<G::Timestamp, C1>;
 
     /// Creates a new dataflow operator that partitions its input streams by a parallelization
     /// strategy pact, and repeatedly schedules logic, the future returned by the function passed
     /// as constructor. logic can read from the input streams, and write to the output stream.
-    fn binary_async<D2, D3, P1, P2, B, BFut>(
+    fn binary_async<C2, CB, P1, P2, B, BFut>(
         &self,
-        other: &Stream<G, D2>,
+        other: &StreamCore<G, C2>,
         pact1: P1,
         pact2: P2,
         name: String,
         constructor: B,
-    ) -> Stream<G, D3>
+    ) -> StreamCore<G, CB::Container>
     where
-        D2: Data,
-        D3: Data,
+        C2: Container,
+        CB: ContainerBuilder,
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
-            AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
-            AsyncOutputHandle<
-                G::Timestamp,
-                CapacityContainerBuilder<Vec<D3>>,
-                Tee<G::Timestamp, Vec<D3>>,
-            >,
+            AsyncInputHandle<G::Timestamp, C1, ConnectedToOne>,
+            AsyncInputHandle<G::Timestamp, C2, ConnectedToOne>,
+            AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
         ) -> BFut,
         BFut: Future + 'static,
-        P1: ParallelizationContract<G::Timestamp, Vec<D1>>,
-        P2: ParallelizationContract<G::Timestamp, Vec<D2>>;
+        P1: ParallelizationContract<G::Timestamp, C1>,
+        P2: ParallelizationContract<G::Timestamp, C2>;
 
     /// Creates a new dataflow operator that partitions its input stream by a parallelization
     /// strategy pact, and repeatedly schedules logic which can read from the input stream and
     /// inspect the frontier at the input.
     fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
     where
-        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, Disconnected>) -> BFut,
+        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, C1, Disconnected>) -> BFut,
         BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, Vec<D1>>;
+        P: ParallelizationContract<G::Timestamp, C1>;
 
     /// Like [`timely::dataflow::operators::map::Map::map`], but `logic`
     /// is allowed to fail. The first returned stream will contain the
@@ -142,7 +139,7 @@ where
     where
         DCB: ContainerBuilder + PushInto<D2>,
         ECB: ContainerBuilder + PushInto<E>,
-        L: FnMut(D1) -> Result<D2, E> + 'static,
+        L: for<'a> FnMut(C1::Item<'a>) -> Result<D2, E> + 'static,
     {
         self.flat_map_fallible::<DCB, ECB, _, _, _, _>(name, move |record| Some(logic(record)))
     }
@@ -160,21 +157,24 @@ where
         DCB: ContainerBuilder + PushInto<D2>,
         ECB: ContainerBuilder + PushInto<E>,
         I: IntoIterator<Item = Result<D2, E>>,
-        L: FnMut(D1) -> I + 'static;
+        L: for<'a> FnMut(C1::Item<'a>) -> I + 'static;
 
     /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
     /// and each time is the current Timely timestamp.
-    fn pass_through<R: Data>(&self, name: &str, unit: R) -> Stream<G, (D1, G::Timestamp, R)>;
+    fn pass_through<CB, R>(&self, name: &str, unit: R) -> StreamCore<G, CB::Container>
+    where
+        CB: ContainerBuilder + for<'a> PushInto<(C1::Item<'a>, G::Timestamp, R)>,
+        R: Data;
 
     /// Wraps the stream with an operator that passes through all received inputs as long as the
     /// provided token can be upgraded. Once the token cannot be upgraded anymore, all data flowing
     /// into the operator is dropped.
-    fn with_token(&self, token: Weak<()>) -> Stream<G, D1>;
+    fn with_token(&self, token: Weak<()>) -> StreamCore<G, C1>;
 
     /// Distributes the data of the stream to all workers in a round-robin fashion.
-    fn distribute(&self) -> Stream<G, D1>
+    fn distribute(&self) -> StreamCore<G, C1>
     where
-        D1: ExchangeData;
+        C1: ExchangeData;
 }
 
 /// Extension methods for differential [`Collection`]s.
@@ -283,9 +283,9 @@ where
             > + 'static;
 }
 
-impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
+impl<G, C1> StreamExt<G, C1> for StreamCore<G, C1>
 where
-    D1: Data,
+    C1: Container,
     G: Scope,
 {
     fn unary_fallible<DCB, ECB, B, P>(
@@ -302,12 +302,12 @@ where
             OperatorInfo,
         ) -> Box<
             dyn FnMut(
-                    &mut InputHandle<G::Timestamp, D1, P::Puller>,
+                    &mut InputHandleCore<G::Timestamp, C1, P::Puller>,
                     &mut OutputHandleCore<G::Timestamp, DCB, Tee<G::Timestamp, DCB::Container>>,
                     &mut OutputHandleCore<G::Timestamp, ECB, Tee<G::Timestamp, ECB::Container>>,
                 ) + 'static,
         >,
-        P: ParallelizationContract<G::Timestamp, Vec<D1>>,
+        P: ParallelizationContract<G::Timestamp, C1>,
     {
         let mut builder = OperatorBuilderRc::new(name.into(), self.scope());
         builder.set_notify(false);
@@ -332,21 +332,22 @@ where
         (ok_stream, err_stream)
     }
 
-    fn unary_async<D2, P, B, BFut>(&self, pact: P, name: String, constructor: B) -> Stream<G, D2>
+    fn unary_async<CB, P, B, BFut>(
+        &self,
+        pact: P,
+        name: String,
+        constructor: B,
+    ) -> StreamCore<G, CB::Container>
     where
-        D2: Data,
+        CB: ContainerBuilder,
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
-            AsyncOutputHandle<
-                G::Timestamp,
-                CapacityContainerBuilder<Vec<D2>>,
-                Tee<G::Timestamp, Vec<D2>>,
-            >,
+            AsyncInputHandle<G::Timestamp, C1, ConnectedToOne>,
+            AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
         ) -> BFut,
         BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, Vec<D1>>,
+        P: ParallelizationContract<G::Timestamp, C1>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
@@ -363,31 +364,27 @@ where
         stream
     }
 
-    fn binary_async<D2, D3, P1, P2, B, BFut>(
+    fn binary_async<C2, CB, P1, P2, B, BFut>(
         &self,
-        other: &Stream<G, D2>,
+        other: &StreamCore<G, C2>,
         pact1: P1,
         pact2: P2,
         name: String,
         constructor: B,
-    ) -> Stream<G, D3>
+    ) -> StreamCore<G, CB::Container>
     where
-        D2: Data,
-        D3: Data,
+        C2: Container,
+        CB: ContainerBuilder,
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
-            AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
-            AsyncOutputHandle<
-                G::Timestamp,
-                CapacityContainerBuilder<Vec<D3>>,
-                Tee<G::Timestamp, Vec<D3>>,
-            >,
+            AsyncInputHandle<G::Timestamp, C1, ConnectedToOne>,
+            AsyncInputHandle<G::Timestamp, C2, ConnectedToOne>,
+            AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
         ) -> BFut,
         BFut: Future + 'static,
-        P1: ParallelizationContract<G::Timestamp, Vec<D1>>,
-        P2: ParallelizationContract<G::Timestamp, Vec<D2>>,
+        P1: ParallelizationContract<G::Timestamp, C1>,
+        P2: ParallelizationContract<G::Timestamp, C2>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
@@ -410,9 +407,9 @@ where
     /// inspect the frontier at the input.
     fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
     where
-        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, Disconnected>) -> BFut,
+        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, C1, Disconnected>) -> BFut,
         BFut: Future + 'static,
-        P: ParallelizationContract<G::Timestamp, Vec<D1>>,
+        P: ParallelizationContract<G::Timestamp, C1>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
@@ -437,16 +434,16 @@ where
         DCB: ContainerBuilder + PushInto<D2>,
         ECB: ContainerBuilder + PushInto<E>,
         I: IntoIterator<Item = Result<D2, E>>,
-        L: FnMut(D1) -> I + 'static,
+        L: for<'a> FnMut(C1::Item<'a>) -> I + 'static,
     {
-        let mut storage = Vec::new();
+        let mut storage = C1::default();
         self.unary_fallible::<DCB, ECB, _, _>(Pipeline, name, move |_, _| {
             Box::new(move |input, ok_output, err_output| {
                 input.for_each(|time, data| {
                     let mut ok_session = ok_output.session_with_builder(&time);
                     let mut err_session = err_output.session_with_builder(&time);
                     data.swap(&mut storage);
-                    for r in storage.drain(..).flat_map(|d1| logic(d1)) {
+                    for r in storage.drain().flat_map(|d1| logic(d1)) {
                         match r {
                             Ok(d2) => ok_session.push_into(d2),
                             Err(e) => err_session.push_into(e),
@@ -457,15 +454,20 @@ where
         })
     }
 
-    fn pass_through<R: Data>(&self, name: &str, unit: R) -> Stream<G, (D1, G::Timestamp, R)> {
-        self.unary(Pipeline, name, move |_, _| {
+    fn pass_through<CB, R>(&self, name: &str, unit: R) -> StreamCore<G, CB::Container>
+    where
+        CB: ContainerBuilder + for<'a> PushInto<(C1::Item<'a>, G::Timestamp, R)>,
+        R: Data,
+    {
+        self.unary::<CB, _, _, _>(Pipeline, name, move |_, _| {
+            let mut storage = C1::default();
             move |input, output| {
                 input.for_each(|cap, data| {
-                    let mut v = Vec::new();
-                    data.swap(&mut v);
-                    let mut session = output.session(&cap);
+                    data.swap(&mut storage);
+                    let mut session = output.session_with_builder(&cap);
                     session.give_iterator(
-                        v.into_iter()
+                        storage
+                            .drain()
                             .map(|payload| (payload, cap.time().clone(), unit.clone())),
                     );
                 });
@@ -473,30 +475,30 @@ where
         })
     }
 
-    fn with_token(&self, token: Weak<()>) -> Stream<G, D1> {
+    fn with_token(&self, token: Weak<()>) -> StreamCore<G, C1> {
         self.unary(Pipeline, "WithToken", move |_cap, _info| {
-            let mut vector = Default::default();
+            let mut storage = C1::default();
             move |input, output| {
                 input.for_each(|cap, data| {
                     if token.upgrade().is_some() {
-                        data.swap(&mut vector);
-                        output.session(&cap).give_container(&mut vector);
+                        data.swap(&mut storage);
+                        output.session(&cap).give_container(&mut storage);
                     }
                 });
             }
         })
     }
 
-    fn distribute(&self) -> Stream<G, D1>
+    fn distribute(&self) -> StreamCore<G, C1>
     where
-        D1: ExchangeData,
+        C1: ExchangeData,
     {
-        let mut vector = Vec::new();
+        let mut storage = C1::default();
         self.unary(crate::pact::Distribute, "Distribute", move |_, _| {
             move |input, output| {
                 input.for_each(|time, data| {
-                    data.swap(&mut vector);
-                    output.session(&time).give_container(&mut vector);
+                    data.swap(&mut storage);
+                    output.session(&time).give_container(&mut storage);
                 });
             }
         })

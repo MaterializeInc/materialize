@@ -29,7 +29,7 @@ As a first step, you need to make sure logical replication is enabled.
 
 1. Check if logical replication is enabled:
 
-    ```sql
+    ```postgres
     SHOW wal_level;
     ```
 
@@ -43,7 +43,7 @@ As a first step, you need to make sure logical replication is enabled.
 1. Back in the SQL client connected to PostgreSQL, verify that replication is
    now enabled:
 
-    ```sql
+    ```postgres
     SHOW wal_level;
     ```
 
@@ -73,7 +73,7 @@ Select the option that works best for you.
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
-    ```sql
+    ```mzsql
     SELECT * FROM mz_egress_ips;
     ```
 
@@ -156,7 +156,7 @@ option.
      In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the
      endpoint service that you created in the previous step.
 
-     ```sql
+     ```mzsql
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
         SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
         AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
@@ -171,7 +171,7 @@ option.
     Retrieve the AWS principal for the AWS PrivateLink connection you just
     created:
 
-    ```sql
+    ```mzsql
     SELECT principal
     FROM mz_aws_privatelink_connections plc
     JOIN mz_connections c ON plc.id = c.id
@@ -221,7 +221,7 @@ traffic from the bastion host.
        SQL client connected to Materialize, get the static egress IP addresses for
        the Materialize region you are running in:
 
-       ```sql
+       ```mzsql
        SELECT * FROM mz_egress_ips;
        ```
 
@@ -261,7 +261,7 @@ start by selecting the relevant option.
    command to securely store the password for the `materialize` PostgreSQL user you
    created [earlier](#step-2-create-a-publication):
 
-    ```sql
+    ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
     ```
 
@@ -269,7 +269,7 @@ start by selecting the relevant option.
    connection object with access and authentication details for Materialize to
    use:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION pg_connection TO POSTGRES (
       HOST '<host>',
       PORT 5432,
@@ -289,7 +289,7 @@ start by selecting the relevant option.
    to your database and start ingesting data from the publication you created
    [earlier](#step-2-create-a-publication):
 
-    ```sql
+    ```mzsql
     CREATE SOURCE mz_source
       IN CLUSTER ingest_postgres
       FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
@@ -310,7 +310,7 @@ start by selecting the relevant option.
    client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#ssh-tunnel)
    command to create an SSH tunnel connection:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION ssh_connection TO SSH TUNNEL (
         HOST '<SSH_BASTION_HOST>',
         PORT <SSH_BASTION_PORT>,
@@ -327,7 +327,7 @@ start by selecting the relevant option.
 1. Get Materialize's public keys for the SSH tunnel connection you just
    created:
 
-    ```sql
+    ```mzsql
     SELECT
         mz_connections.name,
         mz_ssh_tunnel_connections.*
@@ -351,7 +351,7 @@ start by selecting the relevant option.
    connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection)
    command:
 
-    ```sql
+    ```mzsql
     VALIDATE CONNECTION ssh_connection;
     ```
 
@@ -360,7 +360,7 @@ start by selecting the relevant option.
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
    password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
 
-    ```sql
+    ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
     ```
 
@@ -368,7 +368,7 @@ start by selecting the relevant option.
    another connection object, this time with database access and authentication
    details for Materialize to use:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION pg_connection TO POSTGRES (
       HOST '<host>',
       PORT 5432,
@@ -388,7 +388,7 @@ start by selecting the relevant option.
    to your Azure instance and start ingesting data from the publication you
    created [earlier](#step-2-create-a-publication):
 
-    ```sql
+    ```mzsql
     CREATE SOURCE mz_source
       IN CLUSTER ingest_postgres
       FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
@@ -413,7 +413,7 @@ start by selecting the relevant option.
    command to securely store the password for the `materialize` PostgreSQL user you
    created [earlier](#step-2-create-a-publication):
 
-    ```sql
+    ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
     ```
 
@@ -421,7 +421,7 @@ start by selecting the relevant option.
    another connection object, this time with database access and authentication
    details for Materialize to use:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION pg_connection TO POSTGRES (
         HOST '<host>',
         PORT 5432,
@@ -441,7 +441,7 @@ start by selecting the relevant option.
    to your database and start ingesting data from the publication you created
    [earlier](#step-2-create-a-publication):
 
-    ```sql
+    ```mzsql
     CREATE SOURCE mz_source
       IN CLUSTER ingest_postgres
       FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')

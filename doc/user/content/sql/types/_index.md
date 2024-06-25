@@ -130,7 +130,7 @@ If we concatenate a custom `list` (in this example, `custom_list`) and a
 structurally equivalent built-in `list` (`int4 list`), the result is of the same
 type as the custom `list` (`custom_list`).
 
-```sql
+```mzsql
 CREATE TYPE custom_list AS LIST (ELEMENT TYPE int4);
 
 SELECT pg_typeof(
@@ -151,7 +151,7 @@ If we append a structurally appropriate element (`int4`) to a custom `list`
 (`custom_list`), the result is of the same type as the custom `list`
 (`custom_list`).
 
-```sql
+```mzsql
 SELECT pg_typeof(
   list_append('{1}'::custom_list, 2)
 ) AS custom_list_built_in_element_cat;
@@ -166,7 +166,7 @@ SELECT pg_typeof(
 If we append a structurally appropriate custom element (`custom_list`) to a
 built-in `list` (`int4 list list`), the result is a `list` of custom elements.
 
-```sql
+```mzsql
 SELECT pg_typeof(
   list_append('{{1}}'::int4 list list, '{2}'::custom_list)
 ) AS built_in_list_custom_element_append;
@@ -190,7 +190,7 @@ types' polymorphic constraints.
 For example, values of type `custom_list list` and `custom_nested_list` cannot
 both be used as `listany` values for the same function:
 
-```sql
+```mzsql
 CREATE TYPE custom_nested_list AS LIST (element_type=custom_list);
 
 SELECT list_cat(
@@ -208,7 +208,7 @@ As another example, when using `custom_list list` values for `listany`
 parameters, you can only use `custom_list` or `int4 list` values for
 `listelementany` parameters––using any other custom type will fail:
 
-```sql
+```mzsql
 CREATE TYPE second_custom_list AS LIST (element_type=int4);
 
 SELECT list_append(
@@ -227,7 +227,7 @@ To make custom types interoperable, you must cast them to the same type. For
 example, casting `custom_nested_list` to `custom_list list` (or vice versa)
 makes the values passed to `listany` parameters of the same custom type:
 
-```sql
+```mzsql
 SELECT pg_typeof(
   list_cat(
     -- result is "custom_list list"

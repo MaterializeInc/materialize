@@ -23,7 +23,7 @@ jupyter-black==0.3.4
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
 launchdarkly-api==11.0.0
-matplotlib==3.7.2
+matplotlib==3.9.0
 matplotlib-stubs==0.2.0
 networkx==3.0
 networkx-stubs==0.0.1
@@ -65,7 +65,7 @@ types-toml==0.10.8.1
 typing-extensions==4.11.0
 yamllint==1.33.0
 confluent-kafka==2.3.0
-fastavro==1.8.2
+fastavro==1.9.4
 websocket-client==1.7.0
 pyarrow-stubs==10.0.1.7
 pyarrow==15.0.2

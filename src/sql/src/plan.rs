@@ -1035,7 +1035,7 @@ pub struct AlterSinkPlan {
     pub in_cluster: ClusterId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AlterClusterPlan {
     pub id: ClusterId,
     pub name: String,

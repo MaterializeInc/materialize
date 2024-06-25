@@ -153,7 +153,7 @@ to hydrate before you can validate that it produces the expected results.
 1. As an example, imagine your dbt project includes the following models:
 
    **Filename:** _models/my_model_a.sql_
-   ```sql
+   ```mzsql
    SELECT
      1 AS a,
      1 AS id,
@@ -163,7 +163,7 @@ to hydrate before you can validate that it produces the expected results.
    ```
 
    **Filename:** _models/my_model_b.sql_
-   ```sql
+   ```mzsql
    SELECT
      2 as b,
      1 as id,
@@ -172,7 +172,7 @@ to hydrate before you can validate that it produces the expected results.
    ```
 
    **Filename:** models/my_model.sql
-   ```sql
+   ```mzsql
    SELECT
      a+b AS c,
      CONCAT(string_a, string_b) AS string_c,
@@ -297,6 +297,14 @@ iteration and reduced CI costs.
 
 #### Configuration and initialization
 
+{{< warning >}}
+If your dbt project includes [sinks](/manage/dbt/#sinks), you **must** ensure
+that these are created in a **dedicated schema and cluster**. Unlike other
+objects, sinks must not be recreated in the process of a blue/green deployment,
+and must instead cut over to the new definition of their upstream dependencies
+after the environment swap.
+{{</ warning >}}
+
 In a blue/green deployment, you first deploy your code changes to a deployment
 environment ("green") that is a clone of your production environment
 ("blue"), in order to validate the changes without causing unavailability.
@@ -382,21 +390,31 @@ environment before cutting over.
    of the deployed changes on the deployment environment, it is safe to push the
    changes to your production environment.
 
-    Use the `run-operation` command to invoke the [`deploy_promote`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_promote.sql)
-     macro, which (atomically) swaps the environments.
+   Use the `run-operation` command to invoke the [`deploy_promote`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_promote.sql)
+   macro, which (atomically) swaps the environments. To perform a dry run of the
+   swap, and validate the sequence of commands that dbt will execute, you can
+   pass the `dry_run: True` argument to the macro.
 
     ```bash
+    # Do a dry run to validate the sequence of commands to execute
+    dbt run-operation deploy_promote --args 'dry_run: True'
+    ```
+
+    ```bash
+    # Promote the deployment environment to production
     dbt run-operation deploy_promote
     ```
 
-    {{< note >}} The `deploy_promote` operation might fail if objects are
+    {{< note >}}The `deploy_promote` operation might fail if objects are
     concurrently modified by a different session. If this occurs, re-run the
     operation.{{</ note >}}
 
-    This macro ensures all deployment targets, including schemas and clusters, are
-    deployed together as a single atomic operation. If any part of the deployment
-    fails, the entire deployment is rolled back to guarantee consistency and prevent
-    partial updates.
+    This macro ensures all deployment targets, including schemas and clusters,
+    are deployed together as a **single atomic operation**, and that any sinks
+    that depend on changed objects are automatically cut over to the new
+    definition of their upstream dependencies. If any part of the deployment
+    fails, the entire deployment is rolled back to guarantee consistency and
+    prevent partial updates.
 
 1. Use the run `run-operation` command to invoke the [`deploy_cleanup`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_cleanup.sql)
    macro, which (cascade) drops the `_dbt_deploy`-suffixed cluster(s) and schema(s):
@@ -405,9 +423,11 @@ environment before cutting over.
     dbt run-operation deploy_cleanup
     ```
 
-   {{< note >}}Any **active `SUBSCRIBE` commands** attached to the swapped
+   {{< note >}}
+   Any **active `SUBSCRIBE` commands** attached to the swapped
    cluster(s) **will break**. On retry, the client will automatically connect
-   to the newly deployed cluster{{</ note >}}
+   to the newly deployed cluster
+   {{</ note >}}
 
 ### Slim deployments
 

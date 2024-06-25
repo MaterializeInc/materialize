@@ -406,7 +406,7 @@ impl From<SchemaSpecifier> for SchemaId {
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Copy, Clone, Default)]
 pub struct Aug;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct ItemQualifiers {
     pub database_spec: ResolvedDatabaseSpecifier,
     pub schema_spec: SchemaSpecifier,

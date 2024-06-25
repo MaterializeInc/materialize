@@ -100,7 +100,7 @@ where
             current_metrics.extend(correction.iter().cloned());
 
             collection_mgmt
-                .update_desired(statistics_collection_id, correction)
+                .differential_append(statistics_collection_id, correction)
                 .await;
         }
 
@@ -152,7 +152,7 @@ where
                     if !correction.is_empty() {
                         current_metrics.extend(correction.iter().cloned());
                         collection_mgmt
-                            .update_desired(statistics_collection_id, correction)
+                            .differential_append(statistics_collection_id, correction)
                             .await;
                     }
                 }

@@ -55,7 +55,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     CollectionDescription, DataSource, DataSourceOther, ExportDescription, ExportState,
     IntrospectionType, MonotonicAppender, PersistEpoch, Response, SnapshotCursor,
-    StorageController, StorageMetadata, StorageTxn,
+    StorageController, StorageMetadata, StorageTxn, StorageWriteOp,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
@@ -80,7 +80,6 @@ use mz_storage_types::AlterCompatible;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::TxnsRead;
 use mz_txn_wal::txns::TxnsHandle;
-use mz_txn_wal::INIT_FORGET_ALL;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -100,14 +99,8 @@ mod statistics;
 
 #[derive(Debug)]
 enum TxnsWal<T> {
-    EnabledEager {
-        txns_id: ShardId,
-        txns_client: PersistClient,
-    },
-    EnabledLazy {
-        txns_read: TxnsRead<T>,
-        txns_client: PersistClient,
-    },
+    EnabledEager,
+    EnabledLazy { txns_read: TxnsRead<T> },
 }
 
 impl<T: Timestamp + Lattice + Codec64> TxnsWal<T> {
@@ -162,9 +155,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Whether to use the new txn-wal tables implementation or the legacy
     /// one.
     txns: TxnsWal<T>,
-    /// Whether we have run `txns_init` yet (required before create_collections
-    /// and the various flavors of append).
-    txns_init_run: bool,
     txns_metrics: Arc<TxnMetrics>,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
@@ -431,8 +421,6 @@ where
         self.storage_collections
             .create_collections(storage_metadata, register_ts.clone(), collections.clone())
             .await?;
-
-        assert!(self.txns_init_run);
 
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
@@ -1652,7 +1640,6 @@ where
         tokio::sync::oneshot::Receiver<Result<(), StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,
     > {
-        assert!(self.txns_init_run);
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
         for (id, updates) in commands.iter() {
             if !updates.is_empty() {
@@ -1671,7 +1658,6 @@ where
         &self,
         id: GlobalId,
     ) -> Result<MonotonicAppender<Self::Timestamp>, StorageError<Self::Timestamp>> {
-        assert!(self.txns_init_run);
         self.collection_manager.monotonic_appender(id)
     }
 
@@ -2180,7 +2166,9 @@ where
         }
 
         let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager
+            .differential_append(id, updates)
+            .await;
     }
 
     async fn record_replica_frontiers(
@@ -2254,7 +2242,9 @@ where
 
         let id =
             self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager
+            .differential_append(id, updates)
+            .await;
     }
 
     async fn append_introspection_updates(
@@ -2269,140 +2259,10 @@ where
     async fn update_introspection_collection(
         &mut self,
         type_: IntrospectionType,
-        updates: Vec<(Row, Diff)>,
+        op: StorageWriteOp,
     ) {
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
-        self.collection_manager.update_desired(id, updates).await;
-    }
-
-    /// With the CRDB based timestamp oracle, there is no longer write timestamp
-    /// fencing. As in, when a new Coordinator, `B`, starts up, there is nothing
-    /// that prevents an old Coordinator, `A`, from getting a new write
-    /// timestamp that is higher than `B`'s boot timestamp. Below is the
-    /// implications for all persist transaction scenarios, `on` means a
-    /// Coordinator turning the txn flag flag on, `off` means a Coordinator
-    /// turning the txn wal flag off.
-    ///
-    /// The following series of events is a concern:
-    ///   1. `A` writes at `t_0`, s.t. `t_0` > `B`'s boot timestamp.
-    ///   2. `B` writes at `t_1`, s.t. `t_1` > `t_0`.
-    ///   3. `A` writes at `t_2`, s.t. `t_2` > `t_1`.
-    ///   4. etc.
-    ///
-    /// - `off` -> `off`: If `B`` manages to append `t_1` before A appends `t_0`
-    ///    then the `t_0` append will panic and we won't acknowledge the write
-    ///   to the user (or similarly `t_2` and `t_1`). Before txn-wal,
-    ///   appends are not atomic, so we might get a partial append. This is fine
-    ///   because we only support single table transactions.
-    /// - `on` -> `on`: The txn-shard is meant to correctly handle two writers
-    ///   so this should be fine. Note it's possible that we have two
-    ///   Coordinators interleaving write transactions without the leadership
-    ///   check described below, but that should be fine.
-    /// - `off` -> `on`: If `A` gets a write timestamp higher than `B`'s boot
-    ///   timestamp, then `A` can write directly to a data shard after it's been
-    ///   registered with a txn-shard, breaking the invariant that no data shard
-    ///   is written to directly while it's registered to a transaction shard.
-    ///   To mitigate this, we must do a leadership check AFTER getting the
-    ///   write timestamp. In order for `B` to register a data shard in the txn
-    ///   shard, it must first become the leader then second get a register
-    ///   timestamp. So if `A` gets a write timestamp higher than `B`'s register
-    ///   timestamp, it will fail the leadership check before attempting the
-    ///   append.
-    /// - `on` -> `off`: If `A` tries to write to the txn-shard at a timestamp
-    ///   higher than `B`'s boot timestamp, it will fail because the shards have
-    ///   been forgotten. So everything should be ok.
-    ///
-    ///  In general, all transitions make the following steps:
-    ///   1. Get write timestamp, `ts`.
-    ///   2. Apply all transactions to all data shards up to `ts`.
-    ///   3. Register/forget all data shards. So if we crash at any point in
-    ///      these steps, for example after only applying some transactions,
-    ///      then the next Coordinator can pick up where we left off and finish
-    ///      whatever needs finishing.
-    ///
-    /// H/t jkosh44 for the above notes from the discussion in which we hashed
-    /// this all out.
-    async fn init_txns(&mut self, init_ts: T) -> Result<(), StorageError<Self::Timestamp>> {
-        assert_eq!(self.txns_init_run, false);
-        let (txns_id, txns_client) = match &self.txns {
-            TxnsWal::EnabledEager {
-                txns_id,
-                txns_client,
-            } => {
-                info!(
-                    "init_txns at {:?}: enabled lazy txns_id={}",
-                    init_ts, txns_id
-                );
-                (txns_id, txns_client)
-            }
-            TxnsWal::EnabledLazy {
-                txns_read,
-                txns_client,
-            } => {
-                info!(
-                    "init_txns at {:?}: enabled eager txns_id={}",
-                    init_ts,
-                    txns_read.txns_id()
-                );
-                (txns_read.txns_id(), txns_client)
-            }
-        };
-
-        let mut txns = TxnsHandle::<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>::open(
-            T::minimum(),
-            txns_client.clone(),
-            Arc::clone(&self.txns_metrics),
-            *txns_id,
-            Arc::new(RelationDesc::empty()),
-            Arc::new(UnitSchema),
-        )
-        .await;
-
-        // If successful, this forget_all call guarantees:
-        // - That we were able to write to the txns shard at `init_ts` (a
-        //   timestamp given to us by the coordinator).
-        // - That no data shards are registered at `init_ts` and thus every
-        //   table is now free to be written to directly at times greater than
-        //   that. This is not necessary if the txns feature is enabled, we
-        //   could instead commit an empty txn, but we need the apply guarantee
-        //   that it has and it doesn't hurt to start everything from a clean
-        //   slate on boot (register is idempotent and create_collections will
-        //   be called shortly).
-        // - That all txn writes through `init_ts` have been applied
-        //   (materialized physically in the data shards).
-        //
-        // We don't have an extra timestamp here for the tidy, so for now ignore it and let the
-        // next transaction perform any tidy needed.
-        if INIT_FORGET_ALL.get(txns_client.dyncfgs()) {
-            let (removed, _tidy) = txns
-                .forget_all(init_ts.clone())
-                .await
-                .map_err(|_| StorageError::InvalidUppers(vec![]))?;
-            info!("init_txns removed from txns shard: {:?}", removed);
-        } else {
-            // More limited version of the above to mitigate #25992. This is all
-            // that should be necessary (and probably more than we need,
-            // strictly) now that we've removed the old tables impl. Guarantees:
-            // - That we were able to write to the txns shard at `init_ts` (a
-            //   timestamp given to us by the coordinator).
-            // - That all txn writes through `init_ts` have been applied
-            //   (materialized physically in the data shards).
-            let mut empty_txn = txns.begin();
-            let apply = empty_txn
-                .commit_at(&mut txns, init_ts.clone())
-                .await
-                .map_err(|_| StorageError::InvalidUppers(vec![]))?;
-            let _tidy = apply.apply_eager(&mut txns).await;
-            info!("init_txns committed at and applied through {:?}", init_ts);
-        }
-
-        drop(txns);
-
-        self.txns_init_run = true;
-
-        self.storage_collections.init_txns(init_ts).await?;
-
-        Ok(())
+        self.collection_manager.differential_write(id, op).await;
     }
 
     async fn initialize_state(
@@ -2611,15 +2471,9 @@ where
         let txns = match txn_wal_tables {
             TxnWalTablesImpl::Lazy => {
                 let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
-                TxnsWal::EnabledLazy {
-                    txns_read,
-                    txns_client,
-                }
+                TxnsWal::EnabledLazy { txns_read }
             }
-            TxnWalTablesImpl::Eager => TxnsWal::EnabledEager {
-                txns_id,
-                txns_client,
-            },
+            TxnWalTablesImpl::Eager => TxnsWal::EnabledEager,
         };
         let persist_monotonic_worker = persist_handles::PersistMonotonicWriteWorker::new();
         let collection_manager_write_handle = persist_monotonic_worker.clone();
@@ -2647,7 +2501,6 @@ where
             persist_table_worker,
             persist_monotonic_worker,
             txns,
-            txns_init_run: false,
             txns_metrics,
             stashed_response: None,
             pending_compaction_commands: vec![],
@@ -3087,7 +2940,9 @@ where
             updates.push((row_buf.clone(), 1));
         }
 
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager
+            .differential_append(id, updates)
+            .await;
     }
 
     /// Effectively truncates the status history shard except for the most
@@ -3330,7 +3185,6 @@ where
     where
         I: Iterator<Item = GlobalId>,
     {
-        assert!(self.txns_init_run);
         mz_ore::soft_assert_or_log!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
 
         let id = match self
@@ -3360,7 +3214,9 @@ where
             updates.push((row_buf.clone(), diff));
         }
 
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager
+            .differential_append(id, updates)
+            .await;
     }
 
     /// Determines and returns this collection's dependencies, if any.

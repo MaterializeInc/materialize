@@ -16,7 +16,8 @@ use mz_controller_types::{is_cluster_size_v2, ClusterId, ReplicaId};
 use mz_ore::now::EpochMillis;
 use mz_pgrepr::oid::{
     FIRST_USER_OID, ROLE_PUBLIC_OID, SCHEMA_INFORMATION_SCHEMA_OID, SCHEMA_MZ_CATALOG_OID,
-    SCHEMA_MZ_INTERNAL_OID, SCHEMA_MZ_UNSAFE_OID, SCHEMA_PG_CATALOG_OID,
+    SCHEMA_MZ_CATALOG_UNSTABLE_OID, SCHEMA_MZ_INTERNAL_OID, SCHEMA_MZ_INTROSPECTION_OID,
+    SCHEMA_MZ_UNSAFE_OID, SCHEMA_PG_CATALOG_OID,
 };
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
@@ -57,6 +58,12 @@ pub(crate) const SYSTEM_CONFIG_SYNCED_KEY: &str = "system_config_synced";
 /// for historical reasons.
 pub(crate) const TXN_WAL_TABLES: &str = "persist_txn_tables";
 
+/// The key used within the "config" collection where we store a mirror of the
+/// `enable_0dt_deployment` "system var" value. This is mirrored so that we can
+/// toggle the flag with LaunchDarkly, but use it in boot before LaunchDarkly is
+/// available.
+pub(crate) const ENABLE_0DT_DEPLOYMENT: &str = "enable_0dt_deployment";
+
 const USER_ID_ALLOC_KEY: &str = "user";
 const SYSTEM_ID_ALLOC_KEY: &str = "system";
 
@@ -75,6 +82,8 @@ const PUBLIC_SCHEMA_ID: u64 = 3;
 const MZ_INTERNAL_SCHEMA_ID: u64 = 4;
 const INFORMATION_SCHEMA_ID: u64 = 5;
 pub const MZ_UNSAFE_SCHEMA_ID: u64 = 6;
+pub const MZ_CATALOG_UNSTABLE_SCHEMA_ID: u64 = 7;
+pub const MZ_INTROSPECTION_SCHEMA_ID: u64 = 8;
 
 const DEFAULT_ALLOCATOR_ID: u64 = 1;
 
@@ -105,6 +114,8 @@ pub(crate) async fn initialize(
                 MZ_INTERNAL_SCHEMA_ID,
                 INFORMATION_SCHEMA_ID,
                 MZ_UNSAFE_SCHEMA_ID,
+                MZ_CATALOG_UNSTABLE_SCHEMA_ID,
+                MZ_INTROSPECTION_SCHEMA_ID,
             ])
             .expect("known to be non-empty")
                 + 1,
@@ -392,6 +403,22 @@ pub(crate) async fn initialize(
         owner_id: MZ_SYSTEM_ROLE_ID,
         privileges: schema_privileges.clone(),
     };
+    let mz_catalog_unstable_schema = Schema {
+        id: SchemaId::System(MZ_CATALOG_UNSTABLE_SCHEMA_ID),
+        oid: SCHEMA_MZ_CATALOG_UNSTABLE_OID,
+        database_id: None,
+        name: "mz_catalog_unstable".to_string(),
+        owner_id: MZ_SYSTEM_ROLE_ID,
+        privileges: schema_privileges.clone(),
+    };
+    let mz_introspection_schema = Schema {
+        id: SchemaId::System(MZ_INTROSPECTION_SCHEMA_ID),
+        oid: SCHEMA_MZ_INTROSPECTION_OID,
+        database_id: None,
+        name: "mz_introspection".to_string(),
+        owner_id: MZ_SYSTEM_ROLE_ID,
+        privileges: schema_privileges.clone(),
+    };
     let public_schema_oid = tx.allocate_oid()?;
     let public_schema = Schema {
         id: SchemaId::User(PUBLIC_SCHEMA_ID),
@@ -431,6 +458,8 @@ pub(crate) async fn initialize(
         mz_internal_schema,
         information_schema,
         mz_unsafe_schema,
+        mz_catalog_unstable_schema,
+        mz_introspection_schema,
     ] {
         tx.insert_schema(
             schema.id,

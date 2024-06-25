@@ -82,7 +82,7 @@ From | Required context
 
 ## Examples
 
-```sql
+```mzsql
 SELECT 123::uint4 AS int_v;
 ```
 ```nofmt
@@ -93,7 +93,7 @@ SELECT 123::uint4 AS int_v;
 
 <hr/>
 
-```sql
+```mzsql
 SELECT 1.23::uint4 AS int_v;
 ```
 ```nofmt

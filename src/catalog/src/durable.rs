@@ -144,6 +144,13 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Get the deployment generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError>;
 
+    /// Get the `enable_0dt_deployment` config value of this instance.
+    ///
+    /// This mirrors the `enable_0dt_deployment` "system var" so that we can
+    /// toggle the flag with LaunchDarkly, but use it in boot before
+    /// LaunchDarkly is available.
+    async fn get_enable_0dt_deployment(&mut self) -> Result<Option<bool>, CatalogError>;
+
     /// Reports if the remote configuration was synchronized at least once.
     async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError>;
 

@@ -49,7 +49,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::SourceError;
+use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
@@ -76,7 +76,7 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::metrics::source::SourceMetrics;
 use crate::metrics::StorageMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockFollower, ReclockOperator};
-use crate::source::types::{SourceMessage, SourceOutput, SourceReaderError, SourceRender};
+use crate::source::types::{SourceMessage, SourceOutput, SourceRender};
 use crate::statistics::SourceStatistics;
 
 /// Shared configuration information for all source types. This is used in the
@@ -160,7 +160,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Time>, Diff>,
-        Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
+        Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
     )>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
@@ -262,7 +262,7 @@ fn source_render_operator<G, C>(
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+    Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
     Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
@@ -320,7 +320,7 @@ where
                     // Downstream consumers of this data will preserve this
                     // status.
                     Err(ref error) => HealthStatusUpdate::stalled(
-                        error.inner.to_string(),
+                        error.to_string(),
                         Some("retracting the errored value may resume the source".to_string()),
                     ),
                 };
@@ -566,21 +566,14 @@ fn reclock_operator<G, FromTime, D, M>(
     config: RawSourceCreationConfig,
     mut timestamper: ReclockFollower<FromTime, mz_repr::Timestamp>,
     mut source_rx: InstrumentedUnboundedReceiver<
-        Event<
-            FromTime,
-            Vec<(
-                (usize, Result<SourceMessage, SourceReaderError>),
-                FromTime,
-                D,
-            )>,
-        >,
+        Event<FromTime, Vec<((usize, Result<SourceMessage, DataflowError>), FromTime, D)>>,
         M,
     >,
     remap_trace_updates: Collection<G, FromTime, Diff>,
     source_metrics: Arc<SourceMetrics>,
 ) -> Vec<(
     Collection<G, SourceOutput<FromTime>, D>,
-    Collection<G, SourceError, Diff>,
+    Collection<G, DataflowError, Diff>,
 )>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -613,7 +606,8 @@ where
 
     let operator_name = format!("reclock({})", id);
     let mut reclock_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-    let (mut reclocked_output, reclocked_stream) = reclock_op.new_output();
+    let (mut reclocked_output, reclocked_stream) =
+        reclock_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates.inner, Pipeline);
 
     reclock_op.build(move |capabilities| async move {
@@ -627,7 +621,7 @@ where
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
 
         // Stash of batches that have not yet been timestamped.
-        type Batch<T, D> = Vec<((usize, Result<SourceMessage, SourceReaderError>), T, D)>;
+        type Batch<T, D> = Vec<((usize, Result<SourceMessage, DataflowError>), T, D)>;
         let mut untimestamped_batches: Vec<(FromTime, Batch<FromTime, D>)> = Vec::new();
 
         // Stash of reclock updates that are still beyond the upper frontier
@@ -734,13 +728,7 @@ where
                                 };
                                 (idx, Ok(ok))
                             }
-                            Err(SourceReaderError { inner }) => {
-                                let err = SourceError {
-                                    source_id: id,
-                                    error: inner,
-                                };
-                                (idx, Err(err))
-                            }
+                            Err(err) => (idx, Err(err)),
                         };
 
                         let ts_cap = cap_set.delayed(&into_ts);

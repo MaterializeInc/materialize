@@ -20,8 +20,10 @@ SELECT nspname, nspacl FROM pg_catalog.pg_namespace
 ----
 information_schema NULL
 mz_catalog   NULL
+mz_catalog_unstable  NULL
 mz_unsafe   NULL
 mz_internal  NULL
+mz_introspection  NULL
 other   NULL
 pg_catalog   NULL
 public   NULL
@@ -29,7 +31,7 @@ public   NULL
 query I
 SELECT COUNT(*) FROM pg_catalog.pg_namespace WHERE nspowner IS NOT NULL
 ----
-7
+9
 
 statement ok
 SET database = other;
@@ -39,12 +41,14 @@ SELECT nspname, nspacl FROM pg_catalog.pg_namespace
 ----
 information_schema NULL
 mz_catalog   NULL
+mz_catalog_unstable  NULL
 mz_unsafe NULL
 mz_internal  NULL
+mz_introspection  NULL
 pg_catalog   NULL
 public   NULL
 
 query I
 SELECT COUNT(*) FROM pg_catalog.pg_namespace WHERE nspowner IS NOT NULL
 ----
-6
+8

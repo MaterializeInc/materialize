@@ -276,8 +276,7 @@ impl Coordinator {
         // While we're flipping on the feature flags for txn-wal tables and
         // the separated Postgres timestamp oracle, we also need to confirm
         // leadership on writes _after_ getting the timestamp and _before_
-        // writing anything to table shards. See the big comment on `init_txns`
-        // in the Storage controller for details.
+        // writing anything to table shards.
         //
         // TODO: Remove this after both (either?) of the above features are on
         // for good and no possibility of running the old code.

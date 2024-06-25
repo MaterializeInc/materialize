@@ -89,14 +89,14 @@ Ensure you have the following:
 
     a. Save WarpStream credentials:
 
-    ```sql
+    ```mzsql
     CREATE SECRET warpstream_username AS '<username>';
     CREATE SECRET warpstream_password AS '<password>';
     ```
 
     b. Set up a connection to the WarpStream broker:
 
-    ```sql
+    ```mzsql
     CREATE CONNECTION warpstream_kafka TO KAFKA (
         BROKER '<CLUSTER_NAME>.fly.dev:9092',
         SASL MECHANISMS = "PLAIN",
@@ -109,7 +109,7 @@ Ensure you have the following:
     source will be created in the active cluster; to use a different cluster,
     use the `IN CLUSTER` clause.
 
-    ```sql
+    ```mzsql
     CREATE SOURCE warpstream_click_stream_source
         FROM KAFKA CONNECTION warpstream_kafka (TOPIC 'materialize_click_streams')
         FORMAT JSON;
@@ -117,13 +117,13 @@ Ensure you have the following:
 
     d. Verify the ingestion and query the data in Materialize:
 
-    ```sql
+    ```mzsql
     SELECT * FROM warpstream_click_stream_source LIMIT 10;
     ```
 
     e. Furthermore, create a materialized view to aggregate the data:
 
-    ```sql
+    ```mzsql
     CREATE MATERIALIZED VIEW warpstream_click_stream_aggregate AS
         SELECT
             user_id,
@@ -146,7 +146,7 @@ Ensure you have the following:
 
     g. Query the materialized view to monitor the real-time updates:
 
-    ```sql
+    ```mzsql
     SELECT * FROM warpstream_click_stream_aggregate;
     ```
 

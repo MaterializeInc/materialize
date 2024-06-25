@@ -197,6 +197,13 @@ impl Coordinator {
                 } => {
                     self.sequence_staged(ctx, span, stage).await;
                 }
+                Message::ClusterStageReady{
+                    ctx,
+                    span,
+                    stage,
+                } => {
+                    self.sequence_staged(ctx, span, stage).await;
+                }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;
                 }

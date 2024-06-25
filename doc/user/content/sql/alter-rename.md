@@ -40,7 +40,7 @@ You cannot rename items if:
     You can only rename either view named `v1` if every dependent view's query
     that contains references to both views fully qualifies all references, e.g.
 
-    ```sql
+    ```mzsql
     CREATE VIEW v2 AS
     SELECT *
     FROM db1.s1.v1
@@ -56,7 +56,7 @@ You cannot rename items if:
 
     In the following examples, `v1` could _not_ be renamed:
 
-    ```sql
+    ```mzsql
     CREATE VIEW v3 AS
     SELECT *
     FROM v1
@@ -64,7 +64,7 @@ You cannot rename items if:
     ON v1.a = v2.v1
     ```
 
-    ```sql
+    ```mzsql
     CREATE VIEW v4 AS
     SELECT *
     FROM v1
@@ -81,7 +81,7 @@ whether that identifier is used implicitly or explicitly.
 
 Consider this example:
 
-```sql
+```mzsql
 CREATE VIEW v5 AS
 SELECT *
 FROM d1.s1.v2
@@ -102,7 +102,7 @@ However, you could rename `v1` to any other [legal identifier](/sql/identifiers)
 
 ## Examples
 
-```sql
+```mzsql
 SHOW VIEWS;
 ```
 ```nofmt
@@ -110,7 +110,7 @@ SHOW VIEWS;
 -------
  v1
 ```
-```sql
+```mzsql
 ALTER VIEW v1 RENAME TO v2;
 SHOW VIEWS;
 ```

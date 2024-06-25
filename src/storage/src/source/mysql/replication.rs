@@ -66,6 +66,7 @@ use mz_mysql_util::{
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
+use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{
@@ -73,7 +74,6 @@ use mz_timely_util::builder_async::{
 };
 
 use crate::metrics::source::mysql::MySqlSourceMetrics;
-use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
 use super::{
@@ -105,7 +105,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     rewind_stream: &Stream<G, RewindRequest>,
     metrics: MySqlSourceMetrics,
 ) -> (
-    Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
+    Collection<G, (usize, Result<Row, DataflowError>), Diff>,
     Stream<G, Infallible>,
     Stream<G, ReplicationError>,
     PressOnDropButton,

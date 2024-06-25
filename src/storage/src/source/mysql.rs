@@ -56,6 +56,7 @@ use std::io;
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
+use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
@@ -79,7 +80,7 @@ use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
-use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
 mod schemas;
@@ -100,7 +101,7 @@ impl SourceRender for MySqlSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -275,11 +276,11 @@ pub enum DefiniteError {
     ServerConfigurationError(String),
 }
 
-impl From<DefiniteError> for SourceReaderError {
+impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
-        SourceReaderError {
-            inner: SourceErrorDetails::Other(err.to_string()),
-        }
+        DataflowError::SourceError(Box::new(SourceError {
+            error: SourceErrorDetails::Other(err.to_string()),
+        }))
     }
 }
 

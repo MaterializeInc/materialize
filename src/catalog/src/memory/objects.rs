@@ -27,7 +27,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc};
+use mz_repr::{Diff, GlobalId, RelationDesc, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Expr, Raw, Statement, UnresolvedItemName, Value, WithOptionValue};
 use mz_sql::catalog::{
@@ -2418,7 +2418,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 #[derive(Debug)]
 pub struct StateUpdate {
     pub kind: StateUpdateKind,
-    // TODO(jkosh44) Add timestamps.
+    pub ts: Timestamp,
     pub diff: StateDiff,
 }
 

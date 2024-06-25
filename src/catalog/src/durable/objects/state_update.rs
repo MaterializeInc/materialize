@@ -121,6 +121,7 @@ impl StateUpdate {
             txn_wal_shard,
             audit_log_updates,
             storage_usage_updates,
+            commit_ts: _,
         } = txn_batch;
         let databases = from_batch(databases, StateUpdateKind::Database);
         let schemas = from_batch(schemas, StateUpdateKind::Schema);
@@ -220,11 +221,11 @@ impl TryFrom<StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpda
     type Error = DurableCatalogError;
 
     fn try_from(
-        StateUpdate { kind, ts: _, diff }: StateUpdate<StateUpdateKind>,
+        StateUpdate { kind, ts, diff }: StateUpdate<StateUpdateKind>,
     ) -> Result<Self, Self::Error> {
         let kind: Option<memory::objects::StateUpdateKind> = TryInto::try_into(kind)?;
         let diff = diff.try_into().expect("invalid diff");
-        let update = kind.map(|kind| memory::objects::StateUpdate { kind, diff });
+        let update = kind.map(|kind| memory::objects::StateUpdate { kind, ts, diff });
         Ok(update)
     }
 }

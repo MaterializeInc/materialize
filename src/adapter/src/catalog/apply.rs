@@ -27,10 +27,10 @@ use mz_catalog::memory::objects::{
 };
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
-use mz_ore::instrument;
+use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::{
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType, NameReference,
 };
@@ -82,24 +82,30 @@ impl CatalogState {
         &mut self,
         updates: Vec<StateUpdate>,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let mut apply_state = BootstrapApplyState::Updates(Vec::new());
-        let updates = sort_updates(updates);
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        let mut retractions = InProgressRetractions::default();
+        let updates = sort_updates(updates);
 
-        for update in updates {
-            let next_apply_state = BootstrapApplyState::new(update);
-            let (next_apply_state, builtin_table_update) = apply_state
-                .step(next_apply_state, self, &mut retractions)
-                .await;
-            apply_state = next_apply_state;
+        let mut groups: Vec<Vec<_>> = Vec::new();
+        for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
+            groups.push(updates.collect());
+        }
+        for updates in groups {
+            let mut apply_state = BootstrapApplyState::Updates(Vec::new());
+            let mut retractions = InProgressRetractions::default();
+
+            for update in updates {
+                let next_apply_state = BootstrapApplyState::new(update);
+                let (next_apply_state, builtin_table_update) = apply_state
+                    .step(next_apply_state, self, &mut retractions)
+                    .await;
+                apply_state = next_apply_state;
+                builtin_table_updates.extend(builtin_table_update);
+            }
+
+            // Apply remaining state.
+            let builtin_table_update = apply_state.apply(self, &mut retractions).await;
             builtin_table_updates.extend(builtin_table_update);
         }
-
-        // Apply remaining state.
-        let builtin_table_update = apply_state.apply(self, &mut retractions).await;
-        builtin_table_updates.extend(builtin_table_update);
-
         builtin_table_updates
     }
 
@@ -111,9 +117,17 @@ impl CatalogState {
         &mut self,
         updates: Vec<StateUpdate>,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let mut retractions = InProgressRetractions::default();
+        let mut builtin_table_updates = Vec::with_capacity(updates.len());
         let updates = sort_updates(updates);
-        self.apply_updates_inner(updates, &mut retractions)
+
+        for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
+            let mut retractions = InProgressRetractions::default();
+            let builtin_table_update =
+                self.apply_updates_inner(updates.collect(), &mut retractions);
+            builtin_table_updates.extend(builtin_table_update);
+        }
+
+        builtin_table_updates
     }
 
     #[must_use]
@@ -123,8 +137,13 @@ impl CatalogState {
         updates: Vec<StateUpdate>,
         retractions: &mut InProgressRetractions,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        soft_assert_no_log!(
+            updates.iter().map(|update| update.ts).all_equal(),
+            "all timestamps should be equal: {updates:?}"
+        );
+
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        for StateUpdate { kind, diff } in updates {
+        for StateUpdate { kind, ts: _, diff } in updates {
             match diff {
                 StateDiff::Retraction => {
                     // We want the builtin table retraction to match the state of the catalog
@@ -895,7 +914,7 @@ impl CatalogState {
         updates: Vec<StateUpdate>,
     ) -> Vec<BuiltinTableUpdate> {
         let mut builtin_table_updates = Vec::new();
-        for StateUpdate { kind, diff } in updates {
+        for StateUpdate { kind, ts: _, diff } in updates {
             let builtin_table_update = self.generate_builtin_table_update(kind, diff);
             let builtin_table_update = self.resolve_builtin_table_updates(builtin_table_update);
             builtin_table_updates.extend(builtin_table_update);
@@ -974,8 +993,21 @@ impl CatalogState {
     }
 }
 
-/// Sort [`StateUpdate`]s in dependency order.
-fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
+/// Sort [`StateUpdate`]s in timestamp then dependency order
+fn sort_updates(mut updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
+    let mut sorted_updates = Vec::with_capacity(updates.len());
+
+    updates.sort_by_key(|update| update.ts);
+    for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
+        let sorted_ts_updates = sort_updates_inner(updates.collect());
+        sorted_updates.extend(sorted_ts_updates);
+    }
+
+    sorted_updates
+}
+
+/// Sort [`StateUpdate`]s in dependency order for a single timestamp.
+fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     fn push_update<T>(
         update: T,
         diff: StateDiff,
@@ -987,6 +1019,11 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             StateDiff::Addition => additions.push(update),
         }
     }
+
+    soft_assert_no_log!(
+        updates.iter().map(|update| update.ts).all_equal(),
+        "all timestamps should be equal: {updates:?}"
+    );
 
     // Partition updates by type so that we can weave different update types into the right spots.
     let mut pre_cluster_retractions = Vec::new();
@@ -1023,16 +1060,16 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 &mut cluster_additions,
             ),
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
-                builtin_item_updates.push((system_object_mapping, update.diff))
+                builtin_item_updates.push((system_object_mapping, update.ts, update.diff))
             }
             StateUpdateKind::TemporaryItem(item) => push_update(
-                (item, update.diff),
+                (item, update.ts, update.diff),
                 diff,
                 &mut temp_item_retractions,
                 &mut temp_item_additions,
             ),
             StateUpdateKind::Item(item) => push_update(
-                (item, update.diff),
+                (item, update.ts, update.diff),
                 diff,
                 &mut item_retractions,
                 &mut item_additions,
@@ -1053,26 +1090,27 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     // Sort builtin item updates by dependency.
     let builtin_item_updates = builtin_item_updates
         .into_iter()
-        .map(|(system_object_mapping, diff)| {
+        .map(|(system_object_mapping, ts, diff)| {
             let idx = BUILTIN_LOOKUP
                 .get(&system_object_mapping.description)
                 .expect("missing builtin")
                 .0;
-            (idx, system_object_mapping, diff)
+            (idx, system_object_mapping, ts, diff)
         })
-        .sorted_by_key(|(idx, _, _)| *idx)
-        .map(|(_, system_object_mapping, diff)| (system_object_mapping, diff));
+        .sorted_by_key(|(idx, _, _, _)| *idx)
+        .map(|(_, system_object_mapping, ts, diff)| (system_object_mapping, ts, diff));
 
     // Further partition builtin item updates.
     let mut other_builtin_retractions = Vec::new();
     let mut other_builtin_additions = Vec::new();
     let mut builtin_index_retractions = Vec::new();
     let mut builtin_index_additions = Vec::new();
-    for (builtin_item_update, diff) in builtin_item_updates {
+    for (builtin_item_update, ts, diff) in builtin_item_updates {
         match &builtin_item_update.description.object_type {
             CatalogItemType::Index => push_update(
                 StateUpdate {
                     kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                    ts,
                     diff,
                 },
                 diff,
@@ -1090,6 +1128,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | CatalogItemType::Connection => push_update(
                 StateUpdate {
                     kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+                    ts,
                     diff,
                 },
                 diff,
@@ -1101,11 +1140,11 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
 
     /// Sort item updates by GlobalId.
     fn sort_item_updates(
-        item_updates: Vec<(mz_catalog::durable::Item, StateDiff)>,
-    ) -> VecDeque<(mz_catalog::durable::Item, StateDiff)> {
+        item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
+    ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
         item_updates
             .into_iter()
-            .sorted_by_key(|(item, _diff)| item.id)
+            .sorted_by_key(|(item, _ts, _diff)| item.id)
             .collect()
     }
     let item_retractions = sort_item_updates(item_retractions);
@@ -1113,11 +1152,11 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
 
     /// Sort temporary item updates by GlobalId.
     fn sort_temp_item_updates(
-        temp_item_updates: Vec<(TemporaryItem, StateDiff)>,
-    ) -> VecDeque<(TemporaryItem, StateDiff)> {
+        temp_item_updates: Vec<(TemporaryItem, Timestamp, StateDiff)>,
+    ) -> VecDeque<(TemporaryItem, Timestamp, StateDiff)> {
         temp_item_updates
             .into_iter()
-            .sorted_by_key(|(item, _diff)| item.id)
+            .sorted_by_key(|(item, _ts, _diff)| item.id)
             .collect()
     }
     let temp_item_retractions = sort_temp_item_updates(temp_item_retractions);
@@ -1125,24 +1164,26 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
 
     /// Merge sorted temporary and non-temp items.
     fn merge_item_updates(
-        mut item_updates: VecDeque<(mz_catalog::durable::Item, StateDiff)>,
-        mut temp_item_updates: VecDeque<(TemporaryItem, StateDiff)>,
+        mut item_updates: VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
+        mut temp_item_updates: VecDeque<(TemporaryItem, Timestamp, StateDiff)>,
     ) -> Vec<StateUpdate> {
         let mut state_updates = Vec::with_capacity(item_updates.len() + temp_item_updates.len());
 
-        while let (Some((item, _)), Some((temp_item, _))) =
+        while let (Some((item, _, _)), Some((temp_item, _, _))) =
             (item_updates.front(), temp_item_updates.front())
         {
             if item.id < temp_item.id {
-                let (item, diff) = item_updates.pop_front().expect("non-empty");
+                let (item, ts, diff) = item_updates.pop_front().expect("non-empty");
                 state_updates.push(StateUpdate {
                     kind: StateUpdateKind::Item(item),
+                    ts,
                     diff,
                 });
             } else if item.id > temp_item.id {
-                let (temp_item, diff) = temp_item_updates.pop_front().expect("non-empty");
+                let (temp_item, ts, diff) = temp_item_updates.pop_front().expect("non-empty");
                 state_updates.push(StateUpdate {
                     kind: StateUpdateKind::TemporaryItem(temp_item),
+                    ts,
                     diff,
                 });
             } else {
@@ -1152,16 +1193,18 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             }
         }
 
-        while let Some((item, diff)) = item_updates.pop_front() {
+        while let Some((item, ts, diff)) = item_updates.pop_front() {
             state_updates.push(StateUpdate {
                 kind: StateUpdateKind::Item(item),
+                ts,
                 diff,
             });
         }
 
-        while let Some((temp_item, diff)) = temp_item_updates.pop_front() {
+        while let Some((temp_item, ts, diff)) = temp_item_updates.pop_front() {
             state_updates.push(StateUpdate {
                 kind: StateUpdateKind::TemporaryItem(temp_item),
+                ts,
                 diff,
             });
         }
@@ -1207,6 +1250,7 @@ impl BootstrapApplyState {
             StateUpdate {
                 kind: StateUpdateKind::SystemObjectMapping(system_object_mapping),
                 diff: StateDiff::Addition,
+                ..
             } if matches!(
                 system_object_mapping.description.object_type,
                 CatalogItemType::View

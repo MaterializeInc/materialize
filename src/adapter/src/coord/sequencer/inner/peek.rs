@@ -122,6 +122,7 @@ impl Coordinator {
         ctx: ExecuteContext,
         plan: plan::SelectPlan,
         target_cluster: TargetCluster,
+        max_query_result_size: Option<u64>,
     ) {
         let explain_ctx = if ctx.session().vars().emit_plan_insights_notice() {
             let optimizer_trace = OptimizerTrace::new(ExplainStage::PlanInsights.paths());
@@ -131,7 +132,14 @@ impl Coordinator {
         };
 
         let stage = return_if_err!(
-            self.peek_validate(ctx.session(), plan, target_cluster, None, explain_ctx),
+            self.peek_validate(
+                ctx.session(),
+                plan,
+                target_cluster,
+                None,
+                explain_ctx,
+                max_query_result_size
+            ),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -195,6 +203,7 @@ impl Coordinator {
                     output_batch_count: None,
                 }),
                 ExplainContext::None,
+                Some(ctx.session().vars().max_query_result_size()),
             ),
             ctx
         );
@@ -242,7 +251,8 @@ impl Coordinator {
                     replan: None,
                     desc: Some(desc),
                     optimizer_trace,
-                })
+                }),
+                Some(ctx.session().vars().max_query_result_size()),
             ),
             ctx
         );
@@ -258,6 +268,7 @@ impl Coordinator {
         target_cluster: TargetCluster,
         copy_to_ctx: Option<CopyToContext>,
         explain_ctx: ExplainContext,
+        max_query_result_size: Option<u64>,
     ) -> Result<PeekStage, AdapterError> {
         // Collect optimizer parameters.
         let catalog = self.owned_catalog();
@@ -368,6 +379,7 @@ impl Coordinator {
         Ok(PeekStage::LinearizeTimestamp(PeekStageLinearizeTimestamp {
             validity,
             plan,
+            max_query_result_size,
             source_ids,
             target_replica,
             timeline_context,
@@ -385,6 +397,7 @@ impl Coordinator {
             validity,
             source_ids,
             plan,
+            max_query_result_size,
             target_replica,
             timeline_context,
             optimizer,
@@ -399,6 +412,7 @@ impl Coordinator {
         let build_stage = move |oracle_read_ts: Option<Timestamp>| PeekStageRealTimeRecency {
             validity,
             plan,
+            max_query_result_size,
             source_ids,
             target_replica,
             timeline_context,
@@ -442,6 +456,7 @@ impl Coordinator {
         PeekStageTimestampReadHold {
             mut validity,
             plan,
+            max_query_result_size,
             source_ids,
             target_replica,
             timeline_context,
@@ -478,6 +493,7 @@ impl Coordinator {
         let stage = PeekStage::Optimize(PeekStageOptimize {
             validity,
             plan,
+            max_query_result_size,
             source_ids,
             id_bundle,
             target_replica,
@@ -495,6 +511,7 @@ impl Coordinator {
         PeekStageOptimize {
             validity,
             plan,
+            max_query_result_size,
             source_ids,
             id_bundle,
             target_replica,
@@ -602,6 +619,7 @@ impl Coordinator {
                                     PeekStage::Finish(PeekStageFinish {
                                         validity,
                                         plan,
+                                        max_query_result_size,
                                         id_bundle,
                                         target_replica,
                                         source_ids,
@@ -616,6 +634,7 @@ impl Coordinator {
                                 ExplainContext::None => PeekStage::Finish(PeekStageFinish {
                                     validity,
                                     plan,
+                                    max_query_result_size,
                                     id_bundle,
                                     target_replica,
                                     source_ids,
@@ -702,6 +721,7 @@ impl Coordinator {
         PeekStageRealTimeRecency {
             validity,
             plan,
+            max_query_result_size,
             source_ids,
             target_replica,
             timeline_context,
@@ -724,6 +744,7 @@ impl Coordinator {
                         let stage = PeekStage::TimestampReadHold(PeekStageTimestampReadHold {
                             validity,
                             plan,
+                            max_query_result_size,
                             target_replica,
                             timeline_context,
                             source_ids,
@@ -741,6 +762,7 @@ impl Coordinator {
                 PeekStage::TimestampReadHold(PeekStageTimestampReadHold {
                     validity,
                     plan,
+                    max_query_result_size,
                     target_replica,
                     timeline_context,
                     source_ids,
@@ -760,6 +782,7 @@ impl Coordinator {
         PeekStageFinish {
             validity: _,
             plan,
+            max_query_result_size,
             id_bundle,
             target_replica,
             source_ids,
@@ -861,7 +884,6 @@ impl Coordinator {
             )
         }
 
-        let max_query_size = ctx.session().vars().max_query_result_size();
         let max_result_size = self.catalog().system_config().max_result_size();
 
         // Implement the peek, and capture the response.
@@ -873,7 +895,7 @@ impl Coordinator {
                 optimizer.cluster_id(),
                 target_replica,
                 max_result_size,
-                Some(max_query_size),
+                max_query_result_size,
             )
             .await?;
 

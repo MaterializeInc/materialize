@@ -16,7 +16,7 @@ Temporal filters cannot be used in aggregate function filters.
 
 ## Examples
 
-```sql
+```mzsql
 SELECT
     COUNT(*) AS unfiltered,
     -- The FILTER guards the evaluation which might otherwise error.

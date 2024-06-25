@@ -48,7 +48,8 @@ use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
 use crate::durable::initialize::{
-    DEPLOY_GENERATION, SYSTEM_CONFIG_SYNCED_KEY, TXN_WAL_TABLES, USER_VERSION_KEY,
+    DEPLOY_GENERATION, ENABLE_0DT_DEPLOYMENT, SYSTEM_CONFIG_SYNCED_KEY, TXN_WAL_TABLES,
+    USER_VERSION_KEY,
 };
 use crate::durable::metrics::Metrics;
 use crate::durable::objects::serialization::proto;
@@ -267,8 +268,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         current_upper(&mut self.write_handle).await
     }
 
-    /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
-    /// iff the current global upper of the catalog is `current_upper`.
+    /// Appends `updates` iff the current global upper of the catalog is `self.upper`.
     #[mz_ore::instrument]
     pub(crate) async fn compare_and_append<S: IntoStateUpdateKindRaw>(
         &mut self,
@@ -1050,6 +1050,22 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
             .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
     }
 
+    #[mz_ore::instrument(level = "debug")]
+    async fn get_enable_0dt_deployment(&mut self) -> Result<Option<bool>, CatalogError> {
+        let value = self.get_current_config(ENABLE_0DT_DEPLOYMENT).await?;
+        match value {
+            None => Ok(None),
+            Some(0) => Ok(Some(false)),
+            Some(1) => Ok(Some(true)),
+            Some(v) => Err(
+                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(format!(
+                    "{v} is not a valid boolean value"
+                )))
+                .into(),
+            ),
+        }
+    }
+
     #[mz_ore::instrument]
     async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
         self.get_current_config(SYSTEM_CONFIG_SYNCED_KEY)
@@ -1296,7 +1312,8 @@ impl DurableCatalogState for PersistCatalogState {
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
         self.metrics.transactions_started.inc();
         let snapshot = self.snapshot().await?;
-        Transaction::new(self, snapshot)
+        let commit_ts = self.upper.clone();
+        Transaction::new(self, snapshot, commit_ts)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1316,6 +1333,15 @@ impl DurableCatalogState for PersistCatalogState {
                 )
                 .into());
             }
+
+            // If the current upper does not match the transaction's commit timestamp, then the
+            // catalog must have changed since the transaction was started, making the transaction
+            // invalid. When/if we want a multi-writer catalog, this will likely have to change
+            // from an assert to a retry.
+            assert_eq!(
+                catalog.upper, txn_batch.commit_ts,
+                "only one transaction at a time is supported"
+            );
 
             let updates = StateUpdate::from_txn_batch(txn_batch).collect();
             debug!("committing updates: {updates:?}");

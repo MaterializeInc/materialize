@@ -35,11 +35,23 @@
     {% if not schema_exists(schema) %}
         {{ exceptions.raise_compiler_error("Production schema " ~ schema ~ " does not exist") }}
     {% endif %}
+    {% if schema_contains_sinks(schema) %}
+        {{ exceptions.raise_compiler_error("""
+        Production schema " ~ schema ~ " contains sinks.
+        Blue/green deployments require sinks to be in a dedicated schema.
+        """) }}
+    {% endif %}
 {% endfor %}
 
 {% for cluster in clusters %}
     {% if not cluster_exists(cluster) %}
         {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " does not exist") }}
+    {% endif %}
+    {% if cluster_contains_sinks(cluster) %}
+        {{ exceptions.raise_compiler_error("""
+        Production cluster " ~ cluster ~ " contains sinks.
+        Blue/green deployments require sinks to be in a dedicated cluster.
+        """) }}
     {% endif %}
 {% endfor %}
 
@@ -159,9 +171,17 @@
     {% else %}
         {{ log("Creating deployment cluster " ~ deploy_cluster ~ " like cluster " ~ cluster, info=True)}}
         {% set cluster_configuration %}
-            SELECT managed, size, replication_factor
-            FROM mz_clusters
-            WHERE name = {{ dbt.string_literal(cluster) }}
+            SELECT
+                c.managed,
+                c.size,
+                c.replication_factor,
+                c.id AS cluster_id,
+                c.name AS cluster_name,
+                cs.type AS schedule_type,
+                cs.refresh_rehydration_time_estimate
+            FROM mz_clusters c
+            LEFT JOIN mz_internal.mz_cluster_schedules cs ON cs.cluster_id = c.id
+            WHERE c.name = {{ dbt.string_literal(cluster) }}
         {% endset %}
 
         {% set cluster_config_results = run_query(cluster_configuration) %}
@@ -172,6 +192,8 @@
             {% set managed = results[0] %}
             {% set size = results[1] %}
             {% set replication_factor = results[2] %}
+            {% set schedule_type = results[5] %}
+            {% set refresh_rehydration_time_estimate = results[6] %}
 
             {% if not managed %}
                 {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " is not managed") }}
@@ -179,14 +201,19 @@
 
             {% set create_cluster %}
                 CREATE CLUSTER {{ deploy_cluster }} (
-                    SIZE = {{ dbt.string_literal(size) }},
-                    REPLICATION FACTOR = {{ replication_factor }}
+                    SIZE = {{ dbt.string_literal(size) }}
+                    {% if schedule_type == 'manual' %}
+                        , REPLICATION FACTOR = {{ replication_factor }}
+                    {% elif schedule_type == 'on-refresh' and refresh_rehydration_time_estimate %}
+                        , SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = {{ dbt.string_literal(refresh_rehydration_time_estimate) }})
+                    {% endif %}
                 );
             {% endset %}
             {{ run_query(create_cluster) }}
             {{ set_cluster_ci_tag() }}
             {{ internal_copy_cluster_grants(schema, deploy_schema) }}
         {% endif %}
+
     {% endif %}
 {% endfor %}
 {% endmacro %}

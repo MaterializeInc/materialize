@@ -24,7 +24,7 @@ _database&lowbar;name_ | The database to show schemas from. Defaults to the curr
 
 ## Examples
 
-```sql
+```mzsql
 SHOW DATABASES;
 ```
 ```nofmt
@@ -33,7 +33,7 @@ SHOW DATABASES;
 materialize
 my_db
 ```
-```sql
+```mzsql
 SHOW SCHEMAS FROM my_db
 ```
 ```nofmt

@@ -262,6 +262,30 @@ pub trait StorageTxn<T> {
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
+/// A predicate for a `Row` filter.
+pub type RowPredicate = Box<dyn Fn(&Row) -> bool + Send + Sync>;
+
+/// High-level write operations applicable to storage collections.
+pub enum StorageWriteOp {
+    /// Append a set of rows with specified multiplicities.
+    ///
+    /// The multiplicities may be negative, so an `Append` operation can perform
+    /// both insertions and retractions.
+    Append { updates: Vec<(Row, Diff)> },
+    /// Delete all rows matching the given predicate.
+    Delete { filter: RowPredicate },
+}
+
+impl StorageWriteOp {
+    /// Returns whether this operation appends an empty set of updates.
+    pub fn is_empty_append(&self) -> bool {
+        match self {
+            Self::Append { updates } => updates.is_empty(),
+            Self::Delete { .. } => false,
+        }
+    }
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
     type Timestamp: TimelyTimestamp;
@@ -673,29 +697,13 @@ pub trait StorageController: Debug {
 
     /// Updates the desired state of the given introspection type.
     ///
-    /// Rows passed in `updates` MUST have the correct schema for the given
+    /// Rows passed in `op` MUST have the correct schema for the given
     /// introspection type, as readers rely on this and might panic otherwise.
     async fn update_introspection_collection(
         &mut self,
         type_: IntrospectionType,
-        updates: Vec<(Row, Diff)>,
+        op: StorageWriteOp,
     );
-
-    /// Resets the txns system to a set of invariants necessary for correctness.
-    ///
-    /// Must be called on boot before create_collections or the various appends.
-    /// This is true _regardless_ of whether the txn-wal feature is on or
-    /// not. See the big comment in the impl of the method for details. Ideally,
-    /// this would have just been folded into `Controller::new`, but it needs
-    /// the timestamp and there are boot dependency issues.
-    ///
-    /// TODO: This can be removed once we've flipped to the new txns system for
-    /// good and there is no possibility of the old code running concurrently
-    /// with the new code.
-    async fn init_txns(
-        &mut self,
-        init_ts: Self::Timestamp,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// On boot, seed the controller's metadata/state.
     async fn initialize_state(

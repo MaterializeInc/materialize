@@ -13,8 +13,11 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
+use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
+use mz_expr::{
+    AccessStrategy, AggregateExpr, AggregateFunc, Id, MirRelationExpr, OptimizedMirRelationExpr,
+    RowSetFinishing,
+};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::plan::HirRelationExpr;
@@ -62,6 +65,8 @@ pub struct PlanInsights {
     /// this as fast path. That is: if this query were run on the cluster of the key, it would be
     /// fast because it would use the index of the value.
     pub fast_path_clusters: BTreeMap<String, Option<FastPathCluster>>,
+    /// Names of persist sources over which a count(*) is done.
+    pub persist_count: Vec<Name>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -213,6 +218,53 @@ fn global_insights(
     }
     for (id, _) in plan.index_imports {
         add_import_insights(&mut insights, humanizer, id, ImportType::Compute)
+    }
+    for BuildDesc { plan, .. } in plan.objects_to_build {
+        // Search for a count(*) over a persist read.
+        plan.visit_pre(|expr| {
+            let MirRelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+                ..
+            } = expr
+            else {
+                return;
+            };
+            if !group_key.is_empty() {
+                return;
+            }
+            let MirRelationExpr::Project { input, outputs } = &**input else {
+                return;
+            };
+            if !outputs.is_empty() {
+                return;
+            }
+            let MirRelationExpr::Get {
+                id: Id::Global(id),
+                access_strategy: AccessStrategy::Persist,
+                ..
+            } = &**input
+            else {
+                return;
+            };
+            let [aggregate] = aggregates.as_slice() else {
+                return;
+            };
+            let AggregateExpr {
+                func: AggregateFunc::Count,
+                distinct: false,
+                expr,
+            } = aggregate
+            else {
+                return;
+            };
+            if !expr.is_literal_true() {
+                return;
+            }
+            let name = structured_name(humanizer, *id);
+            insights.persist_count.push(name);
+        });
     }
     insights
 }

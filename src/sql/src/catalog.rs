@@ -149,16 +149,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn get_schemas(&self) -> Vec<&dyn CatalogSchema>;
 
     /// Gets the mz_internal schema id.
-    fn get_mz_internal_schema_id(&self) -> &SchemaId;
+    fn get_mz_internal_schema_id(&self) -> SchemaId;
 
     /// Gets the mz_unsafe schema id.
-    fn get_mz_unsafe_schema_id(&self) -> &SchemaId;
+    fn get_mz_unsafe_schema_id(&self) -> SchemaId;
 
     /// Returns true if `schema` is an internal system schema, false otherwise
-    fn is_system_schema(&self, schema: &str) -> bool;
-
-    /// Returns true if `schema` is an internal system schema, false otherwise
-    fn is_system_schema_specifier(&self, schema: &SchemaSpecifier) -> bool;
+    fn is_system_schema_specifier(&self, schema: SchemaSpecifier) -> bool;
 
     /// Resolves the named role.
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;

@@ -19,6 +19,7 @@
 //! [`mz_catalog_server`]: https://materialize.com/docs/sql/show-clusters/#mz_catalog_server-system-cluster
 
 use mz_expr::CollectionPlan;
+use mz_repr::namespaces::is_system_schema;
 use mz_repr::GlobalId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{
@@ -160,7 +161,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
     // per-replica object, that requires being run a specific replica.
     let valid_dependencies = depends_on.all(|id| {
         let entry = catalog.state().get_entry(&id);
-        let schema = &entry.name().qualifiers.schema_spec;
+        let schema = entry.name().qualifiers.schema_spec;
 
         let system_only = catalog.state().is_system_schema_specifier(schema);
         let non_replica = catalog.state().introspection_dependencies(id).is_empty();
@@ -221,7 +222,7 @@ pub fn check_cluster_restrictions(
             let item = catalog.get_item(&id);
             let full_name = catalog.resolve_full_name(item.name());
 
-            if !catalog.is_system_schema(&full_name.schema) {
+            if !is_system_schema(&full_name.schema) {
                 Some(full_name.to_string())
             } else {
                 None

@@ -47,53 +47,52 @@ your session via the `auto_route_catalog_queries`
 
 The following characteristics apply to the `mz_catalog_server` cluster:
 
-  * You are **not** billed for this cluster.
+  * You are **not billed** for this cluster.
   * You cannot create objects in this cluster.
   * You cannot drop this cluster.
-  * You can run `SELECT` or `SUBSCRIBE` statements against [system catalog
-  objects](https://materialize.com/docs/sql/system-catalog/) on this cluster.
-  This includes queries with joins, as long as the query depends only on objects
-  in the system catalog.
-
-### `mz_system` system cluster
-
-A system cluster named `mz_system` will be pre-installed in every environment.
-This cluster is used for various internal system monitoring tasks.
-
-The following characteristics apply to the `mz_system` cluster:
-
-  * You are **not** billed for this cluster.
-  * You cannot create objects in this cluster.
-  * You cannot drop this cluster.
-  * You cannot run `SELECT` or `SUBSCRIBE` on this cluster.
+  * You can run `SELECT` or `SUBSCRIBE` queries in this cluster as long
+    as you only reference objects in the [system catalog](/sql/system-catalog/).
 
 ### `mz_probe` system cluster
 
 A system cluster named `mz_probe` will be pre-installed in every environment.
-This cluster is used for uptiming monitoring.
+This cluster is used for internal uptime monitoring.
 
 The following characteristics apply to the `mz_probe` cluster:
 
-  * You are **not** billed for this cluster.
+  * You are **not billed** for this cluster.
   * You cannot create objects in this cluster.
   * You cannot drop this cluster.
-  * You cannot run `SELECT` or `SUBSCRIBE` on this cluster.
+  * You cannot run `SELECT` or `SUBSCRIBE` queries in this cluster.
 
 ### `mz_support` system cluster
 
 A system cluster named `mz_support` will be pre-installed in every environment.
-This cluster is used for support to perform one-off debugging and validation.
+This cluster is used for internal support tasks.
 
 The following characteristics apply to the `mz_support` cluster:
 
-  * You are **not** billed for this cluster.
+  * You are **not billed** for this cluster.
   * You cannot create objects in this cluster.
   * You cannot drop this cluster.
-  * You cannot run `SELECT` or `SUBSCRIBE` on this cluster.
+  * You cannot run `SELECT` or `SUBSCRIBE` queries in this cluster.
+
+### `mz_system` system cluster
+
+A system cluster named `mz_system` will be pre-installed in every environment.
+This cluster is used for internal system jobs.
+
+The following characteristics apply to the `mz_system` cluster:
+
+  * You are **not billed** for this cluster.
+  * You cannot create objects in this cluster.
+  * You cannot drop this cluster.
+  * You cannot run `SELECT` or `SUBSCRIBE` queries in this cluster.
+
 
 ## Examples
 
-```sql
+```mzsql
 SET CLUSTER = mz_catalog_server;
 
 SHOW CLUSTERS;
@@ -110,7 +109,7 @@ SHOW CLUSTERS;
  mz_support           |
 ```
 
-```sql
+```mzsql
 SHOW CLUSTERS LIKE 'auction_%';
 ```
 

@@ -105,7 +105,7 @@ it is safe to cut over.
 
 3. Use the `SWAP` operation to atomically rename your objects in a way that is
 transparent to clients.
-    ```sql
+    ```mzsql
     BEGIN;
     ALTER SCHEMA prod SWAP WITH prod_deploy;
     ALTER CLUSTER prod SWAP WITH prod_deploy;
@@ -116,7 +116,7 @@ transparent to clients.
 
 4. Now that changes are running in `prod` and the legacy version is in
 `prod_deploy`, you can drop the prod_deploy compute objects and schema.
-    ```sql
+    ```mzsql
     DROP CLUSTER prod_deploy CASCADE;
     DROP SCHEMA prod_deploy CASCADE;
     ```
@@ -135,7 +135,7 @@ also use `ALTER...RENAME` operations on:
 - Materialized Views
 - Indexes
 
-  ```sql
+  ```mzsql
   BEGIN;
   -- Swap schemas
   ALTER SCHEMA prod RENAME TO temp;

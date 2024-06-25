@@ -80,6 +80,8 @@ SELECT oid, name FROM mz_schemas WHERE id LIKE 's%' ORDER BY oid
 16658  mz_internal
 16659  information_schema
 16660  mz_unsafe
+16972  mz_catalog_unstable
+16973  mz_introspection
 
 query TT
 SELECT oid, name FROM mz_roles WHERE id LIKE 's%' OR id LIKE 'g%' ORDER BY oid

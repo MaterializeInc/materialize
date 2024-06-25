@@ -16,8 +16,10 @@ public
 "some schema"
 information_schema
 mz_catalog
+mz_catalog_unstable
 mz_unsafe
 mz_internal
+mz_introspection
 pg_catalog
 
 > SELECT * FROM "some database"."some schema".t1;

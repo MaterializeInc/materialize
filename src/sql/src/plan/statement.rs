@@ -14,6 +14,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_repr::namespaces::is_system_schema;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
@@ -295,7 +296,7 @@ pub fn plan(
         .any(|item| {
             item.func().is_ok()
                 && item.name().qualifiers.schema_spec
-                    == SchemaSpecifier::Id(*catalog.get_mz_unsafe_schema_id())
+                    == SchemaSpecifier::Id(catalog.get_mz_unsafe_schema_id())
         })
     {
         scx.require_feature_flag(&vars::ENABLE_UNSAFE_FUNCTIONS)?;
@@ -525,7 +526,7 @@ impl<'a> StatementContext<'a> {
                 (database, schema.name().schema.clone())
             }
             (None, Some(schema)) => {
-                if self.catalog.is_system_schema(&schema) {
+                if is_system_schema(&schema) {
                     (RawDatabaseSpecifier::Ambient, schema)
                 } else {
                     match self.catalog.active_database_name() {

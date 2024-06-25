@@ -42,7 +42,7 @@ _value&lowbar;type_ | The [type](../../types) of the map's values.
 
 You can construct maps using the `MAP` expression:
 
-```sql
+```mzsql
 SELECT MAP['a' => 1, 'b' => 2];
 ```
 ```nofmt
@@ -53,7 +53,7 @@ SELECT MAP['a' => 1, 'b' => 2];
 
 You can nest `MAP` constructors:
 
-```sql
+```mzsql
 SELECT MAP['a' => MAP['b' => 'c']];
 ```
 ```nofmt
@@ -64,7 +64,7 @@ SELECT MAP['a' => MAP['b' => 'c']];
 
 You can also elide the `MAP` keyword from the interior map expressions:
 
-```sql
+```mzsql
 SELECT MAP['a' => ['b' => 'c']];
 ```
 ```nofmt
@@ -75,7 +75,7 @@ SELECT MAP['a' => ['b' => 'c']];
 
 `MAP` expressions evalute expressions for both keys and values:
 
-```sql
+```mzsql
 SELECT MAP['a' || 'b' => 1 + 2];
 ```
 ```nofmt
@@ -89,7 +89,7 @@ subquery must return two columns: a key column of type `text` and a value column
 of any type, in that order. Note that, in this form of the `MAP` expression,
 parentheses are used rather than square brackets.
 
-```sql
+```mzsql
 SELECT MAP(SELECT key, value FROM test0 ORDER BY x DESC LIMIT 3);
 ```
 ```nofmt
@@ -128,7 +128,7 @@ encoding and decoding][binary] for these types, as well.
 The textual format for a `map` is a sequence of `key => value` mappings
 separated by commas and surrounded by curly braces (`{}`). For example:
 
-```sql
+```mzsql
 SELECT '{a=>123.4, b=>111.1}'::map[text=>double] as m;
 ```
 ```nofmt
@@ -138,7 +138,7 @@ SELECT '{a=>123.4, b=>111.1}'::map[text=>double] as m;
 ```
 
 You can create nested maps the same way:
-```sql
+```mzsql
 SELECT '{a=>{b=>{c=>d}}}'::map[text=>map[text=>map[text=>text]]] as nested_map;
 ```
 ```nofmt
@@ -177,7 +177,7 @@ You can [cast](../../functions/cast) `map` to and from the following types:
 
 Retrieves and returns the target value or `NULL`.
 
-```sql
+```mzsql
 SELECT MAP['a' => 1, 'b' => 2] -> 'a' as field_map;
 ```
 ```nofmt
@@ -186,7 +186,7 @@ SELECT MAP['a' => 1, 'b' => 2] -> 'a' as field_map;
  1
 ```
 
-```sql
+```mzsql
 SELECT MAP['a' => 1, 'b' => 2] -> 'c' as field_map;
 ```
 ```nofmt
@@ -197,7 +197,7 @@ SELECT MAP['a' => 1, 'b' => 2] -> 'c' as field_map;
 
 Field accessors can also be chained together.
 
-```sql
+```mzsql
 SELECT MAP['a' => ['b' => 1], 'c' => ['d' => 2]] -> 'a' -> 'b' as field_map;
 ```
 ```nofmt
@@ -212,7 +212,7 @@ Note that all returned values are of the map's value type.
 
 #### LHS contains RHS (`@>`)
 
-```sql
+```mzsql
 SELECT MAP['a' => 1, 'b' => 2] @> MAP['a' => 1] AS lhs_contains_rhs;
 ```
 ```nofmt
@@ -225,7 +225,7 @@ SELECT MAP['a' => 1, 'b' => 2] @> MAP['a' => 1] AS lhs_contains_rhs;
 
 #### RHS contains LHS (`<@`)
 
-```sql
+```mzsql
 SELECT MAP['a' => 1, 'b' => 2] <@ MAP['a' => 1] as rhs_contains_lhs;
 ```
 ```nofmt
@@ -238,7 +238,7 @@ SELECT MAP['a' => 1, 'b' => 2] <@ MAP['a' => 1] as rhs_contains_lhs;
 
 #### Search top-level keys (`?`)
 
-```sql
+```mzsql
 SELECT MAP['a' => 1.9, 'b' => 2.0] ? 'a' AS search_for_key;
 ```
 ```nofmt
@@ -247,7 +247,7 @@ SELECT MAP['a' => 1.9, 'b' => 2.0] ? 'a' AS search_for_key;
  t
 ```
 
-```sql
+```mzsql
 SELECT MAP['a' => ['aa' => 1.9], 'b' => ['bb' => 2.0]] ? 'aa' AS search_for_key;
 ```
 ```nofmt
@@ -261,7 +261,7 @@ SELECT MAP['a' => ['aa' => 1.9], 'b' => ['bb' => 2.0]] ? 'aa' AS search_for_key;
 Returns `true` if all keys provided on the RHS are present in the top-level of
 the map, `false` otherwise.
 
-```sql
+```mzsql
 SELECT MAP['a' => 1, 'b' => 2] ?& ARRAY['b', 'a'] as search_for_all_keys;
 ```
 ```nofmt
@@ -270,7 +270,7 @@ SELECT MAP['a' => 1, 'b' => 2] ?& ARRAY['b', 'a'] as search_for_all_keys;
  t
 ```
 
-```sql
+```mzsql
 SELECT MAP['a' => 1, 'b' => 2] ?& ARRAY['c', 'b'] as search_for_all_keys;
 ```
 ```nofmt
@@ -284,7 +284,7 @@ SELECT MAP['a' => 1, 'b' => 2] ?& ARRAY['c', 'b'] as search_for_all_keys;
 Returns `true` if any keys provided on the RHS are present in the top-level of
 the map, `false` otherwise.
 
-```sql
+```mzsql
 SELECT MAP['a' => 1, 'b' => 2] ?| ARRAY['c', 'b'] as search_for_any_keys;
 ```
 ```nofmt
@@ -293,7 +293,7 @@ SELECT MAP['a' => 1, 'b' => 2] ?| ARRAY['c', 'b'] as search_for_any_keys;
  t
 ```
 
-```sql
+```mzsql
 SELECT MAP['a' => 1, 'b' => 2] ?| ARRAY['c', 'd', '1'] as search_for_any_keys;
 ```
 ```nofmt
@@ -306,7 +306,7 @@ SELECT MAP['a' => 1, 'b' => 2] ?| ARRAY['c', 'd', '1'] as search_for_any_keys;
 
 Returns the number of entries in the map.
 
-```sql
+```mzsql
 SELECT map_length(MAP['a' => 1, 'b' => 2]);
 ```
 ```nofmt

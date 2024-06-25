@@ -78,6 +78,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         input=dedent(
                             """
                                 $ kafka-create-topic topic=test-source partitions=1
+                                $ kafka-create-topic topic=test-sink partitions=1
                                 """
                         )
                     )
@@ -95,6 +96,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                             port=6877,
                             sql=f"ALTER {what} OWNER TO materialize",
                         )
+
+                    # Create two databases that some tests rely on
+                    c.sql(
+                        service="materialized",
+                        user="materialize",
+                        sql=dedent(
+                            """
+                            CREATE DATABASE test_database_1;
+                            CREATE DATABASE test_database_2;
+                            CREATE TABLE test_database_1.public.table1 (id int);
+                            CREATE TABLE test_database_2.public.table2 (id int);
+                            """
+                        ),
+                    )
 
                     c.run(
                         "dbt",

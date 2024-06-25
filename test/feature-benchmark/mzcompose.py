@@ -683,37 +683,36 @@ def upload_results_to_test_analytics(
         # only include measurements on HEAD
         return
 
-    try:
-        test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
-        test_analytics.builds.insert_build_job(was_successful=was_successful)
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    test_analytics.builds.add_build_job(was_successful=was_successful)
 
-        result_entries = []
+    result_entries = []
 
-        for scenario_cls in scenario_classes:
-            scenario_name = scenario_cls.__name__
-            report = latest_report_by_scenario_name[scenario_name]
-            report_measurements = report.measurements_of_this(scenario_name)
-            scenario_version = report.get_scenario_version(scenario_name)
+    for scenario_cls in scenario_classes:
+        scenario_name = scenario_cls.__name__
+        report = latest_report_by_scenario_name[scenario_name]
+        report_measurements = report.measurements_of_this(scenario_name)
+        scenario_version = report.get_scenario_version(scenario_name)
 
-            result_entries.append(
-                feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
-                    scenario_name=scenario_name,
-                    scenario_version=str(scenario_version),
-                    scale=scale or "default",
-                    wallclock=report_measurements[MeasurementType.WALLCLOCK],
-                    messages=report_measurements[MeasurementType.MESSAGES],
-                    memory_mz=report_measurements[MeasurementType.MEMORY_MZ],
-                    memory_clusterd=report_measurements[
-                        MeasurementType.MEMORY_CLUSTERD
-                    ],
-                )
+        result_entries.append(
+            feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
+                scenario_name=scenario_name,
+                scenario_version=str(scenario_version),
+                scale=scale or "default",
+                wallclock=report_measurements[MeasurementType.WALLCLOCK],
+                messages=report_measurements[MeasurementType.MESSAGES],
+                memory_mz=report_measurements[MeasurementType.MEMORY_MZ],
+                memory_clusterd=report_measurements[MeasurementType.MEMORY_CLUSTERD],
             )
-
-        test_analytics.benchmark_results.insert_result(
-            framework_version=FEATURE_BENCHMARK_FRAMEWORK_VERSION,
-            results=result_entries,
         )
 
+    test_analytics.benchmark_results.add_result(
+        framework_version=FEATURE_BENCHMARK_FRAMEWORK_VERSION,
+        results=result_entries,
+    )
+
+    try:
+        test_analytics.submit_updates()
         print("Uploaded results.")
     except Exception as e:
         # An error during an upload must never cause the build to fail

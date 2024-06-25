@@ -107,7 +107,7 @@ steps:
     the name of the topic you created in Step 3. The `<your-username>` and
     `<your-password>` are from the _Create new credentials_ step.
 
-    ```sql
+    ```mzsql
       CREATE SECRET upstash_username AS '<your-username>';
       CREATE SECRET upstash_password AS '<your-password>';
 
@@ -146,7 +146,7 @@ steps:
 
     To create a sink, run the following command:
 
-    ```sql
+    ```mzsql
       CREATE SINK <sink-name>
         FROM <source, table or mview>
         INTO KAFKA CONNECTION <upstash_kafka> (TOPIC '<sink-topic-name>')

@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-regex match=(s\d+|\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)) replacement=<>
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET allow_real_time_recency = true
 
@@ -80,3 +82,10 @@ A,B,0
 
 > SELECT sum FROM sum;
 5000207
+
+# It can take a moment for the "can respond immediately: true" to be set, so allow retries for the EXPLAIN
+$ set-max-tries max-tries=10
+
+# RTR timestamp should be present.
+> EXPLAIN TIMESTAMP FOR SELECT sum FROM sum
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\n    real time recency timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: true\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.sum (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"

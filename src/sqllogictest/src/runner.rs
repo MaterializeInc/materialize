@@ -47,6 +47,7 @@ use mz_environmentd::CatalogConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
+use mz_ore::channel::trigger;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -411,7 +412,7 @@ pub struct RunnerInner<'a> {
     enable_table_keys: bool,
     verbosity: usize,
     stdout: &'a dyn WriteFmt,
-    _shutdown_trigger: oneshot::Sender<()>,
+    _shutdown_trigger: trigger::Trigger,
     _server_thread: JoinOnDropHandle<()>,
     _temp_dir: TempDir,
 }
@@ -1079,7 +1080,6 @@ impl<'a> RunnerInner<'a> {
             internal_console_redirect_url: None,
             txn_wal_tables_cli: Some(TxnWalTablesImpl::Lazy),
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
-            read_only_controllers: false,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1089,7 +1089,7 @@ impl<'a> RunnerInner<'a> {
         let (server_addr_tx, server_addr_rx) = oneshot::channel();
         let (internal_server_addr_tx, internal_server_addr_rx) = oneshot::channel();
         let (internal_http_server_addr_tx, internal_http_server_addr_rx) = oneshot::channel();
-        let (shutdown_trigger, shutdown_tripwire) = oneshot::channel();
+        let (shutdown_trigger, shutdown_trigger_rx) = trigger::channel();
         let server_thread = thread::spawn(|| {
             let runtime = match Runtime::new() {
                 Ok(runtime) => runtime,
@@ -1118,7 +1118,7 @@ impl<'a> RunnerInner<'a> {
             internal_http_server_addr_tx
                 .send(server.internal_http_local_addr())
                 .expect("receiver should not drop first");
-            let _ = runtime.block_on(shutdown_tripwire);
+            let _ = runtime.block_on(shutdown_trigger_rx);
         });
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;

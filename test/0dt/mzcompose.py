@@ -7,36 +7,22 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
+import time
 from textwrap import dedent
 
-import requests
-
 from materialize import buildkite
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.kafka import Kafka
-from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.redpanda import Redpanda
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
-    Localstack(),
-    Clusterd(),
     Materialized(),
-    Redpanda(),
-    Toxiproxy(),
     Testdrive(materialize_params={"cluster": "cluster"}, no_reset=True),
 ]
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition) -> None:
     for name in buildkite.shard_list(
         list(c.workflows.keys()), lambda workflow: workflow
     ):
@@ -46,41 +32,27 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             c.workflow(name)
 
 
-def workflow_compute(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Verify that compute parts are read-only when Mz is restarted in read-only-mode"""
+def workflow_basic(c: Composition) -> None:
+    """Verify basic 0dt deployment flow."""
     c.down(destroy_volumes=True)
-    c.up(
-        "zookeeper",
-        "kafka",
-        "schema-registry",
-        "localstack",
-        "materialized",
-        "clusterd",
-    )
+    c.up("materialized")
     c.up("testdrive", persistent=True)
 
     # Make sure cluster is owned by the system so it doesn't get dropped
     # between testdrive runs.
     c.sql(
         """
-        ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
         DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster REPLICAS (
-            replica1 (
-                STORAGECTL ADDRESSES ['clusterd:2100'],
-                STORAGE ADDRESSES ['clusterd:2103'],
-                COMPUTECTL ADDRESSES ['clusterd:2101'],
-                COMPUTE ADDRESSES ['clusterd:2102'],
-                WORKERS 2
-            )
-        );
+        CREATE CLUSTER cluster SIZE '2-1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
+        ALTER SYSTEM SET enable_0dt_deployment = true;
     """,
         port=6877,
         user="mz_system",
     )
 
+    # Inserts should be reflected when writes are allowed.
     c.testdrive(
         dedent(
             """
@@ -98,11 +70,15 @@ def workflow_compute(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
     )
 
-    c.kill("materialized")
-    c.kill("clusterd")
-    with c.override(Materialized(read_only_controllers=True)):
+    # Restart in a new deploy generation, which will cause Materialize to
+    # boot in read-only mode.
+    with c.override(Materialized(environment_extra=["MZ_DEPLOY_GENERATION=1"])):
         c.up("materialized")
-        c.up("clusterd")
+
+        # Materialized views should not update in read only mode.
+        #
+        # TODO: it should not be possible to issue any mutating queries (e.g.,
+        # DDL, inserts) in read only mode.
         c.testdrive(
             dedent(
                 """
@@ -136,16 +112,52 @@ def workflow_compute(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
         )
 
-        port = c.port("materialized", 6878)
-        resp = requests.post(f"http://localhost:{port}/api/control/allow-writes")
-        assert resp.status_code == 200, resp
-        print(resp.text)
+        c.up("materialized")
+        # Wait up to 60s for the new deployment to become ready for promotion.
+        for _ in range(1, 60):
+            result = json.loads(
+                c.exec(
+                    "materialized",
+                    "curl",
+                    "localhost:6878/api/leader/status",
+                    capture=True,
+                ).stdout
+            )
+            if result["status"] == "ReadyToPromote":
+                break
+            assert result["status"] == "Initializing", f"Unexpected status {result}"
+            print("Not ready yet, waiting 1s")
+            time.sleep(1)
+        result = json.loads(
+            c.exec(
+                "materialized",
+                "curl",
+                "-X",
+                "POST",
+                "localhost:6878/api/leader/promote",
+                capture=True,
+            ).stdout
+        )
+        assert result["result"] == "Success", f"Unexpected result {result}"
+
+    # After promotion, the deployment should boot with writes allowed.
+    with c.override(
+        Materialized(
+            healthcheck=[
+                "CMD-SHELL",
+                """[ "$(curl -f localhost:6878/api/leader/status)" = '{"status":"IsLeader"}' ]""",
+            ],
+            environment_extra=["MZ_DEPLOY_GENERATION=1"],
+        )
+    ):
+        c.up("materialized")
 
         c.testdrive(
             dedent(
                 """
             > SET CLUSTER = cluster;
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+            > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
             > SELECT * FROM mv;
             9
             > SELECT * FROM mv2;

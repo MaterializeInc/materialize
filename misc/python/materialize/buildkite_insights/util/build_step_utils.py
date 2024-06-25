@@ -7,68 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from materialize.buildkite import get_job_url
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_COMPLETED_BUILD_STEP_STATES,
 )
-
-
-@dataclass
-class BuildItemOutcomeBase:
-    step_key: str
-    build_number: int
-    commit_hash: str
-    created_at: datetime
-    duration_in_min: float | None
-    passed: bool
-    completed: bool
-    retry_count: int
-
-    def formatted_date(self) -> str:
-        return self.created_at.strftime("%Y-%m-%d %H:%M:%S %z")
-
-
-@dataclass
-class BuildStepOutcome(BuildItemOutcomeBase):
-    """Outcome of an atomic build step. For sharded jobs, more than one build step exists for a job."""
-
-    id: str
-    web_url_to_job: str
-    parallel_job_index: int | None
-    exit_status: int | None
-
-    def web_url_to_build(self) -> str:
-        return self.web_url_to_job[: self.web_url_to_job.index("#")]
-
-
-@dataclass
-class BuildJobOutcome(BuildItemOutcomeBase):
-    """Outcome, which aggregates multiple build steps in case of a sharded job."""
-
-    ids: list[str]
-    web_url_to_build: str
-    # number of merged shards, 1 otherwise
-    count_items: int
-
-
-@dataclass
-class BuildStepMatcher:
-    step_key: str
-    # will be ignored if not specified
-    parallel_job_index: int | None
-
-    def matches(self, job_step_key: str, job_parallel_index: int | None) -> bool:
-        if self.step_key != job_step_key:
-            return False
-
-        if self.parallel_job_index is None:
-            # not specified
-            return True
-
-        return self.parallel_job_index == job_parallel_index
+from materialize.buildkite_insights.data.build_step import (
+    BuildJobOutcome,
+    BuildStepMatcher,
+    BuildStepOutcome,
+)
 
 
 def extract_build_step_outcomes(
@@ -140,7 +90,7 @@ def _extract_build_step_data_from_build(
             completed=job_completed,
             exit_status=exit_status,
             retry_count=retry_count,
-            web_url_to_job=f"{build_data['web_url']}#{job['id']}",
+            web_url_to_job=get_job_url(build_data["web_url"], job["id"]),
         )
 
         if retry_count == 0:

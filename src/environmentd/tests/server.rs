@@ -26,9 +26,6 @@ use futures::FutureExt;
 use http::{Request, StatusCode};
 use itertools::Itertools;
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use mz_environmentd::http::{
-    BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
-};
 use mz_environmentd::test_util::{self, make_pg_tls, Ca, PostgresErrorExt, KAFKA_ADDRS};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
@@ -2473,9 +2470,9 @@ async fn test_leader_promotion() {
                     .await
                     .unwrap();
                 assert_eq!(res.status(), StatusCode::OK);
-                let response: LeaderStatusResponse = res.json().await.unwrap();
-                assert_ne!(response.status, LeaderStatus::IsLeader);
-                if response.status == LeaderStatus::ReadyToPromote {
+                let response = res.text().await.unwrap();
+                assert_ne!(response, r#"{"status":"IsLeader"}"#);
+                if response == r#"{"status":"ReadyToPromote"}"# {
                     Ok(())
                 } else {
                     Err(())
@@ -2530,9 +2527,9 @@ async fn test_leader_promotion() {
                     .await
                     .unwrap();
                 assert_eq!(res.status(), StatusCode::OK);
-                let response: LeaderStatusResponse = res.json().await.unwrap();
-                assert_ne!(response.status, LeaderStatus::IsLeader);
-                if response.status == LeaderStatus::ReadyToPromote {
+                let response = res.text().await.unwrap();
+                assert_ne!(response, r#"{"status":"IsLeader"}"#);
+                if response == r#"{"status":"ReadyToPromote"}"# {
                     Ok(())
                 } else {
                     Err(())
@@ -2551,13 +2548,8 @@ async fn test_leader_promotion() {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: BecomeLeaderResponse = res.json().await.unwrap();
-        assert_eq!(
-            response,
-            BecomeLeaderResponse {
-                result: BecomeLeaderResult::Success
-            }
-        );
+        let response = res.text().await.unwrap();
+        assert_eq!(response, r#"{"result":"Success"}"#,);
 
         let server_3 = server_3.await.unwrap();
 
@@ -2571,8 +2563,8 @@ async fn test_leader_promotion() {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: LeaderStatusResponse = res.json().await.unwrap();
-        assert_eq!(response.status, LeaderStatus::IsLeader);
+        let response = res.text().await.unwrap();
+        assert_eq!(response, r#"{"status":"IsLeader"}"#);
 
         let res = reqwest::Client::new()
             .post(promote_http_url)
@@ -2580,13 +2572,8 @@ async fn test_leader_promotion() {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: BecomeLeaderResponse = res.json().await.unwrap();
-        assert_eq!(
-            response,
-            BecomeLeaderResponse {
-                result: BecomeLeaderResult::Success
-            }
-        );
+        let response = res.text().await.unwrap();
+        assert_eq!(response, r#"{"result":"Success"}"#);
     }
 }
 
@@ -2620,8 +2607,8 @@ async fn test_leader_promotion_always_using_deploy_generation() {
         .unwrap();
         let res = http_client.get(status_http_url).send().await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: LeaderStatusResponse = res.json().await.unwrap();
-        assert_eq!(response.status, LeaderStatus::IsLeader);
+        let response = res.text().await.unwrap();
+        assert_eq!(response, r#"{"status":"IsLeader"}"#);
 
         let promote_http_url = Url::parse(&format!(
             "http://{}/api/leader/promote",
@@ -2630,13 +2617,8 @@ async fn test_leader_promotion_always_using_deploy_generation() {
         .unwrap();
         let res = http_client.post(promote_http_url).send().await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: BecomeLeaderResponse = res.json().await.unwrap();
-        assert_eq!(
-            response,
-            BecomeLeaderResponse {
-                result: BecomeLeaderResult::Success
-            }
-        );
+        let response = res.text().await.unwrap();
+        assert_eq!(response, r#"{"result":"Success"}"#);
     }
 }
 
@@ -2684,10 +2666,10 @@ async fn test_leader_promotion_mixed_code_version() {
                 .unwrap();
             tracing::info!("{} response: {res:?}", next_version);
             assert_eq!(res.status(), StatusCode::OK);
-            let response: LeaderStatusResponse = res.json().await.unwrap();
+            let response = res.text().await.unwrap();
             tracing::info!("{} response body: {response:?}", next_version);
-            assert_ne!(response.status, LeaderStatus::IsLeader);
-            if response.status == LeaderStatus::ReadyToPromote {
+            assert_ne!(response, r#"{"status":"IsLeader"}"#);
+            if response == r#"{"status":"ReadyToPromote"}"# {
                 Ok(())
             } else {
                 Err(())

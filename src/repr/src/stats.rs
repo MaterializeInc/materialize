@@ -170,10 +170,9 @@ impl<'a> JsonDatums<'a> {
 #[cfg(test)]
 mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::Data;
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::{
-        ColumnStats, DynStats, ProtoStructStats, StructStats, TrimStats,
+        ColumnStats, ColumnarStats, ProtoStructStats, StructStats, TrimStats,
     };
     use mz_proto::RustType;
     use proptest::prelude::*;
@@ -200,14 +199,11 @@ mod tests {
         actual.trim();
         let actual: StructStats = RustType::from_proto(actual).unwrap();
         for (name, typ) in schema.iter() {
-            struct ColMinMaxNulls<'a>(&'a dyn DynStats);
+            struct ColMinMaxNulls<'a>(&'a ColumnarStats);
             impl<'a> DatumToPersistFn<()> for ColMinMaxNulls<'a> {
                 fn call<T: DatumToPersist>(self) {
                     let ColMinMaxNulls(stats) = self;
-                    let stats = stats
-                        .as_any()
-                        .downcast_ref::<<T::Data as Data>::Stats>()
-                        .unwrap();
+                    let stats = stats.downcast::<T::Data>().unwrap();
                     let arena = RowArena::default();
                     let _ = stats
                         .lower()
@@ -219,7 +215,7 @@ mod tests {
                 }
             }
             let col_stats = actual.cols.get(name.as_str()).unwrap();
-            typ.to_persist(ColMinMaxNulls(col_stats.as_ref()));
+            typ.to_persist(ColMinMaxNulls(col_stats));
         }
     }
 

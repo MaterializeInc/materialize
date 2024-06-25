@@ -1,5 +1,23 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Enable cross-database references ([#27686](https://github.com/MaterializeInc/materialize/pull/27686)). Although cross-database references are not supported in `dbt-postgres`, databases in Materialize are purely used for namespacing, and therefore do not present the same constraint.
+
+## 1.8.2 - 2024-06-21
+
+* Add support for sink cutover to the blue/green deployment workflow [#27557](https://github.com/MaterializeInc/materialize/pull/27557).
+  Sinks **must** be created in a **dedicated schema and cluster**.
+
+* Add a `dry_run` argument to the `deploy_promote` macro, which allows
+  previewing the sequence of commands that will be run as part of the
+  environment promotion step of the blue/green deployment workflow.
+
+* Fix the `deploy_init` macro to correctly account for scheduled clusters.
+  Before, these clusters would be incorrectly recreated in the deployment
+  environment with the `SCHEDULE` option set to `manual` (instead of
+  `on-refresh`).
+
 ## 1.8.1 - 2024-06-08
 
 * Add support for overriding the `generate_cluster_name` macro to customize the

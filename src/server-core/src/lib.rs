@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use futures::stream::{BoxStream, Stream, StreamExt};
+use mz_ore::channel::trigger;
 use mz_ore::error::ErrorExt;
 use mz_ore::task::JoinSetExt;
 use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
@@ -59,7 +60,7 @@ impl<T> ConnectionStream for T where T: Stream<Item = io::Result<TcpStream>> + U
 #[derive(Debug)]
 pub struct ListenerHandle {
     local_addr: SocketAddr,
-    _trigger: oneshot::Sender<()>,
+    _trigger: trigger::Trigger,
 }
 
 impl ListenerHandle {
@@ -79,14 +80,14 @@ pub async fn listen(
 ) -> Result<(ListenerHandle, Pin<Box<dyn ConnectionStream>>), io::Error> {
     let listener = TcpListener::bind(addr).await?;
     let local_addr = listener.local_addr()?;
-    let (trigger, tripwire) = oneshot::channel();
+    let (trigger, trigger_rx) = trigger::channel();
     let handle = ListenerHandle {
         local_addr,
         _trigger: trigger,
     };
     // TODO(benesch): replace `TCPListenerStream`s with `listener.incoming()` if
     // that is restored when the `Stream` trait stabilizes.
-    let stream = TcpListenerStream::new(listener).take_until(tripwire);
+    let stream = TcpListenerStream::new(listener).take_until(trigger_rx);
     Ok((handle, Box::pin(stream)))
 }
 

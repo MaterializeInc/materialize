@@ -296,7 +296,8 @@ impl Coordinator {
                     self.sequence_end_transaction(ctx, action).await;
                 }
                 Plan::Select(plan) => {
-                    self.sequence_peek(ctx, plan, target_cluster).await;
+                    let max = Some(ctx.session().vars().max_query_result_size());
+                    self.sequence_peek(ctx, plan, target_cluster, max).await;
                 }
                 Plan::Subscribe(plan) => {
                     self.sequence_subscribe(ctx, plan, target_cluster).await;
@@ -308,7 +309,8 @@ impl Coordinator {
                     ctx.retire(Ok(Self::send_immediate_rows(plan.row)));
                 }
                 Plan::ShowColumns(show_columns_plan) => {
-                    self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster)
+                    let max = Some(ctx.session().vars().max_query_result_size());
+                    self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max)
                         .await;
                 }
                 Plan::CopyFrom(plan) => {
@@ -348,8 +350,7 @@ impl Coordinator {
                     ctx.retire(Ok(ExecuteResponse::AlteredObject(plan.object_type)));
                 }
                 Plan::AlterCluster(plan) => {
-                    let result = self.sequence_alter_cluster(ctx.session(), plan).await;
-                    ctx.retire(result);
+                    self.sequence_alter_cluster_staged(ctx, plan).await;
                 }
                 Plan::AlterClusterRename(plan) => {
                     let result = self
