@@ -13,6 +13,7 @@ import argparse
 
 from materialize.buildkite_insights.annotation_search import annotation_search_logic
 from materialize.buildkite_insights.annotation_search.buildkite_search_source import (
+    ANY_PIPELINE_VALUE,
     BuildkiteDataSource,
 )
 from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
@@ -31,7 +32,7 @@ if __name__ == "__main__":
         "pipeline",
         choices=MZ_PIPELINES,
         type=str,
-        help="Use * for all pipelines",
+        help=f"Use {ANY_PIPELINE_VALUE} for all pipelines",
     )
 
     parser.add_argument("pattern", type=str)
