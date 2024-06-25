@@ -26,7 +26,7 @@ use mz_controller_types::{
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
-use mz_ore::collections::HashSet;
+use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
@@ -145,6 +145,7 @@ use crate::session::vars;
 use crate::session::vars::{
     ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
 };
+use crate::{names, parse};
 
 mod connection;
 
@@ -3547,12 +3548,49 @@ generate_extracted_config!(
 /// The reverse of [`unplan_create_cluster`].
 pub fn plan_create_cluster(
     scx: &StatementContext,
+    stmt: CreateClusterStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let plan = plan_create_cluster_inner(scx, stmt)?;
+
+    // Roundtrip through unplan and make sure that we end up with the same plan.
+    if let CreateClusterVariant::Managed(_) = &plan.variant {
+        let stmt = unplan_create_cluster(scx, plan.clone())
+            .map_err(|e| PlanError::Replan(e.to_string()))?;
+        let create_sql = stmt.to_ast_string_stable();
+        let stmt = parse::parse(&create_sql)
+            .map_err(|e| PlanError::Replan(e.to_string()))?
+            .into_element()
+            .ast;
+        let (stmt, _resolved_ids) =
+            names::resolve(scx.catalog, stmt).map_err(|e| PlanError::Replan(e.to_string()))?;
+        let stmt = match stmt {
+            Statement::CreateCluster(stmt) => stmt,
+            stmt => {
+                return Err(PlanError::Replan(format!(
+                "replan does not match: plan={plan:?}, create_sql={create_sql:?}, stmt={stmt:?}"
+            )))
+            }
+        };
+        let replan =
+            plan_create_cluster_inner(scx, stmt).map_err(|e| PlanError::Replan(e.to_string()))?;
+        if plan != replan {
+            return Err(PlanError::Replan(format!(
+                "replan does not match: plan={plan:?}, replan={replan:?}"
+            )));
+        }
+    }
+
+    Ok(Plan::CreateCluster(plan))
+}
+
+pub fn plan_create_cluster_inner(
+    scx: &StatementContext,
     CreateClusterStatement {
         name,
         options,
         features,
     }: CreateClusterStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<CreateClusterPlan, PlanError> {
     let ClusterOptionExtracted {
         availability_zones,
         introspection_debugging,
@@ -3646,7 +3684,7 @@ pub fn plan_create_cluster(
 
         let schedule = plan_cluster_schedule(schedule)?;
 
-        Ok(Plan::CreateCluster(CreateClusterPlan {
+        Ok(CreateClusterPlan {
             name: normalize::ident(name),
             variant: CreateClusterVariant::Managed(CreateClusterManagedPlan {
                 replication_factor,
@@ -3657,7 +3695,7 @@ pub fn plan_create_cluster(
                 optimizer_feature_overrides,
                 schedule,
             }),
-        }))
+        })
     } else {
         let Some(replica_defs) = replicas else {
             sql_bail!("REPLICAS must be specified for unmanaged clusters");
@@ -3694,10 +3732,10 @@ pub fn plan_create_cluster(
             replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
         }
 
-        Ok(Plan::CreateCluster(CreateClusterPlan {
+        Ok(CreateClusterPlan {
             name: normalize::ident(name),
             variant: CreateClusterVariant::Unmanaged(CreateClusterUnmanagedPlan { replicas }),
-        }))
+        })
     }
 }
 

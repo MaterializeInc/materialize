@@ -478,24 +478,24 @@ pub struct CreateRolePlan {
     pub attributes: RoleAttributes,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CreateClusterPlan {
     pub name: String,
     pub variant: CreateClusterVariant,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum CreateClusterVariant {
     Managed(CreateClusterManagedPlan),
     Unmanaged(CreateClusterUnmanagedPlan),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CreateClusterUnmanagedPlan {
     pub replicas: Vec<(String, ReplicaConfig)>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CreateClusterManagedPlan {
     pub replication_factor: u32,
     pub size: String,
@@ -522,12 +522,12 @@ pub struct ComputeReplicaIntrospectionConfig {
     pub interval: Duration,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ComputeReplicaConfig {
     pub introspection: Option<ComputeReplicaIntrospectionConfig>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ReplicaConfig {
     Unorchestrated {
         storagectl_addrs: Vec<String>,
