@@ -25,3 +25,5 @@ CREATE TABLE scalability_framework_result (
    count INT,
    tps DOUBLE
 );
+
+CREATE INDEX pk_scalability_framework_result ON scalability_framework_result(build_job_id, framework_version, workload_name, workload_version, concurrency);

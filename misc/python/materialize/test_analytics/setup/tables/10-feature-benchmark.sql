@@ -26,3 +26,5 @@ CREATE TABLE feature_benchmark_result (
    memory_mz DOUBLE,
    memory_clusterd DOUBLE
 );
+
+CREATE INDEX pk_feature_benchmark_result ON feature_benchmark_result(build_job_id, framework_version, scenario_name, scenario_version, scale);

@@ -22,6 +22,8 @@ CREATE TABLE build_annotation (
    insert_date TIMESTAMPTZ NOT NULL
 );
 
+CREATE INDEX pk_build_annotation ON build_annotation(build_job_id, test_suite, test_retry_count);
+
 CREATE TABLE build_annotation_error (
    build_job_id TEXT NOT NULL,
    error_type TEXT NOT NULL,

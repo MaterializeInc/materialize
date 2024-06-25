@@ -28,3 +28,5 @@ CREATE TABLE build_job (
     aws_instance_type TEXT NOT NULL,
     remarks TEXT
 );
+
+CREATE INDEX pk_build_job ON build_job(build_job_id);

@@ -27,3 +27,5 @@ CREATE TABLE build (
    data_version UINT4 NOT NULL,
    remarks TEXT
 );
+
+CREATE INDEX pk_build ON build(build_id);
