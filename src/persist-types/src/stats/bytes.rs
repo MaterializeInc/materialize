@@ -102,7 +102,7 @@ impl RustType<ProtoFixedSizeBytesStats> for FixedSizeBytesStats {
     }
 }
 
-/// The type of data encoded in an [`PackedBytesStats`].
+/// The type of data encoded in an [`FixedSizeBytesStats`].
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FixedSizeBytesStatsKind {
