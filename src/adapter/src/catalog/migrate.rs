@@ -678,6 +678,20 @@ pub(crate) fn durable_migrate(
     catalog_fix_system_cluster_replica_ids_v_0_95_0(tx, boot_ts)?;
     catalog_rename_mz_introspection_cluster_v_0_103_0(tx, boot_ts)?;
     catalog_add_new_unstable_schemas_v_0_106_0(tx)?;
+    catalog_remove_pending_replicas(tx)?;
+    Ok(())
+}
+
+fn catalog_remove_pending_replicas(tx: &mut Transaction) -> Result<(), anyhow::Error> {
+    for replica in tx.get_cluster_replicas() {
+        if let mz_catalog::durable::ReplicaLocation::Managed { pending, .. } =
+            replica.config.location
+        {
+            if pending {
+                tx.remove_cluster_replica(replica.replica_id)?;
+            }
+        }
+    }
     Ok(())
 }
 

@@ -348,7 +348,7 @@ impl CatalogState {
         let id = cluster.replica_id(name).expect("Must exist");
         let replica = cluster.replica(id).expect("Must exist");
 
-        let (size, disk, az, internal) = match &replica.config.location {
+        let (size, disk, az, internal, pending) = match &replica.config.location {
             // TODO(guswynn): The column should be `availability_zones`, not
             // `availability_zone`.
             ReplicaLocation::Managed(ManagedReplicaLocation {
@@ -358,8 +358,14 @@ impl CatalogState {
                 disk,
                 billed_as: _,
                 internal,
-                pending: _,
-            }) => (Some(&**size), Some(*disk), Some(az.as_str()), *internal),
+                pending,
+            }) => (
+                Some(&**size),
+                Some(*disk),
+                Some(az.as_str()),
+                *internal,
+                *pending,
+            ),
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
                 availability_zones: _,
@@ -367,9 +373,9 @@ impl CatalogState {
                 disk,
                 billed_as: _,
                 internal,
-                pending: _,
-            }) => (Some(&**size), Some(*disk), None, *internal),
-            _ => (None, None, None, false),
+                pending,
+            }) => (Some(&**size), Some(*disk), None, *internal, *pending),
+            _ => (None, None, None, false, false),
         };
 
         let cluster_replica_update = BuiltinTableUpdate {
@@ -382,6 +388,7 @@ impl CatalogState {
                 Datum::from(az),
                 Datum::String(&replica.owner_id.to_string()),
                 Datum::from(disk),
+                Datum::from(pending),
             ]),
             diff,
         };

@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import time
 from textwrap import dedent
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
@@ -104,3 +105,171 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
             port="internal",
             user="mz_system",
         )
+
+    # Test graceful reconfiguration
+    # graceful reconfig test cases matrix
+    # - size change, no replica change
+    # - replica size up, no other change
+    # - replica size down, with size change
+    # - replica size down, no other change
+    # - replica size up, with size change
+    # Other assertions
+    # - no pending replicas after alter finishes
+    # - names should match r# patter, not end with `-pending`
+    mz.environmentd.sql(
+        "ALTER SYSTEM SET ENABLE_GRACEFUL_CLUSTER_RECONFIGURATION=true;",
+        port="internal",
+        user="mz_system",
+    )
+    try:
+
+        def assert_replica_names(names):
+            replicas = mz.environmentd.sql_query(
+                """
+                SELECT mz_cluster_replicas.name, mz_cluster_replicas.id, mz_cluster_replicas.pending_reconfiguration
+                FROM mz_cluster_replicas JOIN mz_clusters
+                ON mz_cluster_replicas.cluster_id = mz_clusters.id
+                WHERE mz_clusters.name = 'mzgracefultest' ORDER BY 1
+                """
+            )
+            assert [replica[0] for replica in replicas] == names
+            assert [
+                replica[2] for replica in replicas if replica[2] == True
+            ] == [], "There should be no pending replicas after cluster alter"
+
+        mz.environmentd.sql(
+            'CREATE CLUSTER mzgracefultest ( SIZE = "1" )',
+            port="internal",
+            user="mz_system",
+        )
+
+        mz.environmentd.sql(
+            """
+            ALTER CLUSTER mzgracefultest SET ( SIZE = '2' ) WITH ( WAIT FOR '1ms' )
+            """,
+            port="internal",
+            user="mz_system",
+        )
+        assert_replica_names(["r1"])
+
+        mz.environmentd.sql(
+            """
+            ALTER CLUSTER mzgracefultest SET ( SIZE = '1', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
+            """,
+            port="internal",
+            user="mz_system",
+        )
+        assert_replica_names(["r1", "r2"])
+
+        mz.environmentd.sql(
+            """
+            ALTER CLUSTER mzgracefultest SET ( SIZE = '1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
+            """,
+            port="internal",
+            user="mz_system",
+        )
+        assert_replica_names(["r1"])
+
+        mz.environmentd.sql(
+            """
+            ALTER CLUSTER mzgracefultest SET ( SIZE = '2', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
+            """,
+            port="internal",
+            user="mz_system",
+        )
+        assert_replica_names(["r1", "r2"])
+
+        mz.environmentd.sql(
+            """
+            ALTER CLUSTER mzgracefultest SET ( SIZE = '1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
+            """,
+            port="internal",
+            user="mz_system",
+        )
+        assert_replica_names(["r1"])
+
+    finally:
+        mz.environmentd.sql(
+            "ALTER SYSTEM RESET ENABLE_GRACEFUL_CLUSTER_RECONFIGURATION;",
+            port="internal",
+            user="mz_system",
+        )
+
+    from threading import Thread
+
+    mz.environmentd.sql(
+        """
+        ALTER SYSTEM SET enable_graceful_cluster_reconfiguration = true;
+
+        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+        DROP TABLE IF EXISTS t CASCADE;
+
+        CREATE CLUSTER cluster1 ( SIZE = '1');
+
+        SET CLUSTER = cluster1;
+
+        -- now let's give it another go with user-defined objects
+        CREATE TABLE t (a int);
+        CREATE DEFAULT INDEX ON t;
+        INSERT INTO t VALUES (42);
+        GRANT ALL ON CLUSTER cluster1 TO materialize;
+        """,
+        port="internal",
+        user="mz_system",
+    )
+
+    def gracefully_alter():
+        mz.environmentd.sql(
+            """
+            ALTER CLUSTER cluster1 SET (SIZE = '2') WITH ( WAIT FOR '5s')
+            """,
+            port="internal",
+            user="mz_system",
+        )
+
+    thread = Thread(target=gracefully_alter)
+    thread.start()
+    time.sleep(1)
+
+    assert (
+        mz.environmentd.sql_query(
+            """
+        SELECT mz_cluster_replicas.name, mz_cluster_replicas.pending_reconfiguration
+        FROM mz_cluster_replicas, mz_clusters WHERE
+        mz_cluster_replicas.cluster_id = mz_clusters.id AND mz_clusters.name='cluster1';
+        """
+        )
+        == (
+            ["r1", False],
+            ["r1-pending", True],
+        )
+    ), "Cluster should have pending replicas during alter"
+    assert (
+        mz.environmentd.sql_query(
+            """
+        SELECT size FROM mz_clusters WHERE name='cluster1';
+        """
+        )
+        == (["1"],)
+    ), "Cluster should use original config during alter"
+
+    thread.join()
+
+    assert (
+        mz.environmentd.sql_query(
+            """
+        SELECT mz_cluster_replicas.name, mz_cluster_replicas.pending_reconfiguration
+        FROM mz_cluster_replicas, mz_clusters WHERE
+        mz_cluster_replicas.cluster_id = mz_clusters.id AND mz_clusters.name='cluster1';
+        """
+        )
+        == (["r1", False],)
+    ), "No pending replicas should be present after alter completes"
+    assert (
+        mz.environmentd.sql_query(
+            """
+        SELECT size FROM mz_clusters WHERE name='cluster1';
+        """
+        )
+        == (["2"],)
+    ), "Cluster should use new config after alter completes"

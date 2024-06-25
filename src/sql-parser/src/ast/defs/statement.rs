@@ -1799,6 +1799,73 @@ pub struct ClusterOption<T: AstInfo> {
 }
 impl_display_for_with_option!(ClusterOption);
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ClusterAlterStrategyOptionName {
+    /// The `Wait` option.
+    Wait,
+}
+
+impl AstDisplay for ClusterAlterStrategyOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ClusterAlterStrategyOptionName::Wait => f.write_str("WAIT"),
+        }
+    }
+}
+
+impl WithOptionName for ClusterAlterStrategyOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            ClusterAlterStrategyOptionName::Wait => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ClusterAlterStrategyOptionValue {
+    For(Option<Value>),
+}
+
+impl AstDisplay for ClusterAlterStrategyOptionValue {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ClusterAlterStrategyOptionValue::For(duration) => {
+                if let Some(duration) = duration {
+                    f.write_str("FOR");
+                    f.write_node(duration);
+                }
+            }
+        }
+    }
+}
+
+impl WithOptionName for ClusterAlterStrategyOptionValue {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            ClusterAlterStrategyOptionValue::For(_) => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An option in a `ALTER CLUSTER... WITH` statement.
+pub struct ClusterAlterStrategyOption<T: AstInfo> {
+    pub name: ClusterAlterStrategyOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl_display_for_with_option!(ClusterAlterStrategyOption);
+
 // Note: the `AstDisplay` implementation and `Parser::parse_` method for this
 // enum are generated automatically by this crate's `build.rs`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1885,7 +1952,10 @@ impl_display_t!(ReplicaDefinition);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterClusterAction<T: AstInfo> {
-    SetOptions(Vec<ClusterOption<T>>),
+    SetOptions {
+        options: Vec<ClusterOption<T>>,
+        strategy: Vec<ClusterAlterStrategyOption<T>>,
+    },
     ResetOptions(Vec<ClusterOptionName>),
 }
 
@@ -1909,10 +1979,16 @@ impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
         f.write_node(&self.name);
         f.write_str(" ");
         match &self.action {
-            AlterClusterAction::SetOptions(options) => {
+            AlterClusterAction::SetOptions { options, strategy } => {
                 f.write_str("SET (");
                 f.write_node(&display::comma_separated(options));
                 f.write_str(")");
+                if !strategy.is_empty() {
+                    f.write_str(" WITH");
+                    f.write_str("(");
+                    f.write_node(&display::comma_separated(strategy));
+                    f.write_str(")");
+                }
             }
             AlterClusterAction::ResetOptions(options) => {
                 f.write_str("RESET (");
@@ -3555,6 +3631,7 @@ pub enum WithOptionValue<T: AstInfo> {
     RetainHistoryFor(Value),
     Refresh(RefreshOptionValue<T>),
     ClusterScheduleOptionValue(ClusterScheduleOptionValue),
+    ClusterAlterStrategy(ClusterAlterStrategyOptionValue),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -3579,7 +3656,8 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::UnresolvedItemName(_)
                 | WithOptionValue::ConnectionAwsPrivatelink(_)
                 | WithOptionValue::ClusterReplicas(_)
-                | WithOptionValue::ClusterScheduleOptionValue(_) => {
+                | WithOptionValue::ClusterScheduleOptionValue(_)
+                | WithOptionValue::ClusterAlterStrategy(_) => {
                     // These do not need redaction.
                 }
             }
@@ -3629,6 +3707,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             }
             WithOptionValue::Refresh(opt) => f.write_node(opt),
             WithOptionValue::ClusterScheduleOptionValue(value) => f.write_node(value),
+            WithOptionValue::ClusterAlterStrategy(value) => f.write_node(value),
         }
     }
 }

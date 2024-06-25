@@ -962,6 +962,7 @@ fn generate_rbac_requirements(
             id,
             name: _,
             options: _,
+            strategy: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Cluster(*id)],
             item_usage: &CREATE_ITEM_USAGE,

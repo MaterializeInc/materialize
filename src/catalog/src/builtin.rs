@@ -2552,7 +2552,8 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         // hasn't specified them.
         .with_column("availability_zone", ScalarType::String.nullable(true))
         .with_column("owner_id", ScalarType::String.nullable(false))
-        .with_column("disk", ScalarType::Bool.nullable(true)),
+        .with_column("disk", ScalarType::Bool.nullable(true))
+        .with_column("pending_reconfiguration", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });

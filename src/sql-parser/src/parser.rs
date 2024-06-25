@@ -3852,6 +3852,38 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_cluster_alter_with_option(
+        &mut self,
+    ) -> Result<ClusterAlterStrategyOption<Raw>, ParserError> {
+        let r: ClusterAlterStrategyOption<Raw>;
+        let option = self.expect_one_of_keywords(&[WAIT])?;
+        let _ = self.consume_token(&Token::Eq);
+
+        let name = match option {
+            WAIT => ClusterAlterStrategyOptionName::Wait,
+            _ => unreachable!(),
+        };
+        match name {
+            ClusterAlterStrategyOptionName::Wait => {
+                let inner_option = self.expect_one_of_keywords(&[FOR])?;
+                let _ = self.consume_token(&Token::Eq);
+                match inner_option {
+                    FOR => {
+                        r = ClusterAlterStrategyOption {
+                            name,
+                            value: Some(WithOptionValue::ClusterAlterStrategy(
+                                ClusterAlterStrategyOptionValue::For(Some(self.parse_value()?)),
+                            )),
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        Ok(r)
+    }
+
     fn parse_cluster_option_replicas(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
         self.expect_token(&Token::LParen)?;
@@ -4685,10 +4717,28 @@ impl<'a> Parser<'a> {
                     .map_parser_err(StatementKind::AlterCluster)?;
                 self.expect_token(&Token::RParen)
                     .map_parser_err(StatementKind::AlterCluster)?;
+                let alter_strategy_options = if self.parse_keyword(WITH) {
+                    self.expect_token(&Token::LParen)
+                        .map_parser_err(StatementKind::AlterCluster)?;
+                    let o = if matches!(self.peek_token(), Some(Token::RParen)) {
+                        vec![]
+                    } else {
+                        self.parse_comma_separated(Parser::parse_cluster_alter_with_option)
+                            .map_parser_err(StatementKind::AlterCluster)?
+                    };
+                    self.expect_token(&Token::RParen)
+                        .map_parser_err(StatementKind::AlterCluster)?;
+                    o
+                } else {
+                    vec![]
+                };
                 Ok(Statement::AlterCluster(AlterClusterStatement {
                     if_exists,
                     name,
-                    action: AlterClusterAction::SetOptions(options),
+                    action: AlterClusterAction::SetOptions {
+                        options,
+                        strategy: alter_strategy_options,
+                    },
                 }))
             }
             SWAP => {
