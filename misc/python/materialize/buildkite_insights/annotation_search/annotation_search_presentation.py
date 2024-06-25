@@ -8,9 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.buildkite_insights.annotation_search.annotation_match import (
-    AnnotationMatch,
-)
+from materialize.buildkite_insights.data.build_annotation import BuildAnnotation
 from materialize.buildkite_insights.data.build_info import Build
 from materialize.buildkite_insights.util.search_utility import (
     highlight_match,
@@ -36,7 +34,7 @@ def print_annotation_match(
     build_pipeline: str,
     branch: str,
     web_url: str,
-    annotation: AnnotationMatch,
+    annotation: BuildAnnotation,
     search_value: str,
     use_regex: bool,
     short_result_presentation: bool,
@@ -55,7 +53,7 @@ def print_annotation_match(
 
     if not short_result_presentation:
         matched_snippet = trim_match(
-            match_text=annotation.title_and_text,
+            match_text=annotation.content,
             search_value=search_value,
             use_regex=use_regex,
             one_line_match_presentation=one_line_match_presentation,

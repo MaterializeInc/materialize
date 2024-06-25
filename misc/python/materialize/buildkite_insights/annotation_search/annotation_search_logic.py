@@ -10,9 +10,6 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.buildkite_insights.annotation_search.annotation_match import (
-    AnnotationMatch,
-)
 from materialize.buildkite_insights.annotation_search.annotation_search_presentation import (
     print_annotation_match,
     print_before_search_results,
@@ -75,14 +72,14 @@ def search_annotations(
     annotations: list[BuildAnnotation],
     search_value: str,
     use_regex: bool,
-) -> list[AnnotationMatch]:
+) -> list[BuildAnnotation]:
     matched_annotations = []
 
     search_pattern = _search_value_to_pattern(search_value, use_regex)
     for annotation in annotations:
         if search_pattern.search(annotation.content) is not None:
             matched_annotations.append(
-                AnnotationMatch(annotation.title, annotation.content)
+                BuildAnnotation(title=annotation.title, content=annotation.content)
             )
 
     return matched_annotations
