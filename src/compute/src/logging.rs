@@ -43,6 +43,7 @@ where
 {
     /// Time in milliseconds of the current expressed capability.
     time_ms: Timestamp,
+    /// Pushes events to the logging dataflow.
     event_pusher: P,
     /// Each time is advanced to the strictly next millisecond that is a multiple of this interval.
     /// This means we should be able to perform the same action on timestamp capabilities, and only
@@ -67,6 +68,8 @@ where
         }
     }
 
+    /// Flushes the contents of the builder through the current time and sends
+    /// appropriate progress statements.
     fn flush_through(&mut self, time: &Duration) {
         let time_ms = ((time.as_millis() / self.interval_ms) + 1) * self.interval_ms;
         let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
@@ -86,6 +89,7 @@ where
         }
     }
 
+    /// Extracts and sends all messages that are ready to be sent.
     fn extract_and_send(&mut self) {
         while let Some(extracted) = self.builder.extract() {
             let extracted = std::mem::take(extracted);
@@ -102,7 +106,6 @@ where
 {
     fn push_into(&mut self, item: D) {
         self.builder.push_into(item);
-        self.extract_and_send();
     }
 }
 
@@ -112,9 +115,10 @@ where
     P: EventPusher<Timestamp, C>,
 {
     /// Publishes a batch of logged events and advances the capability.
-    fn push_container(&mut self, data: &mut C) {
+    fn publish_batch(&mut self, time: &Duration, data: &mut C) {
         self.builder.push_container(data);
         self.extract_and_send();
+        self.flush_through(time);
     }
 }
 

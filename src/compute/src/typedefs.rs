@@ -19,7 +19,7 @@ use differential_dataflow::trace::implementations::merge_batcher_col::Columnatio
 use differential_dataflow::trace::implementations::ord_neu::{FlatValSpine, OrdValBatch};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
-use mz_ore::flatcontainer::MzContainerized;
+use mz_ore::flatcontainer::MzRegionPreference;
 use mz_repr::Diff;
 use mz_storage_types::errors::DataflowError;
 use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
@@ -82,7 +82,7 @@ pub(crate) mod spines {
         type OffsetContainer = OffsetOptimized;
     }
 
-    /// A layout based on timely stacks
+    /// A layout based on flat container stacks
     pub struct MzFlatLayout<K, V, T, R> {
         phantom: std::marker::PhantomData<(K, V, T, R)>,
     }
@@ -104,6 +104,10 @@ pub(crate) mod spines {
         type Diff = R::Owned;
     }
 
+    /// Layout implementation for [`MzFlatLayout`]. Mostly equivalent to differential's
+    /// flat layout but with a different opinion for the offset container. Here, we use
+    /// [`OffsetOptimized`] instead of an offset list. If differential should gain access
+    /// to the optimized variant, we might be able to remove this implementation.
     impl<K, V, T, R> Layout for MzFlatLayout<K, V, T, R>
     where
         K: Region
@@ -187,10 +191,10 @@ pub type FlatKeyValBatch<K, V, T, R> = OrdValBatch<MzFlatLayout<K, V, T, R>>;
 pub type FlatKeyValSpine<K, V, T, R, C> =
     FlatValSpine<MzFlatLayout<K, V, T, R>, TupleABCRegion<TupleABRegion<K, V>, T, R>, C>;
 pub type FlatKeyValSpineDefault<K, V, T, R, C> = FlatKeyValSpine<
-    <K as MzContainerized>::Region,
-    <V as MzContainerized>::Region,
-    <T as MzContainerized>::Region,
-    <R as MzContainerized>::Region,
+    <K as MzRegionPreference>::Region,
+    <V as MzRegionPreference>::Region,
+    <T as MzRegionPreference>::Region,
+    <R as MzRegionPreference>::Region,
     C,
 >;
 pub type FlatKeyValAgent<K, V, T, R, C> = TraceAgent<FlatKeyValSpine<K, V, T, R, C>>;

@@ -16,7 +16,7 @@ use std::rc::Rc;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
-use mz_ore::flatcontainer::{MzContainerized, OwnedRegionMarker};
+use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, RowArena, SharedRow, Timestamp};
 use mz_timely_util::replay::MzReplay;
@@ -26,7 +26,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 
 use crate::extensions::arrange::{MzArrange, MzArrangeCore};
-use crate::logging::initialize::ReachabilityRegion;
+use crate::logging::initialize::ReachabilityEventRegion;
 use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog};
 use crate::typedefs::{FlatKeyValSpineDefault, RowRowSpine};
 
@@ -39,7 +39,7 @@ use crate::typedefs::{FlatKeyValSpineDefault, RowRowSpine};
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    event_queue: EventQueue<FlatStack<ReachabilityRegion>>,
+    event_queue: EventQueue<FlatStack<ReachabilityEventRegion>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_index = worker.index();
@@ -50,12 +50,12 @@ pub(super) fn construct<A: Allocate>(
         let enable_logging = config.enable_logging;
         type UpdatesKey = (
             bool,
-            OwnedRegionMarker<usize>,
+            OwnedRegionOpinion<Vec<usize>>,
             usize,
             usize,
             Option<Timestamp>,
         );
-        type UpdatesRegion = <((UpdatesKey, ()), Timestamp, Diff) as MzContainerized>::Region;
+        type UpdatesRegion = <((UpdatesKey, ()), Timestamp, Diff) as MzRegionPreference>::Region;
 
         type CB = CapacityContainerBuilder<FlatStack<UpdatesRegion>>;
         let (updates, token) = Some(event_queue.link).mz_replay::<_, CB, _>(

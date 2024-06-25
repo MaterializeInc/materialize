@@ -415,7 +415,7 @@ mod flatcontainer {
     use differential_dataflow::lattice::Lattice;
     use differential_dataflow::operators::arrange::Arranged;
     use differential_dataflow::trace::TraceReader;
-    use mz_ore::flatcontainer::MzContainerized;
+    use mz_ore::flatcontainer::MzRegionPreference;
     use timely::container::flatcontainer::{IntoOwned, Push, Region, ReserveItems};
     use timely::dataflow::Scope;
     use timely::progress::Timestamp;
@@ -428,7 +428,7 @@ mod flatcontainer {
     where
         Self: Clone,
         G: Scope<Timestamp = T::Owned>,
-        G::Timestamp: Lattice + Ord + MzContainerized,
+        G::Timestamp: Lattice + Ord + MzRegionPreference,
         K: Region
             + Clone
             + Push<<K as Region>::Owned>

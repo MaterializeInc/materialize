@@ -18,7 +18,7 @@
 use flatcontainer::{Push, Region, ReserveItems};
 
 /// Associate a type with a flat container region.
-pub trait MzContainerized: 'static {
+pub trait MzRegionPreference: 'static {
     /// The owned type of the container.
     type Owned;
     /// A region that can hold `Self`.
@@ -28,23 +28,23 @@ pub trait MzContainerized: 'static {
         + for<'a> ReserveItems<<Self::Region as Region>::ReadItem<'a>>;
 }
 
-/// Marker to indicate that the contents of a collection should be stored in an
+/// Opinion indicating that the contents of a collection should be stored in an
 /// [`OwnedRegion`](flatcontainer::OwnedRegion). This is most useful to force types to a region
 /// that doesn't copy individual elements to a nested region, like the
 /// [`SliceRegion`](flatcontainer::SliceRegion) does.
 #[derive(Debug)]
-pub struct OwnedRegionMarker<T>(std::marker::PhantomData<T>);
+pub struct OwnedRegionOpinion<T>(std::marker::PhantomData<T>);
 
 mod tuple {
     use flatcontainer::impls::tuple::*;
     use paste::paste;
 
-    use crate::flatcontainer::MzContainerized;
+    use crate::flatcontainer::MzRegionPreference;
 
     macro_rules! tuple_flatcontainer {
         ($($name:ident)+) => (
             paste! {
-                impl<$($name: MzContainerized),*> MzContainerized for ($($name,)*) {
+                impl<$($name: MzRegionPreference),*> MzRegionPreference for ($($name,)*) {
                     type Owned = ($($name::Owned,)*);
                     type Region = [<Tuple $($name)* Region >]<$($name::Region,)*>;
                 }
@@ -62,11 +62,11 @@ mod tuple {
 mod copy {
     use flatcontainer::MirrorRegion;
 
-    use crate::flatcontainer::MzContainerized;
+    use crate::flatcontainer::MzRegionPreference;
 
     macro_rules! implement_for {
         ($index_type:ty) => {
-            impl MzContainerized for $index_type {
+            impl MzRegionPreference for $index_type {
                 type Owned = Self;
                 type Region = MirrorRegion<Self>;
             }
@@ -107,15 +107,15 @@ mod copy {
 mod vec {
     use flatcontainer::OwnedRegion;
 
-    use crate::flatcontainer::{MzContainerized, OwnedRegionMarker};
+    use crate::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
 
-    impl<T: Clone + 'static> MzContainerized for OwnedRegionMarker<T> {
+    impl<T: Clone + 'static> MzRegionPreference for OwnedRegionOpinion<Vec<T>> {
         type Owned = Vec<T>;
         type Region = OwnedRegion<T>;
     }
 }
 
-impl<T: MzContainerized> MzContainerized for Option<T> {
+impl<T: MzRegionPreference> MzRegionPreference for Option<T> {
     type Owned = <flatcontainer::OptionRegion<T::Region> as Region>::Owned;
     type Region = flatcontainer::OptionRegion<T::Region>;
 }

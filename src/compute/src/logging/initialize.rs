@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use differential_dataflow::logging::DifferentialEvent;
 use differential_dataflow::Collection;
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
-use mz_ore::flatcontainer::{MzContainerized, OwnedRegionMarker};
+use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
 use mz_repr::{Diff, Timestamp};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
@@ -78,13 +78,16 @@ pub fn initialize<A: Allocate + 'static>(
 }
 
 /// Type to specify the region for holding reachability events. Only intended to be interpreted
-/// as [`MzContainerized`].
-type ReachabilityEvent = (
-    OwnedRegionMarker<usize>,
-    OwnedRegionMarker<(usize, usize, bool, Option<Timestamp>, Diff)>,
+/// as [`MzRegionPreference`].
+type ReachabilityEventRegionPreference = (
+    OwnedRegionOpinion<Vec<usize>>,
+    OwnedRegionOpinion<Vec<(usize, usize, bool, Option<Timestamp>, Diff)>>,
 );
-pub(super) type ReachabilityRegion =
-    <(Duration, WorkerIdentifier, ReachabilityEvent) as MzContainerized>::Region;
+pub(super) type ReachabilityEventRegion = <(
+    Duration,
+    WorkerIdentifier,
+    ReachabilityEventRegionPreference,
+) as MzRegionPreference>::Region;
 
 struct LoggingContext<'a, A: Allocate> {
     worker: &'a mut timely::worker::Worker<A>,
@@ -93,7 +96,7 @@ struct LoggingContext<'a, A: Allocate> {
     now: Instant,
     start_offset: Duration,
     t_event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, TimelyEvent)>>,
-    r_event_queue: EventQueue<FlatStack<ReachabilityRegion>>,
+    r_event_queue: EventQueue<FlatStack<ReachabilityEventRegion>>,
     d_event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, DifferentialEvent)>>,
     c_event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
@@ -173,8 +176,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             self.start_offset,
             self.worker.index(),
             move |time, data| {
-                logger.push_container(data);
-                logger.flush_through(time);
+                logger.publish_batch(time, data);
                 event_queue.activator.activate();
             },
         )
@@ -182,11 +184,10 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
 
     fn reachability_logger(&self) -> Logger<TrackerEvent> {
         let event_queue = self.r_event_queue.clone();
-        let mut logger =
-            BatchLogger::<CapacityContainerBuilder<FlatStack<ReachabilityRegion>>, _>::new(
-                event_queue.link,
-                self.interval_ms,
-            );
+        let mut logger = BatchLogger::<
+            CapacityContainerBuilder<FlatStack<ReachabilityEventRegion>>,
+            _,
+        >::new(event_queue.link, self.interval_ms);
         Logger::new(
             self.now,
             self.start_offset,
@@ -205,6 +206,8 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                             ));
 
                             logger.push_into((time, worker, (update.tracker_id, &massaged)));
+                            logger.extract_and_send();
+                            massaged.clear();
                         }
                         TrackerEvent::TargetUpdate(update) => {
                             massaged.extend(update.updates.iter().map(
@@ -216,9 +219,10 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                             ));
 
                             logger.push_into((time, worker, (update.tracker_id, &massaged)));
+                            logger.extract_and_send();
+                            massaged.clear();
                         }
                     }
-                    massaged.clear();
                 }
                 logger.flush_through(time);
                 event_queue.activator.activate();
