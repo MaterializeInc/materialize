@@ -1384,7 +1384,7 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
 class ManyKafkaSourcesOnSameCluster(Scenario):
     """Measure the time it takes to ingest data from many Kafka sources"""
 
-    SCALE = 2  # 100 sources
+    SCALE = 2.5  # 316 sources
     FIXED_SCALE = True
 
     COUNT_SOURCE_ENTRIES = 100000
