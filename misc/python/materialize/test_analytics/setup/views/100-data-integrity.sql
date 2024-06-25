@@ -61,4 +61,8 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     FROM build_job
     GROUP BY build_id, build_step_key, shard_index
     HAVING sum(CASE WHEN is_latest_retry THEN 1 ELSE 0 END) > 1
+    UNION
+    SELECT 'build', build_id, NULL, 'build without build jobs'
+    FROM build
+    WHERE NOT EXISTS (SELECT 1 FROM build_job WHERE build_id = build.build_id)
 ;
