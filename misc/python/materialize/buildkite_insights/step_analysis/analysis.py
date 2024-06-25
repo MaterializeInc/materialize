@@ -13,7 +13,7 @@ import argparse
 
 import pandas as pd
 
-from materialize.buildkite_insights.annotation_search.annotation_search_source import (
+from materialize.buildkite_insights.annotation_search.buildkite_search_source import (
     ANY_BRANCH_VALUE,
 )
 from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES

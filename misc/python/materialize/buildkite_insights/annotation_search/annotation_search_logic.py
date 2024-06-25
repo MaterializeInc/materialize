@@ -18,8 +18,8 @@ from materialize.buildkite_insights.annotation_search.annotation_search_presenta
     print_before_search_results,
     print_summary,
 )
-from materialize.buildkite_insights.annotation_search.annotation_search_source import (
-    AnnotationSearchSource,
+from materialize.buildkite_insights.annotation_search.buildkite_search_source import (
+    BuildkiteDataSource,
 )
 from materialize.buildkite_insights.buildkite_api.generic_api import RateLimitExceeded
 from materialize.buildkite_insights.data.build_annotation import BuildAnnotation
@@ -31,7 +31,7 @@ from materialize.buildkite_insights.util.search_utility import (
 
 def search_build(
     build: Build,
-    search_source: AnnotationSearchSource,
+    search_source: BuildkiteDataSource,
     search_value: str,
     use_regex: bool,
     max_entries_to_print: int,
@@ -91,7 +91,7 @@ def search_annotations(
 def start_search(
     pipeline_slug: str,
     branch: str,
-    search_source: AnnotationSearchSource,
+    search_source: BuildkiteDataSource,
     max_results: int,
     only_one_result_per_build: bool,
     pattern: str,

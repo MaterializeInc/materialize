@@ -10,10 +10,6 @@
 import re
 from typing import Any
 
-from materialize.buildkite_insights.annotation_search.annotation_search_source import (
-    ANY_PIPELINE_VALUE,
-    AnnotationSearchSource,
-)
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_COMPLETED_BUILD_STATES,
     BUILDKITE_FAILED_BUILD_STATES,
@@ -28,8 +24,11 @@ from materialize.buildkite_insights.util.build_step_utils import (
     extract_build_step_outcomes,
 )
 
+ANY_PIPELINE_VALUE = "*"
+ANY_BRANCH_VALUE = "*"
 
-class BuildkiteDataSource(AnnotationSearchSource):
+
+class BuildkiteDataSource:
 
     def __init__(
         self,
