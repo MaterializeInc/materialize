@@ -430,7 +430,11 @@ impl ReduceBuilder {
                     predicates.push(
                         class[0]
                             .clone()
-                            .call_binary(expr.clone(), mz_expr::BinaryFunc::Eq),
+                            .call_binary(expr.clone(), mz_expr::BinaryFunc::Eq)
+                            .or(class[0]
+                                .clone()
+                                .call_is_null()
+                                .and(expr.clone().call_is_null())),
                     );
                 }
             }

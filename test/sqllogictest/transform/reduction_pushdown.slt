@@ -87,3 +87,45 @@ Source materialize.public.y
 Target cluster: quickstart
 
 EOF
+
+## Regression test for https://github.com/MaterializeInc/materialize/issues/27702
+statement ok
+CREATE TABLE t1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE TABLE t2 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE TABLE t3 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE MATERIALIZED VIEW pk1 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t1 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
+
+statement ok
+CREATE MATERIALIZED VIEW pk2 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t2 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
+
+statement ok
+CREATE MATERIALIZED VIEW pk3 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t3 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
+
+query T multiline
+EXPLAIN
+SELECT FROM(SELECT) a JOIN(t2 JOIN pk1 ON NULL) ON(NULL) UNION SELECT FROM(SELECT AVG(a.f2) f2 FROM t2 a RIGHT JOIN t2 USING(f1) WHERE a.f2 IS NULL) a WHERE NULLIF(a.f2, 1) NOT IN(SELECT c FROM(SELECT 0 c FROM pk1 JOIN(SELECT f2 FROM pk1) b ON NULLIF(b.f2, b.f2) < b.f2) d);
+----
+Explained Query:
+  Distinct project=[]
+    Union
+      Negate
+        Distinct project=[]
+          Project ()
+            Filter (case when (#1 = #1) then null else #1 end < #1)
+              ReadStorage materialize.public.pk1
+      Constant
+        - ()
+
+Source materialize.public.t2
+Source materialize.public.pk1
+  filter=((case when (#1 = #1) then null else #1 end < #1))
+
+Target cluster: quickstart
+
+EOF
