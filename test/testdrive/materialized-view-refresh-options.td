@@ -9,9 +9,8 @@
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_refresh_every_mvs = true
-
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_cluster_schedule_refresh = true
+ALTER SYSTEM SET enable_unstable_dependencies = true
 
 > CREATE DATABASE materialized_view_refresh_options;
 > SET DATABASE = materialized_view_refresh_options;
@@ -621,6 +620,48 @@ true <null>
   WHERE mv.id = mvr.materialized_view_id AND name = 'mv1';
 8000
 
+# Negative test for `mz_hydration_statuses`, a regression test for #25518.
+#
+# It's hard to observe the bug before the first hydration, so we make the first
+# hydration quick to just get it over with, and then we make the next hydration
+# slow, and try to catch the bug there.
+
+> CREATE CLUSTER cluster_to_be_bricked SIZE = '1', REPLICATION FACTOR = 1;
+> CREATE TABLE t6 (a int);
+> INSERT INTO t6 VALUES (1);
+> CREATE MATERIALIZED VIEW mv_long_hydration
+  IN CLUSTER cluster_to_be_bricked
+  WITH (REFRESH EVERY '1 day') AS
+  SELECT mz_unsafe.mz_sleep(a)
+  FROM t6;
+
+# Wait for the first rehydration to complete
+> SELECT * FROM mv_long_hydration;
+<null>
+
+> SELECT hydrated
+  FROM mz_internal.mz_hydration_statuses JOIN mz_materialized_views ON (object_id = id)
+  WHERE name = 'mv_long_hydration';
+true
+
+# Make the next rehydration take 1000000 ms.
+> INSERT INTO t6 VALUES (1000000);
+
+# Restart the cluster to force a rehydration.
+> ALTER CLUSTER cluster_to_be_bricked SET (REPLICATION FACTOR 0);
+> ALTER CLUSTER cluster_to_be_bricked SET (REPLICATION FACTOR 1);
+
+# Give the following hydration status query some time to wrongly turn to true if there is a bug.
+> SELECT mz_unsafe.mz_sleep(3);
+<null>
+
+> SELECT hydrated
+  FROM mz_internal.mz_hydration_statuses JOIN mz_materialized_views ON (object_id = id)
+  WHERE name = 'mv_long_hydration';
+false
+
+> DROP MATERIALIZED VIEW mv_long_hydration;
+
 # ----------------------------------------
 # Cleanup
 # ----------------------------------------
@@ -632,3 +673,4 @@ true <null>
 > DROP CLUSTER c_schedule_6;
 > DROP CLUSTER c_schedule_7;
 > DROP CLUSTER cluster_no_replica;
+> DROP CLUSTER cluster_to_be_bricked;
