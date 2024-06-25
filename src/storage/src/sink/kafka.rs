@@ -1014,7 +1014,14 @@ async fn determine_sink_progress(
         // beyond the high water mark. To make this invariant easy to check, do
         // not use `break` in the body of the loop.
         let mut last_progress: Option<ProgressRecord> = None;
-        while get_position()? < hi {
+        loop {
+            let current_position = get_position()?;
+
+            if current_position >= hi {
+                // consumer is at or beyond the high water mark and has read enough messages
+                break;
+            }
+
             let message = match progress_client_read_committed.poll(progress_record_fetch_timeout) {
                 Some(Ok(message)) => message,
                 Some(Err(KafkaError::PartitionEOF(_))) => {
@@ -1028,7 +1035,7 @@ async fn determine_sink_progress(
                 None => {
                     bail!(
                         "timed out while waiting to reach high water mark of non-empty \
-                         topic {progress_topic}:{partition}, lo/hi: {lo}/{hi}"
+                        topic {progress_topic}:{partition}, lo/hi: {lo}/{hi}, current position: {current_position}"
                     );
                 }
             };
