@@ -432,6 +432,13 @@ pub static MAX_POSTGRES_CONNECTIONS: VarDefinition = VarDefinition::new(
     false,
 );
 
+pub static MAX_MYSQL_CONNECTIONS: VarDefinition = VarDefinition::new(
+    "max_mysql_connections",
+    value!(u32; 1000),
+    "The maximum number of MySQL connections in the region, across all schemas (Materialize).",
+    false,
+);
+
 pub static MAX_AWS_PRIVATELINK_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_aws_privatelink_connections",
     value!(u32; 0),
@@ -1980,13 +1987,6 @@ feature_flags!(
         default: false,
         internal: true,
         enable_for_item_parsing: true,
-    },
-    {
-        name: enable_mysql_source,
-        desc: "Create a MySQL connection or source",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: false,
     },
     {
         name: enable_load_generator_key_value,

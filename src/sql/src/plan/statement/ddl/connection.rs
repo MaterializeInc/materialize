@@ -387,8 +387,6 @@ impl ConnectionOptionExtracted {
                 },
             }),
             CreateConnectionType::MySql => {
-                scx.require_feature_flag(&crate::session::vars::ENABLE_MYSQL_SOURCE)?;
-
                 let cert = self.ssl_certificate;
                 let key = self.ssl_key.map(|secret| secret.into());
                 let tls_identity = match (cert, key) {

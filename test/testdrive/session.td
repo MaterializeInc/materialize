@@ -48,6 +48,7 @@ max_databases                       1000                    "The maximum number 
 max_identifier_length               255                     "The maximum length of object identifiers in bytes (PostgreSQL)."
 max_kafka_connections               1000                    "The maximum number of Kafka connections in the region, across all schemas (Materialize)."
 max_materialized_views              100                     "The maximum number of materialized views in the region, across all schemas (Materialize)."
+max_mysql_connections               1000                    "The maximum number of MySQL connections in the region, across all schemas (Materialize)."
 max_objects_per_schema              1000                    "The maximum number of objects in a schema (Materialize)."
 max_postgres_connections            1000                    "The maximum number of PostgreSQL connections in the region, across all schemas (Materialize)."
 max_query_result_size               "1GB"                   "The maximum size in bytes for a single query's result (Materialize)."

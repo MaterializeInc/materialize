@@ -299,7 +299,6 @@ def initialize(c: Composition, create_source: bool = True) -> None:
         "configure-toxiproxy.td",
         "configure-mysql.td",
         "populate-tables.td",
-        "configure-materialize.td",
     )
 
     if create_source:
