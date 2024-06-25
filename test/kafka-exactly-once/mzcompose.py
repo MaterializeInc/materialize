@@ -8,16 +8,12 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
+    Redpanda(),
     Materialized(),
     Testdrive(),
 ]
@@ -32,7 +28,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.up("zookeeper", "kafka", "schema-registry", "materialized")
+    c.up("redpanda", "materialized")
     c.run_testdrive_files(
         f"--seed={args.seed}",
         "--kafka-option=group.id=group1",

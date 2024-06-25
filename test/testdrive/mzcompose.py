@@ -12,18 +12,12 @@ from pathlib import Path
 from materialize import ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.redpanda import Redpanda
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
     Redpanda(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Materialized(external_minio=True),
@@ -80,10 +74,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     (args, passthrough_args) = parser.parse_known_args()
 
     dependencies = ["fivetran-destination", "minio", "materialized"]
-    if args.redpanda:
-        dependencies += ["redpanda"]
-    else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+    dependencies += ["redpanda"]
 
     testdrive = Testdrive(
         forward_buildkite_shard=True,

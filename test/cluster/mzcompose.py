@@ -28,22 +28,17 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
+    Redpanda(),
     Localstack(),
     Cockroach(setup_materialize=True),
     Clusterd(name="clusterd1"),
@@ -55,7 +50,6 @@ SERVICES = [
         propagate_crashes=False,
         external_cockroach=True,
     ),
-    Redpanda(),
     Toxiproxy(),
     Testdrive(
         volume_workdir="../testdrive:/workdir/testdrive",
@@ -93,7 +87,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "localstack")
+    c.up("redpanda", "localstack")
     c.up("materialized")
 
     # Create a cluster and verify that tests pass.
@@ -1300,7 +1294,7 @@ def workflow_test_upsert(c: Composition) -> None:
         Testdrive(default_timeout="30s", no_reset=True, consistent_seed=True),
     ):
         c.down(destroy_volumes=True)
-        c.up("materialized", "zookeeper", "kafka", "schema-registry")
+        c.up("materialized", "redpanda")
 
         c.run_testdrive_files("upsert/01-create-sources.td")
         # Sleep to make sure the errors have made it to persist.
@@ -1328,9 +1322,7 @@ def workflow_test_remote_storage(c: Composition) -> None:
             "materialized",
             "clusterd1",
             "clusterd2",
-            "zookeeper",
-            "kafka",
-            "schema-registry",
+            "redpanda",
         )
 
         c.run_testdrive_files("storage/01-create-sources.td")
@@ -1427,7 +1419,7 @@ def workflow_sink_failure(c: Composition) -> None:
             environment_extra=["FAILPOINTS=kafka_sink_creation_error=return"],
         ),
     ):
-        c.up("materialized", "zookeeper", "kafka", "schema-registry", "storage")
+        c.up("materialized", "redpanda", "storage")
 
         c.run_testdrive_files("sink-failure/01-configure-sinks.td")
         c.run_testdrive_files("sink-failure/02-ensure-sink-down.td")

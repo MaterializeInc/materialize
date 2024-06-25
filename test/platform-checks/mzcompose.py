@@ -29,7 +29,6 @@ from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.postgres import Postgres
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
@@ -85,7 +84,6 @@ SERVICES = [
             "./kafka.jaas.config:/etc/kafka/jaas.config",
         ],
     ),
-    SchemaRegistry(),
     Debezium(),
     Clusterd(
         name="clusterd_compute_1"
@@ -130,7 +128,6 @@ def setup(c: Composition) -> None:
         "test-certs",
         "zookeeper",
         "kafka",
-        "schema-registry",
         "postgres",
         "mysql",
         "debezium",

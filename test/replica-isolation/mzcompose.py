@@ -17,17 +17,13 @@ from pg8000 import Cursor  # type: ignore
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
+    Redpanda(),
     Localstack(),
     Materialized(
         additional_system_parameter_defaults={
@@ -403,7 +399,7 @@ def workflow_default(c: Composition) -> None:
     and then making sure that the cluster continues to operate properly
     """
 
-    c.up("zookeeper", "kafka", "schema-registry", "localstack")
+    c.up("redpanda", "localstack")
     for id, disruption in enumerate(disruptions):
         run_test(c, disruption, id)
 

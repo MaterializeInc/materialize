@@ -19,14 +19,12 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.frontegg import FronteggMock
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
 
 
@@ -177,7 +175,7 @@ class KafkaTopics(Generator):
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn
                 FOR CONFLUENT SCHEMA REGISTRY
-                URL '${testdrive.schema-registry-url}';
+                URL 'http://redpanda:8081';
                 """
         )
 
@@ -232,7 +230,7 @@ class KafkaSourcesSameTopic(Generator):
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
-            URL '${testdrive.schema-registry-url}';
+            URL 'http://redpanda:8081';
             """
         )
 
@@ -285,7 +283,7 @@ class KafkaPartitions(Generator):
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
-            URL '${testdrive.schema-registry-url}';
+            URL 'http://redpanda:8081';
             """
         )
 
@@ -342,7 +340,7 @@ class KafkaRecordsEnvelopeNone(Generator):
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
-            URL '${testdrive.schema-registry-url}';
+            URL 'http://redpanda:8081';
             """
         )
 
@@ -392,7 +390,7 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
-            URL '${testdrive.schema-registry-url}';
+            URL 'http://redpanda:8081';
             """
         )
 
@@ -445,7 +443,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
-            URL '${testdrive.schema-registry-url}';
+            URL 'http://redpanda:8081';
             """
         )
 
@@ -496,7 +494,7 @@ class KafkaSinks(Generator):
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
-            URL '${testdrive.schema-registry-url}';
+            URL 'http://redpanda:8081';
             """
         )
 
@@ -545,7 +543,7 @@ class KafkaSinksSameSource(Generator):
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);"""
         )
         print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}');"""
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://redpanda:8081');"""
         )
 
         for i in cls.all():
@@ -1551,11 +1549,9 @@ def app_password(email: str) -> str:
 
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
+    Redpanda(),
     Postgres(max_wal_senders=Generator.COUNT, max_replication_slots=Generator.COUNT),
     MySql(),
-    SchemaRegistry(),
     # We create all sources, sinks and dataflows by default with SIZE '1'
     # The workflow_instance_size workflow is testing multi-process clusters
     Testdrive(
@@ -1642,9 +1638,7 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     c.up(
-        "zookeeper",
-        "kafka",
-        "schema-registry",
+        "redpanda",
         "postgres",
         "mysql",
         "materialized",
@@ -1757,9 +1751,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
     c.up("testdrive", persistent=True)
     c.up(
-        "zookeeper",
-        "kafka",
-        "schema-registry",
+        "redpanda",
         "materialized",
         "balancerd",
         "frontegg-mock",
@@ -1884,7 +1876,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
                          > CREATE CONNECTION IF NOT EXISTS csr_conn
                            FOR CONFLUENT SCHEMA REGISTRY
-                           URL '${{testdrive.schema-registry-url}}';
+                           URL 'http://redpanda:8081';
 
                          > CREATE SOURCE s_{cluster_name}
                            IN CLUSTER single_replica_cluster

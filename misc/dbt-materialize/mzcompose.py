@@ -118,7 +118,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         env_extra={
                             "DBT_HOST": "materialized",
                             "KAFKA_ADDR": "redpanda:9092",
-                            "SCHEMA_REGISTRY_URL": "http://schema-registry:8081",
+                            "SCHEMA_REGISTRY_URL": "http://redpanda:8081",
                             **test_case.dbt_env,
                         },
                     )

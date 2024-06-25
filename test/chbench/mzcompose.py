@@ -15,17 +15,13 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.debezium import Debezium
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metabase import Metabase
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
-from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.mzcompose.services.redpanda import Redpanda
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(auto_create_topics=True),
-    SchemaRegistry(),
+    Redpanda(),
     Debezium(),
     MySql(root_password="rootpw"),
     Materialized(),
@@ -63,7 +59,7 @@ def workflow_no_load(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("materialized")
 
     # Start MySQL and Debezium.
-    c.up("zookeeper", "kafka", "schema-registry", "mysql", "debezium")
+    c.up("redpanda", "mysql", "debezium")
 
     # Generate initial data.
     c.run(
@@ -86,7 +82,7 @@ def workflow_no_load(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "database.password": "rootpw",
                 "database.server.name": "debezium",
                 "database.server.id": "1234",
-                "database.history.kafka.bootstrap.servers": "kafka:9092",
+                "database.history.kafka.bootstrap.servers": "redpanda:9092",
                 "database.history.kafka.topic": "mysql-history",
                 "database.allowPublicKeyRetrieval": "true",
                 "time.precision.mode": "connect",

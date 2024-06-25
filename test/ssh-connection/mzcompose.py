@@ -8,21 +8,15 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
     Materialized(),
     Testdrive(consistent_seed=True),
     SshBastionHost(),
@@ -49,10 +43,7 @@ def workflow_basic_ssh_features(c: Composition, redpanda: bool = False) -> None:
     c.down()
 
     dependencies = ["materialized", "ssh-bastion-host"]
-    if redpanda:
-        dependencies += ["redpanda"]
-    else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+    dependencies += ["redpanda"]
     c.up(*dependencies)
 
     c.run_testdrive_files("ssh-connections.td")
@@ -187,10 +178,7 @@ def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
     with c.override(SshBastionHost(max_startups="2")):
 
         dependencies = ["materialized", "ssh-bastion-host"]
-        if redpanda:
-            dependencies += ["redpanda"]
-        else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["redpanda"]
         c.up(*dependencies)
 
         c.run_testdrive_files("setup.td")
@@ -229,10 +217,7 @@ def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> No
     with c.override(SshBastionHost(max_startups="2")):
 
         dependencies = ["materialized", "ssh-bastion-host"]
-        if redpanda:
-            dependencies += ["redpanda"]
-        else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["redpanda"]
         c.up(*dependencies)
 
         c.run_testdrive_files("setup.td")
@@ -274,10 +259,7 @@ def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
     with c.override(SshBastionHost(max_startups="2")):
 
         dependencies = ["materialized", "ssh-bastion-host"]
-        if redpanda:
-            dependencies += ["redpanda"]
-        else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["redpanda"]
         c.up(*dependencies)
 
         c.run_testdrive_files("setup.td")
@@ -308,10 +290,7 @@ def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
 def workflow_hidden_hosts(c: Composition, redpanda: bool = False) -> None:
     c.down()
     dependencies = ["materialized", "ssh-bastion-host"]
-    if redpanda:
-        dependencies += ["redpanda"]
-    else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+    dependencies += ["redpanda"]
     c.up(*dependencies)
 
     c.run_testdrive_files("setup.td")
@@ -343,7 +322,6 @@ def workflow_hidden_hosts(c: Composition, redpanda: bool = False) -> None:
         )
 
     add_hidden_host("kafka")
-    add_hidden_host("schema-registry")
 
     c.run_testdrive_files("--no-reset", "hidden-hosts.td")
 

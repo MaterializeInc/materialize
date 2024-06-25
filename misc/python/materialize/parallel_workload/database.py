@@ -987,10 +987,10 @@ class Database:
         print("Creating connections")
 
         exe.execute(
-            "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"
+            "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER 'redpanda:9092', SECURITY PROTOCOL PLAINTEXT"
         )
         exe.execute(
-            "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'"
+            "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://redpanda:8081'"
         )
 
         exe.execute("CREATE SECRET pgpass AS 'postgres'")

@@ -16,19 +16,15 @@ import requests
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import UIError
 
 testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(auto_create_topics=True),
-    SchemaRegistry(),
+    Redpanda(auto_create_topics=True),
     Materialized(),
     Testdrive(
         entrypoint_extra=[
@@ -184,12 +180,10 @@ def workflow_audit_log(c: Composition) -> None:
 # Test for GitHub issue #13726
 def workflow_timelines(c: Composition) -> None:
     for _ in range(3):
-        c.up("zookeeper", "kafka", "schema-registry", "materialized")
+        c.up("redpanda", "materialized")
         c.run_testdrive_files("timelines.td")
         c.rm(
-            "zookeeper",
-            "kafka",
-            "schema-registry",
+            "redpanda",
             "materialized",
             destroy_volumes=True,
         )
@@ -437,7 +431,7 @@ def workflow_drop_materialize_database(c: Composition) -> None:
 
 
 def workflow_bound_size_mz_status_history(c: Composition) -> None:
-    c.up("zookeeper", "kafka", "schema-registry", "materialized")
+    c.up("redpanda", "materialized")
     c.up("testdrive_no_reset", persistent=True)
 
     c.testdrive(
@@ -450,7 +444,7 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
               TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
             > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
-                URL '${testdrive.schema-registry-url}'
+                URL 'http://redpanda:8081'
               );
 
             > CREATE SOURCE kafka_source

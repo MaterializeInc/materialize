@@ -21,27 +21,18 @@ from materialize.data_ingest.workload import *  # noqa: F401 F403
 from materialize.data_ingest.workload import WORKLOADS, execute_workload
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
-from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.mzcompose.services.redpanda import Redpanda
 
 SERVICES = [
     Postgres(),
     MySql(),
-    Zookeeper(),
-    Kafka(
+    Redpanda(
         auto_create_topics=False,
-        ports=["30123:30123"],
-        allow_host_ports=True,
-        environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
-        ],
+        ports=[30123],
     ),
-    SchemaRegistry(),
     # Fixed port so that we keep the same port after restarting Mz in disruptions
     Materialized(
         ports=["16875:6875"],
@@ -79,9 +70,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     services = (
         "materialized",
-        "zookeeper",
-        "kafka",
-        "schema-registry",
+        "redpanda",
         "postgres",
         "mysql",
     )
@@ -92,12 +81,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """CREATE CONNECTION IF NOT EXISTS kafka_conn
-               FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"""
+               FOR KAFKA BROKER 'redpanda:9092', SECURITY PROTOCOL PLAINTEXT"""
         )
         cur.execute(
             """CREATE CONNECTION IF NOT EXISTS csr_conn
                FOR CONFLUENT SCHEMA REGISTRY
-               URL 'http://schema-registry:8081'"""
+               URL 'http://redpanda:8081'"""
         )
     conn.autocommit = False
     conn.close()

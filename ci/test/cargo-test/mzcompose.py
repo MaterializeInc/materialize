@@ -15,27 +15,18 @@ from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import Postgres
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
-from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(
+    Redpanda(
         # We need a stable port to advertise, so pick one that is unlikely to
         # conflict with a Kafka cluster running on the local machine.
-        ports=["30123:30123"],
-        allow_host_ports=True,
-        environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
-        ],
+        ports=[30123],
     ),
-    SchemaRegistry(),
     Postgres(image="postgres:14.2"),
     Cockroach(),
     Minio(
@@ -57,7 +48,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--miri-fast", action="store_true")
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
-    c.up("zookeeper", "kafka", "schema-registry", "postgres", "cockroach", "minio")
+    c.up("redpanda", "postgres", "cockroach", "minio")
     # Heads up: this intentionally runs on the host rather than in a Docker
     # image. See #13010.
     postgres_url = (
@@ -69,7 +60,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         os.environ,
         ZOOKEEPER_ADDR=f"localhost:{c.default_port('zookeeper')}",
         KAFKA_ADDRS="localhost:30123",
-        SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
         POSTGRES_URL=postgres_url,
         COCKROACH_URL=cockroach_url,
         MZ_SOFT_ASSERTIONS="1",

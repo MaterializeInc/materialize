@@ -31,13 +31,13 @@ def schema() -> str:
 
 
 SERVICES = [
-    Redpanda(),
     Materialized(),
     Testdrive(),
     Clusterd(),
     Postgres(),
     Zookeeper(),
     Kafka(),
+    Redpanda(),
     SchemaRegistry(),
 ]
 
@@ -173,7 +173,7 @@ class KafkaDisruption:
                   );
 
                 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
-                  URL '${testdrive.schema-registry-url}'
+                  URL 'http://redpanda:8081'
                   );
 
                 $ kafka-create-topic topic=source-topic
@@ -287,7 +287,7 @@ class KafkaSinkDisruption:
                   );
 
                 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
-                  URL '${testdrive.schema-registry-url}'
+                  URL 'http://redpanda:8081'
                   );
 
                 $ kafka-create-topic topic=source-topic
