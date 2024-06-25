@@ -65,4 +65,9 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     SELECT 'build', build_id, NULL, 'build without build jobs'
     FROM build
     WHERE NOT EXISTS (SELECT 1 FROM build_job WHERE build_id = build.build_id)
+    UNION
+    SELECT 'build_annotation', build_job_id, NULL, 'build job with multiple annotation entries'
+    FROM build_annotation
+    GROUP BY build_job_id
+    HAVING count(*) > 1
 ;
