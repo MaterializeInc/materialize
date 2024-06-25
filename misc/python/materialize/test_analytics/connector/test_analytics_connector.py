@@ -102,7 +102,7 @@ class DatabaseConnector:
 
         last_executed_sql = self.update_statements[0]
 
-        print("--- Updates to test analytics database")
+        print("~~~ Updates to test analytics database")
 
         try:
             if self._use_transaction:
