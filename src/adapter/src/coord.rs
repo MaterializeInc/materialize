@@ -106,13 +106,12 @@ use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
-use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::{spawn, JoinHandle};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::{soft_assert_or_log, soft_panic_or_log, stack};
+use mz_ore::{instrument, soft_assert_or_log, soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
@@ -277,7 +276,6 @@ pub enum Message<T = mz_repr::Timestamp> {
         stage: SubscribeStage,
     },
     IntrospectionSubscribeStageReady {
-        ctx: ExecuteContext,
         span: Span,
         stage: IntrospectionSubscribeStage,
     },
@@ -945,26 +943,51 @@ pub(crate) enum StageResult<T> {
     HandleRetire(JoinHandle<Result<ExecuteResponse, AdapterError>>),
     /// The next stage is immediately ready and will execute.
     Immediate(T),
-    /// The finaly stage was executed and is ready to respond to the client.
+    /// The final stage was executed and is ready to respond to the client.
     Response(ExecuteResponse),
 }
 
 /// Common functionality for [Coordinator::sequence_staged].
 pub(crate) trait Staged: Send {
+    type Ctx: StagedContext;
+
     fn validity(&mut self) -> &mut PlanValidity;
 
     /// Returns the next stage or final result.
     async fn stage(
         self,
         coord: &mut Coordinator,
-        ctx: &mut ExecuteContext,
+        ctx: &mut Self::Ctx,
     ) -> Result<StageResult<Box<Self>>, AdapterError>;
 
     /// Prepares a message for the Coordinator.
-    fn message(self, ctx: ExecuteContext, span: Span) -> Message;
+    fn message(self, ctx: Self::Ctx, span: Span) -> Message;
 
     /// Whether it is safe to SQL cancel this stage.
     fn cancel_enabled(&self) -> bool;
+}
+
+pub trait StagedContext {
+    fn retire(self, result: Result<ExecuteResponse, AdapterError>);
+    fn session(&self) -> Option<&Session>;
+}
+
+impl StagedContext for ExecuteContext {
+    fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
+        self.retire(result);
+    }
+
+    fn session(&self) -> Option<&Session> {
+        Some(self.session())
+    }
+}
+
+impl StagedContext for () {
+    fn retire(self, _result: Result<ExecuteResponse, AdapterError>) {}
+
+    fn session(&self) -> Option<&Session> {
+        None
+    }
 }
 
 /// Configures a coordinator.

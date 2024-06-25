@@ -53,6 +53,8 @@ use crate::ReadHolds;
 use crate::{catalog, AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider};
 
 impl Staged for CreateMaterializedViewStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             Self::Optimize(stage) => &mut stage.validity,

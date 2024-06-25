@@ -37,6 +37,8 @@ use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
 
 impl Staged for CreateIndexStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             Self::Optimize(stage) => &mut stage.validity,
@@ -53,7 +55,7 @@ impl Staged for CreateIndexStage {
         match self {
             CreateIndexStage::Optimize(stage) => coord.create_index_optimize(stage).await,
             CreateIndexStage::Finish(stage) => {
-                coord.create_index_finish(ctx.session_mut(), stage).await
+                coord.create_index_finish(ctx.session(), stage).await
             }
             CreateIndexStage::Explain(stage) => {
                 coord.create_index_explain(ctx.session(), stage).await
@@ -410,7 +412,7 @@ impl Coordinator {
     #[instrument]
     async fn create_index_finish(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         CreateIndexFinish {
             exported_index_id,
             plan:

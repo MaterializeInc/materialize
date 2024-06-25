@@ -29,6 +29,8 @@ use crate::session::{RequireLinearization, Session};
 use crate::{CollectionIdBundle, ExecuteContext, TimelineContext, TimestampExplanation};
 
 impl Staged for ExplainTimestampStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             ExplainTimestampStage::Optimize(stage) => &mut stage.validity,

@@ -41,10 +41,8 @@ use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{Params, Plan, SubscribePlan};
-use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{RoleMetadata, MZ_SYSTEM_ROLE_ID};
 use mz_storage_client::controller::IntrospectionType;
-use tokio::sync::{mpsc, oneshot};
 use tracing::{info, Span};
 
 use crate::coord::{
@@ -53,9 +51,7 @@ use crate::coord::{
     StageResult, Staged,
 };
 use crate::optimize::Optimize;
-use crate::session::Session;
-use crate::util::ClientTransmitter;
-use crate::{optimize, AdapterError, ExecuteContext, ExecuteContextExtra, ExecuteResponse};
+use crate::{optimize, AdapterError, ExecuteResponse};
 
 // State tracked about an active introspection subscribe.
 #[derive(Debug, Clone)]
@@ -138,21 +134,6 @@ impl Coordinator {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
     ) {
-        let (tx, rx) = oneshot::channel();
-        let client_tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-        let ctx = ExecuteContext::from_parts(
-            client_tx,
-            self.internal_cmd_tx.clone(),
-            Session::dummy(),
-            Default::default(),
-        );
-
-        // If we just dropped the response `rx`, the coordinator would fail to send the response
-        // at the end of sequencing and proceed with trying to terminate the client connection,
-        // which would panic since there is no actual client connection. To prevent this we make
-        // sure that the `rx` gets properly drained.
-        mz_ore::task::spawn(|| "introspection-subscribe-response-drain", rx);
-
         let catalog = self.catalog().for_system_session();
         let plan = spec.to_plan(&catalog).expect("valid spec");
 
@@ -174,12 +155,11 @@ impl Coordinator {
             plan,
             subscribe_id,
         });
-        self.sequence_staged(ctx, Span::current(), stage).await;
+        self.sequence_staged((), Span::current(), stage).await;
     }
 
     fn sequence_introspection_subscribe_optimize_mir(
         &mut self,
-        session: &Session,
         stage: IntrospectionSubscribeOptimizeMir,
     ) -> Result<StageResult<Box<IntrospectionSubscribeStage>>, AdapterError> {
         let IntrospectionSubscribeOptimizeMir {
@@ -201,7 +181,7 @@ impl Coordinator {
             compute_instance,
             view_id,
             subscribe_id,
-            session.conn_id().clone(),
+            None,
             plan.with_snapshot,
             None,
             format!("introspection-subscribe-{subscribe_id}"),
@@ -440,6 +420,8 @@ impl Coordinator {
 }
 
 impl Staged for IntrospectionSubscribeStage {
+    type Ctx = ();
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             Self::OptimizeMir(stage) => &mut stage.validity,
@@ -451,12 +433,10 @@ impl Staged for IntrospectionSubscribeStage {
     async fn stage(
         self,
         coord: &mut Coordinator,
-        ctx: &mut ExecuteContext,
+        _ctx: &mut (),
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
-            Self::OptimizeMir(stage) => {
-                coord.sequence_introspection_subscribe_optimize_mir(ctx.session(), stage)
-            }
+            Self::OptimizeMir(stage) => coord.sequence_introspection_subscribe_optimize_mir(stage),
             Self::TimestampOptimizeLir(stage) => {
                 coord.sequence_introspection_subscribe_timestamp_optimize_lir(stage)
             }
@@ -464,12 +444,8 @@ impl Staged for IntrospectionSubscribeStage {
         }
     }
 
-    fn message(self, ctx: ExecuteContext, span: Span) -> super::Message {
-        Message::IntrospectionSubscribeStageReady {
-            ctx,
-            span,
-            stage: self,
-        }
+    fn message(self, _ctx: (), span: Span) -> super::Message {
+        Message::IntrospectionSubscribeStageReady { span, stage: self }
     }
 
     fn cancel_enabled(&self) -> bool {

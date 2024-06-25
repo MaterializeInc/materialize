@@ -22,7 +22,7 @@ use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{soft_assert_no_log, task};
+use mz_ore::{soft_assert_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
@@ -184,11 +184,10 @@ impl Coordinator {
                     self.sequence_staged(ctx, span, stage).await;
                 }
                 Message::IntrospectionSubscribeStageReady {
-                    ctx,
                     span,
                     stage,
                 } => {
-                    self.sequence_staged(ctx, span, stage).await;
+                    self.sequence_staged((), span, stage).await;
                 }
                 Message::ExplainTimestampStageReady {
                     ctx,

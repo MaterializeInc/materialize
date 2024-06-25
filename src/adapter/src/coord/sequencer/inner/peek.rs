@@ -58,6 +58,8 @@ use crate::session::{RequireLinearization, Session, TransactionOps, TransactionS
 use crate::statement_logging::StatementLifecycleEvent;
 
 impl Staged for PeekStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             PeekStage::LinearizeTimestamp(stage) => &mut stage.validity,
