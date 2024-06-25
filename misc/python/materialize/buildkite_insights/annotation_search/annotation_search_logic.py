@@ -54,10 +54,7 @@ def search_build(
             break
 
         print_annotation_match(
-            build.number,
-            build.pipeline,
-            build.branch,
-            build.web_url,
+            build,
             annotation,
             search_value=search_value,
             use_regex=use_regex,

@@ -30,10 +30,7 @@ def print_before_search_results() -> None:
 
 
 def print_annotation_match(
-    build_number: str,
-    build_pipeline: str,
-    branch: str,
-    web_url: str,
+    build: Build,
     annotation: BuildAnnotation,
     search_value: str,
     use_regex: bool,
@@ -42,11 +39,11 @@ def print_annotation_match(
 ) -> None:
     print(
         with_formatting(
-            f"Match in build #{build_number} (pipeline {build_pipeline} on {branch}):",
+            f"Match in build #{build.number} (pipeline {build.pipeline} on {build.branch}):",
             STYLE_BOLD,
         )
     )
-    print(f"URL: {with_formatting(web_url, COLOR_CYAN)}")
+    print(f"URL: {with_formatting(build.web_url, COLOR_CYAN)}")
 
     if annotation.title is not None:
         print(f"Annotation: {with_formatting(annotation.title, COLOR_CYAN)}")
