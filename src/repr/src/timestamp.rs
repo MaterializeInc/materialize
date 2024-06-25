@@ -461,11 +461,13 @@ impl columnation::Columnation for Timestamp {
 }
 
 mod flatcontainer {
-    use flatcontainer::{Containerized, IntoOwned, MirrorRegion};
+    use flatcontainer::{IntoOwned, MirrorRegion};
+    use mz_ore::flatcontainer::MzRegionPreference;
 
     use crate::Timestamp;
 
-    impl Containerized for Timestamp {
+    impl MzRegionPreference for Timestamp {
+        type Owned = Self;
         type Region = MirrorRegion<Timestamp>;
     }
 

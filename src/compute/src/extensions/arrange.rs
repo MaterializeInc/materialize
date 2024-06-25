@@ -415,9 +415,8 @@ mod flatcontainer {
     use differential_dataflow::lattice::Lattice;
     use differential_dataflow::operators::arrange::Arranged;
     use differential_dataflow::trace::TraceReader;
-    use differential_dataflow::Data;
-    use std::fmt::Debug;
-    use timely::container::flatcontainer::{Containerized, IntoOwned, Push, Region, ReserveItems};
+    use mz_ore::flatcontainer::MzRegionPreference;
+    use timely::container::flatcontainer::{IntoOwned, Push, Region, ReserveItems};
     use timely::dataflow::Scope;
     use timely::progress::Timestamp;
     use timely::PartialOrder;
@@ -428,46 +427,42 @@ mod flatcontainer {
     impl<G, K, V, T, R, C> ArrangementSize for Arranged<G, FlatKeyValAgent<K, V, T, R, C>>
     where
         Self: Clone,
-        G: Scope<Timestamp = T>,
-        G::Timestamp: Lattice + Ord + Containerized,
-        K: Data + Containerized,
-        K::Region: Clone
-            + Region<Owned = K>
-            + Push<K>
-            + for<'a> Push<<K::Region as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<K::Region as Region>::ReadItem<'a>>,
-        for<'a> <K::Region as Region>::ReadItem<'a>: Copy + Debug + Ord,
-        V: Data + Containerized,
-        V::Region: Clone
-            + Push<V>
-            + for<'a> Push<<V::Region as Region>::ReadItem<'a>>
-            + Region<Owned = V>
-            + for<'a> ReserveItems<<V::Region as Region>::ReadItem<'a>>,
-        for<'a> <V::Region as Region>::ReadItem<'a>: Copy + Debug + Ord,
-        T: Containerized
-            + Lattice
-            + for<'a> PartialOrder<<T::Region as Region>::ReadItem<'a>>
-            + Timestamp,
-        T::Region: Clone
-            + Push<T>
-            + for<'a> Push<<T::Region as Region>::ReadItem<'a>>
-            + Region<Owned = T>
-            + for<'a> ReserveItems<<T::Region as Region>::ReadItem<'a>>,
-        for<'a> <T::Region as Region>::ReadItem<'a>:
-            Copy + Debug + IntoOwned<'a, Owned = T> + Ord + PartialOrder<T>,
-        R: Containerized
-            + Default
-            + Ord
-            + Semigroup
-            + for<'a> Semigroup<<R::Region as Region>::ReadItem<'a>>
+        G: Scope<Timestamp = T::Owned>,
+        G::Timestamp: Lattice + Ord + MzRegionPreference,
+        K: Region
+            + Clone
+            + Push<<K as Region>::Owned>
+            + for<'a> Push<<K as Region>::ReadItem<'a>>
+            + for<'a> ReserveItems<<K as Region>::ReadItem<'a>>
             + 'static,
-        R::Region: Clone
-            + Push<R>
-            + for<'a> Push<&'a R>
-            + for<'a> Push<<R::Region as Region>::ReadItem<'a>>
-            + Region<Owned = R>
-            + for<'a> ReserveItems<<R::Region as Region>::ReadItem<'a>>,
-        for<'a> <R::Region as Region>::ReadItem<'a>: Copy + Debug + IntoOwned<'a, Owned = R> + Ord,
+        V: Region
+            + Clone
+            + Push<<V as Region>::Owned>
+            + for<'a> Push<<V as Region>::ReadItem<'a>>
+            + for<'a> ReserveItems<<V as Region>::ReadItem<'a>>
+            + 'static,
+        T: Region
+            + Clone
+            + Push<<T as Region>::Owned>
+            + for<'a> Push<<T as Region>::ReadItem<'a>>
+            + for<'a> ReserveItems<<T as Region>::ReadItem<'a>>
+            + 'static,
+        R: Region
+            + Clone
+            + Push<<R as Region>::Owned>
+            + for<'a> Push<&'a <R as Region>::Owned>
+            + for<'a> Push<<R as Region>::ReadItem<'a>>
+            + for<'a> ReserveItems<<R as Region>::ReadItem<'a>>
+            + 'static,
+        K::Owned: Clone + Ord,
+        V::Owned: Clone + Ord,
+        T::Owned: Lattice + for<'a> PartialOrder<<T as Region>::ReadItem<'a>> + Timestamp,
+        R::Owned:
+            Default + Ord + Semigroup + for<'a> Semigroup<<R as Region>::ReadItem<'a>> + 'static,
+        for<'a> <K as Region>::ReadItem<'a>: Copy + Ord,
+        for<'a> <V as Region>::ReadItem<'a>: Copy + Ord,
+        for<'a> <T as Region>::ReadItem<'a>: Copy + IntoOwned<'a> + Ord + PartialOrder<T::Owned>,
+        for<'a> <R as Region>::ReadItem<'a>: Copy + IntoOwned<'a, Owned = R::Owned> + Ord,
         C: 'static,
     {
         fn log_arrangement_size(self) -> Self {

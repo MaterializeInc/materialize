@@ -15,13 +15,14 @@ mod initialize;
 mod reachability;
 mod timely;
 
+use ::timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto, SizableContainer};
+use ::timely::Container;
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
-use ::timely::logging::WorkerIdentifier;
 use ::timely::progress::Timestamp as TimelyTimestamp;
 use ::timely::scheduling::Activator;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
@@ -35,79 +36,48 @@ use crate::typedefs::RowRowAgent;
 pub use crate::logging::initialize::initialize;
 
 /// Logs events as a timely stream, with progress statements.
-struct BatchLogger<T, E, P>
+struct BatchLogger<CB, P>
 where
-    P: EventPusher<Timestamp, Vec<(Duration, E, T)>>,
+    CB: ContainerBuilder,
+    P: EventPusher<Timestamp, CB::Container>,
 {
     /// Time in milliseconds of the current expressed capability.
     time_ms: Timestamp,
+    /// Pushes events to the logging dataflow.
     event_pusher: P,
-    _phantom: ::std::marker::PhantomData<(E, T)>,
     /// Each time is advanced to the strictly next millisecond that is a multiple of this interval.
     /// This means we should be able to perform the same action on timestamp capabilities, and only
     /// flush buffers when this timestamp advances.
-    interval_ms: u64,
+    interval_ms: u128,
     /// A stash for data that does not yet need to be sent.
-    buffer: Vec<(Duration, E, T)>,
+    builder: CB,
 }
 
-impl<T, E, P> BatchLogger<T, E, P>
+impl<CB, P> BatchLogger<CB, P>
 where
-    P: EventPusher<Timestamp, Vec<(Duration, E, T)>>,
+    CB: ContainerBuilder,
+    P: EventPusher<Timestamp, CB::Container>,
 {
-    /// Batch size in bytes for batches
-    const BATCH_SIZE_BYTES: usize = 1 << 13;
-
-    /// Calculate the default buffer size based on `(Duration, E, T)` tuples.
-    fn buffer_capacity() -> usize {
-        let size = ::std::mem::size_of::<(Duration, E, T)>();
-        if size == 0 {
-            Self::BATCH_SIZE_BYTES
-        } else if size <= Self::BATCH_SIZE_BYTES {
-            Self::BATCH_SIZE_BYTES / size
-        } else {
-            1
-        }
-    }
-
     /// Creates a new batch logger.
-    fn new(event_pusher: P, interval_ms: u64) -> Self {
+    fn new(event_pusher: P, interval_ms: u128) -> Self {
         BatchLogger {
             time_ms: Timestamp::minimum(),
             event_pusher,
-            _phantom: ::std::marker::PhantomData,
             interval_ms,
-            buffer: Vec::with_capacity(Self::buffer_capacity()),
+            builder: CB::default(),
         }
     }
 
-    /// Publishes a batch of logged events and advances the capability.
-    fn publish_batch(&mut self, time: &Duration, data: &mut Vec<(Duration, E, T)>) {
-        // TODO(benesch): avoid dangerous `as` conversion.
-        #[allow(clippy::as_conversions)]
-        let new_time_ms = Timestamp::try_from(
-            (((time.as_millis() as u64) / self.interval_ms) + 1) * self.interval_ms,
-        )
-        .expect("must fit");
-        if !data.is_empty() {
-            // If we don't need to grow our buffer, move
-            if data.len() > self.buffer.capacity() - self.buffer.len() {
-                self.event_pusher.push(Event::Messages(
-                    self.time_ms,
-                    self.buffer.drain(..).collect(),
-                ));
-            }
-
-            self.buffer.append(data);
-        }
+    /// Flushes the contents of the builder through the current time and sends
+    /// appropriate progress statements.
+    fn flush_through(&mut self, time: &Duration) {
+        let time_ms = ((time.as_millis() / self.interval_ms) + 1) * self.interval_ms;
+        let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
         if self.time_ms < new_time_ms {
-            // Flush buffered events that may need to advance.
-            self.event_pusher.push(Event::Messages(
-                self.time_ms,
-                self.buffer.drain(..).collect(),
-            ));
-            if self.buffer.capacity() > Self::buffer_capacity() {
-                self.buffer = Vec::with_capacity(Self::buffer_capacity())
+            while let Some(finished) = self.builder.finish() {
+                let finished = std::mem::take(finished);
+                self.event_pusher
+                    .push(Event::Messages(self.time_ms, finished));
             }
 
             // In principle we can buffer up until this point, if that is appealing to us.
@@ -115,13 +85,47 @@ where
             // here, as the forward ticks would be that much less frequent.
             self.event_pusher
                 .push(Event::Progress(vec![(new_time_ms, 1), (self.time_ms, -1)]));
+            self.time_ms = new_time_ms;
         }
-        self.time_ms = new_time_ms;
+    }
+
+    /// Extracts and sends all messages that are ready to be sent.
+    fn extract_and_send(&mut self) {
+        while let Some(extracted) = self.builder.extract() {
+            let extracted = std::mem::take(extracted);
+            self.event_pusher
+                .push(Event::Messages(self.time_ms, extracted));
+        }
     }
 }
-impl<T, E, P> Drop for BatchLogger<T, E, P>
+
+impl<CB, P, D> PushInto<D> for BatchLogger<CB, P>
 where
-    P: EventPusher<Timestamp, Vec<(Duration, E, T)>>,
+    CB: ContainerBuilder + PushInto<D>,
+    P: EventPusher<Timestamp, CB::Container>,
+{
+    fn push_into(&mut self, item: D) {
+        self.builder.push_into(item);
+    }
+}
+
+impl<C, P> BatchLogger<CapacityContainerBuilder<C>, P>
+where
+    C: SizableContainer,
+    P: EventPusher<Timestamp, C>,
+{
+    /// Publishes a batch of logged events and advances the capability.
+    fn publish_batch(&mut self, time: &Duration, data: &mut C) {
+        self.builder.push_container(data);
+        self.extract_and_send();
+        self.flush_through(time);
+    }
+}
+
+impl<CB, P> Drop for BatchLogger<CB, P>
+where
+    CB: ContainerBuilder,
+    P: EventPusher<Timestamp, CB::Container>,
 {
     fn drop(&mut self) {
         self.event_pusher
@@ -134,12 +138,12 @@ where
 /// This is just a bundle-type intended to make passing around its contents in the logging
 /// initialization code more convenient.
 #[derive(Clone)]
-struct EventQueue<E> {
-    link: Rc<EventLink<Timestamp, Vec<(Duration, WorkerIdentifier, E)>>>,
+struct EventQueue<C> {
+    link: Rc<EventLink<Timestamp, C>>,
     activator: RcActivator,
 }
 
-impl<E> EventQueue<E> {
+impl<C> EventQueue<C> {
     fn new(name: &str) -> Self {
         let activator_name = format!("{name}_activator");
         let activate_after = 128;

@@ -16,11 +16,13 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::implementations::merge_batcher_col::ColumnationMerger;
-use differential_dataflow::trace::implementations::ord_neu::OrdValBatch;
+use differential_dataflow::trace::implementations::ord_neu::{FlatValSpine, OrdValBatch};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
+use mz_ore::flatcontainer::MzRegionPreference;
 use mz_repr::Diff;
 use mz_storage_types::errors::DataflowError;
+use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
 use timely::dataflow::ScopeParent;
 
 pub use crate::row_spine::{RowRowSpine, RowSpine, RowValSpine};
@@ -30,9 +32,8 @@ pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
 pub(crate) mod spines {
     use std::rc::Rc;
 
-    use differential_dataflow::trace::implementations::chunker::ContainerChunker;
-    use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-    use differential_dataflow::trace::implementations::merge_batcher_flat::FlatcontainerMerger;
+    use differential_dataflow::difference::Semigroup;
+    use differential_dataflow::lattice::Lattice;
     use differential_dataflow::trace::implementations::ord_neu::{
         OrdKeyBatch, OrdKeyBuilder, OrdValBatch, OrdValBuilder,
     };
@@ -41,7 +42,8 @@ pub(crate) mod spines {
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_timely_util::containers::stack::StackWrapper;
     use timely::container::columnation::{Columnation, TimelyStack};
-    use timely::container::flatcontainer::{Containerized, FlatStack, Push, Region};
+    use timely::container::flatcontainer::{FlatStack, Push, Region};
+    use timely::progress::Timestamp;
 
     use crate::row_spine::OffsetOptimized;
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
@@ -80,56 +82,66 @@ pub(crate) mod spines {
         type OffsetContainer = OffsetOptimized;
     }
 
-    /// A layout based on timely stacks
-    pub struct MzFlatLayout<U: Update> {
-        phantom: std::marker::PhantomData<U>,
+    /// A layout based on flat container stacks
+    pub struct MzFlatLayout<K, V, T, R> {
+        phantom: std::marker::PhantomData<(K, V, T, R)>,
     }
 
-    impl<U: Update> Layout for MzFlatLayout<U>
+    impl<K, V, T, R> Update for MzFlatLayout<K, V, T, R>
     where
-        U::Key: Containerized,
-        for<'a> <U::Key as Containerized>::Region:
-            Push<U::Key> + Push<<<U::Key as Containerized>::Region as Region>::ReadItem<'a>>,
-        for<'a> <<U::Key as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-        U::Val: Containerized,
-        for<'a> <U::Val as Containerized>::Region:
-            Push<U::Val> + Push<<<U::Val as Containerized>::Region as Region>::ReadItem<'a>>,
-        for<'a> <<U::Val as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-        U::Time: Containerized,
-        <U::Time as Containerized>::Region: Region<Owned = U::Time>,
-        for<'a> <U::Time as Containerized>::Region:
-            Push<U::Time> + Push<<<U::Time as Containerized>::Region as Region>::ReadItem<'a>>,
-        for<'a> <<U::Time as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
-        U::Diff: Containerized,
-        <U::Diff as Containerized>::Region: Region<Owned = U::Diff>,
-        for<'a> <U::Diff as Containerized>::Region:
-            Push<U::Diff> + Push<<<U::Diff as Containerized>::Region as Region>::ReadItem<'a>>,
-        for<'a> <<U::Diff as Containerized>::Region as Region>::ReadItem<'a>: Copy + Ord,
+        K: Region,
+        V: Region,
+        T: Region,
+        R: Region,
+        K::Owned: Ord + Clone + 'static,
+        V::Owned: Ord + Clone + 'static,
+        T::Owned: Ord + Clone + Lattice + Timestamp + 'static,
+        R::Owned: Ord + Semigroup + 'static,
     {
-        type Target = U;
-        type KeyContainer = FlatStack<<U::Key as Containerized>::Region>;
-        type ValContainer = FlatStack<<U::Val as Containerized>::Region>;
-        type TimeContainer = FlatStack<<U::Time as Containerized>::Region>;
-        type DiffContainer = FlatStack<<U::Diff as Containerized>::Region>;
+        type Key = K::Owned;
+        type Val = V::Owned;
+        type Time = T::Owned;
+        type Diff = R::Owned;
+    }
+
+    /// Layout implementation for [`MzFlatLayout`]. Mostly equivalent to differential's
+    /// flat layout but with a different opinion for the offset container. Here, we use
+    /// [`OffsetOptimized`] instead of an offset list. If differential should gain access
+    /// to the optimized variant, we might be able to remove this implementation.
+    impl<K, V, T, R> Layout for MzFlatLayout<K, V, T, R>
+    where
+        K: Region
+            + Push<<K as Region>::Owned>
+            + for<'a> Push<<K as Region>::ReadItem<'a>>
+            + 'static,
+        V: Region
+            + Push<<V as Region>::Owned>
+            + for<'a> Push<<V as Region>::ReadItem<'a>>
+            + 'static,
+        T: Region
+            + Push<<T as Region>::Owned>
+            + for<'a> Push<<T as Region>::ReadItem<'a>>
+            + 'static,
+        R: Region
+            + Push<<R as Region>::Owned>
+            + for<'a> Push<<R as Region>::ReadItem<'a>>
+            + 'static,
+        K::Owned: Ord + Clone + 'static,
+        V::Owned: Ord + Clone + 'static,
+        T::Owned: Ord + Clone + Lattice + Timestamp + 'static,
+        R::Owned: Ord + Semigroup + 'static,
+        for<'a> K::ReadItem<'a>: Copy + Ord,
+        for<'a> V::ReadItem<'a>: Copy + Ord,
+        for<'a> T::ReadItem<'a>: Copy + Ord,
+        for<'a> R::ReadItem<'a>: Copy + Ord,
+    {
+        type Target = Self;
+        type KeyContainer = FlatStack<K>;
+        type ValContainer = FlatStack<V>;
+        type TimeContainer = FlatStack<T>;
+        type DiffContainer = FlatStack<R>;
         type OffsetContainer = OffsetOptimized;
     }
-
-    /// A trace implementation backed by flatcontainer storage.
-    pub type FlatValSpine<K, V, T, R, C> = Spine<
-        Rc<OrdValBatch<MzFlatLayout<((K, V), T, R)>>>,
-        MergeBatcher<
-            C,
-            ContainerChunker<FlatStack<<((K, V), T, R) as Containerized>::Region>>,
-            FlatcontainerMerger<T, R, <((K, V), T, R) as Containerized>::Region>,
-            T,
-        >,
-        RcBuilder<
-            OrdValBuilder<
-                MzFlatLayout<((K, V), T, R)>,
-                FlatStack<<((K, V), T, R) as Containerized>::Region>,
-            >,
-        >,
-    >;
 }
 
 // Spines are data structures that collect and maintain updates.
@@ -175,8 +187,16 @@ pub type KeyValBatcher<K, V, T, D> = MergeBatcher<
     T,
 >;
 
-pub type FlatKeyValBatch<K, V, T, R> = OrdValBatch<MzFlatLayout<((K, V), T, R)>>;
-pub type FlatKeyValSpine<K, V, T, R, C> = spines::FlatValSpine<K, V, T, R, C>;
+pub type FlatKeyValBatch<K, V, T, R> = OrdValBatch<MzFlatLayout<K, V, T, R>>;
+pub type FlatKeyValSpine<K, V, T, R, C> =
+    FlatValSpine<MzFlatLayout<K, V, T, R>, TupleABCRegion<TupleABRegion<K, V>, T, R>, C>;
+pub type FlatKeyValSpineDefault<K, V, T, R, C> = FlatKeyValSpine<
+    <K as MzRegionPreference>::Region,
+    <V as MzRegionPreference>::Region,
+    <T as MzRegionPreference>::Region,
+    <R as MzRegionPreference>::Region,
+    C,
+>;
 pub type FlatKeyValAgent<K, V, T, R, C> = TraceAgent<FlatKeyValSpine<K, V, T, R, C>>;
 pub type FlatKeyValEnter<K, V, T, R, C, TEnter> =
     TraceEnter<TraceFrontier<FlatKeyValAgent<K, V, T, R, C>>, TEnter>;

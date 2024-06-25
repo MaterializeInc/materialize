@@ -40,6 +40,8 @@ pub mod codegen;
 pub mod collections;
 pub mod env;
 pub mod error;
+#[cfg(feature = "flatcontainer")]
+pub mod flatcontainer;
 pub mod fmt;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
