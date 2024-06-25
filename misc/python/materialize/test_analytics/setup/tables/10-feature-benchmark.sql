@@ -28,3 +28,5 @@ CREATE TABLE feature_benchmark_result (
 );
 
 CREATE INDEX pk_feature_benchmark_result ON feature_benchmark_result(build_job_id, framework_version, scenario_name, scenario_version, scale);
+
+CREATE INDEX fk_feature_benchmark_result_build_job_id ON feature_benchmark_result(build_job_id);

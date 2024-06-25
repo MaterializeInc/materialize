@@ -30,3 +30,5 @@ CREATE TABLE build_job (
 );
 
 CREATE INDEX pk_build_job ON build_job(build_job_id);
+
+CREATE INDEX fk_build_job_build ON build_job(build_id);

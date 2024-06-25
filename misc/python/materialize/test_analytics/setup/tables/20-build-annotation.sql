@@ -24,6 +24,9 @@ CREATE TABLE build_annotation (
 
 CREATE INDEX pk_build_annotation ON build_annotation(build_job_id, test_suite, test_retry_count);
 
+CREATE INDEX fk_build_annotation_build_id ON build_annotation(build_id);
+CREATE INDEX fk_build_annotation_build_job_id ON build_annotation(build_job_id);
+
 CREATE TABLE build_annotation_error (
    build_job_id TEXT NOT NULL,
    error_type TEXT NOT NULL,
@@ -31,3 +34,5 @@ CREATE TABLE build_annotation_error (
    issue TEXT,
    occurrence_count UINT4 NOT NULL
 );
+
+CREATE INDEX fk_build_annotation_error_build_job_id ON build_annotation_error(build_job_id);
