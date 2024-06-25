@@ -2175,19 +2175,6 @@ impl Coordinator {
     /// storage collections, without needing to worry about dependency order.
     #[instrument]
     async fn bootstrap_storage_collections(&mut self) {
-        // Reset the txns and table shards to a known set of invariants.
-        //
-        // TODO: This can be removed once we've flipped to the new txns system
-        // for good and there is no possibility of the old code running
-        // concurrently with the new code.
-        let init_ts = self.get_local_write_ts().await.timestamp;
-        self.controller
-            .storage
-            .init_txns(init_ts)
-            .await
-            .unwrap_or_terminate("init_txns");
-        self.apply_local_write(init_ts).await;
-
         let catalog = self.catalog();
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
