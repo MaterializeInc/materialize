@@ -23,23 +23,14 @@ def create_test_analytics_config(c: Composition) -> MzDbConfig:
 def create_test_analytics_config_with_hostname(hostname: str) -> MzDbConfig:
     username = os.getenv("PRODUCTION_ANALYTICS_USERNAME", "infra+bot@materialize.com")
     app_password = os.environ["PRODUCTION_ANALYTICS_APP_PASSWORD"]
-    database = "raw"
-    search_path = "test_analytics"
-
-    return MzDbConfig(
-        hostname=hostname,
-        username=username,
-        app_password=app_password,
-        database=database,
-        search_path=search_path,
+    return create_test_analytics_config_with_credentials(
+        hostname, username, app_password
     )
 
 
-def create_local_dev_config_for_analytics() -> MzDbConfig:
-    hostname = os.environ["MATERIALIZE_PROD_SANDBOX_HOSTNAME"]
-    username = os.getenv("PRODUCTION_ANALYTICS_USERNAME", "infra+bot@materialize.com")
-    app_password = os.environ["PRODUCTION_ANALYTICS_APP_PASSWORD"]
-
+def create_test_analytics_config_with_credentials(
+    hostname: str, username: str, app_password: str
+) -> MzDbConfig:
     database = "raw"
     search_path = "test_analytics"
 
