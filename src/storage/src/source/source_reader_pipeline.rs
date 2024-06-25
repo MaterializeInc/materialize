@@ -606,7 +606,8 @@ where
 
     let operator_name = format!("reclock({})", id);
     let mut reclock_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-    let (mut reclocked_output, reclocked_stream) = reclock_op.new_output();
+    let (mut reclocked_output, reclocked_stream) =
+        reclock_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates.inner, Pipeline);
 
     reclock_op.build(move |capabilities| async move {
