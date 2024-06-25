@@ -549,214 +549,11 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  name  text
 3  url  text
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_active_peeks' ORDER BY position
-----
-1  id  uuid
-2  object_id  text
-3  type  text
-4  time  mz_timestamp
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_arrangement_sharing' ORDER BY position
-----
-1  operator_id  uint8
-2  count  bigint
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_arrangement_sizes' ORDER BY position
-----
-1  operator_id  uint8
-2  records  numeric
-3  batches  numeric
-4  size  numeric
-5  capacity  numeric
-6  allocations  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_error_counts' ORDER BY position
-----
-1  export_id  text
-2  count  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_exports' ORDER BY position
-----
-1  export_id  text
-2  dataflow_id  uint8
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_frontiers' ORDER BY position
-----
-1  export_id  text
-2  time  mz_timestamp
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_import_frontiers' ORDER BY position
-----
-1  export_id  text
-2  import_id  text
-3  time  mz_timestamp
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_operator_durations_histogram' ORDER BY position
-----
-1  id  uint8
-2  duration_ns  uint8
-3  count  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflows' ORDER BY position
-----
-1  id  uint8
-2  name  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflow_addresses' ORDER BY position
-----
-1  id  uint8
-2  address  list
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflow_arrangement_sizes' ORDER BY position
-----
-1  id  uint8
-2  name  text
-3  records  numeric
-4  batches  numeric
-5  size  numeric
-6  capacity  numeric
-7  allocations  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflow_channels' ORDER BY position
-----
-1  id  uint8
-2  from_index  uint8
-3  from_port  uint8
-4  to_index  uint8
-5  to_port  uint8
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflow_channel_operators' ORDER BY position
-----
-1  id  uint8
-2  from_operator_id  uint8
-3  from_operator_address  list
-4  to_operator_id  uint8
-5  to_operator_address  list
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflow_operators' ORDER BY position
-----
-1  id  uint8
-2  name  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflow_operator_dataflows' ORDER BY position
-----
-1  id  uint8
-2  name  text
-3  dataflow_id  uint8
-4  dataflow_name  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflow_operator_parents' ORDER BY position
-----
-1  id  uint8
-2  parent_id  uint8
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_dataflow_shutdown_durations_histogram' ORDER BY position
-----
-1  duration_ns  uint8
-2  count  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_expected_group_size_advice' ORDER BY position
-----
-1  dataflow_id  uint8
-2  dataflow_name  text
-3  region_id  uint8
-4  region_name  text
-5  levels  bigint
-6  to_cut  bigint
-7  savings  numeric
-8  hint  double␠precision
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_message_counts' ORDER BY position
-----
-1  channel_id  uint8
-2  sent  numeric
-3  received  numeric
-4  batch_sent  numeric
-5  batch_received  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_peek_durations_histogram' ORDER BY position
-----
-1  type  text
-2  duration_ns  uint8
-3  count  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_records_per_dataflow' ORDER BY position
-----
-1  id  uint8
-2  name  text
-3  records  numeric
-4  batches  numeric
-5  size  numeric
-6  capacity  numeric
-7  allocations  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_records_per_dataflow_operator' ORDER BY position
-----
-1  id  uint8
-2  name  text
-3  dataflow_id  uint8
-4  records  numeric
-5  batches  numeric
-6  size  numeric
-7  capacity  numeric
-8  allocations  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_scheduling_elapsed' ORDER BY position
-----
-1  id  uint8
-2  elapsed_ns  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_scheduling_parks_histogram' ORDER BY position
-----
-1  slept_for_ns  uint8
-2  requested_ns  uint8
-3  count  numeric
-
 query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_internal') ORDER BY object
 ----
-mz_active_peeks
-mz_active_peeks_per_worker
 mz_activity_log_thinned
 mz_aggregates
-mz_arrangement_batcher_allocations_raw
-mz_arrangement_batcher_capacity_raw
-mz_arrangement_batcher_records_raw
-mz_arrangement_batcher_size_raw
-mz_arrangement_batches_raw
-mz_arrangement_heap_allocations_raw
-mz_arrangement_heap_capacity_raw
-mz_arrangement_heap_size_raw
-mz_arrangement_records_raw
-mz_arrangement_sharing
-mz_arrangement_sharing_per_worker
-mz_arrangement_sharing_raw
-mz_arrangement_sizes
-mz_arrangement_sizes_per_worker
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
@@ -768,43 +565,9 @@ mz_cluster_replica_utilization
 mz_cluster_schedules
 mz_comments
 mz_compute_dependencies
-mz_compute_error_counts
-mz_compute_error_counts_per_worker
-mz_compute_error_counts_raw
-mz_compute_exports
-mz_compute_exports_per_worker
-mz_compute_frontiers
-mz_compute_frontiers_per_worker
 mz_compute_hydration_statuses
-mz_compute_import_frontiers
-mz_compute_import_frontiers_per_worker
-mz_compute_operator_durations_histogram
-mz_compute_operator_durations_histogram_per_worker
-mz_compute_operator_durations_histogram_raw
 mz_compute_operator_hydration_statuses
 mz_compute_operator_hydration_statuses_per_worker
-mz_dataflow_addresses
-mz_dataflow_addresses_per_worker
-mz_dataflow_arrangement_sizes
-mz_dataflow_channel_operators
-mz_dataflow_channel_operators_per_worker
-mz_dataflow_channels
-mz_dataflow_channels_per_worker
-mz_dataflow_operator_dataflows
-mz_dataflow_operator_dataflows_per_worker
-mz_dataflow_operator_parents
-mz_dataflow_operator_parents_per_worker
-mz_dataflow_operator_reachability
-mz_dataflow_operator_reachability_per_worker
-mz_dataflow_operator_reachability_raw
-mz_dataflow_operators
-mz_dataflow_operators_per_worker
-mz_dataflow_shutdown_durations_histogram
-mz_dataflow_shutdown_durations_histogram_per_worker
-mz_dataflow_shutdown_durations_histogram_raw
-mz_dataflows
-mz_dataflows_per_worker
-mz_expected_group_size_advice
 mz_frontiers
 mz_global_frontiers
 mz_history_retention_strategies
@@ -814,12 +577,6 @@ mz_kafka_sources
 mz_materialization_lag
 mz_materialized_view_refresh_strategies
 mz_materialized_view_refreshes
-mz_message_batch_counts_received_raw
-mz_message_batch_counts_sent_raw
-mz_message_counts
-mz_message_counts_per_worker
-mz_message_counts_received_raw
-mz_message_counts_sent_raw
 mz_mysql_source_tables
 mz_notices
 mz_notices_redacted
@@ -829,9 +586,6 @@ mz_object_lifetimes
 mz_object_oid_alias
 mz_object_transitive_dependencies
 mz_optimizer_notices
-mz_peek_durations_histogram
-mz_peek_durations_histogram_per_worker
-mz_peek_durations_histogram_raw
 mz_postgres_source_tables
 mz_postgres_sources
 mz_prepared_statement_history
@@ -840,16 +594,6 @@ mz_recent_activity_log_redacted
 mz_recent_activity_log_thinned
 mz_recent_sql_text
 mz_recent_sql_text_redacted
-mz_records_per_dataflow
-mz_records_per_dataflow_operator
-mz_records_per_dataflow_operator_per_worker
-mz_records_per_dataflow_per_worker
-mz_scheduling_elapsed
-mz_scheduling_elapsed_per_worker
-mz_scheduling_elapsed_raw
-mz_scheduling_parks_histogram
-mz_scheduling_parks_histogram_per_worker
-mz_scheduling_parks_histogram_raw
 mz_session_history
 mz_sessions
 mz_show_all_my_privileges

@@ -24,6 +24,7 @@ set -euo pipefail
 
 catalog_files=(
   doc/user/content/sql/system-catalog/mz_internal.md
+  doc/user/content/sql/system-catalog/mz_introspection.md
   doc/user/content/sql/system-catalog/mz_catalog.md
 )
 
