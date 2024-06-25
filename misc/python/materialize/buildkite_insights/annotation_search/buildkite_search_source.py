@@ -23,8 +23,8 @@ from materialize.buildkite_insights.cache import annotations_cache, builds_cache
 from materialize.buildkite_insights.cache.cache_constants import FetchMode
 from materialize.buildkite_insights.data.build_annotation import BuildAnnotation
 from materialize.buildkite_insights.data.build_info import Build
-from materialize.buildkite_insights.steps.build_step import (
-    BuildStepMatcher,
+from materialize.buildkite_insights.data.build_step import BuildStepMatcher
+from materialize.buildkite_insights.util.build_step_utils import (
     extract_build_step_outcomes,
 )
 

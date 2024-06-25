@@ -32,8 +32,8 @@ from materialize.buildkite_insights.data.build_history import (
     BuildHistory,
     BuildHistoryEntry,
 )
-from materialize.buildkite_insights.steps.build_step import (
-    BuildStepMatcher,
+from materialize.buildkite_insights.data.build_step import BuildStepMatcher
+from materialize.buildkite_insights.util.build_step_utils import (
     extract_build_step_outcomes,
 )
 from materialize.github import (
