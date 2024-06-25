@@ -311,6 +311,8 @@ impl Catalog {
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
             migrated_builtins
         };
+        remove_pending_cluster_replicas_migration(&mut txn)?;
+
         let op_updates = txn.get_and_commit_op_updates();
         updates.extend(op_updates);
 
@@ -1203,6 +1205,19 @@ fn remove_invalid_config_param_role_defaults_migration(
 
     txn.update_roles(roles_to_migrate)?;
 
+    Ok(())
+}
+
+/// Cluster Replicas may be created ephemerally during an alter statement, these replicas
+/// are marked as pending and should be cleaned up on catalog opsn.
+fn remove_pending_cluster_replicas_migration(tx: &mut Transaction) -> Result<(), anyhow::Error> {
+    for replica in tx.get_cluster_replicas() {
+        if let mz_catalog::durable::ReplicaLocation::Managed { pending: true, .. } =
+            replica.config.location
+        {
+            tx.remove_cluster_replica(replica.replica_id)?;
+        }
+    }
     Ok(())
 }
 

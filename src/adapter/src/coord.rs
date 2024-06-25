@@ -97,7 +97,8 @@ use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc, Source,
+    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
+    DataSourceDesc, Source,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::controller::error::InstanceMissing;
@@ -649,12 +650,20 @@ pub struct ExplainTimestampFinish {
 #[derive(Debug)]
 pub enum ClusterStage {
     Alter(AlterCluster),
+    Finalize(FinalizeAlterCluster),
 }
 
 #[derive(Debug)]
 pub struct AlterCluster {
     validity: PlanValidity,
     plan: plan::AlterClusterPlan,
+}
+
+#[derive(Debug)]
+pub struct FinalizeAlterCluster {
+    validity: PlanValidity,
+    plan: plan::AlterClusterPlan,
+    new_config: ClusterVariantManaged,
 }
 
 #[derive(Debug)]

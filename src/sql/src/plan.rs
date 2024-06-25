@@ -1646,28 +1646,15 @@ impl Default for PlanClusterOption {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct AlterClusterPlanStrategy {
-    pub condition: AlterClusterStrategyCondition,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AlterClusterStrategyCondition {
+pub enum AlterClusterPlanStrategy {
     None,
     For(Duration),
 }
 
-impl AlterClusterStrategyCondition {
+impl AlterClusterPlanStrategy {
     pub fn is_none(&self) -> bool {
         matches!(self, Self::None)
-    }
-}
-
-impl Default for AlterClusterPlanStrategy {
-    fn default() -> Self {
-        Self {
-            condition: AlterClusterStrategyCondition::None,
-        }
     }
 }
 
@@ -1675,13 +1662,9 @@ impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
     type Error = PlanError;
 
     fn try_from(value: ClusterAlterOptionExtracted) -> Result<Self, Self::Error> {
-        Ok(Self {
-            condition: match value.wait {
-                Some(ClusterAlterOptionValue::For(v)) => {
-                    AlterClusterStrategyCondition::For(Duration::try_from_value(v)?)
-                }
-                None => AlterClusterStrategyCondition::None,
-            },
+        Ok(match value.wait {
+            Some(ClusterAlterOptionValue::For(d)) => Self::For(Duration::try_from_value(d)?),
+            None => Self::None,
         })
     }
 }
