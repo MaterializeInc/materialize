@@ -288,7 +288,7 @@ impl Coordinator {
 
         // The subscribe may already have been dropped, in which case we must not install a
         // dataflow for it.
-        if self.introspection_subscribes.contains_key(&subscribe_id) {
+        let response = if self.introspection_subscribes.contains_key(&subscribe_id) {
             let (df_desc, _df_meta) = global_lir_plan.unapply();
             self.ship_dataflow(df_desc, cluster_id).await;
 
@@ -296,17 +296,19 @@ impl Coordinator {
                 .compute
                 .set_subscribe_target_replica(cluster_id, subscribe_id, replica_id)
                 .expect("cannot fail");
-        }
+
+            Ok(StageResult::Response(
+                ExecuteResponse::CreatedIntrospectionSubscribe,
+            ))
+        } else {
+            Err(AdapterError::internal(
+                "introspection",
+                "introspection subscribe has already been dropped",
+            ))
+        };
 
         drop(read_holds);
-
-        let (_tx, rx) = mpsc::unbounded_channel();
-        let resp = ExecuteResponse::Subscribing {
-            rx,
-            ctx_extra: ExecuteContextExtra::default(),
-            instance_id: cluster_id,
-        };
-        Ok(StageResult::Response(resp))
+        response
     }
 
     /// Drops the introspection subscribes installed on the given replica.

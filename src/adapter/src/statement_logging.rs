@@ -197,6 +197,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedCluster
             | ExecuteResponse::CreatedClusterReplica
             | ExecuteResponse::CreatedIndex
+            | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedSecret
             | ExecuteResponse::CreatedSink
             | ExecuteResponse::CreatedSource
