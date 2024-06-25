@@ -15,6 +15,10 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET pg_source_wal_sender_timeout = ''
 ALTER SYSTEM SET pg_source_tcp_configure_server = FALSE
 
+> DROP SOURCE IF EXISTS mz_source CASCADE;
+> DROP SECRET IF EXISTS pgpass CASCADE;
+> DROP CONNECTION IF EXISTS pg_conn CASCADE;
+
 > CREATE SECRET pgpass AS 'postgres'
 
 > CREATE CONNECTION pg_conn TO POSTGRES (
