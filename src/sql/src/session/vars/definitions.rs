@@ -2109,6 +2109,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_envelope_upsert_inline_errors,
+        desc: "The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

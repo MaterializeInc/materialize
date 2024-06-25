@@ -1226,6 +1226,7 @@ pub fn plan_create_source(
             let style = if value_decode_err_policy.is_empty() {
                 UpsertStyle::Default(key_envelope)
             } else if value_decode_err_policy.contains(&SourceErrorPolicy::Inline) {
+                scx.require_feature_flag(&vars::ENABLE_ENVELOPE_UPSERT_INLINE_ERRORS)?;
                 UpsertStyle::ValueErrInline { key_envelope }
             } else {
                 bail_unsupported!("ENVELOPE UPSERT with unsupported value decode error policy")
