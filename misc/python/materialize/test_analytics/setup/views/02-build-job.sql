@@ -36,6 +36,8 @@ WHERE bj.success = TRUE
 
 CREATE OR REPLACE VIEW v_build_step_success AS
 SELECT
+    EXTRACT(YEAR FROM b.date) AS year,
+    EXTRACT(MONTH FROM b.date) AS month,
     b.branch,
     b.pipeline,
     bj.build_step_key,
@@ -48,6 +50,8 @@ INNER JOIN build_job bj
   ON b.build_id = bj.build_id
 WHERE bj.is_latest_retry = TRUE
 GROUP BY
+    EXTRACT(YEAR FROM b.date),
+    EXTRACT(MONTH FROM b.date),
     b.branch,
     b.pipeline,
     bj.build_step_key,
