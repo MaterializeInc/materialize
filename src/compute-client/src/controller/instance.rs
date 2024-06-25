@@ -1804,12 +1804,11 @@ where
 
             let old_global_frontier = coll.write_frontier.clone();
 
-            self.update_hydration_status(id, replica_id, &new_frontier);
             self.collection_mut(id)
                 .expect("we know about the collection")
                 .collection_introspection
                 .frontier_update(&new_frontier);
-            self.update_write_frontiers(replica_id, &[(id, new_frontier.clone())].into());
+            self.update_write_frontiers(replica_id, &[(id, new_frontier)].into());
 
             if let Ok(coll) = self.collection(id) {
                 if coll.write_frontier != old_global_frontier {
@@ -1823,7 +1822,12 @@ where
 
         // Apply an input frontier advancement.
         if let Some(new_frontier) = frontiers.input_frontier {
-            self.update_replica_input_frontiers(replica_id, &[(id, new_frontier.clone())].into());
+            self.update_replica_input_frontiers(replica_id, &[(id, new_frontier)].into());
+        }
+
+        // Apply an output frontier advancement.
+        if let Some(new_frontier) = frontiers.output_frontier {
+            self.update_hydration_status(id, replica_id, &new_frontier);
         }
     }
 

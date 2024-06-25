@@ -33,7 +33,7 @@ use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuild
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
+use timely::dataflow::operators::{probe, Broadcast, Capability, CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
@@ -60,6 +60,14 @@ where
         mut ok_collection: Collection<G, Row, Diff>,
         mut err_collection: Collection<G, DataflowError, Diff>,
     ) -> Option<Rc<dyn Any>> {
+        // Attach a probe reporting the compute frontier.
+        // The `apply_refresh` operator can round up frontiers, making it impossible to accurately
+        // track the progress of the computation, so we need to attach the probe before it.
+        let mut probe = probe::Handle::default();
+        ok_collection = ok_collection.probe_with(&mut probe);
+        let collection_state = compute_state.expect_collection_mut(sink_id);
+        collection_state.compute_probe = Some(probe);
+
         // If a `RefreshSchedule` was specified, round up timestamps.
         if let Some(refresh_schedule) = &sink.refresh_schedule {
             ok_collection = apply_refresh(ok_collection, refresh_schedule.clone());

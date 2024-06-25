@@ -156,31 +156,22 @@ where
         if let ComputeResponse::Frontiers(
             id,
             FrontiersResponse {
-                write_frontier: Some(upper),
+                output_frontier: Some(frontier),
                 ..
             },
         ) = resp
         {
             if let Some(collection) = self.collections.remove(id) {
-                let hydrated = PartialOrder::less_than(&collection.as_of, upper);
-                if hydrated || upper.is_empty() {
+                let hydrated = PartialOrder::less_than(&collection.as_of, frontier);
+                if hydrated || frontier.is_empty() {
                     debug!(%id, "collection hydrated");
 
                     // Note that it is possible to observe hydration even for collections for which
-                    // we never sent a `Schedule` command, for two reasons:
-                    //
-                    //  (1) The replica decided to not suspend the dataflow after creation. The
-                    //      compute protocol does not require replicas to create dataflows in
-                    //      suspended state.
-                    //  (2) A `REFRESH` materialized view was created in suspended state but
-                    //      jumped its frontier ahead to the next refresh time. Hydration tracking
-                    //      is currently broken for `REFRESH` MVs and something we have to fix
-                    //      (#25518).
-                    //
-                    // Only (2) requires us to still send a `Schedule` command, to ensure the
-                    // `REFRESH` MV doesn't remain suspended forever. But it seems like a good idea
-                    // to always send one, rather than swallowing it, to make the protocol
-                    // communication more predicatable.
+                    // we never sent a `Schedule` command, if the replica decided to not suspend
+                    // the dataflow after creation. The compute protocol does not require replicas
+                    // to create dataflows in suspended state. It seems like a good idea to still
+                    // send a `Schedule` command in this case, rather than swallowing it, to make
+                    // the protocol communication more predicatable.
 
                     match collection.state {
                         State::Created => {
