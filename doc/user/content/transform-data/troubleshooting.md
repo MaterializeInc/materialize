@@ -220,16 +220,19 @@ To detect and address stalled sources, follow the [`Ingest data` troubleshooting
 guide.
 
 ### Hydrating upstream objects
-When a source, materialized view, or index is created or updated, the underlying cluster must first do an
-initial processing for the object over all the existing data. We call this process hydration. Queries that depend on hydrating objects will block until hydration is
-complete.
 
-Hydration takes time proportional to data volume and query complexity. Indexes and materialized views with large amounts of data will take longer to hydrate than indexes and materialized views with small amounts of data. Similarly, indexes and materialized views for complex queries will take longer to hydrate than indexes and materialized views for simple queries.
+When a source, materialized view, or index is created or updated, it must first
+be backfilled with any pre-existing data — a process known as _hydration_.
 
-Hydration also happens every time a cluster is restarted or sized up, including during
+Queries that depend objects that are still hydrating will **block until
+hydration is complete**. To see whether an object is still hydrating, navigate
+to the [workflow graph](#detect) for the object in the Materialize console.
+
+Hydration time is proportional to data volume and query complexity. This means
+that you should expect objects with large volumes of data and/or complex
+queries to take longer to hydrate. You should also expect hydration to be
+triggered every time a cluster is restarted or sized up, including during
 [Materialize's routine maintenance window](/releases#schedule).
-
-To see whether an object is still hydrating, use the [workflow graph in the Materialize console](#detect) for the object.
 
 ### Unhealthy cluster
 
