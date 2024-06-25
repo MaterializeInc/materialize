@@ -7,6 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// BE CAREFUL! Unlike other Materialize Protos, Persist's messages need to
+// be forward-compatible and roundtrip losslessly between versions. Consider
+// making your Proto changes in a release before you populate non-default values,
+// or guard the code changes behind a feature flag.
+
 syntax = "proto3";
 
 package mz_persist_client.internal.diff;

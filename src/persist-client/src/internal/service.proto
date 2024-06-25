@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// Unlike other Persist proto definitions, these messages are not sent between
+// versions and do not have special compatibility requirements.
+
 syntax = "proto3";
 
 import "proto/src/proto.proto";
