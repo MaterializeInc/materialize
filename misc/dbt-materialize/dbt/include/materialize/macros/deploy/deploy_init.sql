@@ -107,113 +107,46 @@
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
-    {% if cluster_exists(deploy_cluster) %}
-        {{ log("Deployment cluster " ~ deploy_cluster ~ " already exists", info=True) }}
-        {% set cluster_empty %}
-            WITH dataflows AS (
-                SELECT mz_indexes.id
-                FROM mz_indexes
-                JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
+    {% set cluster_configuration %}
+        SELECT
+            c.managed,
+            c.size,
+            c.replication_factor,
+            c.id AS cluster_id,
+            c.name AS cluster_name,
+            cs.type AS schedule_type,
+            cs.refresh_rehydration_time_estimate
+        FROM mz_clusters c
+        LEFT JOIN mz_internal.mz_cluster_schedules cs ON cs.cluster_id = c.id
+        WHERE c.name = {{ dbt.string_literal(cluster) }}
+    {% endset %}
 
-                UNION ALL
+    {% set cluster_config_results = run_query(cluster_configuration) %}
 
-                SELECT mz_materialized_views.id
-                FROM mz_materialized_views
-                JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
+    {% if execute %}
+        {% set results = cluster_config_results.rows[0] %}
 
-                UNION ALL
+        {% set managed = results[0] %}
+        {% set size = results[1] %}
+        {% set replication_factor = results[2] %}
+        {% set schedule_type = results[5] %}
+        {% set refresh_rehydration_time_estimate = results[6] %}
 
-                SELECT mz_sources.id
-                FROM mz_sources
-                JOIN mz_clusters ON mz_clusters.id = mz_sources.cluster_id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
-
-                UNION ALL
-
-                SELECT mz_sinks.id
-                FROM mz_sinks
-                JOIN mz_clusters ON mz_clusters.id = mz_sinks.cluster_id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
-            )
-
-            SELECT count(*)
-            FROM dataflows
-            WHERE id LIKE 'u%'
-        {% endset %}
-
-
-        {% set cluster_object_count = run_query(cluster_empty) %}
-        {% if execute %}
-            {% if cluster_object_count and cluster_object_count.columns[0] and cluster_object_count.rows[0][0] > 0 %}
-                {% if check_cluster_ci_tag(deploy_cluster) %}
-                    {{ log("Cluster " ~ deploy_cluster ~ " was already created for this pull request", info=True) }}
-                {% elif ignore_existing_objects %}
-                    {{ log("[Warning] Deployment cluster " ~ deploy_cluster ~ " is not empty", info=True) }}
-                    {{ log("[Warning] Confirm the objects it contains are expected before deployment", info=True) }}
-                {% else %}
-                    {{ exceptions.raise_compiler_error("""
-                        Deployment cluster """ ~ deploy_cluster ~ """ already exists and is not empty.
-                        This is potentially dangerous as you may end up deploying objects to production you
-                        do not intend.
-
-                        If you are certain the objects in this cluster are supposed to exist, you can ignore this
-                        error by setting ignore_existing_objects to True.
-
-                        dbt run-operation create_deployment_environment --args '{ignore_existing_objects: True}'
-                    """) }}
-                {% endif %}
-            {% endif %}
+        {% if not managed %}
+            {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " is not managed") }}
         {% endif %}
 
-    {% else %}
-        {{ log("Creating deployment cluster " ~ deploy_cluster ~ " like cluster " ~ cluster, info=True)}}
-        {% set cluster_configuration %}
-            SELECT
-                c.managed,
-                c.size,
-                c.replication_factor,
-                c.id AS cluster_id,
-                c.name AS cluster_name,
-                cs.type AS schedule_type,
-                cs.refresh_rehydration_time_estimate
-            FROM mz_clusters c
-            LEFT JOIN mz_internal.mz_cluster_schedules cs ON cs.cluster_id = c.id
-            WHERE c.name = {{ dbt.string_literal(cluster) }}
-        {% endset %}
+        {% set deploy_cluster = create_cluster(
+            cluster_name=cluster,
+            size=size,
+            replication_factor=replication_factor,
+            schedule_type=schedule_type,
+            refresh_rehydration_time_estimate=refresh_rehydration_time_estimate,
+            ignore_existing_objects=ignore_existing_objects,
+            force_deploy_suffix=True
+        ) %}
 
-        {% set cluster_config_results = run_query(cluster_configuration) %}
-
-        {% if execute %}
-            {% set results = cluster_config_results.rows[0] %}
-
-            {% set managed = results[0] %}
-            {% set size = results[1] %}
-            {% set replication_factor = results[2] %}
-            {% set schedule_type = results[5] %}
-            {% set refresh_rehydration_time_estimate = results[6] %}
-
-            {% if not managed %}
-                {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " is not managed") }}
-            {% endif %}
-
-            {% set create_cluster %}
-                CREATE CLUSTER {{ deploy_cluster }} (
-                    SIZE = {{ dbt.string_literal(size) }}
-                    {% if schedule_type == 'manual' %}
-                        , REPLICATION FACTOR = {{ replication_factor }}
-                    {% elif schedule_type == 'on-refresh' and refresh_rehydration_time_estimate %}
-                        , SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = {{ dbt.string_literal(refresh_rehydration_time_estimate) }})
-                    {% endif %}
-                );
-            {% endset %}
-            {{ run_query(create_cluster) }}
-            {{ set_cluster_ci_tag() }}
-            {{ internal_copy_cluster_grants(schema, deploy_schema) }}
-        {% endif %}
-
+        {{ internal_copy_cluster_grants(schema, deploy_schema) }}
     {% endif %}
 {% endfor %}
 {% endmacro %}

@@ -4,6 +4,10 @@
 
 * Enable cross-database references ([#27686](https://github.com/MaterializeInc/materialize/pull/27686)). Although cross-database references are not supported in `dbt-postgres`, databases in Materialize are purely used for namespacing, and therefore do not present the same constraint.
 
+* Add the `create_cluster` and `drop_cluster` macros, which allow managing the
+  creation and deletion of clusters in workflows requiring transient
+  infrastructure (e.g. CI/CD).
+
 ## 1.8.2 - 2024-06-21
 
 * Add support for sink cutover to the blue/green deployment workflow [#27557](https://github.com/MaterializeInc/materialize/pull/27557).
