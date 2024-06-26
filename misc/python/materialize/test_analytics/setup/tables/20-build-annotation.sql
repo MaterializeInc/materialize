@@ -36,3 +36,5 @@ CREATE TABLE build_annotation_error (
 );
 
 CREATE INDEX fk_build_annotation_error_build_job_id ON build_annotation_error(build_job_id);
+
+CREATE INDEX idx_build_annotation_error_content ON build_annotation_error(content);
