@@ -48,7 +48,6 @@ use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, Timeline,
@@ -497,17 +496,6 @@ impl Table {
     pub fn timeline(&self) -> Timeline {
         Timeline::EpochMilliseconds
     }
-}
-
-/// A description of a source ingestion
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct Ingestion {
-    /// The source description.
-    pub desc: SourceDesc<ReferencedConnection>,
-    /// The ID of the instance in which to install the source.
-    pub instance_id: StorageInstanceId,
-    /// The ID of this ingestion's remap/progress collection.
-    pub remap_collection_id: GlobalId,
 }
 
 #[derive(Debug, Clone, Serialize)]
