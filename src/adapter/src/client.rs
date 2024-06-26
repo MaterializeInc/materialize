@@ -885,11 +885,13 @@ impl SessionClient {
                     drop(guarded_rx);
 
                     let res = res.expect("sender dropped");
-                    let status = if res.result.is_ok() {
-                        "success"
-                    } else {
-                        "error"
-                    };
+                    let status = res.result.is_ok().then_some("success").unwrap_or("error");
+                    if let Err(err) = res.result.as_ref() {
+                        if name_hint.should_trace_errors() {
+                            tracing::warn!(?err, ?name_hint, "adapter response error");
+                        }
+                    }
+
                     if let Some(typ) = typ {
                         inner_client
                             .metrics
