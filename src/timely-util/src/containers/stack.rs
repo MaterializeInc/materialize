@@ -15,6 +15,7 @@ use std::collections::Bound;
 use std::ops::{Index, RangeBounds};
 use std::sync::atomic::AtomicBool;
 
+use ::serde::{Deserialize, Serialize};
 use differential_dataflow::trace::implementations::BatchContainer;
 use either::Either;
 use timely::container::columnation::{Columnation, Region, TimelyStack};
@@ -25,7 +26,7 @@ use crate::containers::array::Array;
 static ENABLE_CHUNKED_STACK: AtomicBool = AtomicBool::new(false);
 
 /// A runtime-configurable wrapper around timely stacks and chunked stacks.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum StackWrapper<T: Columnation> {
     Legacy(TimelyStack<T>),
     Chunked(ChunkedStack<T>),
@@ -187,7 +188,7 @@ impl<T: Clone + Columnation + 'static> SizableContainer for StackWrapper<T> {
     }
 }
 
-impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> PushInto<T> for StackWrapper<T> {
+impl<T: Columnation + ToOwned<Owned = T> + 'static> PushInto<T> for StackWrapper<T> {
     fn push_into(&mut self, item: T) {
         match self {
             StackWrapper::Legacy(stack) => stack.copy(&item),
@@ -196,7 +197,7 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> PushInto<T> for StackW
     }
 }
 
-impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> PushInto<&T> for StackWrapper<T> {
+impl<T: Columnation + ToOwned<Owned = T> + 'static> PushInto<&T> for StackWrapper<T> {
     fn push_into(&mut self, item: &T) {
         match self {
             StackWrapper::Legacy(stack) => stack.copy(item),
@@ -481,6 +482,71 @@ impl<T: Columnation + 'static> SizableContainer for ChunkedStack<T> {
     fn reserve(&mut self, additional: usize) {
         let additional_chunks = (additional + Self::CHUNK - 1) / Self::CHUNK;
         self.local.reserve(additional_chunks);
+    }
+}
+
+mod serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use timely::container::columnation::Columnation;
+
+    use crate::containers::stack::ChunkedStack;
+
+    impl<T: Columnation + Serialize> Serialize for ChunkedStack<T> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            use serde::ser::SerializeSeq;
+            let mut seq = serializer.serialize_seq(Some(self.len()))?;
+            for element in self.range(..) {
+                seq.serialize_element(element)?;
+            }
+            seq.end()
+        }
+    }
+
+    impl<'a, T: Columnation + Deserialize<'a>> Deserialize<'a> for ChunkedStack<T> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'a>,
+        {
+            use serde::de::{SeqAccess, Visitor};
+            use std::fmt;
+            use std::marker::PhantomData;
+            struct ChunkedStackVisitor<T> {
+                marker: PhantomData<T>,
+            }
+
+            impl<'de, T: Columnation> Visitor<'de> for ChunkedStackVisitor<T>
+            where
+                T: Deserialize<'de>,
+            {
+                type Value = ChunkedStack<T>;
+
+                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("a sequence")
+                }
+
+                fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+                where
+                    A: SeqAccess<'de>,
+                {
+                    let mut stack = ChunkedStack::with_capacity(seq.size_hint().unwrap_or(0));
+
+                    while let Some(value) = seq.next_element()? {
+                        stack.copy(&value);
+                    }
+
+                    Ok(stack)
+                }
+            }
+
+            let visitor = ChunkedStackVisitor {
+                marker: PhantomData,
+            };
+            deserializer.deserialize_seq(visitor)
+        }
     }
 }
 
