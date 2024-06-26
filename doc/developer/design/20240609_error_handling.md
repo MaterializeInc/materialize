@@ -187,6 +187,13 @@ described in [#6367].
 
 ### Implementation
 
+##### Update 6/26
+
+Inline errors have been implemented in https://github.com/MaterializeInc/materialize/pull/27802
+albeit just with the `INLINE` option, since the `PROPAGATE` option doesn't make
+sense without the DLQ.
+
+
 #### Inline errors
 
 When `VALUE DECODING ERRORS = INLINE` is set:
@@ -237,7 +244,7 @@ received from `upsert_commands` as before.
 
 #### Dead-letter queue (DLQ)
 
-TODO
+TODO if we decide to proceed with this implementation in the future.
 
 **Open questions:**
 
