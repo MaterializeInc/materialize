@@ -615,10 +615,10 @@ impl DatumColumnEncoder {
                 let offsets = OffsetBuffer::<i32>::from_lengths(lengths.iter().copied());
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
 
-                let key_field =
-                    Arc::new(Field::new("key", keys.data_type().clone(), nulls.is_some()));
-                let val_field =
-                    Arc::new(Field::new("val", vals.data_type().clone(), nulls.is_some()));
+                // The keys and values in a Map can never be null, instead a
+                // field being null is maintained by the higher level MapArray.
+                let key_field = Arc::new(Field::new("key", keys.data_type().clone(), false));
+                let val_field = Arc::new(Field::new("val", vals.data_type().clone(), false));
                 let fields = Fields::from(vec![Arc::clone(&key_field), Arc::clone(&val_field)]);
                 let entries = StructArray::new(fields, vec![Arc::new(keys), vals], None);
 
@@ -980,7 +980,8 @@ impl Schema2<Row> for RelationDesc {
     }
 
     fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
-        Ok(RowColumnarEncoder::new(self))
+        RowColumnarEncoder::new(self)
+            .ok_or_else(|| anyhow::anyhow!("Cannot encode a RelationDesc with no columns"))
     }
 }
 
@@ -992,8 +993,10 @@ pub struct RowColumnarDecoder {
 }
 
 impl RowColumnarDecoder {
-    /// Creates a [`RowColumnarDecoder`] that decodes from the provided [`StructArray`] if the
-    /// schema of the [`StructArray`] matches that of the provided [`RelationDesc`].
+    /// Creates a [`RowColumnarDecoder`] that decodes from the provided [`StructArray`].
+    ///
+    /// Returns an error if the schema of the [`StructArray`] does not match
+    /// the provided [`RelationDesc`].
     pub fn new(col: StructArray, desc: &RelationDesc) -> Result<Self, anyhow::Error> {
         let inner_columns = col.columns();
         let desc_columns = desc.typ().columns();
@@ -1045,8 +1048,21 @@ pub struct RowColumnarEncoder {
 }
 
 impl RowColumnarEncoder {
-    pub fn new(desc: &RelationDesc) -> Self {
-        let encoders = desc
+    /// Creates a [`RowColumnarEncoder`] for the provided [`RelationDesc`].
+    ///
+    /// Returns `None` if the provided [`RelationDesc`] has no columns.
+    ///
+    /// # Note
+    /// Internally we represent a [`Row`] as a [`StructArray`] which is
+    /// required to have at least one field. Instead of handling this case by
+    /// adding some special "internal" column we let a higher level encoder
+    /// (e.g. `SourceDataColumnarEncoder`) handle this case.
+    pub fn new(desc: &RelationDesc) -> Option<Self> {
+        if desc.typ().columns().is_empty() {
+            return None;
+        }
+
+        let encoders: Vec<_> = desc
             .typ()
             .columns()
             .iter()
@@ -1059,13 +1075,14 @@ impl RowColumnarEncoder {
                 }
             })
             .collect();
-        let col_names = desc.iter_names().map(|name| name.as_str().into()).collect();
+        let col_names: Vec<_> = desc.iter_names().map(|name| name.as_str().into()).collect();
+        assert_eq!(encoders.len(), col_names.len());
 
-        RowColumnarEncoder {
+        Some(RowColumnarEncoder {
             encoders,
             col_names,
             nullability: BooleanBufferBuilder::new(100),
-        }
+        })
     }
 }
 
@@ -1424,32 +1441,30 @@ mod tests {
 
     use super::*;
     use crate::adt::array::ArrayDimension;
-    use crate::{arb_datum_for_column, ColumnName, ColumnType};
+    use crate::relation::arb_relation_desc;
+    use crate::{arb_datum_for_column, arb_row_for_relation, ColumnName, ColumnType};
 
     #[track_caller]
-    fn roundtrip_datum<'a>(ty: ColumnType, datums: impl Iterator<Item = Datum<'a>>) {
+    fn roundtrip_datum<'a>(ty: ColumnType, datum: impl Iterator<Item = Datum<'a>>) {
         let desc = RelationDesc::empty().with_column("a", ty);
-        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
+        let rows = datum.map(|d| Row::pack_slice(&[d])).collect();
+        roundtrip_rows(&desc, rows)
+    }
 
-        let mut row = Row::default();
-        let datums: Vec<_> = datums.collect();
-
-        for d in &datums {
-            row.packer().push(d);
-            encoder.append(&row);
+    #[track_caller]
+    fn roundtrip_rows(desc: &RelationDesc, rows: Vec<Row>) {
+        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(desc).unwrap();
+        for row in &rows {
+            encoder.append(row);
         }
         let col = encoder.finish();
 
-        let decoder = <RelationDesc as Schema2<Row>>::decoder(&desc, col).unwrap();
+        let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col).unwrap();
 
-        for (idx, datum) in datums.into_iter().enumerate() {
-            // Creating a packer clears the row.
-            row.packer();
-
-            decoder.decode(idx, &mut row);
-            let rnd_datum = row.unpack_first();
-
-            assert_eq!(datum, rnd_datum);
+        let mut rnd_row = Row::default();
+        for (idx, og_row) in rows.into_iter().enumerate() {
+            decoder.decode(idx, &mut rnd_row);
+            assert_eq!(og_row, rnd_row);
         }
     }
 
@@ -1464,6 +1479,26 @@ mod tests {
         proptest!(|((ty, datums) in strat)| {
             roundtrip_datum(ty.clone(), datums.iter().map(Datum::from));
         })
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn proptest_non_empty_relation_descs() {
+        let strat = arb_relation_desc(1..8).prop_flat_map(|desc| {
+            proptest::collection::vec(arb_row_for_relation(&desc), 0..8)
+                .prop_map(move |rows| (desc.clone(), rows))
+        });
+
+        proptest!(|((desc, rows) in strat)| {
+            roundtrip_rows(&desc, rows)
+        })
+    }
+
+    #[mz_ore::test]
+    fn empty_relation_desc_returns_error() {
+        let empty_desc = RelationDesc::empty();
+        let result = <RelationDesc as Schema2<Row>>::encoder(&empty_desc);
+        assert!(result.is_err());
     }
 
     #[mz_ore::test]

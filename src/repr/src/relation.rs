@@ -7,12 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
 use std::{fmt, iter, vec};
 
 use anyhow::bail;
 use mz_lowertest::MzReflect;
 use mz_ore::str::StrExt;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use proptest::prelude::*;
+use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +23,7 @@ use crate::relation_and_scalar::proto_relation_type::ProtoKey;
 pub use crate::relation_and_scalar::{
     ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
 };
-use crate::{Datum, ScalarType};
+use crate::{arb_datum_for_column, Datum, Row, ScalarType};
 
 /// The type of a [`Datum`].
 ///
@@ -353,7 +356,7 @@ impl From<ColumnName> for mz_sql_parser::ast::Ident {
 /// });
 /// let desc = RelationDesc::new(relation_type, names);
 /// ```
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RelationDesc {
     typ: RelationType,
     names: Vec<ColumnName>,
@@ -562,6 +565,48 @@ impl RelationDesc {
     }
 }
 
+impl Arbitrary for RelationDesc {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<RelationDesc>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        let num_columns = Union::new_weighted(vec![
+            (100, Just(0..4)),
+            (50, Just(4..8)),
+            (25, Just(8..16)),
+            (12, Just(16..32)),
+            (6, Just(32..64)),
+            (3, Just(64..128)),
+            (1, Just(128..256)),
+        ]);
+
+        num_columns.prop_flat_map(arb_relation_desc).boxed()
+    }
+}
+
+/// Returns a [`Strategy`] that generates an arbitrary [`RelationDesc`] with a number columns
+/// within the range provided.
+pub fn arb_relation_desc(num_cols: std::ops::Range<usize>) -> impl Strategy<Value = RelationDesc> {
+    // Long column names are generally uninteresting, and can greatly
+    // increase the runtime for a test case, so bound the max length.
+    let name_length = Union::new_weighted(vec![
+        (50, Just(0..8)),
+        (20, Just(8..16)),
+        (5, Just(16..128)),
+        (1, Just(128..1024)),
+        (1, Just(1024..4096)),
+    ]);
+
+    let name_strat = name_length
+        .prop_flat_map(|length| proptest::collection::vec(any::<char>(), length))
+        .prop_map(|chars| chars.into_iter().collect::<String>())
+        .no_shrink();
+    let name_strat = Arc::new(name_strat);
+
+    proptest::collection::vec((Arc::clone(&name_strat), any::<ColumnType>()), num_cols)
+        .prop_map(RelationDesc::from_names_and_types)
+}
+
 impl IntoIterator for RelationDesc {
     type Item = (ColumnName, ColumnType);
     type IntoIter = iter::Zip<vec::IntoIter<ColumnName>, vec::IntoIter<ColumnType>>;
@@ -569,6 +614,17 @@ impl IntoIterator for RelationDesc {
     fn into_iter(self) -> Self::IntoIter {
         self.names.into_iter().zip(self.typ.column_types)
     }
+}
+
+/// Returns a [`Strategy`] that yields arbitrary [`Row`]s for the provided [`RelationDesc`].
+pub fn arb_row_for_relation(desc: &RelationDesc) -> impl Strategy<Value = Row> {
+    let datums: Vec<_> = desc
+        .typ()
+        .columns()
+        .iter()
+        .map(arb_datum_for_column)
+        .collect();
+    datums.prop_map(|x| Row::pack(x.iter().map(Datum::from)))
 }
 
 /// Expression violated not-null constraint on named column
