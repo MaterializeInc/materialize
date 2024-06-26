@@ -824,6 +824,12 @@ impl<'a> StatementContext<'a> {
         Ok(())
     }
 
+    /// Returns true if the named [`FeatureFlag`] is set to `on`, returns false otherwise.
+    pub fn is_feature_flag_enabled(&self, flag: &FeatureFlag) -> bool {
+        flag.enabled(Some(self.catalog.system_vars()), None, None)
+            .is_ok()
+    }
+
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {
         let param_types = self.param_types.into_inner();
         let mut out = vec![];

@@ -3621,9 +3621,26 @@ pub fn plan_create_cluster_inner(
         let Some(size) = size else {
             sql_bail!("SIZE must be specified for managed clusters");
         };
-        if disk_in.is_some() {
+
+        let mut disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
+        // HACK(benesch): disk is always enabled for v2 cluster sizes, and it
+        // is an error to specify `DISK = FALSE` or `DISK = TRUE` explicitly.
+        //
+        // The long term plan is to phase out the v1 cluster sizes, at which
+        // point we'll be able to remove the `DISK` option entirely and simply
+        // always enable disk.
+        if is_cluster_size_v2(&size) {
+            if disk_in == Some(false) {
+                sql_bail!("DISK option disabled is not supported for cluster sizes ending in cc or C because disk is always enabled");
+            }
+            disk_default = true;
+        }
+        // Only require the feature flag if `DISK` was explicitly specified and it does not match
+        // the default value.
+        if matches!(disk_in, Some(disk) if disk != disk_default) {
             scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
         }
+        let disk = disk_in.unwrap_or(disk_default);
 
         let compute = plan_compute_replica_config(
             introspection_interval,
@@ -3646,22 +3663,6 @@ pub fn plan_create_cluster_inner(
 
         if !availability_zones.is_empty() {
             scx.require_feature_flag(&vars::ENABLE_MANAGED_CLUSTER_AVAILABILITY_ZONES)?;
-        }
-
-        let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
-        let mut disk = disk_in.unwrap_or(disk_default);
-
-        // HACK(benesch): disk is always enabled for v2 cluster sizes, and it
-        // is an error to specify `DISK = FALSE` or `DISK = TRUE` explicitly.
-        //
-        // The long term plan is to phase out the v1 cluster sizes, at which
-        // point we'll be able to remove the `DISK` option entirely and simply
-        // always enable disk.
-        if is_cluster_size_v2(&size) {
-            if disk_in.is_some() {
-                sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
-            }
-            disk = true;
         }
 
         // Plan OptimizerFeatureOverrides.
@@ -3785,6 +3786,18 @@ pub fn unplan_create_cluster(
             };
             let (introspection_interval, introspection_debugging) =
                 unplan_compute_replica_config(compute);
+            // Replication factor cannot be explicitly specified with a refresh schedule, it's
+            // always 1 or less.
+            let replication_factor = match &schedule {
+                ClusterScheduleOptionValue::Manual => Some(replication_factor),
+                ClusterScheduleOptionValue::Refresh { .. } => {
+                    assert!(
+                        replication_factor <= 1,
+                        "replication factor, {replication_factor:?}, must be <= 1"
+                    );
+                    None
+                }
+            };
             let options_extracted = ClusterOptionExtracted {
                 // Seen is ignored when unplanning.
                 seen: Default::default(),
@@ -3794,7 +3807,7 @@ pub fn unplan_create_cluster(
                 introspection_interval,
                 managed: Some(true),
                 replicas: None,
-                replication_factor: Some(replication_factor),
+                replication_factor,
                 size: Some(size),
                 schedule: Some(schedule),
             };
