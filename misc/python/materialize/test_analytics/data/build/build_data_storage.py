@@ -33,7 +33,6 @@ class BuildDataStorage(BaseDataStorage):
             remote=git.get_remote(), branch="main", fetch_branch=True
         )
         mz_version = MzVersion.parse_cargo()
-        build_url = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_URL)
 
         sql_statements = []
         sql_statements.append(
@@ -48,7 +47,6 @@ class BuildDataStorage(BaseDataStorage):
                main_ancestor_commit_hash,
                mz_version,
                date,
-               build_url,
                data_version,
                remarks
             )
@@ -61,7 +59,6 @@ class BuildDataStorage(BaseDataStorage):
               '{main_ancestor_commit_hash}',
               '{mz_version}',
               now(),
-              '{build_url}',
               {self.data_version},
               NULL
             WHERE NOT EXISTS

@@ -25,7 +25,7 @@ SELECT
     b.commit_hash,
     b.mz_version,
     b.date,
-    concat(b.build_url, concat('#', bj.build_job_id)),
+    concat('https://buildkite.com/materialize/', b.pipeline, '/builds/', b.build_number, '#', bj.build_job_id),
     bj.build_step_key,
     bj.shard_index
 FROM build b
