@@ -153,7 +153,7 @@ pub async fn list(cx: RegionContext) -> Result<(), Error> {
         status: &'a str,
     }
 
-    let cloud_providers: Vec<CloudProvider> = cx.cloud_client().list_cloud_providers().await?;
+    let cloud_providers: Vec<CloudProvider> = cx.cloud_client().list_cloud_regions().await?;
     let mut regions: Vec<Region> = vec![];
 
     for cloud_provider in cloud_providers {
