@@ -108,11 +108,12 @@ false
 
 # Ensure that disk isn't configurable for the new sizes (as it's force enabled).
 
-! CREATE CLUSTER c SIZE '1cc', DISK = true;
-contains:DISK option not supported for cluster sizes ending in cc or C
+> CREATE CLUSTER c SIZE '1cc', DISK = true;
+
+> DROP CLUSTER c;
 
 ! CREATE CLUSTER c SIZE '1cc', DISK = false;
-contains:DISK option not supported for cluster sizes ending in cc or C
+contains:DISK option disabled is not supported for cluster sizes ending in cc or C
 
 > CREATE CLUSTER c REPLICAS (r1 (SIZE '1cc'))
 > CREATE CLUSTER REPLICA c.r2 SIZE '1cc';
