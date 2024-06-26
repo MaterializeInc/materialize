@@ -16,7 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use chrono::{DateTime, NaiveDateTime};
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::AsCollection;
 use futures::StreamExt;
 use maplit::btreemap;
 use mz_kafka_util::client::{get_partitions, MzClientContext, PartitionId, TunnelingClientContext};
@@ -35,6 +35,7 @@ use mz_storage_types::sources::kafka::{
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::containers::stack::AccountedStackBuilder;
 use mz_timely_util::order::Partitioned;
 use rdkafka::client::Client;
 use rdkafka::consumer::base_consumer::PartitionQueue;
@@ -55,7 +56,7 @@ use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
+use crate::source::types::{ProgressStatisticsUpdate, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 #[derive(Default)]
@@ -161,7 +162,7 @@ impl SourceRender for KafkaSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
+        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -169,7 +170,7 @@ impl SourceRender for KafkaSourceConnection {
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-        let (mut data_output, stream) = builder.new_output();
+        let (mut data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
         let (_progress_output, progress_stream) =
             builder.new_output::<CapacityContainerBuilder<_>>();
         let (mut health_output, health_stream) = builder.new_output();
@@ -547,7 +548,9 @@ impl SourceRender for KafkaSourceConnection {
                             )),
                         }));
                         let time = data_cap.time().clone();
-                        data_output.give(&data_cap, ((0, Err(err)), time, 1));
+                        data_output
+                            .give_fueled(&data_cap, ((0, Err(err)), time, 1))
+                            .await;
                         return;
                     }
 
@@ -564,7 +567,9 @@ impl SourceRender for KafkaSourceConnection {
                                     )),
                                 }));
                                 let time = data_cap.time().clone();
-                                data_output.give(&data_cap, ((0, Err(err)), time, 1));
+                                data_output
+                                    .give_fueled(&data_cap, ((0, Err(err)), time, 1))
+                                    .await;
                                 return;
                             }
                         }
@@ -661,7 +666,9 @@ impl SourceRender for KafkaSourceConnection {
                                         error: SourceErrorDetails::Other(format!("{}", e)),
                                     }))
                                 });
-                                data_output.give(part_cap, ((0, msg), time, diff));
+                                data_output
+                                    .give_fueled(part_cap, ((0, msg), time, diff))
+                                    .await;
                             }
                         }
                     }
@@ -686,7 +693,9 @@ impl SourceRender for KafkaSourceConnection {
                                         error: SourceErrorDetails::Other(format!("{}", e)),
                                     }))
                                 });
-                                data_output.give(part_cap, ((0, msg), time, diff));
+                                data_output
+                                    .give_fueled(part_cap, ((0, msg), time, diff))
+                                    .await;
                             }
                             Ok(None) => continue,
                             Err(err) => {
