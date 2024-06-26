@@ -232,8 +232,8 @@ impl ColumnarStatsBuilder<OrderedDecimal<Numeric>> for NumericStatsBuilder {
         Self: Sized,
     {
         NumericStatsBuilder {
-            lower: OrderedDecimal(Numeric::default()),
-            upper: OrderedDecimal(Numeric::default()),
+            lower: OrderedDecimal(Numeric::nan()),
+            upper: OrderedDecimal(-Numeric::infinity()),
         }
     }
 

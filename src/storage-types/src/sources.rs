@@ -30,7 +30,7 @@ use mz_persist_types::dyn_col::DynColumnMut;
 use mz_persist_types::dyn_struct::{
     DynStruct, DynStructCfg, DynStructMut, ValidityMut, ValidityRef,
 };
-use mz_persist_types::stats::{DynStats, PrimitiveStats, StatsFn, StructStats};
+use mz_persist_types::stats::{DynStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
 use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
@@ -1809,7 +1809,7 @@ impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
         } = self;
 
         let err_column = BinaryBuilder::finish(&mut err_encoder);
-        let err_stats = PrimitiveStats::<Vec<u8>>::from_column(&err_column);
+        let err_stats = OptionStats::<PrimitiveStats<Vec<u8>>>::from_column(&err_column).finish();
         let row_column: Arc<dyn Array> = match row_encoder {
             SourceDataRowColumnarEncoder::Row(encoder) => Arc::new(encoder.finish()),
             SourceDataRowColumnarEncoder::EmptyRow => Arc::new(NullArray::new(err_column.len())),
@@ -1820,10 +1820,7 @@ impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
                 Self::OK_COLUMN_NAME.to_string(),
                 row_stats.into_columnar_stats(),
             ),
-            (
-                Self::ERR_COLUMN_NAME.to_string(),
-                err_stats.into_columnar_stats(),
-            ),
+            (Self::ERR_COLUMN_NAME.to_string(), err_stats),
         ];
         let stats = StructStats {
             len: row_column.len(),

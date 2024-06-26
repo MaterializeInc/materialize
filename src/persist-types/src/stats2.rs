@@ -12,14 +12,16 @@
 use std::fmt::Debug;
 
 use arrow::array::{
-    BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Array, BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 
 use crate::stats::primitive::{
     truncate_bytes, truncate_string, PrimitiveStats, TruncateBound, TRUNCATE_LEN,
 };
-use crate::stats::{DynStats, NoneStats};
+use crate::stats::{
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, DynStats, NoneStats, OptionStats,
+};
 
 /// A type that can incrementally collect stats from a sequence of values.
 pub trait ColumnarStatsBuilder<T>: Debug {
@@ -227,6 +229,52 @@ impl ColumnarStatsBuilder<&[u8]> for PrimitiveStats<Vec<u8>> {
         Self::FinishedStats: Sized,
     {
         self
+    }
+}
+
+impl<I, T> ColumnarStatsBuilder<Option<I>> for OptionStats<T>
+where
+    T: ColumnarStatsBuilder<I> + DynStats,
+    T::FinishedStats: Into<ColumnStatKinds>,
+{
+    type ArrowColumn = T::ArrowColumn;
+    type FinishedStats = ColumnarStats;
+
+    fn new() -> Self
+    where
+        Self: Sized,
+    {
+        OptionStats {
+            none: 0,
+            some: T::new(),
+        }
+    }
+
+    fn from_column(col: &Self::ArrowColumn) -> Self
+    where
+        Self: Sized,
+    {
+        OptionStats {
+            none: col.null_count(),
+            some: T::from_column(col),
+        }
+    }
+
+    fn include(&mut self, val: Option<I>) {
+        match val {
+            None => self.none += 1,
+            Some(val) => self.some.include(val),
+        }
+    }
+
+    fn finish(self) -> Self::FinishedStats
+    where
+        Self::FinishedStats: Sized,
+    {
+        ColumnarStats {
+            nulls: Some(ColumnNullStats { count: self.none }),
+            values: self.some.finish().into(),
+        }
     }
 }
 

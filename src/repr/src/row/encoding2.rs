@@ -91,16 +91,12 @@ impl DatumEncoder {
     }
 
     fn push_invalid(&mut self) {
-        self.encoder.push_invalid()
+        self.encoder.push_invalid();
+        self.none_stats += 1;
     }
 
     fn finish(self) -> (Arc<dyn Array>, ColumnarStats) {
         let (array, stats) = self.encoder.finish();
-        assert!(
-            self.none_stats == 0 || self.nullable,
-            "pushed nulls into a non-nullable column"
-        );
-
         let nulls = self.nullable.then_some(ColumnNullStats {
             count: self.none_stats,
         });
