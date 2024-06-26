@@ -398,6 +398,7 @@ pub enum ReplicaLocation {
         disk: bool,
         internal: bool,
         billed_as: Option<String>,
+        pending: bool,
     },
 }
 
@@ -427,6 +428,7 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                     disk,
                     billed_as,
                     internal,
+                    pending,
                 },
             ) => ReplicaLocation::Managed {
                 size,
@@ -442,6 +444,7 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                 disk,
                 internal,
                 billed_as,
+                pending,
             },
         }
     }

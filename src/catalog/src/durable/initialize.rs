@@ -677,6 +677,7 @@ fn default_replica_config(args: &BootstrapArgs) -> ReplicaConfig {
             disk: is_cluster_size_v2(&args.default_cluster_replica_size),
             internal: false,
             billed_as: None,
+            pending: false,
         },
         logging: ReplicaLogging {
             log_logging: false,

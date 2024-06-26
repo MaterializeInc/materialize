@@ -1245,6 +1245,7 @@ pub(crate) fn builtin_cluster_replica_config(
             availability_zone: None,
             billed_as: None,
             disk: is_cluster_size_v2(&replica_size),
+            pending: false,
             internal: false,
             size: replica_size,
         },
