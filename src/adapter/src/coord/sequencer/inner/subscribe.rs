@@ -29,6 +29,8 @@ use crate::util::ResultExt;
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
 
 impl Staged for SubscribeStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             SubscribeStage::OptimizeMir(stage) => &mut stage.validity,
@@ -168,7 +170,7 @@ impl Coordinator {
         } = &plan;
 
         // Collect optimizer parameters.
-        let cluster_id = validity.cluster_id.expect("cluser_id");
+        let cluster_id = validity.cluster_id.expect("cluster_id");
         let compute_instance = self
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
@@ -189,7 +191,7 @@ impl Coordinator {
             compute_instance,
             view_id,
             sink_id,
-            conn_id,
+            Some(conn_id),
             *with_snapshot,
             up_to,
             debug_name,

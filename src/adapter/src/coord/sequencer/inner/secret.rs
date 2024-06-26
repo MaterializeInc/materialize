@@ -30,6 +30,8 @@ use crate::session::Session;
 use crate::{catalog, AdapterError, AdapterNotice, ExecuteContext, ExecuteResponse};
 
 impl Staged for SecretStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut crate::coord::PlanValidity {
         match self {
             SecretStage::CreateFinish(stage) => &mut stage.validity,
@@ -43,7 +45,7 @@ impl Staged for SecretStage {
     async fn stage(
         self,
         coord: &mut Coordinator,
-        ctx: &mut crate::ExecuteContext,
+        ctx: &mut ExecuteContext,
     ) -> Result<crate::coord::StageResult<Box<Self>>, AdapterError> {
         match self {
             SecretStage::CreateEnsure(stage) => {
@@ -60,7 +62,7 @@ impl Staged for SecretStage {
         }
     }
 
-    fn message(self, ctx: crate::ExecuteContext, span: tracing::Span) -> crate::coord::Message {
+    fn message(self, ctx: ExecuteContext, span: tracing::Span) -> Message {
         Message::SecretStageReady {
             ctx,
             span,

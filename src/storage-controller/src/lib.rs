@@ -976,7 +976,8 @@ where
                         IntrospectionType::ComputeDependencies
                         | IntrospectionType::ComputeHydrationStatus
                         | IntrospectionType::ComputeOperatorHydrationStatus
-                        | IntrospectionType::ComputeMaterializedViewRefreshes => {
+                        | IntrospectionType::ComputeMaterializedViewRefreshes
+                        | IntrospectionType::ComputeErrorCounts => {
                             self.collection_manager.register_differential_collection(id, read_handle_fn);
                             // Differential collections start with an empty
                             // desired state. No need to manually reset.

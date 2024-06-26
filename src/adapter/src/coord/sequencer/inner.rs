@@ -104,7 +104,7 @@ use crate::coord::{
     AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
     CreateConnectionValidationReady, ExecuteContext, ExplainContext, Message, PendingRead,
     PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, StageResult, Staged,
-    TargetCluster, WatchSetResponse,
+    StagedContext, TargetCluster, WatchSetResponse,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
@@ -156,34 +156,40 @@ impl Coordinator {
     /// execute both on and off of the coordinator thread. Stages can either produce another stage
     /// to execute or a final response. An explicit [Span] is passed to allow for convenient
     /// tracing.
-    pub(crate) async fn sequence_staged<S: Staged + 'static>(
+    pub(crate) async fn sequence_staged<S>(
         &mut self,
-        mut ctx: ExecuteContext,
+        mut ctx: S::Ctx,
         parent_span: Span,
         mut stage: S,
-    ) {
-        let cancel_enabled = stage.cancel_enabled();
-        if cancel_enabled {
-            // Channel to await cancellation. Insert a new channel, but check if the previous one
-            // was already canceled.
-            if let Some((_prev_tx, prev_rx)) = self
-                .staged_cancellation
-                .insert(ctx.session.conn_id().clone(), watch::channel(false))
-            {
-                let was_canceled = *prev_rx.borrow();
-                if was_canceled {
-                    ctx.retire(Err(AdapterError::Canceled));
-                    return;
-                }
-            }
-        } else {
-            // If no cancel allowed, remove it so handle_spawn doesn't observe any previous value
-            // when cancel_enabled may have been true on an earlier stage.
-            self.staged_cancellation.remove(ctx.session.conn_id());
-        }
+    ) where
+        S: Staged + 'static,
+        S::Ctx: Send + 'static,
+    {
         return_if_err!(stage.validity().check(self.catalog()), ctx);
         loop {
-            let cancel_enabled = stage.cancel_enabled();
+            let mut cancel_enabled = stage.cancel_enabled();
+            if let Some(session) = ctx.session() {
+                if cancel_enabled {
+                    // Channel to await cancellation. Insert a new channel, but check if the previous one
+                    // was already canceled.
+                    if let Some((_prev_tx, prev_rx)) = self
+                        .staged_cancellation
+                        .insert(session.conn_id().clone(), watch::channel(false))
+                    {
+                        let was_canceled = *prev_rx.borrow();
+                        if was_canceled {
+                            ctx.retire(Err(AdapterError::Canceled));
+                            return;
+                        }
+                    }
+                } else {
+                    // If no cancel allowed, remove it so handle_spawn doesn't observe any previous value
+                    // when cancel_enabled may have been true on an earlier stage.
+                    self.staged_cancellation.remove(session.conn_id());
+                }
+            } else {
+                cancel_enabled = false
+            };
             let next = stage
                 .stage(self, &mut ctx)
                 .instrument(parent_span.clone())
@@ -212,27 +218,30 @@ impl Coordinator {
         }
     }
 
-    fn handle_spawn<T, F>(
+    fn handle_spawn<C, T, F>(
         &mut self,
-        ctx: ExecuteContext,
+        ctx: C,
         handle: JoinHandle<Result<T, AdapterError>>,
         cancel_enabled: bool,
         f: F,
     ) where
+        C: StagedContext + Send + 'static,
         T: Send + 'static,
-        F: FnOnce(ExecuteContext, T) + Send + 'static,
+        F: FnOnce(C, T) + Send + 'static,
     {
-        let rx: BoxFuture<()> =
-            if let Some((_tx, rx)) = self.staged_cancellation.get(ctx.session().conn_id()) {
-                let mut rx = rx.clone();
-                Box::pin(async move {
-                    // Wait for true or dropped sender.
-                    let _ = rx.wait_for(|v| *v).await;
-                    ()
-                })
-            } else {
-                Box::pin(future::pending())
-            };
+        let rx: BoxFuture<()> = if let Some((_tx, rx)) = ctx
+            .session()
+            .and_then(|session| self.staged_cancellation.get(session.conn_id()))
+        {
+            let mut rx = rx.clone();
+            Box::pin(async move {
+                // Wait for true or dropped sender.
+                let _ = rx.wait_for(|v| *v).await;
+                ()
+            })
+        } else {
+            Box::pin(future::pending())
+        };
         spawn(|| "sequence_staged", async move {
             tokio::select! {
                 res = handle => {

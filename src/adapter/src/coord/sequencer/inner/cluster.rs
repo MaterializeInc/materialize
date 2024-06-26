@@ -19,15 +19,16 @@ use mz_sql::{plan, session::metadata::SessionMetadata};
 use tracing::Span;
 
 use crate::catalog::ReplicaCreateDropReason;
-use crate::{
-    coord::{AlterCluster, ClusterStage, Coordinator, Message, PlanValidity, StageResult, Staged},
-    session::Session,
-    AdapterError, ExecuteContext, ExecuteResponse,
+use crate::coord::{
+    AlterCluster, ClusterStage, Coordinator, Message, PlanValidity, StageResult, Staged,
 };
+use crate::{session::Session, AdapterError, ExecuteContext, ExecuteResponse};
 
 use super::return_if_err;
 
 impl Staged for ClusterStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             Self::Alter(stage) => &mut stage.validity,
@@ -36,9 +37,9 @@ impl Staged for ClusterStage {
 
     async fn stage(
         self,
-        coord: &mut crate::coord::Coordinator,
-        ctx: &mut crate::ExecuteContext,
-    ) -> Result<crate::coord::StageResult<Box<Self>>, crate::AdapterError> {
+        coord: &mut Coordinator,
+        ctx: &mut ExecuteContext,
+    ) -> Result<StageResult<Box<Self>>, crate::AdapterError> {
         match self {
             Self::Alter(stage) => {
                 coord
@@ -48,7 +49,7 @@ impl Staged for ClusterStage {
         }
     }
 
-    fn message(self, ctx: crate::ExecuteContext, span: tracing::Span) -> crate::coord::Message {
+    fn message(self, ctx: ExecuteContext, span: tracing::Span) -> Message {
         Message::ClusterStageReady {
             ctx,
             span,

@@ -534,6 +534,11 @@ impl Coordinator {
             .create_replicas(replicas_to_start, enable_worker_core_affinity)
             .await
             .expect("creating replicas must not fail");
+
+        for (cluster_id, replica_id) in replicas {
+            self.install_introspection_subscribes(*cluster_id, *replica_id)
+                .await;
+        }
     }
 
     /// When this is called by the automated cluster scheduling, `scheduling_decision_reason` should

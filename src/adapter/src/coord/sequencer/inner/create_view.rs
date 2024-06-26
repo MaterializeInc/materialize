@@ -37,6 +37,8 @@ use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext};
 
 impl Staged for CreateViewStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             Self::Optimize(stage) => &mut stage.validity,

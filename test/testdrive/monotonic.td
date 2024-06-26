@@ -203,27 +203,31 @@ Target cluster: quickstart
 # in memory consumptions and should be understood before adapting the values.
 > SET cluster_replica = r1
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"ArrangeBy[[Column(0), Column(1)]]"
-"ArrangeBy[[Column(0), Column(1)]]-errors"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-"ArrangeMonotonic [val: empty]"
-"ArrangeMonotonic [val: empty]"
-"ArrangeMonotonic [val: empty]"
-"Arranged TopK input"
-ReduceMonotonic
-ReduceMonotonic
-ReduceMonotonic
-"Reduced TopK input"
+> SELECT mdod.dataflow_name, mdod.name
+  FROM mz_internal.mz_arrangement_sharing mash
+  JOIN mz_internal.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
+  JOIN mz_internal.mz_compute_exports USING (dataflow_id)
+  WHERE export_id LIKE 'u%'
+"Dataflow: materialize.public.i1_primary_idx" ArrangeBy[[Column(0)]]
+"Dataflow: materialize.public.i1_primary_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.i4_primary_idx" ArrangeBy[[Column(0)]]
+"Dataflow: materialize.public.i4_primary_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.i6_primary_idx" ArrangeBy[[Column(0)]]
+"Dataflow: materialize.public.i6_primary_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
+"Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
+"Dataflow: materialize.public.i8_primary_idx" ArrangeBy[[Column(0)]]
+"Dataflow: materialize.public.i8_primary_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.i9_primary_idx" ArrangeBy[[Column(0)]]
+"Dataflow: materialize.public.i9_primary_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.monotonic_fused" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.monotonic_fused" ReduceMonotonic
+"Dataflow: materialize.public.monotonic_max" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.monotonic_max" ReduceMonotonic
+"Dataflow: materialize.public.monotonic_min" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.monotonic_min" ReduceMonotonic
+"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
+"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
 
 # Propagating monotonicity analysis through materialized views
 

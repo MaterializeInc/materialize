@@ -794,6 +794,9 @@ impl Coordinator {
             }
             self.builtin_table_update().background(updates);
         }
+
+        self.drop_introspection_subscribes(replica_id);
+
         self.controller
             .drop_replica(cluster_id, replica_id)
             .await

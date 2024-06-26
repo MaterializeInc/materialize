@@ -17,12 +17,13 @@ $ set-arg-default default-replica-size=1
 # Note that we count on the retry behavior of testdrive in this test
 # since introspection sources may take some time to catch up.
 
-# The contents of the introspection tables depend on the replica size
-$ skip-if
-SELECT '${arg.default-replica-size}' != '4-4'
+# Introspection subscribes add noise to the introspection sources, so disable them.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_introspection_subscribes = false
 
 # In case the environment has other replicas
-> SET cluster_replica = r1
+> CREATE CLUSTER test SIZE '4-4'
+> SET cluster = test
 
 > CREATE TABLE t (a int)
 
@@ -495,3 +496,6 @@ idx3_div_by_zero 3
   FROM mz_internal.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
+
+# Cleanup.
+> DROP CLUSTER test CASCADE

@@ -21,8 +21,8 @@ use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
-use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{soft_assert_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
@@ -182,6 +182,12 @@ impl Coordinator {
                     stage,
                 } => {
                     self.sequence_staged(ctx, span, stage).await;
+                }
+                Message::IntrospectionSubscribeStageReady {
+                    span,
+                    stage,
+                } => {
+                    self.sequence_staged((), span, stage).await;
                 }
                 Message::ExplainTimestampStageReady {
                     ctx,
@@ -381,19 +387,27 @@ impl Coordinator {
                 self.send_peek_response(uuid, response, otel_ctx);
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
-                match self.active_compute_sinks.get_mut(&sink_id) {
-                    Some(ActiveComputeSink::Subscribe(active_subscribe)) => {
-                        let finished = active_subscribe.process_response(response);
-                        if finished {
-                            self.retire_compute_sinks(btreemap! {
-                                sink_id => ActiveComputeSinkRetireReason::Finished,
-                            })
-                            .await;
-                        }
+                if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =
+                    self.active_compute_sinks.get_mut(&sink_id)
+                {
+                    let finished = active_subscribe.process_response(response);
+                    if finished {
+                        self.retire_compute_sinks(btreemap! {
+                            sink_id => ActiveComputeSinkRetireReason::Finished,
+                        })
+                        .await;
                     }
-                    _ => {
-                        tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
-                    }
+
+                    soft_assert_or_log!(
+                        !self.introspection_subscribes.contains_key(&sink_id),
+                        "`sink_id` {sink_id} unexpectedly found in both `active_subscribes` \
+                         and `introspection_subscribes`",
+                    );
+                } else if self.introspection_subscribes.contains_key(&sink_id) {
+                    self.handle_introspection_subscribe_batch(sink_id, response)
+                        .await;
+                } else {
+                    tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
                 }
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {

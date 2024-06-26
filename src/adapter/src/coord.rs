@@ -106,13 +106,12 @@ use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
-use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::{spawn, JoinHandle};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::{soft_assert_or_log, soft_panic_or_log, stack};
+use mz_ore::{instrument, soft_assert_or_log, soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
@@ -157,6 +156,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadHoldsInner;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -198,6 +198,7 @@ mod command_handler;
 pub mod consistency;
 mod ddl;
 mod indexes;
+mod introspection;
 mod message_handler;
 mod privatelink_status;
 pub mod read_policy;
@@ -274,6 +275,10 @@ pub enum Message<T = mz_repr::Timestamp> {
         span: Span,
         stage: SubscribeStage,
     },
+    IntrospectionSubscribeStageReady {
+        span: Span,
+        stage: IntrospectionSubscribeStage,
+    },
     SecretStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -346,6 +351,9 @@ impl Message {
                 "create_materialized_view_stage_ready"
             }
             Message::SubscribeStageReady { .. } => "subscribe_stage_ready",
+            Message::IntrospectionSubscribeStageReady { .. } => {
+                "introspection_subscribe_stage_ready"
+            }
             Message::SecretStageReady { .. } => "secret_stage_ready",
             Message::ClusterStageReady { .. } => "cluster_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
@@ -765,6 +773,34 @@ pub struct SubscribeFinish {
 }
 
 #[derive(Debug)]
+pub enum IntrospectionSubscribeStage {
+    OptimizeMir(IntrospectionSubscribeOptimizeMir),
+    TimestampOptimizeLir(IntrospectionSubscribeTimestampOptimizeLir),
+    Finish(IntrospectionSubscribeFinish),
+}
+
+#[derive(Debug)]
+pub struct IntrospectionSubscribeOptimizeMir {
+    validity: PlanValidity,
+    plan: plan::SubscribePlan,
+    subscribe_id: GlobalId,
+}
+
+#[derive(Debug)]
+pub struct IntrospectionSubscribeTimestampOptimizeLir {
+    validity: PlanValidity,
+    optimizer: optimize::subscribe::Optimizer,
+    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
+}
+
+#[derive(Debug)]
+pub struct IntrospectionSubscribeFinish {
+    validity: PlanValidity,
+    global_lir_plan: optimize::subscribe::GlobalLirPlan,
+    read_holds: ReadHolds<Timestamp>,
+}
+
+#[derive(Debug)]
 pub enum SecretStage {
     CreateEnsure(CreateSecretEnsure),
     CreateFinish(CreateSecretFinish),
@@ -907,26 +943,51 @@ pub(crate) enum StageResult<T> {
     HandleRetire(JoinHandle<Result<ExecuteResponse, AdapterError>>),
     /// The next stage is immediately ready and will execute.
     Immediate(T),
-    /// The finaly stage was executed and is ready to respond to the client.
+    /// The final stage was executed and is ready to respond to the client.
     Response(ExecuteResponse),
 }
 
 /// Common functionality for [Coordinator::sequence_staged].
 pub(crate) trait Staged: Send {
+    type Ctx: StagedContext;
+
     fn validity(&mut self) -> &mut PlanValidity;
 
     /// Returns the next stage or final result.
     async fn stage(
         self,
         coord: &mut Coordinator,
-        ctx: &mut ExecuteContext,
+        ctx: &mut Self::Ctx,
     ) -> Result<StageResult<Box<Self>>, AdapterError>;
 
     /// Prepares a message for the Coordinator.
-    fn message(self, ctx: ExecuteContext, span: Span) -> Message;
+    fn message(self, ctx: Self::Ctx, span: Span) -> Message;
 
     /// Whether it is safe to SQL cancel this stage.
     fn cancel_enabled(&self) -> bool;
+}
+
+pub trait StagedContext {
+    fn retire(self, result: Result<ExecuteResponse, AdapterError>);
+    fn session(&self) -> Option<&Session>;
+}
+
+impl StagedContext for ExecuteContext {
+    fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
+        self.retire(result);
+    }
+
+    fn session(&self) -> Option<&Session> {
+        Some(self.session())
+    }
+}
+
+impl StagedContext for () {
+    fn retire(self, _result: Result<ExecuteResponse, AdapterError>) {}
+
+    fn session(&self) -> Option<&Session> {
+        None
+    }
 }
 
 /// Configures a coordinator.
@@ -1595,6 +1656,8 @@ pub struct Coordinator {
     /// A map from connection ids to a watch channel that is set to `true` if the connection
     /// received a cancel request.
     staged_cancellation: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
+    /// Active introspection subscribes.
+    introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
 
     /// Serializes accesses to write critical sections.
     write_lock: Arc<tokio::sync::Mutex<()>>,
@@ -2058,6 +2121,9 @@ impl Coordinator {
         debug!("coordinator init: announcing completion of initialization to controller");
         // Announce the completion of initialization.
         self.controller.initialization_complete();
+
+        // Initialize unified introspection.
+        self.bootstrap_introspection_subscribes().await;
 
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(
@@ -3413,6 +3479,7 @@ pub fn serve(
                     active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
                     staged_cancellation: BTreeMap::new(),
+                    introspection_subscribes: BTreeMap::new(),
                     write_lock: Arc::new(tokio::sync::Mutex::new(())),
                     write_lock_wait_group: VecDeque::new(),
                     pending_writes: Vec::new(),

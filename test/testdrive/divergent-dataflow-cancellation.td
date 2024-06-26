@@ -14,6 +14,13 @@
 # sources. This also serves to verify that logging is correctly cleaned up under
 # active dataflow cancellation.
 
+# Introspection subscribes add noise to the introspection sources, so disable them.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_introspection_subscribes = false
+
+> CREATE CLUSTER test SIZE '1';
+> SET cluster = test;
+
 > CREATE VIEW divergent AS
   WITH MUTUALLY RECURSIVE
       flip(x int) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip)
@@ -24,9 +31,6 @@
   WITH MUTUALLY RECURSIVE
       flip(x int) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip)
   SELECT * FROM flip
-
-# In case the environment has other replicas
-> SET cluster_replica = r1
 
 # Ensure the dataflow was successfully installed.
 > SELECT count(*)
@@ -130,3 +134,6 @@ true
 # This source never sees retractions.
 > SELECT count(*) > 0 FROM mz_internal.mz_scheduling_parks_histogram_raw
 true
+
+# Cleanup.
+> DROP CLUSTER test CASCADE

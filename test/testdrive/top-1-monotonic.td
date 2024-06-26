@@ -277,34 +277,38 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 # in memory consumptions and should be understood before adapting the values.
 > SET cluster_replica = r1
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"Arranged DistinctBy"
-"Arranged DistinctBy"
-"Arranged DistinctBy"
-"Arranged DistinctBy"
-"Arranged MonotonicTop1 partial [val: empty]"
-"Arranged MonotonicTop1 partial [val: empty]"
-"Arranged MonotonicTop1 partial [val: empty]"
-"Arranged MonotonicTop1 partial [val: empty]"
-"Arranged MonotonicTop1 partial [val: empty]"
-"Arranged MonotonicTop1 partial [val: empty]"
-"DistinctBy"
-"DistinctBy"
-"DistinctBy"
-"DistinctBy"
-DistinctByErrorCheck
-DistinctByErrorCheck
-DistinctByErrorCheck
-DistinctByErrorCheck
-MonotonicTop1
-MonotonicTop1
-MonotonicTop1
-MonotonicTop1
-MonotonicTop1
-MonotonicTop1
+> SELECT mdod.dataflow_name, mdod.name
+  FROM mz_internal.mz_arrangement_sharing mash
+  JOIN mz_internal.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
+  JOIN mz_internal.mz_compute_exports USING (dataflow_id)
+  WHERE export_id LIKE 'u%'
+"Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
+"Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
+"Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
+"Dataflow: group_by_in_top_1" "Arranged DistinctBy"
+"Dataflow: group_by_in_top_1" "Arranged DistinctBy"
+"Dataflow: group_by_in_top_1" "Arranged MonotonicTop1 partial [val: empty]"
+"Dataflow: group_by_in_top_1" DistinctBy
+"Dataflow: group_by_in_top_1" DistinctBy
+"Dataflow: group_by_in_top_1" DistinctByErrorCheck
+"Dataflow: group_by_in_top_1" DistinctByErrorCheck
+"Dataflow: group_by_in_top_1" MonotonicTop1
+"Dataflow: group_by_limit" "Arranged DistinctBy"
+"Dataflow: group_by_limit" "Arranged MonotonicTop1 partial [val: empty]"
+"Dataflow: group_by_limit" DistinctBy
+"Dataflow: group_by_limit" DistinctByErrorCheck
+"Dataflow: group_by_limit" MonotonicTop1
+"Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
+"Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
+"Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
+"Dataflow: group_by_order_by_in_top_1" "Arranged DistinctBy"
+"Dataflow: group_by_order_by_in_top_1" "Arranged MonotonicTop1 partial [val: empty]"
+"Dataflow: group_by_order_by_in_top_1" DistinctBy
+"Dataflow: group_by_order_by_in_top_1" DistinctByErrorCheck
+"Dataflow: group_by_order_by_in_top_1" MonotonicTop1
+"Dataflow: limit_only" "Arranged MonotonicTop1 partial [val: empty]"
+"Dataflow: limit_only" MonotonicTop1
+"Dataflow: order_by_desc_limit" "Arranged MonotonicTop1 partial [val: empty]"
+"Dataflow: order_by_desc_limit" MonotonicTop1
+"Dataflow: order_by_limit" "Arranged MonotonicTop1 partial [val: empty]"
+"Dataflow: order_by_limit" MonotonicTop1

@@ -43,7 +43,7 @@ use timely::progress::{Antichain, ChangeBatch};
 use timely::{Container, PartialOrder};
 use uuid::Uuid;
 
-use crate::controller::error::CollectionMissing;
+use crate::controller::error::{CollectionMissing, ERROR_TARGET_REPLICA_FAILED};
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionState, ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates,
@@ -902,7 +902,7 @@ where
                 SubscribeBatch {
                     lower: subscribe.frontier.clone(),
                     upper: subscribe.frontier,
-                    updates: Err("target replica failed or was dropped".into()),
+                    updates: Err(ERROR_TARGET_REPLICA_FAILED.into()),
                 },
             );
             self.deliver_response(response);
@@ -917,7 +917,7 @@ where
         for (uuid, peek) in self.peeks_targeting(id) {
             peek_responses.push(ComputeControllerResponse::PeekResponse(
                 uuid,
-                PeekResponse::Error("target replica failed or was dropped".into()),
+                PeekResponse::Error(ERROR_TARGET_REPLICA_FAILED.into()),
                 peek.otel_ctx.clone(),
             ));
             to_drop.push(uuid);
