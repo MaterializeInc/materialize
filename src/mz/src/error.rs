@@ -57,8 +57,8 @@ pub enum Error {
     #[error("Error: The profile '{0}' is missing in the configuration file. \n\nTo resolve this issue, you can either: \n1. Add the missing profile using the command `mz profile --profile {0} init` \n2. Set another existing profile using the command: `mz config set profile <profile_name>`.")]
     ProfileMissing(String),
     /// Error finding the region's cloud provider.
-    #[error("Error finding the region's cloud provider.")]
-    CloudProviderMissing,
+    #[error("Cloud region not found.")]
+    CloudRegionMissing,
     /// Error parsing TOML.
     #[error("Error parsing TOML file: {0}")]
     TomlParseError(#[from] toml_edit::de::Error),

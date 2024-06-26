@@ -97,7 +97,7 @@ impl Client {
 
     /// Get all the available customer regions for the current user.
     pub async fn get_all_regions(&self) -> Result<Vec<Region>, Error> {
-        let cloud_providers: Vec<CloudProvider> = self.list_cloud_providers().await?;
+        let cloud_providers: Vec<CloudProvider> = self.list_cloud_regions().await?;
         let mut regions: Vec<Region> = vec![];
 
         for cloud_provider in cloud_providers {

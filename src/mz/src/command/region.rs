@@ -119,6 +119,8 @@ pub async fn disable(cx: RegionContext) -> Result<(), Error> {
         .output_formatter()
         .loading_spinner("Retrieving information...");
 
+    let cloud_provider = cx.get_cloud_provider().await?;
+
     // The `delete_region` method retries disabling a region,
     // has an inner timeout, and manages a `504` response.
     // For any other type of error response, we handle it here
@@ -127,8 +129,6 @@ pub async fn disable(cx: RegionContext) -> Result<(), Error> {
         .max_duration(Duration::from_secs(720))
         .clamp_backoff(Duration::from_secs(1))
         .retry_async(|_| async {
-            let cloud_provider = cx.get_cloud_provider().await?;
-
             loading_spinner.set_message("Disabling region...");
             cx.cloud_client()
                 .delete_region(cloud_provider.clone())
@@ -153,7 +153,7 @@ pub async fn list(cx: RegionContext) -> Result<(), Error> {
         status: &'a str,
     }
 
-    let cloud_providers: Vec<CloudProvider> = cx.cloud_client().list_cloud_providers().await?;
+    let cloud_providers: Vec<CloudProvider> = cx.cloud_client().list_cloud_regions().await?;
     let mut regions: Vec<Region> = vec![];
 
     for cloud_provider in cloud_providers {
