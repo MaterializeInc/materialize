@@ -34,7 +34,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::stream::StreamExt;
@@ -56,6 +55,7 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
+use mz_timely_util::containers::stack::StackWrapper;
 use mz_timely_util::operator::StreamExt as _;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -68,7 +68,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
+use timely::{Container, PartialOrder};
 use tokio_stream::wrappers::WatchStream;
 use tracing::{info, trace};
 
@@ -76,7 +76,7 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::metrics::source::SourceMetrics;
 use crate::metrics::StorageMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockFollower, ReclockOperator};
-use crate::source::types::{SourceMessage, SourceOutput, SourceRender};
+use crate::source::types::{SourceMessage, SourceOutput, SourceRender, StackedCollection};
 use crate::statistics::SourceStatistics;
 
 /// Shared configuration information for all source types. This is used in the
@@ -262,7 +262,7 @@ fn source_render_operator<G, C>(
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
+    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
@@ -561,24 +561,30 @@ where
 /// Receives un-timestamped batches from the source reader and updates to the
 /// remap trace on a second input. This operator takes the remap information,
 /// reclocks incoming batches and sends them forward.
-fn reclock_operator<G, FromTime, D, M>(
+fn reclock_operator<G, FromTime, M>(
     scope: &G,
     config: RawSourceCreationConfig,
     mut timestamper: ReclockFollower<FromTime, mz_repr::Timestamp>,
     mut source_rx: InstrumentedUnboundedReceiver<
-        Event<FromTime, Vec<((usize, Result<SourceMessage, DataflowError>), FromTime, D)>>,
+        Event<
+            FromTime,
+            StackWrapper<(
+                (usize, Result<SourceMessage, DataflowError>),
+                FromTime,
+                Diff,
+            )>,
+        >,
         M,
     >,
     remap_trace_updates: Collection<G, FromTime, Diff>,
     source_metrics: Arc<SourceMetrics>,
 ) -> Vec<(
-    Collection<G, SourceOutput<FromTime>, D>,
+    Collection<G, SourceOutput<FromTime>, Diff>,
     Collection<G, DataflowError, Diff>,
 )>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
-    D: Semigroup + Into<Diff> + 'static,
     M: InstrumentedChannelMetric + 'static,
 {
     let RawSourceCreationConfig {
@@ -621,8 +627,8 @@ where
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
 
         // Stash of batches that have not yet been timestamped.
-        type Batch<T, D> = Vec<((usize, Result<SourceMessage, DataflowError>), T, D)>;
-        let mut untimestamped_batches: Vec<(FromTime, Batch<FromTime, D>)> = Vec::new();
+        type Batch<T> = Vec<((usize, Result<SourceMessage, DataflowError>), T, Diff)>;
+        let mut untimestamped_batches: Vec<(FromTime, Batch<FromTime>)> = Vec::new();
 
         // Stash of reclock updates that are still beyond the upper frontier
         let mut remap_updates_stash = vec![];
@@ -679,8 +685,8 @@ where
                         );
                         work_to_do.notify_one();
                     }
-                    Event::Messages(time, batch) => {
-                        untimestamped_batches.push((time, batch));
+                    Event::Messages(time, mut batch) => {
+                        untimestamped_batches.push((time, batch.drain().cloned().collect()));
                         work_to_do.notify_one();
                     }
                 },

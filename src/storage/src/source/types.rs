@@ -20,8 +20,9 @@ use mz_repr::{Diff, Row};
 use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::containers::stack::StackWrapper;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
@@ -44,6 +45,9 @@ pub enum ProgressStatisticsUpdate {
         records_staged: u64,
     },
 }
+
+pub type StackedCollection<G, T> =
+    Collection<G, T, Diff, StackWrapper<(T, <G as ScopeParent>::Timestamp, Diff)>>;
 
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {
@@ -82,7 +86,7 @@ pub trait SourceRender {
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
+        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
