@@ -86,7 +86,7 @@ class TestAnalyticsDataSource:
             FROM v_build_annotation_error bae
             INNER JOIN v_build_success bsu
             ON bae.build_id = bsu.build_id
-            WHERE bae.content LIKE '{like_pattern}'
+            WHERE bae.content ILIKE '{like_pattern}'
             {pipeline_clause}
             {branch_clause}
             {failed_builds_clause}
