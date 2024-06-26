@@ -702,15 +702,30 @@ fn generate_rbac_requirements(
             role_membership: role_ids.into_iter().cloned().collect(),
             ..Default::default()
         },
-        Plan::ShowCreate(plan::ShowCreatePlan { id, row: _ }) => RbacRequirements {
-            privileges: vec![(
-                SystemObjectId::Object(catalog.get_item(id).name().qualifiers.clone().into()),
-                AclMode::USAGE,
-                role_id,
-            )],
-            item_usage: &EMPTY_ITEM_USAGE,
-            ..Default::default()
-        },
+        Plan::ShowCreate(plan::ShowCreatePlan { id, row: _ }) => {
+            let container_id = match id {
+                ObjectId::Item(id) => Some(SystemObjectId::Object(
+                    catalog.get_item(id).name().qualifiers.clone().into(),
+                )),
+                ObjectId::Schema((database_id, _schema_id)) => match database_id {
+                    ResolvedDatabaseSpecifier::Ambient => None,
+                    ResolvedDatabaseSpecifier::Id(id) => Some(SystemObjectId::Object(id.into())),
+                },
+                ObjectId::Cluster(_)
+                | ObjectId::ClusterReplica(_)
+                | ObjectId::Database(_)
+                | ObjectId::Role(_) => None,
+            };
+            let privileges = match container_id {
+                Some(id) => vec![(id, AclMode::USAGE, role_id)],
+                None => Vec::new(),
+            };
+            RbacRequirements {
+                privileges,
+                item_usage: &EMPTY_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::ShowColumns(plan::ShowColumnsPlan {
             id,
             select_plan,

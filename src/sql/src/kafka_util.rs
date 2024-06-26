@@ -25,6 +25,7 @@ use rdkafka::{Offset, TopicPartitionList};
 use tokio::time::Duration;
 
 use crate::ast::Value;
+use crate::catalog::SessionCatalog;
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
 use crate::plan::with_options::{ImpliedValue, TryFromValue};
@@ -75,6 +76,16 @@ impl TryFromValue<Value> for KafkaSinkCompressionType {
             },
             _ => sql_bail!("compression type must be a string"),
         }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::String(match self {
+            KafkaSinkCompressionType::None => "none".to_string(),
+            KafkaSinkCompressionType::Gzip => "gzip".to_string(),
+            KafkaSinkCompressionType::Snappy => "snappy".to_string(),
+            KafkaSinkCompressionType::Lz4 => "lz4".to_string(),
+            KafkaSinkCompressionType::Zstd => "zstd".to_string(),
+        }))
     }
 
     fn name() -> String {

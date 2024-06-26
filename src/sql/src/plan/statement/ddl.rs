@@ -26,7 +26,7 @@ use mz_controller_types::{
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
-use mz_ore::collections::HashSet;
+use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
@@ -127,7 +127,7 @@ use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalDuration, TryFromValue};
 use crate::plan::{
-    plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
+    literal, plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan,
     AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan,
@@ -146,6 +146,7 @@ use crate::session::vars;
 use crate::session::vars::{
     ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
 };
+use crate::{names, parse};
 
 mod connection;
 
@@ -3552,14 +3553,54 @@ generate_extracted_config!(
     (EnableLetrecFixpointAnalysis, Option<bool>, Default(None))
 );
 
+/// Convert a [`CreateClusterStatement`] into a [`Plan`].
+///
+/// The reverse of [`unplan_create_cluster`].
 pub fn plan_create_cluster(
+    scx: &StatementContext,
+    stmt: CreateClusterStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let plan = plan_create_cluster_inner(scx, stmt)?;
+
+    // Roundtrip through unplan and make sure that we end up with the same plan.
+    if let CreateClusterVariant::Managed(_) = &plan.variant {
+        let stmt = unplan_create_cluster(scx, plan.clone())
+            .map_err(|e| PlanError::Replan(e.to_string()))?;
+        let create_sql = stmt.to_ast_string_stable();
+        let stmt = parse::parse(&create_sql)
+            .map_err(|e| PlanError::Replan(e.to_string()))?
+            .into_element()
+            .ast;
+        let (stmt, _resolved_ids) =
+            names::resolve(scx.catalog, stmt).map_err(|e| PlanError::Replan(e.to_string()))?;
+        let stmt = match stmt {
+            Statement::CreateCluster(stmt) => stmt,
+            stmt => {
+                return Err(PlanError::Replan(format!(
+                "replan does not match: plan={plan:?}, create_sql={create_sql:?}, stmt={stmt:?}"
+            )))
+            }
+        };
+        let replan =
+            plan_create_cluster_inner(scx, stmt).map_err(|e| PlanError::Replan(e.to_string()))?;
+        if plan != replan {
+            return Err(PlanError::Replan(format!(
+                "replan does not match: plan={plan:?}, replan={replan:?}"
+            )));
+        }
+    }
+
+    Ok(Plan::CreateCluster(plan))
+}
+
+pub fn plan_create_cluster_inner(
     scx: &StatementContext,
     CreateClusterStatement {
         name,
         options,
         features,
     }: CreateClusterStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<CreateClusterPlan, PlanError> {
     let ClusterOptionExtracted {
         availability_zones,
         introspection_debugging,
@@ -3590,9 +3631,26 @@ pub fn plan_create_cluster(
         let Some(size) = size else {
             sql_bail!("SIZE must be specified for managed clusters");
         };
-        if disk_in.is_some() {
+
+        let mut disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
+        // HACK(benesch): disk is always enabled for v2 cluster sizes, and it
+        // is an error to specify `DISK = FALSE` or `DISK = TRUE` explicitly.
+        //
+        // The long term plan is to phase out the v1 cluster sizes, at which
+        // point we'll be able to remove the `DISK` option entirely and simply
+        // always enable disk.
+        if is_cluster_size_v2(&size) {
+            if disk_in == Some(false) {
+                sql_bail!("DISK option disabled is not supported for cluster sizes ending in cc or C because disk is always enabled");
+            }
+            disk_default = true;
+        }
+        // Only require the feature flag if `DISK` was explicitly specified and it does not match
+        // the default value.
+        if matches!(disk_in, Some(disk) if disk != disk_default) {
             scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
         }
+        let disk = disk_in.unwrap_or(disk_default);
 
         let compute = plan_compute_replica_config(
             introspection_interval,
@@ -3617,22 +3675,6 @@ pub fn plan_create_cluster(
             scx.require_feature_flag(&vars::ENABLE_MANAGED_CLUSTER_AVAILABILITY_ZONES)?;
         }
 
-        let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
-        let mut disk = disk_in.unwrap_or(disk_default);
-
-        // HACK(benesch): disk is always enabled for v2 cluster sizes, and it
-        // is an error to specify `DISK = FALSE` or `DISK = TRUE` explicitly.
-        //
-        // The long term plan is to phase out the v1 cluster sizes, at which
-        // point we'll be able to remove the `DISK` option entirely and simply
-        // always enable disk.
-        if is_cluster_size_v2(&size) {
-            if disk_in.is_some() {
-                sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
-            }
-            disk = true;
-        }
-
         // Plan OptimizerFeatureOverrides.
         let ClusterFeatureExtracted {
             reoptimize_imported_views,
@@ -3653,7 +3695,7 @@ pub fn plan_create_cluster(
 
         let schedule = plan_cluster_schedule(schedule)?;
 
-        Ok(Plan::CreateCluster(CreateClusterPlan {
+        Ok(CreateClusterPlan {
             name: normalize::ident(name),
             variant: CreateClusterVariant::Managed(CreateClusterManagedPlan {
                 replication_factor,
@@ -3664,7 +3706,7 @@ pub fn plan_create_cluster(
                 optimizer_feature_overrides,
                 schedule,
             }),
-        }))
+        })
     } else {
         let Some(replica_defs) = replicas else {
             sql_bail!("REPLICAS must be specified for unmanaged clusters");
@@ -3701,10 +3743,95 @@ pub fn plan_create_cluster(
             replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
         }
 
-        Ok(Plan::CreateCluster(CreateClusterPlan {
+        Ok(CreateClusterPlan {
             name: normalize::ident(name),
             variant: CreateClusterVariant::Unmanaged(CreateClusterUnmanagedPlan { replicas }),
-        }))
+        })
+    }
+}
+
+/// Convert a [`CreateClusterPlan`] into a [`CreateClusterStatement`].
+///
+/// The reverse of [`plan_create_cluster`].
+pub fn unplan_create_cluster(
+    scx: &StatementContext,
+    CreateClusterPlan { name, variant }: CreateClusterPlan,
+) -> Result<CreateClusterStatement<Aug>, PlanError> {
+    match variant {
+        CreateClusterVariant::Managed(CreateClusterManagedPlan {
+            replication_factor,
+            size,
+            availability_zones,
+            compute,
+            disk,
+            optimizer_feature_overrides,
+            schedule,
+        }) => {
+            let schedule = unplan_cluster_schedule(schedule);
+            let OptimizerFeatureOverrides {
+                enable_consolidate_after_union_negate: _,
+                enable_reduce_mfp_fusion: _,
+                enable_cardinality_estimates: _,
+                persist_fast_path_limit: _,
+                reoptimize_imported_views,
+                enable_eager_delta_joins,
+                enable_new_outer_join_lowering,
+                enable_variadic_left_join_lowering,
+                enable_letrec_fixpoint_analysis,
+            } = optimizer_feature_overrides;
+            let features_extracted = ClusterFeatureExtracted {
+                // Seen is ignored when unplanning.
+                seen: Default::default(),
+                reoptimize_imported_views,
+                enable_eager_delta_joins,
+                enable_new_outer_join_lowering,
+                enable_variadic_left_join_lowering,
+                enable_letrec_fixpoint_analysis,
+            };
+            let features = features_extracted.into_values(scx.catalog);
+            let availability_zones = if availability_zones.is_empty() {
+                None
+            } else {
+                Some(availability_zones)
+            };
+            let (introspection_interval, introspection_debugging) =
+                unplan_compute_replica_config(compute);
+            // Replication factor cannot be explicitly specified with a refresh schedule, it's
+            // always 1 or less.
+            let replication_factor = match &schedule {
+                ClusterScheduleOptionValue::Manual => Some(replication_factor),
+                ClusterScheduleOptionValue::Refresh { .. } => {
+                    assert!(
+                        replication_factor <= 1,
+                        "replication factor, {replication_factor:?}, must be <= 1"
+                    );
+                    None
+                }
+            };
+            let options_extracted = ClusterOptionExtracted {
+                // Seen is ignored when unplanning.
+                seen: Default::default(),
+                availability_zones,
+                disk: Some(disk),
+                introspection_debugging: Some(introspection_debugging),
+                introspection_interval,
+                managed: Some(true),
+                replicas: None,
+                replication_factor,
+                size: Some(size),
+                schedule: Some(schedule),
+            };
+            let options = options_extracted.into_values(scx.catalog);
+            let name = Ident::new_unchecked(name);
+            Ok(CreateClusterStatement {
+                name,
+                options,
+                features,
+            })
+        }
+        CreateClusterVariant::Unmanaged(_) => {
+            bail_unsupported!(15435, "SHOW CREATE for unmanaged clusters")
+        }
     }
 }
 
@@ -3860,6 +3987,9 @@ fn plan_replica_config(
     }
 }
 
+/// Convert an [`Option<OptionalDuration>`] and [`bool`] into a [`ComputeReplicaConfig`].
+///
+/// The reverse of [`unplan_compute_replica_config`].
 fn plan_compute_replica_config(
     introspection_interval: Option<OptionalDuration>,
     introspection_debugging: bool,
@@ -3881,6 +4011,24 @@ fn plan_compute_replica_config(
     Ok(compute)
 }
 
+/// Convert a [`ComputeReplicaConfig`] into an [`Option<OptionalDuration>`] and [`bool`].
+///
+/// The reverse of [`plan_compute_replica_config`].
+fn unplan_compute_replica_config(
+    compute_replica_config: ComputeReplicaConfig,
+) -> (Option<OptionalDuration>, bool) {
+    match compute_replica_config.introspection {
+        Some(ComputeReplicaIntrospectionConfig {
+            debugging,
+            interval,
+        }) => (Some(OptionalDuration(Some(interval))), debugging),
+        None => (Some(OptionalDuration(None)), false),
+    }
+}
+
+/// Convert a [`ClusterScheduleOptionValue`] into a [`ClusterSchedule`].
+///
+/// The reverse of [`unplan_cluster_schedule`].
 fn plan_cluster_schedule(
     schedule: ClusterScheduleOptionValue,
 ) -> Result<ClusterSchedule, PlanError> {
@@ -3920,6 +4068,25 @@ fn plan_cluster_schedule(
             }
         }
     })
+}
+
+/// Convert a [`ClusterSchedule`] into a [`ClusterScheduleOptionValue`].
+///
+/// The reverse of [`plan_cluster_schedule`].
+fn unplan_cluster_schedule(schedule: ClusterSchedule) -> ClusterScheduleOptionValue {
+    match schedule {
+        ClusterSchedule::Manual => ClusterScheduleOptionValue::Manual,
+        ClusterSchedule::Refresh {
+            rehydration_time_estimate,
+        } => {
+            let interval = Interval::from_duration(&rehydration_time_estimate)
+                .expect("planning ensured that this is convertible back to Interval");
+            let interval_value = literal::unplan_interval(&interval);
+            ClusterScheduleOptionValue::Refresh {
+                rehydration_time_estimate: Some(interval_value),
+            }
+        }
+    }
 }
 
 pub fn describe_create_cluster_replica(

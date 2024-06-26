@@ -23,11 +23,15 @@ use mz_storage_types::connections::StringOrSecret;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{AstInfo, UnresolvedItemName, Value, WithOptionValue};
+use crate::catalog::SessionCatalog;
 use crate::names::{ResolvedDataType, ResolvedItemName};
 use crate::plan::{literal, Aug, PlanError};
 
 pub trait TryFromValue<T>: Sized {
     fn try_from_value(v: T) -> Result<Self, PlanError>;
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<T>;
+
     fn name() -> String;
 }
 
@@ -51,6 +55,18 @@ impl TryFromValue<WithOptionValue<Aug>> for Secret {
             _ => sql_bail!("must provide a secret value"),
         }
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        let secret = catalog.get_item(&self.0);
+        let name = ResolvedItemName::Item {
+            id: self.0,
+            qualifiers: secret.name().qualifiers.clone(),
+            full_name: catalog.resolve_full_name(secret.name()),
+            print_id: false,
+        };
+        Some(WithOptionValue::Secret(name))
+    }
+
     fn name() -> String {
         "secret".to_string()
     }
@@ -84,6 +100,18 @@ impl TryFromValue<WithOptionValue<Aug>> for Object {
             _ => sql_bail!("must provide an object"),
         })
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        let item = catalog.get_item(&self.0);
+        let name = ResolvedItemName::Item {
+            id: self.0,
+            qualifiers: item.name().qualifiers.clone(),
+            full_name: catalog.resolve_full_name(item.name()),
+            print_id: false,
+        };
+        Some(WithOptionValue::Item(name))
+    }
+
     fn name() -> String {
         "object reference".to_string()
     }
@@ -106,6 +134,13 @@ impl TryFromValue<WithOptionValue<Aug>> for Ident {
             _ => sql_bail!("must provide an unqalified identifier"),
         })
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::UnresolvedItemName(UnresolvedItemName(
+            vec![self],
+        )))
+    }
+
     fn name() -> String {
         "identifier".to_string()
     }
@@ -124,6 +159,11 @@ impl TryFromValue<WithOptionValue<Aug>> for UnresolvedItemName {
             _ => sql_bail!("must provide an object name"),
         })
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::UnresolvedItemName(self))
+    }
+
     fn name() -> String {
         "object name".to_string()
     }
@@ -142,6 +182,11 @@ impl TryFromValue<WithOptionValue<Aug>> for ResolvedDataType {
             _ => sql_bail!("must provide a data type"),
         })
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::DataType(self))
+    }
+
     fn name() -> String {
         "data type".to_string()
     }
@@ -162,6 +207,14 @@ impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
             v => StringOrSecret::String(String::try_from_value(v)?),
         })
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(match self {
+            StringOrSecret::Secret(secret) => Secret(secret).try_into_value(catalog)?,
+            StringOrSecret::String(s) => s.try_into_value(catalog)?,
+        })
+    }
+
     fn name() -> String {
         "string or secret".to_string()
     }
@@ -178,6 +231,13 @@ impl TryFromValue<Value> for Duration {
         let interval = Interval::try_from_value(v)?;
         Ok(interval.duration()?)
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<Value> {
+        let interval = Interval::from_duration(&self)
+            .expect("planning ensured that this is convertible back to Interval");
+        Some(interval.try_into_value(catalog)?)
+    }
+
     fn name() -> String {
         "interval".to_string()
     }
@@ -198,6 +258,11 @@ impl TryFromValue<Value> for ByteSize {
             _ => sql_bail!("cannot use value as bytes"),
         }
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::String(self.to_string()))
+    }
+
     fn name() -> String {
         "bytes".to_string()
     }
@@ -217,6 +282,12 @@ impl TryFromValue<Value> for Interval {
             _ => sql_bail!("cannot use value as interval"),
         }
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        let interval_value = literal::unplan_interval(&self);
+        Some(Value::Interval(interval_value))
+    }
+
     fn name() -> String {
         "interval".to_string()
     }
@@ -246,6 +317,14 @@ impl TryFromValue<Value> for OptionalDuration {
             v => Duration::try_from_value(v)?.into(),
         })
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(match self.0 {
+            None => Value::Null,
+            Some(duration) => duration.try_into_value(catalog)?,
+        })
+    }
+
     fn name() -> String {
         "optional interval".to_string()
     }
@@ -264,6 +343,11 @@ impl TryFromValue<Value> for String {
             _ => sql_bail!("cannot use value as string"),
         }
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::String(self))
+    }
+
     fn name() -> String {
         "text".to_string()
     }
@@ -282,6 +366,11 @@ impl TryFromValue<Value> for bool {
             _ => sql_bail!("cannot use value as boolean"),
         }
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Boolean(self))
+    }
+
     fn name() -> String {
         "bool".to_string()
     }
@@ -301,6 +390,10 @@ impl TryFromValue<Value> for f64 {
                 .map_err(|e| sql_err!("invalid numeric value: {e}")),
             _ => sql_bail!("cannot use value as number"),
         }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Number(self.to_string()))
     }
 
     fn name() -> String {
@@ -323,6 +416,11 @@ impl TryFromValue<Value> for i32 {
             _ => sql_bail!("cannot use value as number"),
         }
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Number(self.to_string()))
+    }
+
     fn name() -> String {
         "int".to_string()
     }
@@ -342,6 +440,9 @@ impl TryFromValue<Value> for i64 {
                 .map_err(|e| sql_err!("invalid numeric value: {e}")),
             _ => sql_bail!("cannot use value as number"),
         }
+    }
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Number(self.to_string()))
     }
     fn name() -> String {
         "int8".to_string()
@@ -363,6 +464,9 @@ impl TryFromValue<Value> for u16 {
             _ => sql_bail!("cannot use value as number"),
         }
     }
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Number(self.to_string()))
+    }
     fn name() -> String {
         "uint2".to_string()
     }
@@ -383,6 +487,9 @@ impl TryFromValue<Value> for u32 {
             _ => sql_bail!("cannot use value as number"),
         }
     }
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Number(self.to_string()))
+    }
     fn name() -> String {
         "uint4".to_string()
     }
@@ -402,6 +509,9 @@ impl TryFromValue<Value> for u64 {
                 .map_err(|e| sql_err!("invalid unsigned numeric value: {e}")),
             _ => sql_bail!("cannot use value as number"),
         }
+    }
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<Value> {
+        Some(Value::Number(self.to_string()))
     }
     fn name() -> String {
         "uint8".to_string()
@@ -430,6 +540,15 @@ impl<V: TryFromValue<WithOptionValue<Aug>>> TryFromValue<WithOptionValue<Aug>> f
             _ => sql_bail!("cannot use value as array"),
         }
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Sequence(
+            self.into_iter()
+                .map(|v| v.try_into_value(catalog))
+                .collect::<Option<_>>()?,
+        ))
+    }
+
     fn name() -> String {
         format!("array of {}", V::name())
     }
@@ -446,6 +565,13 @@ impl<T: AstInfo, V: TryFromValue<WithOptionValue<T>>> TryFromValue<WithOptionVal
 {
     fn try_from_value(v: WithOptionValue<T>) -> Result<Self, PlanError> {
         Ok(Some(V::try_from_value(v)?))
+    }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<T>> {
+        match self {
+            Some(v) => v.try_into_value(catalog),
+            None => None,
+        }
     }
 
     fn name() -> String {
@@ -501,6 +627,11 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             ),
         }
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<T>> {
+        Some(WithOptionValue::Value(self.try_into_value(catalog)?))
+    }
+
     fn name() -> String {
         V::name()
     }
@@ -513,6 +644,11 @@ impl<T, V: TryFromValue<T> + ImpliedValue> TryFromValue<Option<T>> for V {
             None => V::implied_value(),
         }
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<Option<T>> {
+        Some(Some(self.try_into_value(catalog)?))
+    }
+
     fn name() -> String {
         V::name()
     }
@@ -525,6 +661,11 @@ impl TryFromValue<WithOptionValue<Aug>> for Vec<ReplicaDefinition<Aug>> {
             _ => sql_bail!("cannot use value as cluster replicas"),
         }
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::ClusterReplicas(self))
+    }
+
     fn name() -> String {
         "cluster replicas".to_string()
     }
@@ -552,6 +693,15 @@ impl TryFromValue<WithOptionValue<Aug>> for Vec<KafkaBroker<Aug>> {
         }
         Ok(out)
     }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Sequence(
+            self.into_iter()
+                .map(WithOptionValue::ConnectionKafkaBroker)
+                .collect(),
+        ))
+    }
+
     fn name() -> String {
         "kafka broker".to_string()
     }
@@ -572,6 +722,10 @@ impl TryFromValue<WithOptionValue<Aug>> for RefreshOptionValue<Aug> {
         }
     }
 
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Refresh(self))
+    }
+
     fn name() -> String {
         "refresh option value".to_string()
     }
@@ -590,6 +744,10 @@ impl TryFromValue<WithOptionValue<Aug>> for ConnectionDefaultAwsPrivatelink<Aug>
         } else {
             sql_bail!("cannot use value `{}` for a privatelink", v)
         }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::ConnectionAwsPrivatelink(self))
     }
 
     fn name() -> String {
@@ -618,6 +776,10 @@ impl TryFromValue<WithOptionValue<Aug>> for ClusterScheduleOptionValue {
         }
     }
 
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::ClusterScheduleOptionValue(self))
+    }
+
     fn name() -> String {
         "cluster schedule option value".to_string()
     }
@@ -641,6 +803,18 @@ impl<V: TryFromValue<WithOptionValue<Aug>>> TryFromValue<WithOptionValue<Aug>>
             _ => sql_bail!("cannot use value as map"),
         }
     }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Map(
+            self.into_iter()
+                .map(|(k, v)| {
+                    let v = v.try_into_value(catalog);
+                    v.map(|v| (k, v))
+                })
+                .collect::<Option<_>>()?,
+        ))
+    }
+
     fn name() -> String {
         format!("map of string to {}", V::name())
     }

@@ -453,6 +453,8 @@ pub fn create_statement(
 
 /// Generates a struct capable of taking a `Vec` of types commonly used to
 /// represent `WITH` options into useful data types, such as strings.
+/// Additionally, it is able to convert the useful data types back to the `Vec`
+/// of options.
 ///
 /// # Parameters
 /// - `$option_ty`: Accepts a struct representing a set of `WITH` options, which
@@ -557,6 +559,32 @@ macro_rules! generate_extracted_config {
                         }
                     }
                     Ok(extracted)
+                }
+            }
+
+            impl [<$option_ty Extracted>] {
+                #[allow(unused)]
+                fn into_values(self, catalog: &dyn crate::catalog::SessionCatalog) -> Vec<$option_ty<Aug>> {
+                    use [<$option_ty Name>]::*;
+                    let mut options = Vec::new();
+                    $(
+                        let value = self.[<$option_name:snake>];
+                        let values = generate_extracted_config!(
+                            @ifexpr $allow_multiple,
+                            value,
+                            vec![value]
+                        );
+                        for value in values {
+                            // If `try_into_value` returns `None`, then there was no option that
+                            // generated this value. For example, this can happen when `value` is
+                            // `None`.
+                            if let Some(value) = value.try_into_value(catalog) {
+                                let option = $option_ty {name: $option_name, value};
+                                options.push(option);
+                            }
+                        }
+                    )*
+                    options
                 }
             }
         }

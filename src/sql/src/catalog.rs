@@ -47,7 +47,7 @@ use crate::names::{
 };
 use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
-use crate::plan::{query, ClusterSchedule, PlanError, PlanNotice};
+use crate::plan::{query, ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice};
 use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -531,6 +531,10 @@ pub trait CatalogCluster<'a> {
 
     /// Returns the schedule of the cluster, if the cluster is a managed cluster.
     fn schedule(&self) -> Option<&ClusterSchedule>;
+
+    /// Try to convert this cluster into a [`CreateClusterPlan`].
+    // TODO(jkosh44) Make this infallible and convert to `to_plan`.
+    fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError>;
 }
 
 /// A cluster replica in a [`SessionCatalog`]

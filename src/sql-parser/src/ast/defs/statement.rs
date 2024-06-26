@@ -3060,6 +3060,18 @@ impl<T: AstInfo> AstDisplay for ShowCreateConnectionStatement<T> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShowCreateClusterStatement<T: AstInfo> {
+    pub cluster_name: T::ClusterName,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateClusterStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW CREATE CLUSTER ");
+        f.write_node(&self.cluster_name);
+    }
+}
+
 /// `{ BEGIN [ TRANSACTION | WORK ] | START TRANSACTION } ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct StartTransactionStatement {
@@ -4310,6 +4322,7 @@ pub enum ShowStatement<T: AstInfo> {
     ShowCreateSink(ShowCreateSinkStatement<T>),
     ShowCreateIndex(ShowCreateIndexStatement<T>),
     ShowCreateConnection(ShowCreateConnectionStatement<T>),
+    ShowCreateCluster(ShowCreateClusterStatement<T>),
     ShowVariable(ShowVariableStatement),
     InspectShard(InspectShardStatement),
 }
@@ -4326,6 +4339,7 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowCreateSink(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateIndex(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateCluster(stmt) => f.write_node(stmt),
             ShowStatement::ShowVariable(stmt) => f.write_node(stmt),
             ShowStatement::InspectShard(stmt) => f.write_node(stmt),
         }
