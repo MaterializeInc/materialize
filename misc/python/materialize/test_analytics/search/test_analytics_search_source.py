@@ -40,6 +40,7 @@ class TestAnalyticsDataSource:
         pipeline: str,
         branch: str | None,
         build_step_keys: list[str],
+        not_newer_than_build_number: int | None,
         like_pattern: str,
         max_entries: int,
         only_failed_builds: bool,
@@ -58,6 +59,12 @@ class TestAnalyticsDataSource:
             )
         else:
             build_steps_keys_clause = ""
+
+        build_number_offset_clause = (
+            f"AND bae.build_number <= {not_newer_than_build_number}"
+            if not_newer_than_build_number is not None
+            else ""
+        )
 
         order_clause = (
             "bae.build_number DESC"
@@ -84,6 +91,7 @@ class TestAnalyticsDataSource:
             {branch_clause}
             {failed_builds_clause}
             {build_steps_keys_clause}
+            {build_number_offset_clause}
             ORDER BY
                 {order_clause}
             LIMIT {max_entries}

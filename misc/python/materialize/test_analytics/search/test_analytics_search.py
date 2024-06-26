@@ -50,6 +50,7 @@ if __name__ == "__main__":
         action="store_true",
     )
     parser.add_argument("--build-step-key", action="append", default=[], type=str)
+    parser.add_argument("--not-newer-than-build-number", type=int)
 
     parser.add_argument("--max-results", default=50, type=int)
 
@@ -68,6 +69,14 @@ if __name__ == "__main__":
     if args.short and args.oneline:
         print("Note: --oneline will be ignored if --short is set")
 
+    if (
+        args.not_newer_than_build_number is not None
+        and args.pipeline == ANY_PIPELINE_VALUE
+    ):
+        print(
+            "Combining a build number offset (--not-newer-than-build-number) and searching all pipelines does not make sense"
+        )
+
     source = TestAnalyticsDataSource(
         test_analytics_hostname=args.test_analytics_hostname,
         test_analytics_username=args.test_analytics_username,
@@ -80,6 +89,7 @@ if __name__ == "__main__":
         branch=args.branch,
         build_step_keys=args.build_step_key,
         only_failed_builds=args.only_failed_builds,
+        not_newer_than_build_number=args.not_newer_than_build_number,
         like_pattern=args.pattern,
         max_results=args.max_results,
         short_result_presentation=args.short,
