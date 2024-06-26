@@ -2126,6 +2126,7 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         )
         .with_column("create_sql", ScalarType::String.nullable(true))
         .with_column("redacted_create_sql", ScalarType::String.nullable(true))
+        .with_column("insert_only", ScalarType::Bool.nullable(false))
         .with_key(vec![0])
         .with_key(vec![1]),
     is_retained_metrics_object: false,

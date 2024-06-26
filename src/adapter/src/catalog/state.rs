@@ -808,6 +808,7 @@ impl CatalogState {
                 custom_logical_compaction_window: custom_logical_compaction_window
                     .or(table.compaction_window),
                 is_retained_metrics_object,
+                insert_only: table.insert_only,
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,

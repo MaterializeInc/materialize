@@ -41,7 +41,7 @@ CREATE TABLE t (a int NOT NULL GARBAGE)
 parse-statement
 CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
 ----
-error: Expected RETAIN, found identifier "foo"
+error: Expected one of RETAIN or INSERT, found identifier "foo"
 CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
                              ^
 
@@ -1160,7 +1160,7 @@ CREATE TABLE public.customer (
         active integer NOT NULL
 ) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
 ----
-error: Expected RETAIN, found identifier "fillfactor"
+error: Expected one of RETAIN or INSERT, found identifier "fillfactor"
 ) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
         ^
 
@@ -1195,6 +1195,13 @@ parse-statement roundtrip
 CREATE TABLE IF NOT EXISTS foo (bar int)
 ----
 CREATE TABLE IF NOT EXISTS foo (bar int4)
+
+parse-statement
+CREATE TABLE foo (bar int) WITH (INSERT ONLY)
+----
+CREATE TABLE foo (bar int4) WITH (INSERT ONLY)
+=>
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [TableOption { name: InsertOnly, value: None }] })
 
 parse-statement
 ALTER INDEX name SET (property = true)

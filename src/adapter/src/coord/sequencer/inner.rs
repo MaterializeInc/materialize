@@ -867,21 +867,29 @@ impl Coordinator {
             table,
             if_not_exists,
         } = plan;
-
-        let conn_id = if table.temporary {
+        let mz_sql::plan::Table {
+            create_sql,
+            desc,
+            defaults,
+            temporary,
+            compaction_window,
+            insert_only,
+        } = table;
+        let conn_id = if temporary {
             Some(ctx.session().conn_id())
         } else {
             None
         };
         let table_id = self.catalog_mut().allocate_user_id().await?;
         let table = Table {
-            create_sql: Some(table.create_sql),
-            desc: table.desc,
-            defaults: table.defaults,
+            create_sql: Some(create_sql),
+            desc,
+            defaults,
             conn_id: conn_id.cloned(),
             resolved_ids,
-            custom_logical_compaction_window: table.compaction_window,
+            custom_logical_compaction_window: compaction_window,
             is_retained_metrics_object: false,
+            insert_only,
         };
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,
@@ -2469,14 +2477,25 @@ impl Coordinator {
 
         // Read then writes can be queued, so re-verify the id exists.
         let desc = match self.catalog().try_get_entry(&id) {
-            Some(table) => table
-                .desc(
-                    &self
+            Some(entry) => {
+                let table = entry.table().expect("must be a table");
+                if table.insert_only && !matches!(kind, MutationKind::Insert) {
+                    let name = entry.name();
+                    let name = self
                         .catalog()
-                        .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
-                )
-                .expect("desc called on table")
-                .into_owned(),
+                        .resolve_full_name(name, Some(ctx.session().conn_id()));
+                    ctx.retire(Err(AdapterError::InsertOnly(name.to_string())));
+                    return;
+                }
+                entry
+                    .desc(
+                        &self
+                            .catalog()
+                            .resolve_full_name(entry.name(), Some(ctx.session().conn_id())),
+                    )
+                    .expect("desc called on table")
+                    .into_owned()
+            }
             None => {
                 ctx.retire(Err(AdapterError::Catalog(
                     mz_catalog::memory::error::Error {

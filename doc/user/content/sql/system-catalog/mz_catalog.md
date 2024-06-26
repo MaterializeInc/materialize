@@ -512,6 +512,7 @@ Field        | Type                 | Meaning
 `privileges` | [`mz_aclitem array`] | The privileges belonging to the table.
 `create_sql` | [`text`]             | The `CREATE` SQL statement for the table.
 `redacted_create_sql` | [`text`]    | The redacted `CREATE` SQL statement for the table.
+`insert_only` | [`bool`]            | Whether this table is `INSERT`-only.
 
 ### `mz_timezone_abbreviations`
 

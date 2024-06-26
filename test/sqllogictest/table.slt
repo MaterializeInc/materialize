@@ -42,3 +42,49 @@ TABLE t UNION ALL TABLE t ORDER BY a LIMIT 5
 
 query error unknown catalog item 'noexist'
 TABLE noexist
+
+statement error db error: ERROR: `INSERT`\-only tables is not supported
+CREATE TABLE t2 (a int) WITH (INSERT ONLY)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_insert_only_tables = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t2 (a int) WITH (INSERT ONLY)
+
+statement error db error: ERROR: cannot modify insert\-only table materialize\.public\.t2
+DELETE FROM t2
+
+statement error db error: ERROR: cannot modify insert\-only table materialize\.public\.t2
+UPDATE t2 SET a = 1
+
+statement ok
+INSERT INTO t2 VALUES (1)
+
+# Ensure monotonic Reduce operator.
+query T multiline
+EXPLAIN SELECT max(a) FROM t2
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (null)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[max(#0)] monotonic
+        ReadStorage materialize.public.t2
+
+Source materialize.public.t2
+
+Target cluster: quickstart
+
+EOF

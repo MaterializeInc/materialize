@@ -1260,6 +1260,7 @@ pub struct Table {
     pub defaults: Vec<Expr<Aug>>,
     pub temporary: bool,
     pub compaction_window: Option<CompactionWindow>,
+    pub insert_only: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1557,6 +1558,8 @@ pub enum IndexOption {
 pub enum TableOption {
     /// Configures the logical compaction window for a table.
     RetainHistory(CompactionWindow),
+    /// Whether the table is insert only.
+    InsertOnly(bool),
 }
 
 #[derive(Clone, Debug)]

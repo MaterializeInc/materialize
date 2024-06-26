@@ -379,14 +379,19 @@ pub fn plan_create_table(
     let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
 
     let options = plan_table_options(scx, with_options.clone())?;
-    let compaction_window = options.iter().find_map(|o| {
-        #[allow(irrefutable_let_patterns)]
-        if let crate::plan::TableOption::RetainHistory(lcw) = o {
-            Some(lcw.clone())
-        } else {
-            None
+    let mut compaction_window = None;
+    let mut insert_only = false;
+    for o in options {
+        match o {
+            crate::plan::TableOption::RetainHistory(lcw) => {
+                compaction_window = Some(lcw.clone());
+            }
+            crate::plan::TableOption::InsertOnly(insert) => {
+                scx.require_feature_flag(&vars::ENABLE_INSERT_ONLY_TABLES)?;
+                insert_only = insert;
+            }
         }
-    });
+    }
 
     let table = Table {
         create_sql,
@@ -394,6 +399,7 @@ pub fn plan_create_table(
         defaults,
         temporary,
         compaction_window,
+        insert_only,
     };
     Ok(Plan::CreateTable(CreateTablePlan {
         name,
@@ -4634,7 +4640,8 @@ fn plan_index_options(
 generate_extracted_config!(
     TableOption,
     (RetainHistory, OptionalDuration),
-    (RedactedTest, String)
+    (RedactedTest, String),
+    (InsertOnly, bool)
 );
 
 fn plan_table_options(
@@ -4644,16 +4651,20 @@ fn plan_table_options(
     let TableOptionExtracted {
         retain_history,
         redacted_test,
-        ..
+        insert_only,
+        seen: _,
     }: TableOptionExtracted = with_opts.try_into()?;
 
     if redacted_test.is_some() {
         scx.require_feature_flag(&vars::ENABLE_REDACTED_TEST_OPTION)?;
     }
 
-    let mut out = Vec::with_capacity(1);
+    let mut out = Vec::with_capacity(2);
     if let Some(cw) = plan_retain_history_option(scx, retain_history)? {
         out.push(crate::plan::TableOption::RetainHistory(cw));
+    }
+    if let Some(insert_only) = insert_only {
+        out.push(crate::plan::TableOption::InsertOnly(insert_only));
     }
     Ok(out)
 }

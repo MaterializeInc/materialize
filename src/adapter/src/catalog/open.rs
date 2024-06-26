@@ -1344,6 +1344,7 @@ mod builtin_migration_tests {
                     resolved_ids: ResolvedIds(BTreeSet::new()),
                     custom_logical_compaction_window: None,
                     is_retained_metrics_object: false,
+                    insert_only: false,
                 }),
                 SimplifiedItem::MaterializedView { referenced_names } => {
                     let table_list = referenced_names

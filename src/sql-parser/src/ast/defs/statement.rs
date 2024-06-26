@@ -1447,22 +1447,21 @@ impl_display_t!(CreateTableStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TableOptionName {
-    // The `RETAIN HISTORY` option
+    // The `RETAIN HISTORY` option.
     RetainHistory,
     /// A special option to test that we do redact values.
     RedactedTest,
+    /// The `INSERT ONLY' option.
+    InsertOnly,
 }
 
 impl AstDisplay for TableOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            TableOptionName::RetainHistory => {
-                f.write_str("RETAIN HISTORY");
-            }
-            TableOptionName::RedactedTest => {
-                f.write_str("REDACTED");
-            }
-        }
+        f.write_str(match self {
+            TableOptionName::RetainHistory => "RETAIN HISTORY",
+            TableOptionName::RedactedTest => "REDACTED",
+            TableOptionName::InsertOnly => "INSERT ONLY",
+        })
     }
 }
 
@@ -1476,6 +1475,7 @@ impl WithOptionName for TableOptionName {
         match self {
             TableOptionName::RetainHistory => false,
             TableOptionName::RedactedTest => true,
+            TableOptionName::InsertOnly => false,
         }
     }
 }

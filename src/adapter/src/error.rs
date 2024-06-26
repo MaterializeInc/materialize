@@ -226,6 +226,8 @@ pub enum AdapterError {
     UnreadableSinkCollection,
     /// User sessions have been blocked.
     UserSessionsDisallowed,
+    /// Table is insert-only.
+    InsertOnly(String),
 }
 
 impl AdapterError {
@@ -532,6 +534,9 @@ impl AdapterError {
             AdapterError::RtrDropFailure(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnreadableSinkCollection => SqlState::from_code("MZ009"),
             AdapterError::UserSessionsDisallowed => SqlState::from_code("MZ010"),
+            // Postgres uses this code when trying to modify data from within a READ ONLY function
+            // or trigger, so may not be correct here.
+            AdapterError::InsertOnly(_) => SqlState::S_R_E_MODIFYING_SQL_DATA_NOT_PERMITTED,
         }
     }
 
@@ -761,6 +766,7 @@ impl fmt::Display for AdapterError {
                 write!(f, "collection is not readable at any time")
             }
             AdapterError::UserSessionsDisallowed => write!(f, "login blocked"),
+            AdapterError::InsertOnly(name) => write!(f, "cannot modify insert-only table {name}"),
         }
     }
 }

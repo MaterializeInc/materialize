@@ -726,6 +726,7 @@ impl CatalogState {
                 } else {
                     Datum::Null
                 },
+                Datum::from(table.insert_only),
             ]),
             diff,
         }]
