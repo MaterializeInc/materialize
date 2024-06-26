@@ -70,6 +70,8 @@ class BuildHistoryAnalysis(BaseDataStorage):
                 dedent(
                     f"""
                     SELECT
+                        pipeline,
+                        predecessor_build_number,
                         predecessor_build_id,
                         predecessor_build_job_id,
                         predecessor_build_step_success
@@ -87,12 +89,14 @@ class BuildHistoryAnalysis(BaseDataStorage):
 
             for row in rows:
                 (
+                    pipeline,
+                    predecessor_build_number,
                     predecessor_build_id,
                     predecessor_build_job_id,
                     predecessor_build_step_success,
                 ) = row
-                url_to_job = buildkite.get_job_url(
-                    predecessor_build_id, predecessor_build_job_id
+                url_to_job = buildkite.get_job_url_from_pipeline_and_build(
+                    pipeline, predecessor_build_number, predecessor_build_job_id
                 )
                 result.append(
                     BuildHistoryEntry(
