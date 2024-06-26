@@ -55,9 +55,10 @@ use std::fmt;
 use std::io;
 use std::rc::Rc;
 
-use differential_dataflow::Collection;
+use mz_repr::Diff;
 use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
+use mz_timely_util::containers::stack::{AccountedStackBuilder, StackWrapper};
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pushers::Tee;
@@ -71,7 +72,6 @@ use mz_mysql_util::{
     MySqlError, MySqlTableDesc,
 };
 use mz_ore::error::ErrorExt;
-use mz_repr::{Diff, Row};
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
 use mz_storage_types::sources::{MySqlSourceConnection, SourceTimestamp};
@@ -79,7 +79,7 @@ use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
+use crate::source::types::{ProgressStatisticsUpdate, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
@@ -101,7 +101,7 @@ impl SourceRender for MySqlSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
+        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -166,14 +166,7 @@ impl SourceRender for MySqlSourceConnection {
 
         let stats_stream = stats_stream.concat(&snapshot_stats);
 
-        let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
-            let res = res.map(|row| SourceMessage {
-                key: Row::default(),
-                value: row,
-                metadata: Row::default(),
-            });
-            (output, res)
-        });
+        let updates = snapshot_updates.concat(&repl_updates);
 
         let health_init = std::iter::once(HealthStatusMessage {
             index: 0,
@@ -317,13 +310,18 @@ pub(crate) struct RewindRequest {
     pub(crate) snapshot_upper: Antichain<GtidPartition>,
 }
 
+type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
+    T,
+    AccountedStackBuilder<CapacityContainerBuilder<StackWrapper<(D, T, Diff)>>>,
+    Tee<T, StackWrapper<(D, T, Diff)>>,
+>;
+
 async fn return_definite_error(
     err: DefiniteError,
     outputs: &[usize],
-    data_handle: &mut AsyncOutputHandle<
+    data_handle: &mut StackedAsyncOutputHandle<
         GtidPartition,
-        CapacityContainerBuilder<Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
-        Tee<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
+        (usize, Result<SourceMessage, DataflowError>),
     >,
     data_cap_set: &CapabilitySet<GtidPartition>,
     definite_error_handle: &mut AsyncOutputHandle<
@@ -332,14 +330,14 @@ async fn return_definite_error(
         Tee<GtidPartition, Vec<ReplicationError>>,
     >,
     definite_error_cap_set: &CapabilitySet<GtidPartition>,
-) -> () {
+) {
     for output_index in outputs {
         let update = (
-            (*output_index, Err(err.clone())),
+            (*output_index, Err(err.clone().into())),
             GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
             1,
         );
-        data_handle.give(&data_cap_set[0], update);
+        data_handle.give_fueled(&data_cap_set[0], update).await;
     }
     definite_error_handle.give(
         &definite_error_cap_set[0],

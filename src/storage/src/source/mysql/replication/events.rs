@@ -9,12 +9,15 @@
 
 use mysql_common::binlog::events::{QueryEvent, RowsEventData};
 
+use mz_storage_types::errors::DataflowError;
 use timely::progress::Timestamp;
 use tracing::trace;
 
 use mz_mysql_util::{pack_mysql_row, MySqlError};
 use mz_repr::Row;
 use mz_storage_types::sources::mysql::GtidPartition;
+
+use crate::source::types::SourceMessage;
 
 use super::super::schemas::verify_schemas;
 use super::super::{DefiniteError, MySqlTableName, TransientError};
@@ -102,7 +105,11 @@ pub(super) async fn handle_query_event(
                            verification error for {table:?}: {err:?}");
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
                     ctx.data_output
-                        .give(&gtid_cap, ((*output_index, Err(err)), new_gtid.clone(), 1));
+                        .give_fueled(
+                            &gtid_cap,
+                            ((*output_index, Err(err.into())), new_gtid.clone(), 1),
+                        )
+                        .await;
                     ctx.errored_tables.insert(table.clone());
                 }
             }
@@ -135,7 +142,11 @@ pub(super) async fn handle_query_event(
                     if let Some((output_index, _)) = ctx.table_info.get(dropped_table) {
                         let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
                         ctx.data_output
-                            .give(&gtid_cap, ((*output_index, Err(err)), new_gtid.clone(), 1));
+                            .give_fueled(
+                                &gtid_cap,
+                                ((*output_index, Err(err.into())), new_gtid.clone(), 1),
+                            )
+                            .await;
                         ctx.errored_tables.insert(dropped_table.clone());
                     }
                 }
@@ -161,17 +172,21 @@ pub(super) async fn handle_query_event(
                        for {table:?}");
                 if let Some((output_index, _)) = ctx.table_info.get(&table) {
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                    ctx.data_output.give(
-                        &gtid_cap,
-                        (
+                    ctx.data_output
+                        .give_fueled(
+                            &gtid_cap,
                             (
-                                *output_index,
-                                Err(DefiniteError::TableTruncated(table.to_string())),
+                                (
+                                    *output_index,
+                                    Err(DataflowError::from(DefiniteError::TableTruncated(
+                                        table.to_string(),
+                                    ))),
+                                ),
+                                new_gtid.clone(),
+                                1,
                             ),
-                            new_gtid.clone(),
-                            1,
-                        ),
-                    );
+                        )
+                        .await;
                     ctx.errored_tables.insert(table);
                 }
             }
@@ -192,12 +207,12 @@ pub(super) async fn handle_query_event(
 ///
 /// We use these events to update the dataflow with the new rows, and return a new
 /// frontier with which to advance the dataflow's progress.
-pub(super) fn handle_rows_event(
+pub(super) async fn handle_rows_event(
     event: RowsEventData<'_>,
     ctx: &mut ReplContext<'_>,
     new_gtid: &GtidPartition,
     event_buffer: &mut Vec<(
-        (usize, Result<Row, DefiniteError>),
+        (usize, Result<SourceMessage, DataflowError>),
         GtidPartition,
         mz_repr::Diff,
     )>,
@@ -260,11 +275,15 @@ pub(super) fn handle_rows_event(
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
             let event = match pack_mysql_row(&mut final_row, row, table_desc) {
-                Ok(row) => Ok(row),
+                Ok(row) => Ok(SourceMessage {
+                    key: Row::default(),
+                    value: row,
+                    metadata: Row::default(),
+                }),
                 // Produce a DefiniteError in the stream for any rows that fail to decode
-                Err(err @ MySqlError::ValueDecodeError { .. }) => {
-                    Err(DefiniteError::ValueDecodeError(err.to_string()))
-                }
+                Err(err @ MySqlError::ValueDecodeError { .. }) => Err(DataflowError::from(
+                    DefiniteError::ValueDecodeError(err.to_string()),
+                )),
                 Err(err) => Err(err)?,
             };
 
@@ -283,7 +302,8 @@ pub(super) fn handle_rows_event(
                 retractions += 1;
             }
             ctx.data_output
-                .give(&gtid_cap, (data, new_gtid.clone(), diff));
+                .give_fueled(&gtid_cap, (data, new_gtid.clone(), diff))
+                .await;
         }
     }
 
@@ -296,7 +316,7 @@ pub(super) fn handle_rows_event(
     if !event_buffer.is_empty() {
         let (rewind_data_cap, _) = ctx.rewinds.get(&table).unwrap();
         for d in event_buffer.drain(..) {
-            ctx.data_output.give(rewind_data_cap, d);
+            ctx.data_output.give_fueled(rewind_data_cap, d).await;
         }
     }
 
