@@ -242,7 +242,7 @@ RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.3/deb-s3-
 
 # Install the AWS CLI.
 
-RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH_GCC-2.16.4.zip" > awscli.zip \
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH_GCC-2.17.2.zip" > awscli.zip \
     && unzip awscli.zip \
     && ./aws/install \
     && rm -rf aws
