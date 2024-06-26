@@ -19,6 +19,7 @@ CREATE OR REPLACE VIEW v_build_annotation_error AS
       ann.build_job_id,
       b.pipeline,
       b.build_number,
+      bj.build_step_key,
       b.branch,
       b.commit_hash,
       b.mz_version,
@@ -35,6 +36,8 @@ CREATE OR REPLACE VIEW v_build_annotation_error AS
     ON ann.build_job_id = err.build_job_id
     INNER JOIN build b
     ON ann.build_id = b.build_id
+    INNER JOIN build_job bj
+    ON ann.build_job_id = bj.build_job_id
 ;
 
 CREATE OR REPLACE VIEW v_build_annotation_overview AS
