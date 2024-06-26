@@ -35,7 +35,7 @@ pub mod json;
 pub mod primitive;
 pub mod structured;
 
-pub use bytes::{AtomicBytesStats, BytesStats};
+pub use bytes::{AtomicBytesStats, BytesStats, FixedSizeBytesStats, FixedSizeBytesStatsKind};
 pub use json::{JsonMapElementStats, JsonStats};
 pub use primitive::{
     truncate_bytes, PrimitiveStats, PrimitiveStatsVariants, TruncateBound, TRUNCATE_LEN,

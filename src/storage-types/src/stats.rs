@@ -156,7 +156,9 @@ impl RelationPartStats<'_> {
                     BytesStats::Json(json_stats) => {
                         Self::json_spec(ok_stats.some.len, json_stats, arena)
                     }
-                    BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
+                    BytesStats::Primitive(_) | BytesStats::Atomic(_) | BytesStats::FixedSize(_) => {
+                        ResultSpec::anything()
+                    }
                 };
                 Some(value_range)
             }
@@ -178,7 +180,9 @@ impl RelationPartStats<'_> {
                     BytesStats::Json(json_stats) => {
                         Self::json_spec(ok_stats.some.len, json_stats, arena)
                     }
-                    BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
+                    BytesStats::Primitive(_) | BytesStats::Atomic(_) | BytesStats::FixedSize(_) => {
+                        ResultSpec::anything()
+                    }
                 };
                 Some(null_range.union(value_range))
             }
