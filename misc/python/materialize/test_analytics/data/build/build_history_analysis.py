@@ -73,7 +73,7 @@ class BuildHistoryAnalysis(BaseDataStorage):
                         predecessor_build_job_id,
                         predecessor_build_step_success
                     FROM
-                        v_build_job_success
+                        mv_build_job_success
                     WHERE
                         build_job_id = '{build_job_id}'
                         {retry_filter}
