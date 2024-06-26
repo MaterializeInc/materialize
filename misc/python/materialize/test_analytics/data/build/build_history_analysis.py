@@ -40,8 +40,7 @@ class BuildHistoryAnalysis(BaseDataStorage):
         )
 
         rows = self.query_data(
-            dedent(
-                f"""
+            f"""
                 SELECT
                     build_job_id
                 FROM
@@ -52,7 +51,6 @@ class BuildHistoryAnalysis(BaseDataStorage):
                     AND build_step_key = '{step_key}'
                     AND {shard_index_comparison}
                 """
-            ),
         )
 
         assert len(rows) <= 1, f"Expected at most one row, got {len(rows)}"
@@ -67,8 +65,7 @@ class BuildHistoryAnalysis(BaseDataStorage):
                 retry_filter = "AND predecessor_is_latest_retry = TRUE"
 
             rows = self.query_data(
-                dedent(
-                    f"""
+                f"""
                     SELECT
                         pipeline,
                         predecessor_build_number,
@@ -84,7 +81,6 @@ class BuildHistoryAnalysis(BaseDataStorage):
                         predecessor_index ASC
                     LIMIT {max_entries}
                     """
-                ),
             )
 
             for row in rows:
