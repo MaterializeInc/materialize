@@ -19,7 +19,7 @@
 #
 #     https://github.com/actions-ecosystem/action-slack-notifier/blob/fc778468d09c43a6f4d1b8cccaca59766656996a/README.md
 
-# Send a notification to the #epd-mz-introspection-council Slack channel when a change
+# Send a notification to the #rnd-mz-introspection-council Slack channel when a change
 # is made that adds or modifies an index on the mz_introspection cluster, or
 # adds or modifies an object on which those indices depend.
 # Also detects changes to catalog object retention.
@@ -74,7 +74,7 @@ jobs:
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
-          channel: epd-mz-introspection-council
+          channel: rnd-mz-introspection-council
           custom_payload: |
             {
               "blocks": [
