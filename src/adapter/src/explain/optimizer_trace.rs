@@ -208,7 +208,9 @@ impl OptimizerTrace {
                     (plan_insights.as_mut(), insights_ctx, is_fast_path)
                 {
                     if insights_ctx.enable_re_optimize {
-                        plan_insights.compute_fast_path_clusters(insights_ctx).await;
+                        plan_insights
+                            .compute_fast_path_clusters(humanizer, insights_ctx)
+                            .await;
                     }
                 }
 

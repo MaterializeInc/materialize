@@ -750,8 +750,16 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
     },
     "fast_path_clusters": {
       "quickstart": {
-        "index": "materialize.public.t_primary_idx",
-        "on": "materialize.public.t"
+        "index": {
+          "database": "materialize",
+          "schema": "public",
+          "item": "t_primary_idx"
+        },
+        "on": {
+          "database": "materialize",
+          "schema": "public",
+          "item": "t"
+        }
       }
     },
     "persist_count": []
