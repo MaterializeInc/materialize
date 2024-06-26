@@ -140,7 +140,10 @@ class DatabaseConnector:
             cursor.execute(sql)
 
             if print_status:
-                print(f"-- OK ({cursor.rowcount} row(s) affected)")
+                affected_rows = cursor.rowcount
+                print(
+                    f"-- OK ({affected_rows} row{'s' if affected_rows != 1 else ''} affected)"
+                )
         except:
             if print_status:
                 print("-- FAILED!")
