@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import re
 import ssl
 from textwrap import dedent
 
@@ -133,14 +134,17 @@ class DatabaseConnector:
         self, cursor: Cursor, sql: str, print_status: bool = False
     ) -> None:
         if self._log_sql:
-            printable_sql = sql.replace("\n", " ").strip()
+            printable_sql = self.to_short_printable_sql(sql)
             print(f"> {printable_sql}")
 
         try:
             cursor.execute(sql)
 
             if print_status:
-                print(f"-- OK ({cursor.rowcount} row(s) affected)")
+                affected_rows = cursor.rowcount
+                print(
+                    f"-- OK ({affected_rows} row{'s' if affected_rows != 1 else ''} affected)"
+                )
         except:
             if print_status:
                 print("-- FAILED!")
@@ -160,3 +164,6 @@ class DatabaseConnector:
                 f"Uploading test_analytics data is not supported from this data version ({self.current_data_version})"
             )
             self.set_read_only()
+
+    def to_short_printable_sql(self, sql: str) -> str:
+        return re.sub(r"^\s+", "", sql, flags=re.MULTILINE).replace("\n", " ").strip()

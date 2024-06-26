@@ -23,7 +23,9 @@ class BaseDataStorage:
         cursor = self.database_connector.create_cursor(allow_reusing_connection=True)
 
         if verbose:
-            print(f"Executing query: {query}")
+            print(
+                f"Executing query: {self.database_connector.to_short_printable_sql(query)}"
+            )
 
         cursor.execute(query)
         result = cursor.fetchall()

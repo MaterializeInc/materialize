@@ -287,5 +287,12 @@ def add_annotation(style: str, title: str, content: str) -> None:
     add_annotation_raw(style, markdown)
 
 
-def get_job_url(build_url: str, build_job_id: str) -> str:
+def get_job_url_from_build_url(build_url: str, build_job_id: str) -> str:
     return f"{build_url}#{build_job_id}"
+
+
+def get_job_url_from_pipeline_and_build(
+    pipeline: str, build_number: str | int, build_job_id: str
+) -> str:
+    build_url = f"https://buildkite.com/materialize/{pipeline}/builds/{build_number}"
+    return get_job_url_from_build_url(build_url, build_job_id)

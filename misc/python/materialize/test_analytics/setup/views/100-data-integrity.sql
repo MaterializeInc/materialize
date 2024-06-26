@@ -57,7 +57,7 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     GROUP BY build_job_id
     HAVING count(distinct build_id) > 1
     UNION
-    SELECT 'build_job', concat(build_step_key, concat(', shard ', shard_index)), max(build_job_id), 'multiple build jobs as latest retry'
+    SELECT 'build_job', concat(build_step_key, ', shard ', shard_index), max(build_job_id), 'multiple build jobs as latest retry'
     FROM build_job
     GROUP BY build_id, build_step_key, shard_index
     HAVING sum(CASE WHEN is_latest_retry THEN 1 ELSE 0 END) > 1
