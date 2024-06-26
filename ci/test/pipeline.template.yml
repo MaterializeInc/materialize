@@ -595,7 +595,11 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
-          args: [--scenario=KafkaUpsertUnique]
+          args:
+            [
+              --scenario=KafkaUpsertUnique,
+              --other-tag=common-ancestor,
+            ]
     coverage: skip
     agents:
       queue: linux-aarch64-small
