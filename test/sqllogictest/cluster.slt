@@ -878,6 +878,15 @@ DROP CLUSTER c1;
 ----
 COMPLETE 0
 
+statement ok
+CREATE CLUSTER c1 REPLICAS ()
+
+query error SHOW CREATE for unmanaged clusters not yet supported
+SHOW CREATE CLUSTER c1
+
+statement ok
+DROP CLUSTER c1
+
 mode cockroach
 
 reset-server
