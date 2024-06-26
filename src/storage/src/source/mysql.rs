@@ -339,14 +339,12 @@ async fn return_definite_error(
             GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
             1,
         );
-        data_handle.give(&data_cap_set[0], update).await;
+        data_handle.give(&data_cap_set[0], update);
     }
-    definite_error_handle
-        .give(
-            &definite_error_cap_set[0],
-            ReplicationError::Definite(Rc::new(err)),
-        )
-        .await;
+    definite_error_handle.give(
+        &definite_error_cap_set[0],
+        ReplicationError::Definite(Rc::new(err)),
+    );
     ()
 }
 

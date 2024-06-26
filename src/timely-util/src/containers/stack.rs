@@ -215,8 +215,8 @@ impl<T: Columnation> Default for StackWrapper<T> {
 /// A Stacked container builder that keep track of container memory usage.
 #[derive(Default)]
 pub struct AccountedStackBuilder<CB> {
-    bytes: Cell<usize>,
-    builder: CB,
+    pub bytes: Cell<usize>,
+    pub builder: CB,
 }
 
 impl<T, CB> ContainerBuilder for AccountedStackBuilder<CB>

@@ -346,14 +346,14 @@ where
                     Err(_) => {}
                 }
             }
-            data_output.give_container(&cap_data, &mut data).await;
+            data_output.give_container(&cap_data, &mut data);
 
             for statuses in statuses_by_idx.values_mut() {
                 if statuses.is_empty() {
                     continue;
                 }
 
-                health_output.give_container(&health_cap, statuses).await;
+                health_output.give_container(&health_cap, statuses);
                 statuses.clear()
             }
         }
@@ -496,7 +496,7 @@ where
         );
 
         let cap = cap_set.delayed(cap_set.first().unwrap());
-        remap_output.give_container(&cap, &mut initial_batch.updates).await;
+        remap_output.give_container(&cap, &mut initial_batch.updates);
         drop(cap);
         cap_set.downgrade(initial_batch.upper);
 
@@ -524,7 +524,7 @@ where
                     );
 
                     let cap = cap_set.delayed(cap_set.first().unwrap());
-                    remap_output.give_container(&cap, &mut remap_trace_batch.updates).await;
+                    remap_output.give_container(&cap, &mut remap_trace_batch.updates);
 
                     // If the last remap trace closed the input, we no longer
                     // need to (or can) advance the timestamper.
@@ -537,7 +537,7 @@ where
                     let mut remap_trace_batch = timestamper.advance().await;
 
                     let cap = cap_set.delayed(cap_set.first().unwrap());
-                    remap_output.give_container(&cap, &mut remap_trace_batch.updates).await;
+                    remap_output.give_container(&cap, &mut remap_trace_batch.updates);
 
                     cap_set.downgrade(remap_trace_batch.upper);
                 }
@@ -732,7 +732,7 @@ where
                         };
 
                         let ts_cap = cap_set.delayed(&into_ts);
-                        reclocked_output.give(&ts_cap, (output, into_ts, diff)).await;
+                        reclocked_output.give(&ts_cap, (output, into_ts, diff));
                         total_processed += 1;
                     }
                     // The loop above might have completely emptied batches. We can now remove them

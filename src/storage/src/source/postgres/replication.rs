@@ -182,15 +182,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             if !config.responsible_for("slot") {
                 // Emit 0, to mark this worker as having started up correctly.
-                stats_output
-                    .give(
-                        &stats_cap[0],
-                        ProgressStatisticsUpdate::SteadyState {
-                            offset_known: 0,
-                            offset_committed: 0,
-                        },
-                    )
-                    .await;
+                stats_output.give(
+                    &stats_cap[0],
+                    ProgressStatisticsUpdate::SteadyState {
+                        offset_known: 0,
+                        offset_committed: 0,
+                    },
+                );
                 return Ok(());
             }
 
@@ -308,14 +306,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 // We pick `u64::MAX` as the LSN which will (in practice) never conflict
                                 // any previously revealed portions of the TVC.
                                 let update = ((oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
-                                data_output.give(&data_cap_set[0], update).await;
+                                data_output.give(&data_cap_set[0], update);
                             }
-                            definite_error_handle
-                                .give(
-                                    &definite_error_cap_set[0],
-                                    ReplicationError::Definite(Rc::new(err)),
-                                )
-                                .await;
+                            definite_error_handle.give(
+                                &definite_error_cap_set[0],
+                                ReplicationError::Definite(Rc::new(err)),
+                            );
                             return Ok(());
                         }
                         rewinds.insert(req.oid, (cap.clone(), req));
@@ -349,15 +345,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         // We pick `u64::MAX` as the LSN which will (in practice) never conflict
                         // any previously revealed portions of the TVC.
                         let update = ((oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
-                        data_output.give(&data_cap_set[0], update).await;
+                        data_output.give(&data_cap_set[0], update);
                     }
 
-                    definite_error_handle
-                        .give(
-                            &definite_error_cap_set[0],
-                            ReplicationError::Definite(Rc::new(err)),
-                        )
-                        .await;
+                    definite_error_handle.give(
+                        &definite_error_cap_set[0],
+                        ReplicationError::Definite(Rc::new(err)),
+                    );
                     return Ok(());
                 }
             };
@@ -414,12 +408,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 if let Some((data_cap, req)) = rewinds.get(&oid) {
                                     if commit_lsn <= req.snapshot_lsn {
                                         let update = (data.clone(), MzOffset::from(0), -diff);
-                                        data_output.give(data_cap, update).await;
+                                        data_output.give(data_cap, update);
                                     }
                                 }
-                                data_output
-                                    .give(&data_cap_set[0], (data, commit_lsn, diff))
-                                    .await;
+                                data_output.give(&data_cap_set[0], (data, commit_lsn, diff));
                             }
                         }
                         _ => return Err(TransientError::BareTransactionEvent),
@@ -662,17 +654,15 @@ async fn raw_stream<'a>(
                 let upstream_stat = { progress_stat_shared_value.lock().expect("poisoned").take() };
                 if let Some(upstream_stat) = upstream_stat {
                     let upstream_stat = upstream_stat?;
-                    stats_output
-                        .give(
-                            stats_cap,
-                            ProgressStatisticsUpdate::SteadyState {
-                                // Similar to the kafka source, we don't subtract 1 from the upper as we want to report the
-                                // _number of bytes_ we have processed/in upstream.
-                                offset_known: upstream_stat.offset,
-                                offset_committed: last_committed_upper.offset,
-                            },
-                        )
-                        .await;
+                    stats_output.give(
+                        stats_cap,
+                        ProgressStatisticsUpdate::SteadyState {
+                            // Similar to the kafka source, we don't subtract 1 from the upper as we want to report the
+                            // _number of bytes_ we have processed/in upstream.
+                            offset_known: upstream_stat.offset,
+                            offset_committed: last_committed_upper.offset,
+                        },
+                    );
                 }
             }
         }

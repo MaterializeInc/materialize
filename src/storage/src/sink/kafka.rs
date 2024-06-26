@@ -1245,7 +1245,7 @@ fn encode_collection<G: Scope>(
                             value,
                             headers,
                         };
-                        output.give(&cap, (message, time, diff)).await;
+                        output.give(&cap, (message, time, diff));
                     }
                 }
             }

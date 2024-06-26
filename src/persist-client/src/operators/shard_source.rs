@@ -502,7 +502,7 @@ where
                 if let Some(lease) = lease {
                     leases.borrow_mut().push_at(current_ts.clone(), lease);
                 }
-                descs_output.give(&session_cap, (worker_idx, part)).await;
+                descs_output.give(&session_cap, (worker_idx, part));
             }
 
             current_frontier.join_assign(&progress);
@@ -577,7 +577,7 @@ where
                         // outputs or sessions across await points, which
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
-                        fetched_output.give(&fetched_cap, fetched).await;
+                        fetched_output.give(&fetched_cap, fetched);
                     }
                 }
             }

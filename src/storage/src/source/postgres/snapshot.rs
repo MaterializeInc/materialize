@@ -287,9 +287,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 trace!(
                     %id,
                     "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
-                snapshot_handle
-                    .give(&snapshot_cap_set[0], snapshot_info)
-                    .await;
+                snapshot_handle.give(&snapshot_cap_set[0], snapshot_info);
 
                 client
             } else {
@@ -352,15 +350,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         // practice) never conflict any previously revealed
                         // portions of the TVC.
                         let update = ((*oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
-                        raw_handle.give(&data_cap_set[0], update).await;
+                        raw_handle.give(&data_cap_set[0], update);
                     }
 
-                    definite_error_handle
-                        .give(
-                            &definite_error_cap_set[0],
-                            ReplicationError::Definite(Rc::new(err)),
-                        )
-                        .await;
+                    definite_error_handle.give(
+                        &definite_error_cap_set[0],
+                        ReplicationError::Definite(Rc::new(err)),
+                    );
                     return Ok(());
                 }
                 Err(e) => Err(TransientError::from(e))?,
@@ -386,15 +382,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let snapshot_total =
                 fetch_snapshot_size(&client, worker_tables, metrics, &config).await?;
 
-            stats_output
-                .give(
-                    &stats_cap[0],
-                    ProgressStatisticsUpdate::Snapshot {
-                        records_known: snapshot_total,
-                        records_staged: 0,
-                    },
-                )
-                .await;
+            stats_output.give(
+                &stats_cap[0],
+                ProgressStatisticsUpdate::Snapshot {
+                    records_known: snapshot_total,
+                    records_staged: 0,
+                },
+            );
 
             let mut snapshot_staged = 0;
             for (&oid, (_, expected_desc, casts)) in reader_snapshot_table_info.iter() {
@@ -402,8 +396,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     Ok(()) => expected_desc,
                     Err(err) => {
                         raw_handle
-                            .give(&data_cap_set[0], ((oid, Err(err)), MzOffset::minimum(), 1))
-                            .await;
+                            .give(&data_cap_set[0], ((oid, Err(err)), MzOffset::minimum(), 1));
                         continue;
                     }
                 };
@@ -424,21 +417,17 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 let mut stream = pin!(client.copy_out_simple(&query).await?);
 
                 while let Some(bytes) = stream.try_next().await? {
-                    raw_handle
-                        .give(&data_cap_set[0], ((oid, Ok(bytes)), MzOffset::minimum(), 1))
-                        .await;
+                    raw_handle.give(&data_cap_set[0], ((oid, Ok(bytes)), MzOffset::minimum(), 1));
                     snapshot_staged += 1;
                     // TODO(guswynn): does this 1000 need to be configurable?
                     if snapshot_staged % 1000 == 0 {
-                        stats_output
-                            .give(
-                                &stats_cap[0],
-                                ProgressStatisticsUpdate::Snapshot {
-                                    records_known: snapshot_total,
-                                    records_staged: snapshot_staged,
-                                },
-                            )
-                            .await;
+                        stats_output.give(
+                            &stats_cap[0],
+                            ProgressStatisticsUpdate::Snapshot {
+                                records_known: snapshot_total,
+                                records_staged: snapshot_staged,
+                            },
+                        );
                     }
                 }
             }
@@ -452,7 +441,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             for &oid in reader_snapshot_table_info.keys() {
                 trace!(%id, "timely-{worker_id} producing rewind request for {oid}");
                 let req = RewindRequest { oid, snapshot_lsn };
-                rewinds_handle.give(&rewind_cap_set[0], req).await;
+                rewinds_handle.give(&rewind_cap_set[0], req);
             }
             *rewind_cap_set = CapabilitySet::new();
 
@@ -461,15 +450,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                  bigger than records staged {snapshot_staged}");
                 snapshot_staged = snapshot_total;
             }
-            stats_output
-                .give(
-                    &stats_cap[0],
-                    ProgressStatisticsUpdate::Snapshot {
-                        records_known: snapshot_total,
-                        records_staged: snapshot_staged,
-                    },
-                )
-                .await;
+            stats_output.give(
+                &stats_cap[0],
+                ProgressStatisticsUpdate::Snapshot {
+                    records_known: snapshot_total,
+                    records_staged: snapshot_staged,
+                },
+            );
 
             // Failure scenario after we have produced the snapshot, but before a successful COMMIT
             fail::fail_point!("pg_snapshot_failure", |_| Err(

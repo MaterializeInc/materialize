@@ -326,15 +326,13 @@ where
                     Some(event) = desired_oks_input.next() => {
                         if let Event::Data([_, cap], mut data) = event {
                             desired_oks_output
-                                .give_container(&cap, &mut data)
-                                .await;
+                                .give_container(&cap, &mut data);
                         }
                     }
                     Some(event) = desired_errs_input.next() => {
                         if let Event::Data([_, cap], mut data) = event {
                             desired_errs_output
-                                .give_container(&cap, &mut data)
-                                .await;
+                                .give_container(&cap, &mut data);
                         }
                     }
                     // All inputs are exhausted, so we can shut down.
@@ -448,7 +446,7 @@ where
                     match event {
                         Event::Data([_, cap], mut data) => {
                             // Just passthrough the data.
-                            desired_oks_output.give_container(&cap, &mut data).await;
+                            desired_oks_output.give_container(&cap, &mut data);
                             continue;
                         }
                         Event::Progress(frontier) => {
@@ -460,7 +458,7 @@ where
                     match event {
                         Event::Data([_, cap], mut data) => {
                             // Just passthrough the data.
-                            desired_errs_output.give_container(&cap, &mut data).await;
+                            desired_errs_output.give_container(&cap, &mut data);
                             continue;
                         }
                         Event::Progress(frontier) => {
@@ -548,7 +546,7 @@ where
                     batch_description
                 );
 
-                output.give(&cap, batch_description).await;
+                output.give(&cap, batch_description);
 
                 // WIP: We downgrade our capability so that downstream
                 // operators (writer and appender) can know when all the
@@ -946,7 +944,7 @@ where
                         }
                     };
 
-                    output.give(&cap, batch_or_data).await;
+                    output.give(&cap, batch_or_data);
                 }
             }
         }

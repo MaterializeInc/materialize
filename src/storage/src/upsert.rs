@@ -847,12 +847,8 @@ where
             let retraction = Err(UpsertError::Value(error.clone()));
             error.is_legacy_dont_touch_it = false;
             let insertion = Err(UpsertError::Value(error));
-            output_handle
-                .give(&output_cap, (retraction, time.clone(), -diff))
-                .await;
-            output_handle
-                .give(&output_cap, (insertion, time, diff))
-                .await;
+            output_handle.give(&output_cap, (retraction, time.clone(), -diff));
+            output_handle.give(&output_cap, (insertion, time, diff));
         }
 
         tracing::info!(
@@ -938,9 +934,7 @@ where
                         )
                         .await;
 
-                        output_handle
-                            .give_container(&output_cap, &mut output_updates)
-                            .await;
+                        output_handle.give_container(&output_cap, &mut output_updates);
 
                         if let Some(ts) = upper.as_option() {
                             output_cap.downgrade(ts);
@@ -976,9 +970,7 @@ where
                 )
                 .await;
 
-                output_handle
-                    .give_container(&output_cap, &mut output_updates)
-                    .await;
+                output_handle.give_container(&output_cap, &mut output_updates);
             }
         }
     });
@@ -1026,7 +1018,7 @@ async fn process_upsert_state_error<G: Scope>(
     health_cap: &Capability<<G as ScopeParent>::Timestamp>,
 ) {
     let update = HealthStatusUpdate::halting(e.context(context).to_string_with_causes(), None);
-    health_output.give(health_cap, (0, update)).await;
+    health_output.give(health_cap, (0, update));
     std::future::pending::<()>().await;
     unreachable!("pending future never returns");
 }

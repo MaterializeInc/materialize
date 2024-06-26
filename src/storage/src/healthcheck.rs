@@ -1185,17 +1185,15 @@ mod tests {
             }
             let mut capability = Some(caps.pop().unwrap());
             while let Some(element) = input.recv().await {
-                output_handle
-                    .give(
-                        capability.as_ref().unwrap(),
-                        (
-                            element.worker_id,
-                            element.input_index,
-                            element.namespace,
-                            element.update,
-                        ),
-                    )
-                    .await;
+                output_handle.give(
+                    capability.as_ref().unwrap(),
+                    (
+                        element.worker_id,
+                        element.input_index,
+                        element.namespace,
+                        element.update,
+                    ),
+                );
             }
 
             capability.take();
