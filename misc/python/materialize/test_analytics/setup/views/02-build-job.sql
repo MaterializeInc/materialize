@@ -55,7 +55,7 @@ GROUP BY
 ;
 
 -- history of build job success
-CREATE OR REPLACE VIEW v_build_job_success AS
+CREATE OR REPLACE MATERIALIZED VIEW mv_build_job_success IN CLUSTER test_analytics AS
 WITH MUTUALLY RECURSIVE data (build_id TEXT, pipeline TEXT, build_number INT, build_job_id TEXT, build_step_key TEXT, success BOOL, predecessor_index INT, predecessor_build_number INT) AS
 (
     SELECT
@@ -110,6 +110,10 @@ ON pred_b.build_id = pred_bj.build_id
 AND d.build_step_key = pred_bj.build_step_key
 WHERE d.predecessor_index <> 0
 ;
+
+-- only for backwards compatibility
+CREATE OR REPLACE VIEW v_build_job_success AS
+SELECT * FROM mv_build_job_success;
 
 CREATE OR REPLACE VIEW v_most_recent_build_job AS
 SELECT
