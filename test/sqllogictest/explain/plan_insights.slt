@@ -98,6 +98,12 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
     },
     "fast_path_clusters": {},
     "persist_count": []
+  },
+  "cluster": {
+    "name": "quickstart",
+    "id": {
+      "User": 1
+    }
   }
 }
 EOF
@@ -316,6 +322,12 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
     },
     "fast_path_clusters": {},
     "persist_count": []
+  },
+  "cluster": {
+    "name": "quickstart",
+    "id": {
+      "User": 1
+    }
   }
 }
 EOF
@@ -436,6 +448,12 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
     },
     "fast_path_clusters": {},
     "persist_count": []
+  },
+  "cluster": {
+    "name": "quickstart",
+    "id": {
+      "User": 1
+    }
   }
 }
 EOF
@@ -656,6 +674,12 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
     },
     "fast_path_clusters": {},
     "persist_count": []
+  },
+  "cluster": {
+    "name": "quickstart",
+    "id": {
+      "User": 1
+    }
   }
 }
 EOF
@@ -763,10 +787,15 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
       }
     },
     "persist_count": []
+  },
+  "cluster": {
+    "name": "other",
+    "id": {
+      "User": 2
+    }
   }
 }
 EOF
-
 
 # Ensure persist_count is set here.
 query T multiline
@@ -1019,6 +1048,70 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
         "item": "t"
       }
     ]
+  },
+  "cluster": {
+    "name": "other",
+    "id": {
+      "User": 2
+    }
   }
+}
+EOF
+
+# Ensure cluster is null for views.
+query T multiline
+EXPLAIN PLAN INSIGHTS AS JSON FOR CREATE VIEW V AS SELECT 1
+----
+{
+  "plans": {
+    "raw": {
+      "text": "Map (1)\n  Constant\n    - ()\n",
+      "json": {
+        "Map": {
+          "input": {
+            "Constant": {
+              "rows": [
+                {
+                  "data": []
+                }
+              ],
+              "typ": {
+                "column_types": [],
+                "keys": []
+              }
+            }
+          },
+          "scalars": [
+            {
+              "Literal": [
+                {
+                  "data": [
+                    42,
+                    1
+                  ]
+                },
+                {
+                  "scalar_type": "Int32",
+                  "nullable": false
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "optimized": {
+      "global": {
+        "text": "<unknown>",
+        "json": null
+      },
+      "fast_path": {
+        "text": "<unknown>",
+        "json": null
+      }
+    }
+  },
+  "insights": null,
+  "cluster": null
 }
 EOF

@@ -593,7 +593,7 @@ impl Coordinator {
                 &features,
                 &expr_humanizer,
                 None,
-                Some(target_cluster.name.as_str()),
+                Some(target_cluster),
                 df_meta,
                 stage,
                 plan::ExplaineeStatementKind::CreateIndex,
