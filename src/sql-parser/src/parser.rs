@@ -2200,13 +2200,39 @@ impl<'a> Parser<'a> {
         Ok(CsrConnectionProtobuf { connection, seed })
     }
 
+    fn parse_source_error_policy_option(&mut self) -> Result<SourceErrorPolicy, ParserError> {
+        match self.expect_one_of_keywords(&[INLINE])? {
+            INLINE => Ok(SourceErrorPolicy::Inline),
+            _ => unreachable!(),
+        }
+    }
+
     fn parse_source_envelope(&mut self) -> Result<SourceEnvelope, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
             SourceEnvelope::None
         } else if self.parse_keyword(DEBEZIUM) {
             SourceEnvelope::Debezium
         } else if self.parse_keyword(UPSERT) {
-            SourceEnvelope::Upsert
+            let value_decode_err_policy = if self.consume_token(&Token::LParen) {
+                // We only support the `VALUE DECODING ERRORS` option for now, but if we add another
+                // we should extract this into a helper function.
+                self.expect_keywords(&[VALUE, DECODING, ERRORS])?;
+                let _ = self.consume_token(&Token::Eq);
+                let open_inner = self.consume_token(&Token::LParen);
+                let value_decode_err_policy =
+                    self.parse_comma_separated(Parser::parse_source_error_policy_option)?;
+                if open_inner {
+                    self.expect_token(&Token::RParen)?;
+                }
+                self.expect_token(&Token::RParen)?;
+                value_decode_err_policy
+            } else {
+                vec![]
+            };
+
+            SourceEnvelope::Upsert {
+                value_decode_err_policy,
+            }
         } else if self.parse_keyword(MATERIALIZE) {
             SourceEnvelope::CdcV2
         } else {

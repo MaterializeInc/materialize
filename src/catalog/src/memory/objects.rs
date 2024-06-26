@@ -681,6 +681,9 @@ impl Source {
                             // DEBEZIUM.
                             Some("debezium")
                         }
+                        mz_storage_types::sources::envelope::UpsertStyle::ValueErrInline {
+                            ..
+                        } => Some("upsert-value-err-inline"),
                     },
                     SourceEnvelope::CdcV2 => {
                         // TODO(aljoscha): Should we even report this? It's

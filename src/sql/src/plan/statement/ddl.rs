@@ -69,9 +69,10 @@ use mz_sql_parser::ast::{
     MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
     PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
     RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceIncludeMetadata, Statement,
-    TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
+    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
+    Statement, TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -709,7 +710,7 @@ pub fn plan_create_source(
             if !include_metadata.is_empty()
                 && !matches!(
                     envelope,
-                    ast::SourceEnvelope::Upsert
+                    ast::SourceEnvelope::Upsert { .. }
                         | ast::SourceEnvelope::None
                         | ast::SourceEnvelope::Debezium
                 )
@@ -1201,7 +1202,9 @@ pub fn plan_create_source(
                 style: UpsertStyle::Debezium { after_idx },
             }
         }
-        ast::SourceEnvelope::Upsert => {
+        ast::SourceEnvelope::Upsert {
+            value_decode_err_policy,
+        } => {
             let key_encoding = match encoding.as_ref().and_then(|e| e.key.as_ref()) {
                 None => {
                     if !key_envelope_no_encoding {
@@ -1219,9 +1222,16 @@ pub fn plan_create_source(
             if key_envelope == KeyEnvelope::None {
                 key_envelope = get_unnamed_key_envelope(key_encoding)?;
             }
-            UnplannedSourceEnvelope::Upsert {
-                style: UpsertStyle::Default(key_envelope),
-            }
+            // If the value decode error policy is not set we use the default upsert style.
+            let style = if value_decode_err_policy.is_empty() {
+                UpsertStyle::Default(key_envelope)
+            } else if value_decode_err_policy.contains(&SourceErrorPolicy::Inline) {
+                scx.require_feature_flag(&vars::ENABLE_ENVELOPE_UPSERT_INLINE_ERRORS)?;
+                UpsertStyle::ValueErrInline { key_envelope }
+            } else {
+                bail_unsupported!("ENVELOPE UPSERT with unsupported value decode error policy")
+            };
+            UnplannedSourceEnvelope::Upsert { style }
         }
         ast::SourceEnvelope::CdcV2 => {
             scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
@@ -1823,7 +1833,7 @@ fn get_encoding(
 
     let requires_keyvalue = matches!(
         envelope,
-        ast::SourceEnvelope::Debezium | ast::SourceEnvelope::Upsert
+        ast::SourceEnvelope::Debezium | ast::SourceEnvelope::Upsert { .. }
     );
     let is_keyvalue = encoding.key.is_some();
     if requires_keyvalue && !is_keyvalue {

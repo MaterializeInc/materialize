@@ -2304,7 +2304,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT PROTOBUF USI
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, include_metadata: [], format: Some(Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, seed: Some(CsrSeedProtobuf { key: Some(CsrSeedProtobufSchema { schema: "{\"some\": \"seed\"}", message_name: "Batch" }), value: CsrSeedProtobufSchema { schema: "123", message_name: "M" } }) } }))), envelope: Some(Upsert), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, include_metadata: [], format: Some(Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, seed: Some(CsrSeedProtobuf { key: Some(CsrSeedProtobufSchema { schema: "{\"some\": \"seed\"}", message_name: "Batch" }), value: CsrSeedProtobufSchema { schema: "123", message_name: "M" } }) } }))), envelope: Some(Upsert { value_decode_err_policy: [] }), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE MATERIALIZE
@@ -2968,7 +2968,28 @@ CREATE SOURCE header2 FROM KAFKA CONNECTION conn (TOPIC 'test') KEY FORMAT TEXT 
 ----
 CREATE SOURCE header2 FROM KAFKA CONNECTION conn (TOPIC = 'test') KEY FORMAT TEXT VALUE FORMAT JSON INCLUDE HEADER 'header1' AS h1, HEADER 'header2' AS h2 BYTES ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("header2")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("test"))) }] }, include_metadata: [Header { key: "header1", alias: Ident("h1"), use_bytes: false }, Header { key: "header2", alias: Ident("h2"), use_bytes: true }], format: Some(KeyValue { key: Text, value: Json { array: false } }), envelope: Some(Upsert), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("header2")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("test"))) }] }, include_metadata: [Header { key: "header1", alias: Ident("h1"), use_bytes: false }, Header { key: "header2", alias: Ident("h2"), use_bytes: true }], format: Some(KeyValue { key: Text, value: Json { array: false } }), envelope: Some(Upsert { value_decode_err_policy: [] }), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC 'test') KEY FORMAT TEXT VALUE FORMAT JSON ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE))
+----
+CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC = 'test') KEY FORMAT TEXT VALUE FORMAT JSON ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE))
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("header3")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("test"))) }] }, include_metadata: [], format: Some(KeyValue { key: Text, value: Json { array: false } }), envelope: Some(Upsert { value_decode_err_policy: [Inline] }), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC 'test') KEY FORMAT TEXT VALUE FORMAT JSON ENVELOPE UPSERT (VALUE DECODING ERRORS = INLINE)
+----
+CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC = 'test') KEY FORMAT TEXT VALUE FORMAT JSON ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE))
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("header3")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("test"))) }] }, include_metadata: [], format: Some(KeyValue { key: Text, value: Json { array: false } }), envelope: Some(Upsert { value_decode_err_policy: [Inline] }), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC 'test') KEY FORMAT TEXT VALUE FORMAT JSON ENVELOPE UPSERT (VALUE DECODING ERRORS)
+----
+error: Expected one of INLINE, found right parenthesis
+CREATE SOURCE header3 FROM KAFKA CONNECTION conn (TOPIC 'test') KEY FORMAT TEXT VALUE FORMAT JSON ENVELOPE UPSERT (VALUE DECODING ERRORS)
+                                                                                                                                        ^
 
 parse-statement
 CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '1s');
