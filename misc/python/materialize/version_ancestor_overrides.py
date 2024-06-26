@@ -31,6 +31,12 @@ def get_ancestor_overrides_for_performance_regressions(
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "AccumulateReductions":
+        # PR#26807 (compute: hydration status based on output frontiers) increased messages
+        min_ancestor_mz_version_per_commit[
+            "be0e50041169a5cac80c033b083c920b067d049f"
+        ] = MzVersion.parse_mz("v0.106.0")
+
     if scenario_class_name == "SwapSchema":
         # PR#27607 (catalog: Listen for updates in transactions) increased wallclock
         min_ancestor_mz_version_per_commit[
