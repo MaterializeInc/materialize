@@ -78,13 +78,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::AsCollection;
 use futures::{future, future::select, FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_ore::future::InTask;
-use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::simple_query_opt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
@@ -106,8 +105,9 @@ use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::Capability;
-use timely::dataflow::operators::{Concat, Map};
+use timely::dataflow::operators::Concat;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
@@ -119,7 +119,7 @@ use tracing::{error, trace};
 use crate::metrics::source::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, TransientError};
-use crate::source::types::ProgressStatisticsUpdate;
+use crate::source::types::{ProgressStatisticsUpdate, SourceMessage, StackedCollection};
 use crate::source::RawSourceCreationConfig;
 
 /// Postgres epoch is 2000-01-01T00:00:00Z
@@ -147,7 +147,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     metrics: PgSourceMetrics,
 ) -> (
-    Collection<G, (usize, Result<Row, DataflowError>), Diff>,
+    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
     Stream<G, ProgressStatisticsUpdate>,
     Stream<G, ReplicationError>,
@@ -157,10 +157,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope.clone());
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
-    let (mut data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut data_output, data_stream) = builder.new_output();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (mut definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut definite_error_handle, definite_errors) = builder.new_output();
 
     let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
@@ -305,8 +304,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             for &oid in table_info.keys() {
                                 // We pick `u64::MAX` as the LSN which will (in practice) never conflict
                                 // any previously revealed portions of the TVC.
-                                let update = ((oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
-                                data_output.give(&data_cap_set[0], update);
+                                let update = (
+                                    (oid, Err(DataflowError::from(err.clone()))),
+                                    MzOffset::from(u64::MAX),
+                                    1,
+                                );
+                                data_output.give_fueled(&data_cap_set[0], update).await;
                             }
                             definite_error_handle.give(
                                 &definite_error_cap_set[0],
@@ -344,8 +347,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     for &oid in table_info.keys() {
                         // We pick `u64::MAX` as the LSN which will (in practice) never conflict
                         // any previously revealed portions of the TVC.
-                        let update = ((oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
-                        data_output.give(&data_cap_set[0], update);
+                        let update = ((oid, Err(err.clone().into())), MzOffset::from(u64::MAX), 1);
+                        data_output.give_fueled(&data_cap_set[0], update).await;
                     }
 
                     definite_error_handle.give(
@@ -363,6 +366,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // creating excessive progress tracking traffic when there are multiple small
             // transactions ready to go.
             let mut data_upper = *data_cap_set[0].time();
+            // A stash of reusable vectors to convert from bytes::Bytes based data, which is not
+            // compatible with `columnation`, to Vec<u8> data that is.
+            let mut col_temp: Vec<Vec<u8>> = vec![];
+            let mut row_temp = vec![];
             while let Some(event) = stream.as_mut().next().await {
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
@@ -404,14 +411,38 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                     continue;
                                 }
 
-                                let data = (oid, event);
+                                let event = match event {
+                                    Ok(cols) => {
+                                        row_temp.clear();
+                                        for c in cols {
+                                            let c = c.map(|c| {
+                                                let mut col_vec =
+                                                    col_temp.pop().unwrap_or_default();
+                                                col_vec.clear();
+                                                col_vec.extend_from_slice(&c);
+                                                col_vec
+                                            });
+                                            row_temp.push(c);
+                                        }
+                                        Ok(std::mem::take(&mut row_temp))
+                                    }
+                                    Err(err) => Err(err.into()),
+                                };
+                                let mut data = (oid, event);
                                 if let Some((data_cap, req)) = rewinds.get(&oid) {
                                     if commit_lsn <= req.snapshot_lsn {
-                                        let update = (data.clone(), MzOffset::from(0), -diff);
-                                        data_output.give(data_cap, update);
+                                        let update = (data, MzOffset::from(0), -diff);
+                                        data_output.give_fueled(data_cap, &update).await;
+                                        data = update.0;
                                     }
                                 }
-                                data_output.give(&data_cap_set[0], (data, commit_lsn, diff));
+                                let update = (data, commit_lsn, diff);
+                                data_output.give_fueled(&data_cap_set[0], &update).await;
+                                // Store buffers for reuse
+                                if let Ok(mut row) = update.0 .1 {
+                                    col_temp.extend(row.drain(..).flatten());
+                                    row_temp = row;
+                                }
                             }
                         }
                         _ => return Err(TransientError::BareTransactionEvent),
@@ -441,28 +472,31 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         })
     });
 
-    // Distribute the raw slot data to all workers and turn it into a collection
-    let raw_collection = data_stream.distribute().as_collection();
+    // Distribute the raw slot data to all workers.
+    let data_stream = data_stream.distribute();
 
     // We now process the slot updates and apply the cast expressions
     let mut final_row = Row::default();
     let mut datum_vec = DatumVec::new();
-    let replication_updates = raw_collection
-        .map(move |(oid, event)| {
-            let (output_index, _, casts) = &table_info[&oid];
-            let event = event.and_then(|row| {
+    let replication_updates = data_stream
+        .map(move |((oid, event), time, diff)| {
+            let (output_index, _, casts) = &table_info[oid];
+            let event = event.as_ref().map_err(|e| e.clone()).and_then(|row| {
                 let mut datums = datum_vec.borrow();
                 for col in row.iter() {
                     let datum = col.as_deref().map(super::decode_utf8_text).transpose()?;
                     datums.push(datum.unwrap_or(Datum::Null));
                 }
                 super::cast_row(casts, &datums, &mut final_row)?;
-                Ok(final_row.clone())
+                Ok(SourceMessage {
+                    key: Row::default(),
+                    value: final_row.clone(),
+                    metadata: Row::default(),
+                })
             });
 
-            (*output_index, event.err_into())
+            ((*output_index, event), *time, *diff)
         })
-        .inner
         .as_collection();
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
