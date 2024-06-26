@@ -5320,11 +5320,13 @@ dependencies = [
  "maplit",
  "mz-cloud-resources",
  "mz-orchestrator",
+ "mz-ore",
  "mz-repr",
  "mz-secrets",
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
  "tracing",
  "workspace-hack",
 ]

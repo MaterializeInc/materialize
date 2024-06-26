@@ -386,7 +386,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
         self.inner.fetch_service_metrics(id).await
     }
 
-    async fn ensure_service(
+    fn ensure_service(
         &self,
         id: &str,
         mut service_config: ServiceConfig,
@@ -497,11 +497,11 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 port_hint: 6669,
             });
         }
-        self.inner.ensure_service(id, service_config).await
+        self.inner.ensure_service(id, service_config)
     }
 
-    async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
-        self.inner.drop_service(id).await
+    fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
+        self.inner.drop_service(id)
     }
 
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {

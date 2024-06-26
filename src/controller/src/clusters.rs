@@ -421,15 +421,13 @@ where
                     }
                     ReplicaLocation::Managed(m) => {
                         let workers = m.allocation.workers;
-                        let (service, metrics_task_join_handle) = this
-                            .provision_replica(
-                                cluster_id,
-                                replica_id,
-                                role,
-                                m,
-                                enable_worker_core_affinity,
-                            )
-                            .await?;
+                        let (service, metrics_task_join_handle) = this.provision_replica(
+                            cluster_id,
+                            replica_id,
+                            role,
+                            m,
+                            enable_worker_core_affinity,
+                        )?;
                         let storage_location = ClusterReplicaLocation {
                             ctl_addrs: service.addresses("storagectl"),
                             dataflow_addrs: service.addresses("storage"),
@@ -505,7 +503,7 @@ where
     }
 
     /// Drops the specified replica of the specified cluster.
-    pub async fn drop_replica(
+    pub fn drop_replica(
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
@@ -514,8 +512,7 @@ where
         // needing to keep track of which replicas are managed and which are
         // unmanaged. Deprovisioning is a no-op if the replica ID was never
         // provisioned.
-        self.deprovision_replica(cluster_id, replica_id, self.deploy_generation)
-            .await?;
+        self.deprovision_replica(cluster_id, replica_id, self.deploy_generation)?;
         self.metrics_tasks.remove(&replica_id);
 
         self.compute.drop_replica(cluster_id, replica_id)?;
@@ -600,8 +597,7 @@ where
                 halt!("found replica ID ({replica_id}) in orchestrator >= next ID ({next})");
             }
             if !desired.contains(&replica_id) {
-                self.deprovision_replica(cluster_id, replica_id, generation)
-                    .await?;
+                self.deprovision_replica(cluster_id, replica_id, generation)?;
             }
         }
 
@@ -641,7 +637,7 @@ where
         Box::pin(stream)
     }
     /// Provisions a replica with the service orchestrator.
-    async fn provision_replica(
+    fn provision_replica(
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
@@ -667,130 +663,127 @@ where
         let txn_wal_tables = self.txn_wal_tables;
         let secrets_args = self.secrets_args.to_flags();
         let is_cluster_size_v2 = is_cluster_size_v2(&location.size);
-        let service = self
-            .orchestrator
-            .ensure_service(
-                &service_name,
-                ServiceConfig {
-                    image: self.clusterd_image.clone(),
-                    init_container_image: self.init_container_image.clone(),
-                    args: Box::new(move |assigned| {
-                        let mut args = vec![
-                            format!(
-                                "--storage-controller-listen-addr={}",
-                                assigned["storagectl"]
-                            ),
-                            format!(
-                                "--compute-controller-listen-addr={}",
-                                assigned["computectl"]
-                            ),
-                            format!("--internal-http-listen-addr={}", assigned["internal-http"]),
-                            format!("--opentelemetry-resource=cluster_id={}", cluster_id),
-                            format!("--opentelemetry-resource=replica_id={}", replica_id),
-                            format!("--persist-pubsub-url={}", persist_pubsub_url),
-                            format!("--persist-txn-tables={}", txn_wal_tables),
-                            format!("--environment-id={}", environment_id),
-                        ];
-                        if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
-                            args.push(format!(
-                                "--aws-external-id-prefix={}",
-                                aws_external_id_prefix
-                            ));
-                        }
-                        if let Some(aws_connection_role_arn) = &aws_connection_role_arn {
-                            args.push(format!(
-                                "--aws-connection-role-arn={}",
-                                aws_connection_role_arn
-                            ));
-                        }
-                        if let Some(memory_limit) = location.allocation.memory_limit {
-                            args.push(format!(
-                                "--announce-memory-limit={}",
-                                memory_limit.0.as_u64()
-                            ));
-                        }
-                        if location.allocation.cpu_exclusive && enable_worker_core_affinity {
-                            args.push("--worker-core-affinity".into());
-                        }
-                        if is_cluster_size_v2 {
-                            args.push("--is-cluster-size-v2".into());
-                        }
+        let service = self.orchestrator.ensure_service(
+            &service_name,
+            ServiceConfig {
+                image: self.clusterd_image.clone(),
+                init_container_image: self.init_container_image.clone(),
+                args: Box::new(move |assigned| {
+                    let mut args = vec![
+                        format!(
+                            "--storage-controller-listen-addr={}",
+                            assigned["storagectl"]
+                        ),
+                        format!(
+                            "--compute-controller-listen-addr={}",
+                            assigned["computectl"]
+                        ),
+                        format!("--internal-http-listen-addr={}", assigned["internal-http"]),
+                        format!("--opentelemetry-resource=cluster_id={}", cluster_id),
+                        format!("--opentelemetry-resource=replica_id={}", replica_id),
+                        format!("--persist-pubsub-url={}", persist_pubsub_url),
+                        format!("--persist-txn-tables={}", txn_wal_tables),
+                        format!("--environment-id={}", environment_id),
+                    ];
+                    if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
+                        args.push(format!(
+                            "--aws-external-id-prefix={}",
+                            aws_external_id_prefix
+                        ));
+                    }
+                    if let Some(aws_connection_role_arn) = &aws_connection_role_arn {
+                        args.push(format!(
+                            "--aws-connection-role-arn={}",
+                            aws_connection_role_arn
+                        ));
+                    }
+                    if let Some(memory_limit) = location.allocation.memory_limit {
+                        args.push(format!(
+                            "--announce-memory-limit={}",
+                            memory_limit.0.as_u64()
+                        ));
+                    }
+                    if location.allocation.cpu_exclusive && enable_worker_core_affinity {
+                        args.push("--worker-core-affinity".into());
+                    }
+                    if is_cluster_size_v2 {
+                        args.push("--is-cluster-size-v2".into());
+                    }
 
-                        args.extend(secrets_args.clone());
+                    args.extend(secrets_args.clone());
 
-                        args
-                    }),
-                    ports: vec![
-                        ServicePort {
-                            name: "storagectl".into(),
-                            port_hint: 2100,
-                        },
-                        // To simplify the changes to tests, the port
-                        // chosen here is _after_ the compute ones.
-                        // TODO(petrosagg): fix the numerical ordering here
-                        ServicePort {
-                            name: "storage".into(),
-                            port_hint: 2103,
-                        },
-                        ServicePort {
-                            name: "computectl".into(),
-                            port_hint: 2101,
-                        },
-                        ServicePort {
-                            name: "compute".into(),
-                            port_hint: 2102,
-                        },
-                        ServicePort {
-                            name: "internal-http".into(),
-                            port_hint: 6878,
-                        },
-                    ],
-                    cpu_limit: location.allocation.cpu_limit,
-                    memory_limit: location.allocation.memory_limit,
-                    scale: location.allocation.scale,
-                    labels: BTreeMap::from([
-                        ("replica-id".into(), replica_id.to_string()),
-                        ("cluster-id".into(), cluster_id.to_string()),
-                        ("type".into(), "cluster".into()),
-                        ("replica-role".into(), role_label.into()),
-                        ("workers".into(), location.allocation.workers.to_string()),
-                        ("size".into(), location.size.to_string()),
-                    ]),
-                    availability_zones: match location.availability_zones {
-                        ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
-                        ManagedReplicaAvailabilityZones::FromReplica(az) => az.map(|z| vec![z]),
+                    args
+                }),
+                ports: vec![
+                    ServicePort {
+                        name: "storagectl".into(),
+                        port_hint: 2100,
                     },
-                    // This provides the orchestrator with some label selectors that
-                    // are used to constraint the scheduling of replicas, based on
-                    // its internal configuration.
-                    other_replicas_selector: vec![
-                        LabelSelector {
-                            label_name: "cluster-id".to_string(),
-                            logic: LabelSelectionLogic::Eq {
-                                value: cluster_id.to_string(),
-                            },
-                        },
-                        // Select other replicas (but not oneself)
-                        LabelSelector {
-                            label_name: "replica-id".into(),
-                            logic: LabelSelectionLogic::NotEq {
-                                value: replica_id.to_string(),
-                            },
-                        },
-                    ],
-                    replicas_selector: vec![LabelSelector {
+                    // To simplify the changes to tests, the port
+                    // chosen here is _after_ the compute ones.
+                    // TODO(petrosagg): fix the numerical ordering here
+                    ServicePort {
+                        name: "storage".into(),
+                        port_hint: 2103,
+                    },
+                    ServicePort {
+                        name: "computectl".into(),
+                        port_hint: 2101,
+                    },
+                    ServicePort {
+                        name: "compute".into(),
+                        port_hint: 2102,
+                    },
+                    ServicePort {
+                        name: "internal-http".into(),
+                        port_hint: 6878,
+                    },
+                ],
+                cpu_limit: location.allocation.cpu_limit,
+                memory_limit: location.allocation.memory_limit,
+                scale: location.allocation.scale,
+                labels: BTreeMap::from([
+                    ("replica-id".into(), replica_id.to_string()),
+                    ("cluster-id".into(), cluster_id.to_string()),
+                    ("type".into(), "cluster".into()),
+                    ("replica-role".into(), role_label.into()),
+                    ("workers".into(), location.allocation.workers.to_string()),
+                    ("size".into(), location.size.to_string()),
+                ]),
+                availability_zones: match location.availability_zones {
+                    ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
+                    ManagedReplicaAvailabilityZones::FromReplica(az) => az.map(|z| vec![z]),
+                },
+                // This provides the orchestrator with some label selectors that
+                // are used to constraint the scheduling of replicas, based on
+                // its internal configuration.
+                other_replicas_selector: vec![
+                    LabelSelector {
                         label_name: "cluster-id".to_string(),
-                        // Select ALL replicas.
                         logic: LabelSelectionLogic::Eq {
                             value: cluster_id.to_string(),
                         },
-                    }],
-                    disk_limit: location.allocation.disk_limit,
-                    disk: location.disk,
-                    node_selector: location.allocation.selectors,
-                },
-            )
-            .await?;
+                    },
+                    // Select other replicas (but not oneself)
+                    LabelSelector {
+                        label_name: "replica-id".into(),
+                        logic: LabelSelectionLogic::NotEq {
+                            value: replica_id.to_string(),
+                        },
+                    },
+                ],
+                replicas_selector: vec![LabelSelector {
+                    label_name: "cluster-id".to_string(),
+                    // Select ALL replicas.
+                    logic: LabelSelectionLogic::Eq {
+                        value: cluster_id.to_string(),
+                    },
+                }],
+                disk_limit: location.allocation.disk_limit,
+                disk: location.disk,
+                node_selector: location.allocation.selectors,
+            },
+        )?;
 
         let metrics_task = mz_ore::task::spawn(|| format!("replica-metrics-{replica_id}"), {
             let tx = self.metrics_tx.clone();
@@ -825,7 +818,7 @@ where
     }
 
     /// Deprovisions a replica with the service orchestrator.
-    async fn deprovision_replica(
+    fn deprovision_replica(
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
@@ -837,7 +830,7 @@ where
             generation,
         }
         .to_string();
-        self.orchestrator.drop_service(&service_name).await
+        self.orchestrator.drop_service(&service_name)
     }
 }
 
@@ -856,7 +849,7 @@ async fn try_remove_past_generation_replicas(
                 replica_id = %name.replica_id,
                 "removing past generation replica",
             );
-            orchestrator.drop_service(&service).await?;
+            orchestrator.drop_service(&service)?;
         }
     }
 

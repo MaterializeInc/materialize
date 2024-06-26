@@ -57,14 +57,14 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     /// If a service with the same ID already exists, its configuration is
     /// updated to match `config`. This may or may not involve restarting the
     /// service, depending on whether the existing service matches `config`.
-    async fn ensure_service(
+    fn ensure_service(
         &self,
         id: &str,
         config: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error>;
 
     /// Drops the identified service, if it exists.
-    async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error>;
+    fn drop_service(&self, id: &str) -> Result<(), anyhow::Error>;
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error>;
