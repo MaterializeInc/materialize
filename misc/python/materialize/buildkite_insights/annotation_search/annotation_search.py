@@ -16,7 +16,9 @@ from materialize.buildkite_insights.annotation_search.buildkite_search_source im
     ANY_PIPELINE_VALUE,
     BuildkiteDataSource,
 )
-from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
+from materialize.buildkite_insights.buildkite_api.buildkite_config import (
+    MZ_PIPELINES_WITH_WILDCARD,
+)
 from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
     FetchMode,
@@ -30,7 +32,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "pipeline",
-        choices=MZ_PIPELINES,
+        choices=MZ_PIPELINES_WITH_WILDCARD,
         type=str,
         help=f"Use {ANY_PIPELINE_VALUE} for all pipelines",
     )
