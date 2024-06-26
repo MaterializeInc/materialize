@@ -322,7 +322,9 @@ pub struct HollowBatchPart<T> {
     /// Columnar format that this batch was written in.
     ///
     /// This is `None` if this part was written before we started writing structured
-    /// columnar data.
+    /// columnar data, or if the [`BATCH_RECORD_PART_FORMAT`] dyncfg is off.
+    ///
+    /// [`BATCH_RECORD_PART_FORMAT`]: crate::batch::BATCH_RECORD_PART_FORMAT
     pub format: Option<BatchColumnarFormat>,
 }
 
