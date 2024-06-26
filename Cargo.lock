@@ -6540,6 +6540,7 @@ name = "mz-timely-util"
 version = "0.0.0"
 dependencies = [
  "ahash",
+ "columnation",
  "differential-dataflow",
  "either",
  "futures-util",
