@@ -60,6 +60,10 @@ for slug in "${!shortlinks[@]}"; do
     aws s3 cp empty "s3://materialize-website/s/$slug" --website-redirect "${shortlinks[$slug]}"
 done
 
+# Work around bug in AWS CLI where cached credentials are not refreshed
+# properly.
+rm -rf ~/.aws/cli/cache
+
 # Hugo's CloudFront invalidation feature doesn't do anything smarter than
 # invalidating the entire distribution, so we do it here to make it clear that
 # we're invalidating the shortlinks too.
