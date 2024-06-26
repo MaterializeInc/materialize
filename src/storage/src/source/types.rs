@@ -102,6 +102,62 @@ pub struct SourceMessage {
     pub metadata: Row,
 }
 
+mod columnation {
+    use columnation::{Columnation, Region};
+    use mz_repr::Row;
+
+    use super::SourceMessage;
+
+    impl Columnation for SourceMessage {
+        type InnerRegion = SourceMessageRegion;
+    }
+
+    #[derive(Default)]
+    pub struct SourceMessageRegion {
+        inner: <Row as Columnation>::InnerRegion,
+    }
+
+    impl Region for SourceMessageRegion {
+        type Item = SourceMessage;
+
+        unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+            SourceMessage {
+                key: self.inner.copy(&item.key),
+                value: self.inner.copy(&item.value),
+                metadata: self.inner.copy(&item.metadata),
+            }
+        }
+
+        fn clear(&mut self) {
+            self.inner.clear()
+        }
+
+        fn reserve_items<'a, I>(&mut self, items: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            self.inner.reserve_items(
+                items
+                    .map(|item| [&item.key, &item.value, &item.metadata])
+                    .flatten(),
+            )
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            self.inner.reserve_regions(regions.map(|r| &r.inner))
+        }
+
+        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            self.inner.heap_size(callback)
+        }
+    }
+}
+
 /// A record produced by a source
 #[derive(Clone, Serialize, Debug, Deserialize)]
 pub struct SourceOutput<FromTime> {

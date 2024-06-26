@@ -22,6 +22,7 @@ bytesize = "1.1.0"
 bincode = "1"
 chrono = { version = "0.4.35", default-features = false, features = ["std"] }
 clap = { version = "3.2.24", features = ["derive", "env"] }
+columnation = { git = "https://github.com/frankmcsherry/columnation" }
 crossbeam-channel = "0.5.8"
 csv-core = { version = "0.1.10" }
 dec = "0.4.8"
