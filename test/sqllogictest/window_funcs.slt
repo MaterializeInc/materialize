@@ -6985,10 +6985,10 @@ where (case when (((select "collection_timestamp" from mz_internal.mz_storage_us
           ))
       and ((case when subq_3."c0" is NULL then TIMESTAMPTZ '2023-01-01 01:23:45+06' else TIMESTAMPTZ '2023-01-01 01:23:45+06' end
           ) <> (pg_catalog.now())) then case when (((select pg_catalog.sum("id") from mz_internal.mz_sessions)
-            ) - (0::uint8)) >= ((select "worker_id" from mz_internal.mz_arrangement_sharing_per_worker limit 1 offset 3)
+            ) - (0::uint8)) >= ((select "worker_id" from mz_introspection.mz_arrangement_sharing_per_worker limit 1 offset 3)
           ) then numrange(0,0) else numrange(0,0) end
        else case when (((select pg_catalog.sum("id") from mz_internal.mz_sessions)
-            ) - (0::uint8)) >= ((select "worker_id" from mz_internal.mz_arrangement_sharing_per_worker limit 1 offset 3)
+            ) - (0::uint8)) >= ((select "worker_id" from mz_introspection.mz_arrangement_sharing_per_worker limit 1 offset 3)
           ) then numrange(0,0) else numrange(0,0) end
        end
     ) >= (case when (0::uint4) > (pg_catalog.mod(

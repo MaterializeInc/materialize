@@ -123,7 +123,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 # In case the environment has other replicas
 > SET cluster_replica = r1
 
-> SELECT * FROM t CROSS JOIN mz_internal.mz_dataflow_operators LIMIT 0
+> SELECT * FROM t CROSS JOIN mz_introspection.mz_dataflow_operators LIMIT 0
 
 > DROP SOURCE data CASCADE
 

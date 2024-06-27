@@ -33,7 +33,8 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::namespaces::{
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_SCHEMA,
+    MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::{RelationDesc, RelationType, ScalarType};
@@ -1683,7 +1684,7 @@ const MONITOR_REDACTED_SELECT: MzAclItem = MzAclItem {
 
 pub static MZ_DATAFLOW_OPERATORS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_dataflow_operators_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_DATAFLOW_OPERATORS_PER_WORKER_OID,
     variant: LogVariant::Timely(TimelyLog::Operates),
     access: vec![PUBLIC_SELECT],
@@ -1691,7 +1692,7 @@ pub static MZ_DATAFLOW_OPERATORS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| Bui
 
 pub static MZ_DATAFLOW_ADDRESSES_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_dataflow_addresses_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_DATAFLOW_ADDRESSES_PER_WORKER_OID,
     variant: LogVariant::Timely(TimelyLog::Addresses),
     access: vec![PUBLIC_SELECT],
@@ -1699,7 +1700,7 @@ pub static MZ_DATAFLOW_ADDRESSES_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| Bui
 
 pub static MZ_DATAFLOW_CHANNELS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_dataflow_channels_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_DATAFLOW_CHANNELS_PER_WORKER_OID,
     variant: LogVariant::Timely(TimelyLog::Channels),
     access: vec![PUBLIC_SELECT],
@@ -1707,7 +1708,7 @@ pub static MZ_DATAFLOW_CHANNELS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| Buil
 
 pub static MZ_SCHEDULING_ELAPSED_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_scheduling_elapsed_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_SCHEDULING_ELAPSED_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
     access: vec![PUBLIC_SELECT],
@@ -1716,7 +1717,7 @@ pub static MZ_SCHEDULING_ELAPSED_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog
 pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW: Lazy<BuiltinLog> =
     Lazy::new(|| BuiltinLog {
         name: "mz_compute_operator_durations_histogram_raw",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::LOG_MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW_OID,
         variant: LogVariant::Timely(TimelyLog::Histogram),
         access: vec![PUBLIC_SELECT],
@@ -1724,7 +1725,7 @@ pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW: Lazy<BuiltinLog> =
 
 pub static MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_scheduling_parks_histogram_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_SCHEDULING_PARKS_HISTOGRAM_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::Parks),
     access: vec![PUBLIC_SELECT],
@@ -1732,7 +1733,7 @@ pub static MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: Lazy<BuiltinLog> = Lazy::new(|| Bu
 
 pub static MZ_ARRANGEMENT_RECORDS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_records_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_ARRANGEMENT_RECORDS_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
     access: vec![PUBLIC_SELECT],
@@ -1740,7 +1741,7 @@ pub static MZ_ARRANGEMENT_RECORDS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLo
 
 pub static MZ_ARRANGEMENT_BATCHES_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_batches_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_ARRANGEMENT_BATCHES_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::ArrangementBatches),
     access: vec![PUBLIC_SELECT],
@@ -1748,7 +1749,7 @@ pub static MZ_ARRANGEMENT_BATCHES_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLo
 
 pub static MZ_ARRANGEMENT_SHARING_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_sharing_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_ARRANGEMENT_SHARING_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::Sharing),
     access: vec![PUBLIC_SELECT],
@@ -1756,7 +1757,7 @@ pub static MZ_ARRANGEMENT_SHARING_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLo
 
 pub static MZ_ARRANGEMENT_BATCHER_RECORDS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_batcher_records_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_RECORDS_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::BatcherRecords),
     access: vec![PUBLIC_SELECT],
@@ -1764,7 +1765,7 @@ pub static MZ_ARRANGEMENT_BATCHER_RECORDS_RAW: Lazy<BuiltinLog> = Lazy::new(|| B
 
 pub static MZ_ARRANGEMENT_BATCHER_SIZE_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_batcher_size_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_SIZE_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::BatcherSize),
     access: vec![PUBLIC_SELECT],
@@ -1772,7 +1773,7 @@ pub static MZ_ARRANGEMENT_BATCHER_SIZE_RAW: Lazy<BuiltinLog> = Lazy::new(|| Buil
 
 pub static MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_batcher_capacity_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::BatcherCapacity),
     access: vec![PUBLIC_SELECT],
@@ -1780,7 +1781,7 @@ pub static MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW: Lazy<BuiltinLog> = Lazy::new(|| 
 
 pub static MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_batcher_allocations_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::BatcherAllocations),
     access: vec![PUBLIC_SELECT],
@@ -1788,7 +1789,7 @@ pub static MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW: Lazy<BuiltinLog> = Lazy::new(
 
 pub static MZ_COMPUTE_EXPORTS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_compute_exports_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_COMPUTE_EXPORTS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
     access: vec![PUBLIC_SELECT],
@@ -1796,7 +1797,7 @@ pub static MZ_COMPUTE_EXPORTS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| Builti
 
 pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_compute_frontiers_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_COMPUTE_FRONTIERS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
     access: vec![PUBLIC_SELECT],
@@ -1804,7 +1805,7 @@ pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| Buil
 
 pub static MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_compute_import_frontiers_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
     access: vec![PUBLIC_SELECT],
@@ -1812,7 +1813,7 @@ pub static MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(
 
 pub static MZ_COMPUTE_ERROR_COUNTS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_compute_error_counts_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_COMPUTE_ERROR_COUNTS_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ErrorCount),
     access: vec![PUBLIC_SELECT],
@@ -1820,7 +1821,7 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinL
 
 pub static MZ_ACTIVE_PEEKS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_active_peeks_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_ACTIVE_PEEKS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::PeekCurrent),
     access: vec![PUBLIC_SELECT],
@@ -1828,7 +1829,7 @@ pub static MZ_ACTIVE_PEEKS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLo
 
 pub static MZ_PEEK_DURATIONS_HISTOGRAM_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_peek_durations_histogram_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_PEEK_DURATIONS_HISTOGRAM_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
     access: vec![PUBLIC_SELECT],
@@ -1837,7 +1838,7 @@ pub static MZ_PEEK_DURATIONS_HISTOGRAM_RAW: Lazy<BuiltinLog> = Lazy::new(|| Buil
 pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW: Lazy<BuiltinLog> =
     Lazy::new(|| BuiltinLog {
         name: "mz_dataflow_shutdown_durations_histogram_raw",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::LOG_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW_OID,
         variant: LogVariant::Compute(ComputeLog::ShutdownDuration),
         access: vec![PUBLIC_SELECT],
@@ -1845,7 +1846,7 @@ pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW: Lazy<BuiltinLog> =
 
 pub static MZ_ARRANGEMENT_HEAP_SIZE_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_heap_size_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_ARRANGEMENT_HEAP_SIZE_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapSize),
     access: vec![PUBLIC_SELECT],
@@ -1853,7 +1854,7 @@ pub static MZ_ARRANGEMENT_HEAP_SIZE_RAW: Lazy<BuiltinLog> = Lazy::new(|| Builtin
 
 pub static MZ_ARRANGEMENT_HEAP_CAPACITY_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_heap_capacity_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_ARRANGEMENT_HEAP_CAPACITY_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapCapacity),
     access: vec![PUBLIC_SELECT],
@@ -1861,7 +1862,7 @@ pub static MZ_ARRANGEMENT_HEAP_CAPACITY_RAW: Lazy<BuiltinLog> = Lazy::new(|| Bui
 
 pub static MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_heap_allocations_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapAllocations),
     access: vec![PUBLIC_SELECT],
@@ -1869,7 +1870,7 @@ pub static MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: Lazy<BuiltinLog> = Lazy::new(|| 
 
 pub static MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_message_batch_counts_received_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::BatchesReceived),
     access: vec![PUBLIC_SELECT],
@@ -1877,7 +1878,7 @@ pub static MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW: Lazy<BuiltinLog> = Lazy::new(||
 
 pub static MZ_MESSAGE_BATCH_COUNTS_SENT_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_message_batch_counts_sent_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_MESSAGE_BATCH_COUNTS_SENT_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::BatchesSent),
     access: vec![PUBLIC_SELECT],
@@ -1885,7 +1886,7 @@ pub static MZ_MESSAGE_BATCH_COUNTS_SENT_RAW: Lazy<BuiltinLog> = Lazy::new(|| Bui
 
 pub static MZ_MESSAGE_COUNTS_RECEIVED_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_message_counts_received_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_MESSAGE_COUNTS_RECEIVED_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::MessagesReceived),
     access: vec![PUBLIC_SELECT],
@@ -1893,7 +1894,7 @@ pub static MZ_MESSAGE_COUNTS_RECEIVED_RAW: Lazy<BuiltinLog> = Lazy::new(|| Built
 
 pub static MZ_MESSAGE_COUNTS_SENT_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_message_counts_sent_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_MESSAGE_COUNTS_SENT_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::MessagesSent),
     access: vec![PUBLIC_SELECT],
@@ -1901,7 +1902,7 @@ pub static MZ_MESSAGE_COUNTS_SENT_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLo
 
 pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_dataflow_operator_reachability_raw",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::Reachability),
     access: vec![PUBLIC_SELECT],
@@ -3360,7 +3361,7 @@ pub static MZ_OBJECT_LIFETIMES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 
 pub static MZ_DATAFLOWS_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflows_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOWS_PER_WORKER_OID,
     column_defs: None,
     sql: "SELECT
@@ -3368,8 +3369,8 @@ pub static MZ_DATAFLOWS_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView
     ops.worker_id,
     ops.name
 FROM
-    mz_internal.mz_dataflow_addresses_per_worker addrs,
-    mz_internal.mz_dataflow_operators_per_worker ops
+    mz_introspection.mz_dataflow_addresses_per_worker addrs,
+    mz_introspection.mz_dataflow_operators_per_worker ops
 WHERE
     addrs.id = ops.id AND
     addrs.worker_id = ops.worker_id AND
@@ -3379,48 +3380,48 @@ WHERE
 
 pub static MZ_DATAFLOWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflows",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOWS_OID,
     column_defs: None,
     sql: "
 SELECT id, name
-FROM mz_internal.mz_dataflows_per_worker
+FROM mz_introspection.mz_dataflows_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_DATAFLOW_ADDRESSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_addresses",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_ADDRESSES_OID,
     column_defs: None,
     sql: "
 SELECT id, address
-FROM mz_internal.mz_dataflow_addresses_per_worker
+FROM mz_introspection.mz_dataflow_addresses_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_DATAFLOW_CHANNELS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_channels",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_CHANNELS_OID,
     column_defs: None,
     sql: "
 SELECT id, from_index, from_port, to_index, to_port
-FROM mz_internal.mz_dataflow_channels_per_worker
+FROM mz_introspection.mz_dataflow_channels_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_DATAFLOW_OPERATORS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_operators",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_OPERATORS_OID,
     column_defs: None,
     sql: "
 SELECT id, name
-FROM mz_internal.mz_dataflow_operators_per_worker
+FROM mz_introspection.mz_dataflow_operators_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
@@ -3428,7 +3429,7 @@ WHERE worker_id = 0",
 pub static MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_dataflow_operator_dataflows_per_worker",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER_OID,
         column_defs: None,
         sql: "SELECT
@@ -3438,9 +3439,9 @@ pub static MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER: Lazy<BuiltinView> =
     dfs.id as dataflow_id,
     dfs.name as dataflow_name
 FROM
-    mz_internal.mz_dataflow_operators_per_worker ops,
-    mz_internal.mz_dataflow_addresses_per_worker addrs,
-    mz_internal.mz_dataflows_per_worker dfs
+    mz_introspection.mz_dataflow_operators_per_worker ops,
+    mz_introspection.mz_dataflow_addresses_per_worker addrs,
+    mz_introspection.mz_dataflows_per_worker dfs
 WHERE
     ops.id = addrs.id AND
     ops.worker_id = addrs.worker_id AND
@@ -3451,12 +3452,12 @@ WHERE
 
 pub static MZ_DATAFLOW_OPERATOR_DATAFLOWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_operator_dataflows",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_DATAFLOWS_OID,
     column_defs: None,
     sql: "
 SELECT id, name, dataflow_id, dataflow_name
-FROM mz_internal.mz_dataflow_operator_dataflows_per_worker
+FROM mz_introspection.mz_dataflow_operator_dataflows_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
@@ -3479,24 +3480,24 @@ SELECT object_id, referenced_object_id FROM reach;",
 
 pub static MZ_COMPUTE_EXPORTS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_exports",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_EXPORTS_OID,
     column_defs: None,
     sql: "
 SELECT export_id, dataflow_id
-FROM mz_internal.mz_compute_exports_per_worker
+FROM mz_introspection.mz_compute_exports_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_COMPUTE_FRONTIERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_frontiers",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_FRONTIERS_OID,
     column_defs: None,
     sql: "SELECT
     export_id, pg_catalog.min(time) AS time
-FROM mz_internal.mz_compute_frontiers_per_worker
+FROM mz_introspection.mz_compute_frontiers_per_worker
 GROUP BY export_id",
     access: vec![PUBLIC_SELECT],
 });
@@ -3504,15 +3505,15 @@ GROUP BY export_id",
 pub static MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_dataflow_channel_operators_per_worker",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER_OID,
         column_defs: None,
         sql: "
 WITH
 channel_addresses(id, worker_id, address, from_index, to_index) AS (
      SELECT id, worker_id, address, from_index, to_index
-     FROM mz_internal.mz_dataflow_channels_per_worker mdc
-     INNER JOIN mz_internal.mz_dataflow_addresses_per_worker mda
+     FROM mz_introspection.mz_dataflow_channels_per_worker mdc
+     INNER JOIN mz_introspection.mz_dataflow_addresses_per_worker mda
      USING (id, worker_id)
 ),
 channel_operator_addresses(id, worker_id, from_address, to_address) AS (
@@ -3523,8 +3524,8 @@ channel_operator_addresses(id, worker_id, from_address, to_address) AS (
 ),
 operator_addresses(id, worker_id, address) AS (
      SELECT id, worker_id, address
-     FROM mz_internal.mz_dataflow_addresses_per_worker mda
-     INNER JOIN mz_internal.mz_dataflow_operators_per_worker mdo
+     FROM mz_introspection.mz_dataflow_addresses_per_worker mda
+     INNER JOIN mz_introspection.mz_dataflow_operators_per_worker mdo
      USING (id, worker_id)
 )
 SELECT coa.id,
@@ -3546,24 +3547,24 @@ FROM channel_operator_addresses coa
 
 pub static MZ_DATAFLOW_CHANNEL_OPERATORS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_channel_operators",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_CHANNEL_OPERATORS_OID,
     column_defs: None,
     sql: "
 SELECT id, from_operator_id, from_operator_address, to_operator_id, to_operator_address
-FROM mz_internal.mz_dataflow_channel_operators_per_worker
+FROM mz_introspection.mz_dataflow_channel_operators_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_COMPUTE_IMPORT_FRONTIERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_import_frontiers",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_IMPORT_FRONTIERS_OID,
     column_defs: None,
     sql: "SELECT
     export_id, import_id, pg_catalog.min(time) AS time
-FROM mz_internal.mz_compute_import_frontiers_per_worker
+FROM mz_introspection.mz_compute_import_frontiers_per_worker
 GROUP BY export_id, import_id",
     access: vec![PUBLIC_SELECT],
 });
@@ -3571,7 +3572,7 @@ GROUP BY export_id, import_id",
 pub static MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_records_per_dataflow_operator_per_worker",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER_OID,
         column_defs: None,
         sql: "
@@ -3586,8 +3587,8 @@ SELECT
     COALESCE(ar_size.capacity, 0) AS capacity,
     COALESCE(ar_size.allocations, 0) AS allocations
 FROM
-    mz_internal.mz_dataflow_operator_dataflows_per_worker dod
-    LEFT OUTER JOIN mz_internal.mz_arrangement_sizes_per_worker ar_size ON
+    mz_introspection.mz_dataflow_operator_dataflows_per_worker dod
+    LEFT OUTER JOIN mz_introspection.mz_arrangement_sizes_per_worker ar_size ON
         dod.id = ar_size.operator_id AND
         dod.worker_id = ar_size.worker_id",
         access: vec![PUBLIC_SELECT],
@@ -3595,7 +3596,7 @@ FROM
 
 pub static MZ_RECORDS_PER_DATAFLOW_OPERATOR: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_records_per_dataflow_operator",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_RECORDS_PER_DATAFLOW_OPERATOR_OID,
     column_defs: None,
     sql: "
@@ -3608,14 +3609,14 @@ SELECT
     pg_catalog.sum(size) AS size,
     pg_catalog.sum(capacity) AS capacity,
     pg_catalog.sum(allocations) AS allocations
-FROM mz_internal.mz_records_per_dataflow_operator_per_worker
+FROM mz_introspection.mz_records_per_dataflow_operator_per_worker
 GROUP BY id, name, dataflow_id",
     access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_RECORDS_PER_DATAFLOW_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_records_per_dataflow_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_RECORDS_PER_DATAFLOW_PER_WORKER_OID,
     column_defs: None,
     sql: "
@@ -3629,8 +3630,8 @@ SELECT
     pg_catalog.SUM(rdo.capacity) as capacity,
     pg_catalog.SUM(rdo.allocations) as allocations
 FROM
-    mz_internal.mz_records_per_dataflow_operator_per_worker rdo,
-    mz_internal.mz_dataflows_per_worker dfs
+    mz_introspection.mz_records_per_dataflow_operator_per_worker rdo,
+    mz_introspection.mz_dataflows_per_worker dfs
 WHERE
     rdo.dataflow_id = dfs.id AND
     rdo.worker_id = dfs.worker_id
@@ -3643,7 +3644,7 @@ GROUP BY
 
 pub static MZ_RECORDS_PER_DATAFLOW: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_records_per_dataflow",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_RECORDS_PER_DATAFLOW_OID,
     column_defs: None,
     sql: "
@@ -3656,7 +3657,7 @@ SELECT
     pg_catalog.SUM(capacity) as capacity,
     pg_catalog.SUM(allocations) as allocations
 FROM
-    mz_internal.mz_records_per_dataflow_per_worker
+    mz_introspection.mz_records_per_dataflow_per_worker
 GROUP BY
     id,
     name",
@@ -4483,13 +4484,13 @@ pub static MZ_TIMEZONE_NAMES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 
 pub static MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_peek_durations_histogram_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER_OID,
     column_defs: None,
     sql: "SELECT
     worker_id, type, duration_ns, pg_catalog.count(*) AS count
 FROM
-    mz_internal.mz_peek_durations_histogram_raw
+    mz_introspection.mz_peek_durations_histogram_raw
 GROUP BY
     worker_id, type, duration_ns",
     access: vec![PUBLIC_SELECT],
@@ -4497,14 +4498,14 @@ GROUP BY
 
 pub static MZ_PEEK_DURATIONS_HISTOGRAM: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_peek_durations_histogram",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_PEEK_DURATIONS_HISTOGRAM_OID,
     column_defs: None,
     sql: "
 SELECT
     type, duration_ns,
     pg_catalog.sum(count) AS count
-FROM mz_internal.mz_peek_durations_histogram_per_worker
+FROM mz_introspection.mz_peek_durations_histogram_per_worker
 GROUP BY type, duration_ns",
     access: vec![PUBLIC_SELECT],
 });
@@ -4512,13 +4513,13 @@ GROUP BY type, duration_ns",
 pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_dataflow_shutdown_durations_histogram_per_worker",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER_OID,
         column_defs: None,
         sql: "SELECT
     worker_id, duration_ns, pg_catalog.count(*) AS count
 FROM
-    mz_internal.mz_dataflow_shutdown_durations_histogram_raw
+    mz_introspection.mz_dataflow_shutdown_durations_histogram_raw
 GROUP BY
     worker_id, duration_ns",
         access: vec![PUBLIC_SELECT],
@@ -4527,27 +4528,27 @@ GROUP BY
 pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_dataflow_shutdown_durations_histogram",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_OID,
         column_defs: None,
         sql: "
 SELECT
     duration_ns,
     pg_catalog.sum(count) AS count
-FROM mz_internal.mz_dataflow_shutdown_durations_histogram_per_worker
+FROM mz_introspection.mz_dataflow_shutdown_durations_histogram_per_worker
 GROUP BY duration_ns",
         access: vec![PUBLIC_SELECT],
     });
 
 pub static MZ_SCHEDULING_ELAPSED_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_scheduling_elapsed_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_SCHEDULING_ELAPSED_PER_WORKER_OID,
     column_defs: None,
     sql: "SELECT
     id, worker_id, pg_catalog.count(*) AS elapsed_ns
 FROM
-    mz_internal.mz_scheduling_elapsed_raw
+    mz_introspection.mz_scheduling_elapsed_raw
 GROUP BY
     id, worker_id",
     access: vec![PUBLIC_SELECT],
@@ -4555,14 +4556,14 @@ GROUP BY
 
 pub static MZ_SCHEDULING_ELAPSED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_scheduling_elapsed",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_SCHEDULING_ELAPSED_OID,
     column_defs: None,
     sql: "
 SELECT
     id,
     pg_catalog.sum(elapsed_ns) AS elapsed_ns
-FROM mz_internal.mz_scheduling_elapsed_per_worker
+FROM mz_introspection.mz_scheduling_elapsed_per_worker
 GROUP BY id",
     access: vec![PUBLIC_SELECT],
 });
@@ -4570,13 +4571,13 @@ GROUP BY id",
 pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_PER_WORKER: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_compute_operator_durations_histogram_per_worker",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_PER_WORKER_OID,
         column_defs: None,
         sql: "SELECT
     id, worker_id, duration_ns, pg_catalog.count(*) AS count
 FROM
-    mz_internal.mz_compute_operator_durations_histogram_raw
+    mz_introspection.mz_compute_operator_durations_histogram_raw
 GROUP BY
     id, worker_id, duration_ns",
         access: vec![PUBLIC_SELECT],
@@ -4584,7 +4585,7 @@ GROUP BY
 
 pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_operator_durations_histogram",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_OID,
     column_defs: None,
     sql: "
@@ -4592,7 +4593,7 @@ SELECT
     id,
     duration_ns,
     pg_catalog.sum(count) AS count
-FROM mz_internal.mz_compute_operator_durations_histogram_per_worker
+FROM mz_introspection.mz_compute_operator_durations_histogram_per_worker
 GROUP BY id, duration_ns",
     access: vec![PUBLIC_SELECT],
 });
@@ -4600,13 +4601,13 @@ GROUP BY id, duration_ns",
 pub static MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_scheduling_parks_histogram_per_worker",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER_OID,
         column_defs: None,
         sql: "SELECT
     worker_id, slept_for_ns, requested_ns, pg_catalog.count(*) AS count
 FROM
-    mz_internal.mz_scheduling_parks_histogram_raw
+    mz_introspection.mz_scheduling_parks_histogram_raw
 GROUP BY
     worker_id, slept_for_ns, requested_ns",
         access: vec![PUBLIC_SELECT],
@@ -4614,7 +4615,7 @@ GROUP BY
 
 pub static MZ_SCHEDULING_PARKS_HISTOGRAM: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_scheduling_parks_histogram",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_SCHEDULING_PARKS_HISTOGRAM_OID,
     column_defs: None,
     sql: "
@@ -4622,14 +4623,14 @@ SELECT
     slept_for_ns,
     requested_ns,
     pg_catalog.sum(count) AS count
-FROM mz_internal.mz_scheduling_parks_histogram_per_worker
+FROM mz_introspection.mz_scheduling_parks_histogram_per_worker
 GROUP BY slept_for_ns, requested_ns",
     access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_COMPUTE_ERROR_COUNTS_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_error_counts_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_ERROR_COUNTS_PER_WORKER_OID,
     column_defs: None,
     sql: "
@@ -4640,16 +4641,16 @@ WITH MUTUALLY RECURSIVE
     index_reuses(reuse_id text, index_id text) AS (
         SELECT d.object_id, d.dependency_id
         FROM mz_internal.mz_compute_dependencies d
-        JOIN mz_internal.mz_compute_exports e ON (e.export_id = d.object_id)
+        JOIN mz_introspection.mz_compute_exports e ON (e.export_id = d.object_id)
         WHERE NOT EXISTS (
-            SELECT 1 FROM mz_internal.mz_dataflows
+            SELECT 1 FROM mz_introspection.mz_dataflows
             WHERE id = e.dataflow_id
         )
     ),
     -- Error counts that were directly logged on compute exports.
     direct_errors(export_id text, worker_id uint8, count int8) AS (
         SELECT export_id, worker_id, count
-        FROM mz_internal.mz_compute_error_counts_raw
+        FROM mz_introspection.mz_compute_error_counts_raw
     ),
     -- Error counts propagated to index reused.
     all_errors(export_id text, worker_id uint8, count int8) AS (
@@ -4665,14 +4666,14 @@ SELECT * FROM all_errors",
 
 pub static MZ_COMPUTE_ERROR_COUNTS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_error_counts",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_COMPUTE_ERROR_COUNTS_OID,
     column_defs: None,
     sql: "
 SELECT
     export_id,
     pg_catalog.sum(count) AS count
-FROM mz_internal.mz_compute_error_counts_per_worker
+FROM mz_introspection.mz_compute_error_counts_per_worker
 GROUP BY export_id
 HAVING pg_catalog.sum(count) != 0",
     access: vec![PUBLIC_SELECT],
@@ -4696,7 +4697,7 @@ GROUP BY object_id, physical_plan_node_id, replica_id",
 
 pub static MZ_MESSAGE_COUNTS_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_message_counts_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_MESSAGE_COUNTS_PER_WORKER_OID,
     column_defs: None,
     sql: "
@@ -4707,7 +4708,7 @@ WITH batch_sent_cte AS (
         to_worker_id,
         pg_catalog.count(*) AS sent
     FROM
-        mz_internal.mz_message_batch_counts_sent_raw
+        mz_introspection.mz_message_batch_counts_sent_raw
     GROUP BY
         channel_id, from_worker_id, to_worker_id
 ),
@@ -4718,7 +4719,7 @@ batch_received_cte AS (
         to_worker_id,
         pg_catalog.count(*) AS received
     FROM
-        mz_internal.mz_message_batch_counts_received_raw
+        mz_introspection.mz_message_batch_counts_received_raw
     GROUP BY
         channel_id, from_worker_id, to_worker_id
 ),
@@ -4729,7 +4730,7 @@ sent_cte AS (
         to_worker_id,
         pg_catalog.count(*) AS sent
     FROM
-        mz_internal.mz_message_counts_sent_raw
+        mz_introspection.mz_message_counts_sent_raw
     GROUP BY
         channel_id, from_worker_id, to_worker_id
 ),
@@ -4740,7 +4741,7 @@ received_cte AS (
         to_worker_id,
         pg_catalog.count(*) AS received
     FROM
-        mz_internal.mz_message_counts_received_raw
+        mz_introspection.mz_message_counts_received_raw
     GROUP BY
         channel_id, from_worker_id, to_worker_id
 )
@@ -4761,7 +4762,7 @@ JOIN batch_received_cte USING (channel_id, from_worker_id, to_worker_id)",
 
 pub static MZ_MESSAGE_COUNTS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_message_counts",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_MESSAGE_COUNTS_OID,
     column_defs: None,
     sql: "
@@ -4771,19 +4772,19 @@ SELECT
     pg_catalog.sum(received) AS received,
     pg_catalog.sum(batch_sent) AS batch_sent,
     pg_catalog.sum(batch_received) AS batch_received
-FROM mz_internal.mz_message_counts_per_worker
+FROM mz_introspection.mz_message_counts_per_worker
 GROUP BY channel_id",
     access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_ACTIVE_PEEKS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_active_peeks",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_ACTIVE_PEEKS_OID,
     column_defs: None,
     sql: "
 SELECT id, object_id, type, time
-FROM mz_internal.mz_active_peeks_per_worker
+FROM mz_introspection.mz_active_peeks_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
@@ -4791,7 +4792,7 @@ WHERE worker_id = 0",
 pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_dataflow_operator_reachability_per_worker",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER_OID,
         column_defs: None,
         sql: "SELECT
@@ -4802,14 +4803,14 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER: Lazy<BuiltinView> =
     time,
     pg_catalog.count(*) as count
 FROM
-    mz_internal.mz_dataflow_operator_reachability_raw
+    mz_introspection.mz_dataflow_operator_reachability_raw
 GROUP BY address, port, worker_id, update_type, time",
         access: vec![PUBLIC_SELECT],
     });
 
 pub static MZ_DATAFLOW_OPERATOR_REACHABILITY: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_operator_reachability",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_REACHABILITY_OID,
     column_defs: None,
     sql: "
@@ -4819,7 +4820,7 @@ SELECT
     update_type,
     time,
     pg_catalog.sum(count) as count
-FROM mz_internal.mz_dataflow_operator_reachability_per_worker
+FROM mz_introspection.mz_dataflow_operator_reachability_per_worker
 GROUP BY address, port, update_type, time",
     access: vec![PUBLIC_SELECT],
 });
@@ -4827,7 +4828,7 @@ GROUP BY address, port, update_type, time",
 pub static MZ_ARRANGEMENT_SIZES_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
         name: "mz_arrangement_sizes_per_worker",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::VIEW_MZ_ARRANGEMENT_SIZES_PER_WORKER_OID,
         column_defs: None,
         sql: "
@@ -4837,7 +4838,7 @@ WITH batches_cte AS (
         worker_id,
         pg_catalog.count(*) AS batches
     FROM
-        mz_internal.mz_arrangement_batches_raw
+        mz_introspection.mz_arrangement_batches_raw
     GROUP BY
         operator_id, worker_id
 ),
@@ -4847,7 +4848,7 @@ records_cte AS (
         worker_id,
         pg_catalog.count(*) AS records
     FROM
-        mz_internal.mz_arrangement_records_raw
+        mz_introspection.mz_arrangement_records_raw
     GROUP BY
         operator_id, worker_id
 ),
@@ -4857,7 +4858,7 @@ heap_size_cte AS (
         worker_id,
         pg_catalog.count(*) AS size
     FROM
-        mz_internal.mz_arrangement_heap_size_raw
+        mz_introspection.mz_arrangement_heap_size_raw
     GROUP BY
         operator_id, worker_id
 ),
@@ -4867,7 +4868,7 @@ heap_capacity_cte AS (
         worker_id,
         pg_catalog.count(*) AS capacity
     FROM
-        mz_internal.mz_arrangement_heap_capacity_raw
+        mz_introspection.mz_arrangement_heap_capacity_raw
     GROUP BY
         operator_id, worker_id
 ),
@@ -4877,7 +4878,7 @@ heap_allocations_cte AS (
         worker_id,
         pg_catalog.count(*) AS allocations
     FROM
-        mz_internal.mz_arrangement_heap_allocations_raw
+        mz_introspection.mz_arrangement_heap_allocations_raw
     GROUP BY
         operator_id, worker_id
 ),
@@ -4887,7 +4888,7 @@ batcher_records_cte AS (
         worker_id,
         pg_catalog.count(*) AS records
     FROM
-        mz_internal.mz_arrangement_batcher_records_raw
+        mz_introspection.mz_arrangement_batcher_records_raw
     GROUP BY
         operator_id, worker_id
 ),
@@ -4897,7 +4898,7 @@ batcher_size_cte AS (
         worker_id,
         pg_catalog.count(*) AS size
     FROM
-        mz_internal.mz_arrangement_batcher_size_raw
+        mz_introspection.mz_arrangement_batcher_size_raw
     GROUP BY
         operator_id, worker_id
 ),
@@ -4907,7 +4908,7 @@ batcher_capacity_cte AS (
         worker_id,
         pg_catalog.count(*) AS capacity
     FROM
-        mz_internal.mz_arrangement_batcher_capacity_raw
+        mz_introspection.mz_arrangement_batcher_capacity_raw
     GROUP BY
         operator_id, worker_id
 ),
@@ -4917,7 +4918,7 @@ batcher_allocations_cte AS (
         worker_id,
         pg_catalog.count(*) AS allocations
     FROM
-        mz_internal.mz_arrangement_batcher_allocations_raw
+        mz_introspection.mz_arrangement_batcher_allocations_raw
     GROUP BY
         operator_id, worker_id
 )
@@ -4944,7 +4945,7 @@ LEFT OUTER JOIN batcher_allocations_cte USING (operator_id, worker_id)",
 
 pub static MZ_ARRANGEMENT_SIZES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_arrangement_sizes",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_ARRANGEMENT_SIZES_OID,
     column_defs: None,
     sql: "
@@ -4955,14 +4956,14 @@ SELECT
     pg_catalog.sum(size) AS size,
     pg_catalog.sum(capacity) AS capacity,
     pg_catalog.sum(allocations) AS allocations
-FROM mz_internal.mz_arrangement_sizes_per_worker
+FROM mz_introspection.mz_arrangement_sizes_per_worker
 GROUP BY operator_id",
     access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_ARRANGEMENT_SHARING_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_arrangement_sharing_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_ARRANGEMENT_SHARING_PER_WORKER_OID,
     column_defs: None,
     sql: "
@@ -4970,19 +4971,19 @@ SELECT
     operator_id,
     worker_id,
     pg_catalog.count(*) AS count
-FROM mz_internal.mz_arrangement_sharing_raw
+FROM mz_introspection.mz_arrangement_sharing_raw
 GROUP BY operator_id, worker_id",
     access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_ARRANGEMENT_SHARING: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_arrangement_sharing",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_ARRANGEMENT_SHARING_OID,
     column_defs: None,
     sql: "
 SELECT operator_id, count
-FROM mz_internal.mz_arrangement_sharing_per_worker
+FROM mz_introspection.mz_arrangement_sharing_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
@@ -5008,15 +5009,15 @@ FROM
 
 pub static MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_operator_parents_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER_OID,
     column_defs: None,
     sql: "
 WITH operator_addrs AS(
     SELECT
         id, address, worker_id
-    FROM mz_internal.mz_dataflow_addresses_per_worker
-        INNER JOIN mz_internal.mz_dataflow_operators_per_worker
+    FROM mz_introspection.mz_dataflow_addresses_per_worker
+        INNER JOIN mz_introspection.mz_dataflow_operators_per_worker
             USING (id, worker_id)
 ),
 parent_addrs AS (
@@ -5036,19 +5037,19 @@ FROM parent_addrs AS pa
 
 pub static MZ_DATAFLOW_OPERATOR_PARENTS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_operator_parents",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_PARENTS_OID,
     column_defs: None,
     sql: "
 SELECT id, parent_id
-FROM mz_internal.mz_dataflow_operator_parents_per_worker
+FROM mz_introspection.mz_dataflow_operator_parents_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_DATAFLOW_ARRANGEMENT_SIZES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_arrangement_sizes",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_ARRANGEMENT_SIZES_OID,
     column_defs: None,
     sql: "
@@ -5060,8 +5061,8 @@ SELECT
     COALESCE(sum(mas.size), 0) AS size,
     COALESCE(sum(mas.capacity), 0) AS capacity,
     COALESCE(sum(mas.allocations), 0) AS allocations
-FROM mz_internal.mz_dataflow_operator_dataflows AS mdod
-LEFT JOIN mz_internal.mz_arrangement_sizes AS mas
+FROM mz_introspection.mz_dataflow_operator_dataflows AS mdod
+LEFT JOIN mz_introspection.mz_arrangement_sizes AS mas
     ON mdod.id = mas.operator_id
 GROUP BY mdod.dataflow_id, mdod.dataflow_name",
     access: vec![PUBLIC_SELECT],
@@ -5069,7 +5070,7 @@ GROUP BY mdod.dataflow_id, mdod.dataflow_name",
 
 pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_expected_group_size_advice",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_EXPECTED_GROUP_SIZE_ADVICE_OID,
     column_defs: None,
     sql: "
@@ -5092,14 +5093,14 @@ pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: Lazy<BuiltinView> = Lazy::new(|| Built
                 ars.records,
                 ars.size
             FROM
-                mz_internal.mz_dataflow_operator_dataflows dod
-                JOIN mz_internal.mz_dataflow_addresses doa
+                mz_introspection.mz_dataflow_operator_dataflows dod
+                JOIN mz_introspection.mz_dataflow_addresses doa
                     ON dod.id = doa.id
-                JOIN mz_internal.mz_dataflow_addresses dra
+                JOIN mz_introspection.mz_dataflow_addresses dra
                     ON dra.address = doa.address[:list_length(doa.address) - 1]
-                JOIN mz_internal.mz_dataflow_operators dor
+                JOIN mz_introspection.mz_dataflow_operators dor
                     ON dor.id = dra.id
-                JOIN mz_internal.mz_arrangement_sizes ars
+                JOIN mz_introspection.mz_arrangement_sizes ars
                     ON ars.operator_id = dod.id
             WHERE
                 dod.name = 'Arranged TopK input'
@@ -5198,7 +5199,7 @@ pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: Lazy<BuiltinView> = Lazy::new(|| Built
         FROM cuts c
             JOIN levels l
                 ON c.dataflow_id = l.dataflow_id AND c.region_id = l.region_id
-            JOIN mz_internal.mz_dataflow_operator_dataflows dod
+            JOIN mz_introspection.mz_dataflow_operator_dataflows dod
                 ON dod.dataflow_id = c.dataflow_id AND dod.id = c.region_id",
     access: vec![PUBLIC_SELECT],
 });

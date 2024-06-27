@@ -1124,7 +1124,7 @@ impl<T> CollectionPlan for Plan<T> {
 /// on the expected number of rows that will have the same group key.
 fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64> {
     // NOTE(vmarcos): The fan-in of 16 defined below is used in the tuning advice built-in view
-    // mz_internal.mz_expected_group_size_advice.
+    // mz_introspection.mz_expected_group_size_advice.
     let mut buckets = vec![];
     let mut current = 16;
 

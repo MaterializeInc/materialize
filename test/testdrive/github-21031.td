@@ -36,7 +36,7 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 > SELECT count(*)
   FROM
     mz_indexes i,
-    mz_internal.mz_compute_exports e
+    mz_introspection.mz_compute_exports e
   WHERE
     i.name = 'mv_idx' AND
     e.export_id = i.id
@@ -46,8 +46,8 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 0
 
 > SELECT count(*)
-  FROM mz_internal.mz_compute_exports e
-  JOIN mz_internal.mz_dataflows d ON d.id = e.dataflow_id
+  FROM mz_introspection.mz_compute_exports e
+  JOIN mz_introspection.mz_dataflows d ON d.id = e.dataflow_id
   WHERE e.export_id LIKE 't%' AND
         d.name NOT LIKE '%introspection-subscribe%'
 0
