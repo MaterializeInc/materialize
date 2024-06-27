@@ -104,6 +104,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "storage_source_decode_fuel": "100000",
     "timestamp_oracle": "postgres",
     "wait_catalog_consolidation_on_startup": "true",
+    "persist_batch_record_part_format": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

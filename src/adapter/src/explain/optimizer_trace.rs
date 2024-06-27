@@ -12,6 +12,7 @@
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
+use mz_catalog::memory::objects::Cluster;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::explain::ExplainContext;
@@ -133,7 +134,7 @@ impl OptimizerTrace {
         features: &OptimizerFeatures,
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
-        target_cluster: Option<&str>,
+        target_cluster: Option<&Cluster>,
         dataflow_metainfo: DataflowMetainfo,
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
@@ -146,7 +147,7 @@ impl OptimizerTrace {
                 features,
                 humanizer,
                 row_set_finishing.clone(),
-                target_cluster,
+                target_cluster.map(|c| c.name.as_str()),
                 dataflow_metainfo.clone(),
             )
         };
@@ -213,6 +214,12 @@ impl OptimizerTrace {
                             .await;
                     }
                 }
+                let cluster = target_cluster.map(|c| {
+                    serde_json::json!({
+                        "name": c.name,
+                        "id": c.id,
+                    })
+                });
 
                 let output = serde_json::json!({
                     "plans": {
@@ -223,6 +230,7 @@ impl OptimizerTrace {
                         }
                     },
                     "insights": plan_insights,
+                    "cluster": cluster,
                 });
                 let output = serde_json::to_string_pretty(&output).expect("JSON string");
                 vec![Row::pack_slice(&[Datum::from(output.as_str())])]
@@ -289,7 +297,7 @@ impl OptimizerTrace {
         features: &OptimizerFeatures,
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
-        target_cluster: Option<&str>,
+        target_cluster: Option<&Cluster>,
         dataflow_metainfo: DataflowMetainfo,
         insights_ctx: Option<PlanInsightsContext>,
     ) -> Result<String, AdapterError> {

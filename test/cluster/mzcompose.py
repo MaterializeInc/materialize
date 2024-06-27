@@ -517,7 +517,7 @@ def workflow_test_github_15799(c: Composition) -> None:
 
         -- query the introspection sources on the replica with logging enabled
         SET cluster_replica = logging_on;
-        SELECT * FROM mz_internal.mz_active_peeks, mz_internal.mz_compute_exports;
+        SELECT * FROM mz_introspection.mz_active_peeks, mz_introspection.mz_compute_exports;
 
         -- verify that the other replica has not crashed and still responds
         SET cluster_replica = logging_off;
@@ -567,7 +567,7 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
+            > SELECT 1 FROM mz_introspection.mz_compute_frontiers_per_worker LIMIT 1;
             1
                 """
             )
@@ -582,7 +582,7 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
+            > SELECT 1 FROM mz_introspection.mz_compute_frontiers_per_worker LIMIT 1;
             1
                 """
             )
@@ -615,7 +615,7 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
+            > SELECT 1 FROM mz_introspection.mz_compute_frontiers_per_worker LIMIT 1;
             1
             > SELECT * FROM t;
             42
@@ -3340,22 +3340,22 @@ def workflow_test_refresh_mv_warmup(
             input=dedent(
                 """
                 ## 1. We shouldn't have a dataflow for mv1.
-                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
                 > SELECT mz_unsafe.mz_sleep(0.5);
                 <null>
-                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
                 > SELECT mz_unsafe.mz_sleep(0.5);
                 <null>
-                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
                 > SELECT mz_unsafe.mz_sleep(0.5);
                 <null>
-                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
                 > SELECT mz_unsafe.mz_sleep(0.5);
                 <null>
-                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
                 > SELECT mz_unsafe.mz_sleep(0.5);
                 <null>
-                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
 
                 > SELECT * FROM mv1;
                 10000000

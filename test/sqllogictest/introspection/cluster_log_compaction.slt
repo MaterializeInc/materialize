@@ -25,7 +25,7 @@ SET auto_route_catalog_queries = false;
 
 # Transaction will force a read hold on this index.
 query TT rowsort
-SELECT * FROM mz_internal.mz_arrangement_batches_raw;
+SELECT * FROM mz_introspection.mz_arrangement_batches_raw;
 ----
 
 statement ok

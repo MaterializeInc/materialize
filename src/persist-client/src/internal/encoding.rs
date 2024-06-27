@@ -17,9 +17,10 @@ use std::sync::Arc;
 use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::cast::CastInto;
 use mz_ore::halt;
 use mz_persist::indexed::columnar::ColumnarRecords;
-use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
+use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::stats::{PartStats, ProtoStructStats};
@@ -1258,6 +1259,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 stats: None,
                 ts_rewrite: None,
                 diffs_sum: None,
+                format: None,
             })
         }));
         Ok(HollowBatch {
@@ -1279,6 +1281,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 key_stats: x.stats.into_proto(),
                 ts_rewrite: x.ts_rewrite.as_ref().map(|x| x.into_proto()),
                 diffs_sum: x.diffs_sum.as_ref().map(|x| i64::from_le_bytes(*x)),
+                format: x.format.map(|f| f.into_proto()),
             },
             BatchPart::Inline {
                 updates,
@@ -1290,6 +1293,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 key_stats: None,
                 ts_rewrite: ts_rewrite.as_ref().map(|x| x.into_proto()),
                 diffs_sum: None,
+                format: None,
             },
         }
     }
@@ -1308,6 +1312,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                     stats: proto.key_stats.into_rust()?,
                     ts_rewrite,
                     diffs_sum: proto.diffs_sum.map(i64::to_le_bytes),
+                    format: proto.format.map(|f| f.into_rust()).transpose()?,
                 }))
             }
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
@@ -1325,6 +1330,27 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 "ProtoHollowBatchPart::kind",
             )),
         }
+    }
+}
+
+impl RustType<proto_hollow_batch_part::Format> for BatchColumnarFormat {
+    fn into_proto(&self) -> proto_hollow_batch_part::Format {
+        match self {
+            BatchColumnarFormat::Row => proto_hollow_batch_part::Format::Row(()),
+            BatchColumnarFormat::Both(version) => {
+                proto_hollow_batch_part::Format::RowAndColumnar((*version).cast_into())
+            }
+        }
+    }
+
+    fn from_proto(proto: proto_hollow_batch_part::Format) -> Result<Self, TryFromProtoError> {
+        let format = match proto {
+            proto_hollow_batch_part::Format::Row(_) => BatchColumnarFormat::Row,
+            proto_hollow_batch_part::Format::RowAndColumnar(version) => {
+                BatchColumnarFormat::Both(version.cast_into())
+            }
+        };
+        Ok(format)
     }
 }
 
@@ -1620,6 +1646,7 @@ mod tests {
                 stats: None,
                 ts_rewrite: None,
                 diffs_sum: None,
+                format: None,
             })],
             4,
             vec![],
@@ -1642,6 +1669,7 @@ mod tests {
             stats: None,
             ts_rewrite: None,
             diffs_sum: None,
+            format: None,
         }));
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }

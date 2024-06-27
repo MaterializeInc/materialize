@@ -135,6 +135,7 @@ impl ColumnDecoder<()> for UnitColumnar {
 
 impl ColumnEncoder<()> for UnitColumnar {
     type FinishedColumn = NullArray;
+    type FinishedStats = NoneStats;
 
     fn append(&mut self, _val: &()) {
         self.len += 1;
@@ -144,13 +145,14 @@ impl ColumnEncoder<()> for UnitColumnar {
         self.len += 1;
     }
 
-    fn finish(self) -> Self::FinishedColumn {
-        NullArray::new(self.len)
+    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats) {
+        (NullArray::new(self.len), NoneStats)
     }
 }
 
 impl Schema2<()> for UnitSchema {
     type ArrowColumn = NullArray;
+    type Statistics = NoneStats;
 
     type Decoder = UnitColumnar;
     type Encoder = UnitColumnar;

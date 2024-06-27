@@ -253,26 +253,26 @@ CREATE SECRET my_secret AS 'abcd123';
 
 statement ok
 CREATE TEMPORARY VIEW export_to_dataflow AS
-SELECT export_id, id FROM mz_internal.mz_compute_exports AS mce JOIN mz_internal.mz_dataflows AS md ON
+SELECT export_id, id FROM mz_introspection.mz_compute_exports AS mce JOIN mz_introspection.mz_dataflows AS md ON
 mce.dataflow_id = md.id;
 
 statement ok
 CREATE TEMPORARY VIEW all_ops AS
 SELECT e2d.export_id, mdod.id, mda.address, mdod.name, mdop.parent_id, coalesce(mas.records, 0) AS arrangement_records, coalesce(mse.elapsed_ns, 0) AS elapsed_ns
 FROM export_to_dataflow AS e2d
-JOIN mz_internal.mz_dataflow_operator_dataflows AS mdod ON e2d.id = mdod.dataflow_id
-LEFT JOIN mz_internal.mz_scheduling_elapsed AS mse ON mdod.id = mse.id
-LEFT JOIN mz_internal.mz_arrangement_sizes AS mas ON mdod.id = mas.operator_id
-LEFT JOIN mz_internal.mz_dataflow_operator_parents AS mdop ON mdod.id = mdop.id
-LEFT JOIN mz_internal.mz_dataflow_addresses AS mda ON mdod.id = mda.id;
+JOIN mz_introspection.mz_dataflow_operator_dataflows AS mdod ON e2d.id = mdod.dataflow_id
+LEFT JOIN mz_introspection.mz_scheduling_elapsed AS mse ON mdod.id = mse.id
+LEFT JOIN mz_introspection.mz_arrangement_sizes AS mas ON mdod.id = mas.operator_id
+LEFT JOIN mz_introspection.mz_dataflow_operator_parents AS mdop ON mdod.id = mdop.id
+LEFT JOIN mz_introspection.mz_dataflow_addresses AS mda ON mdod.id = mda.id;
 
 # Note(parkmycar): This suceeds on web, but fails because of pg_repr using binary encoding.
 statement error binary encoding of list types is not implemented
 SELECT mdco.id, from_operator_id, from_operator_address, from_port, to_operator_id, to_operator_address, to_port, COALESCE(sum(sent), 0) AS sent
-FROM mz_internal.mz_dataflow_channel_operators AS mdco
-JOIN mz_internal.mz_dataflow_channels AS mdc ON mdc.id = mdco.id
-LEFT JOIN mz_internal.mz_message_counts AS mmc ON mdco.id = mmc.channel_id
-JOIN mz_internal.mz_compute_exports mce ON mce.dataflow_id = from_operator_address[1]
+FROM mz_introspection.mz_dataflow_channel_operators AS mdco
+JOIN mz_introspection.mz_dataflow_channels AS mdc ON mdc.id = mdco.id
+LEFT JOIN mz_introspection.mz_message_counts AS mmc ON mdco.id = mmc.channel_id
+JOIN mz_introspection.mz_compute_exports mce ON mce.dataflow_id = from_operator_address[1]
 WHERE mce.export_id = 'does_not_exist'
 GROUP BY mdco.id, from_operator_id, from_operator_address, to_operator_id, to_operator_address, from_port, to_port;
 

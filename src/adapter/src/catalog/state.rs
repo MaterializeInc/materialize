@@ -24,7 +24,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
@@ -52,8 +52,9 @@ use mz_ore::str::StrExt;
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
-    PG_CATALOG_SCHEMA, SYSTEM_SCHEMAS, UNSTABLE_SCHEMAS,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_CATALOG_UNSTABLE_SCHEMA, MZ_INTERNAL_SCHEMA,
+    MZ_INTROSPECTION_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA, SYSTEM_SCHEMAS,
+    UNSTABLE_SCHEMAS,
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc};
@@ -1173,7 +1174,7 @@ impl CatalogState {
         let mut index_name = QualifiedItemName {
             qualifiers: ItemQualifiers {
                 database_spec: ResolvedDatabaseSpecifier::Ambient,
-                schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id()),
+                schema_spec: SchemaSpecifier::Id(self.get_mz_introspection_schema_id()),
             },
             item: index_name.clone(),
         };
@@ -1371,6 +1372,10 @@ impl CatalogState {
         self.ambient_schemas_by_name[MZ_CATALOG_SCHEMA]
     }
 
+    pub fn get_mz_catalog_unstable_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[MZ_CATALOG_UNSTABLE_SCHEMA]
+    }
+
     pub fn get_pg_catalog_schema_id(&self) -> SchemaId {
         self.ambient_schemas_by_name[PG_CATALOG_SCHEMA]
     }
@@ -1381,6 +1386,10 @@ impl CatalogState {
 
     pub fn get_mz_internal_schema_id(&self) -> SchemaId {
         self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA]
+    }
+
+    pub fn get_mz_introspection_schema_id(&self) -> SchemaId {
+        self.ambient_schemas_by_name[MZ_INTROSPECTION_SCHEMA]
     }
 
     pub fn get_mz_unsafe_schema_id(&self) -> SchemaId {
@@ -1767,13 +1776,40 @@ impl CatalogState {
             },
         };
 
-        for (database_spec, schema_spec) in schemas {
-            let schema = self.get_schema(&database_spec, &schema_spec, conn_id);
+        for (database_spec, schema_spec) in &schemas {
+            let schema = self.get_schema(database_spec, schema_spec, conn_id);
 
             if let Some(id) = get_schema_entries(schema).get(&name.item) {
                 return Ok(&self.entry_by_id[id]);
             }
         }
+
+        // Some relations that have previously lived in the `mz_internal` schema have been moved to
+        // `mz_catalog_unstable` or `mz_introspection`. To simplify the transition for users, we
+        // automatically let uses of the old schema resolve to the new ones as well.
+        // TODO(#27831) remove this after sufficient time has passed
+        let mz_internal_schema = SchemaSpecifier::Id(self.get_mz_internal_schema_id());
+        if schemas.iter().any(|(_, spec)| *spec == mz_internal_schema) {
+            for schema_id in [
+                self.get_mz_catalog_unstable_schema_id(),
+                self.get_mz_introspection_schema_id(),
+            ] {
+                let schema = self.get_schema(
+                    &ResolvedDatabaseSpecifier::Ambient,
+                    &SchemaSpecifier::Id(schema_id),
+                    conn_id,
+                );
+
+                if let Some(id) = get_schema_entries(schema).get(&name.item) {
+                    debug!(
+                        github_27831 = true,
+                        "encountered use of outdated schema `mz_internal` for relation: {name}",
+                    );
+                    return Ok(&self.entry_by_id[id]);
+                }
+            }
+        }
+
         Err(err_gen(name.to_string()))
     }
 

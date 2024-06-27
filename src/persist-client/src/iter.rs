@@ -1043,6 +1043,7 @@ mod tests {
                             stats: None,
                             ts_rewrite: None,
                             diffs_sum: None,
+                            format: None,
                         })
                     })
                     .collect();

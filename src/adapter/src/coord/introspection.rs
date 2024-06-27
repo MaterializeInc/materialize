@@ -480,7 +480,7 @@ const SUBSCRIBES: &[SubscribeSpec] = &[SubscribeSpec {
     introspection_type: IntrospectionType::ComputeErrorCounts,
     sql: "SUBSCRIBE (
         SELECT export_id, sum(count)
-        FROM mz_internal.mz_compute_error_counts_raw
+        FROM mz_introspection.mz_compute_error_counts_raw
         GROUP BY export_id
     )",
 }];

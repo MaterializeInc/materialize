@@ -568,7 +568,32 @@ where
     }
 
     fn handle_shutdown(&mut self) {
-        unreachable!("we are not currently unregistering differential storage-managed collections");
+        let mut senders = Vec::new();
+
+        // Prevent new messages from being sent.
+        self.cmd_rx.close();
+
+        // Get as many waiting senders as possible.
+        'collect: while let Ok((_batch, sender)) = self.cmd_rx.try_recv() {
+            senders.push(sender);
+
+            // Note: because we're shutting down the sending side of `rx` is no
+            // longer accessible, and thus we should no longer receive new
+            // requests. We add this check just as an extra guard.
+            if senders.len() > CHANNEL_CAPACITY {
+                // There's not a correctness issue if we receive new requests, just
+                // unexpected behavior.
+                tracing::error!("Write task channel should not be receiving new requests");
+                break 'collect;
+            }
+        }
+
+        // Notify them that this collection is closed.
+        //
+        // Note: if a task is shutting down, that indicates the source has been
+        // dropped, at which point the identifier is invalid. Returning this
+        // error provides a better user experience.
+        notify_listeners(senders, || Err(StorageError::IdentifierInvalid(self.id)));
     }
 
     async fn handle_updates(

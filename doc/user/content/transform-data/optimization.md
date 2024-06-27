@@ -355,11 +355,11 @@ FROM teachers grp,
               LIMIT 3);
 ```
 
-For indexed and materialized views that have already been created without specifying query hints, Materialize includes an introspection view, [`mz_internal.mz_expected_group_size_advice`], that can be used to query, for a given cluster, all incrementally maintained [dataflows] where tuning of the above query hints could be beneficial. The introspection view also provides an advice value based on an estimate of how many levels could be cut from the hierarchy. The following query illustrates how to access this introspection view:
+For indexed and materialized views that have already been created without specifying query hints, Materialize includes an introspection view, [`mz_introspection.mz_expected_group_size_advice`], that can be used to query, for a given cluster, all incrementally maintained [dataflows] where tuning of the above query hints could be beneficial. The introspection view also provides an advice value based on an estimate of how many levels could be cut from the hierarchy. The following query illustrates how to access this introspection view:
 
 ```mzsql
 SELECT dataflow_name, region_name, levels, to_cut, hint
-FROM mz_internal.mz_expected_group_size_advice
+FROM mz_introspection.mz_expected_group_size_advice
 ORDER BY dataflow_name, region_name;
 ```
 
@@ -374,6 +374,6 @@ Check out the blog post [Delta Joins and Late Materialization](https://materiali
 [`MIN`]: /sql/functions/#min
 [`MAX`]: /sql/functions/#max
 [Top K]: /transform-data/patterns/top-k
-[`mz_internal.mz_expected_group_size_advice`]: /sql/system-catalog/mz_internal/#mz_expected_group_size_advice
+[`mz_introspection.mz_expected_group_size_advice`]: /sql/system-catalog/mz_introspection/#mz_expected_group_size_advice
 [dataflows]: /get-started/arrangements/#dataflows
 [`SELECT` syntax]: /sql/select/#syntax

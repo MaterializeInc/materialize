@@ -15,14 +15,13 @@ use criterion::{criterion_group, criterion_main, Bencher, Criterion, Throughput}
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{ColumnDecoder, PartDecoder, Schema2};
+use mz_persist_types::columnar::{ColumnDecoder, PartDecoder, Schema, Schema2};
 use mz_persist_types::part::{Part, Part2, PartBuilder, PartBuilder2};
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec;
-use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{ColumnType, Datum, ProtoRow, RelationDesc, Row, ScalarType};
-use prost::Message;
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -400,8 +399,10 @@ fn bench_roundtrip(c: &mut Criterion) {
 }
 
 fn bench_json(c: &mut Criterion) {
+    const NUM_ROWS: u64 = 10_000;
+
     let mut group = c.benchmark_group("json");
-    group.throughput(Throughput::Elements(1));
+    group.throughput(Throughput::Elements(NUM_ROWS));
 
     let mut row = Row::default();
     row.packer().push_dict_with(|packer| {
@@ -442,55 +443,53 @@ fn bench_json(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("encode/proto", |b| {
-        let mut buf = Vec::new();
-        b.iter(|| {
-            let proto = std::hint::black_box(&row).into_proto();
-            proto.encode(std::hint::black_box(&mut buf)).unwrap();
-        });
-    });
-
     group.bench_function("encode/structured", |b| {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
-        let mut builder = PartBuilder2::new(&schema, &UnitSchema);
         b.iter(|| {
-            std::hint::black_box(&mut builder).push(&row, &(), 1, 1);
+            let mut builder = PartBuilder::new(&schema, &UnitSchema).unwrap();
+            for _ in 0..NUM_ROWS {
+                std::hint::black_box(&mut builder).push(&row, &(), 1i64, 1u64);
+            }
+            let part = builder.finish();
+            let stats = PartStats::new(std::hint::black_box(&part)).unwrap();
+            std::hint::black_box((part, stats));
         });
     });
 
-    group.bench_function("decode/proto", |b| {
-        let bytes = vec![
-            10, 254, 2, 186, 1, 250, 2, 10, 179, 1, 10, 7, 100, 101, 116, 97, 105, 108, 115, 18,
-            167, 1, 186, 1, 163, 1, 10, 43, 10, 3, 115, 104, 97, 18, 36, 66, 34, 105, 32, 97, 109,
-            32, 110, 111, 116, 32, 97, 32, 71, 73, 84, 32, 115, 104, 97, 32, 98, 117, 116, 32, 116,
-            104, 97, 116, 39, 115, 32, 111, 107, 97, 121, 10, 32, 10, 6, 115, 116, 97, 116, 117,
-            115, 18, 22, 66, 20, 105, 109, 112, 114, 111, 118, 101, 109, 101, 110, 116, 32, 40,
-            109, 97, 121, 98, 101, 63, 41, 10, 82, 10, 11, 116, 105, 109, 105, 110, 103, 95, 105,
-            110, 102, 111, 18, 67, 178, 1, 64, 10, 10, 194, 1, 7, 10, 3, 16, 0, 28, 16, 4, 10, 9,
-            194, 1, 6, 10, 2, 153, 140, 16, 3, 10, 12, 194, 1, 9, 10, 5, 17, 0, 0, 0, 76, 16, 8,
-            10, 12, 194, 1, 9, 10, 5, 1, 85, 85, 85, 92, 16, 7, 10, 11, 194, 1, 8, 10, 4, 153, 153,
-            25, 28, 16, 7, 10, 28, 10, 10, 101, 118, 101, 110, 116, 45, 116, 121, 112, 101, 18, 14,
-            66, 12, 98, 101, 110, 99, 104, 109, 97, 114, 107, 105, 110, 103, 10, 163, 1, 10, 12,
-            111, 116, 104, 101, 114, 95, 102, 105, 101, 108, 100, 115, 18, 146, 1, 186, 1, 142, 1,
-            10, 46, 10, 3, 98, 97, 114, 18, 39, 66, 37, 73, 32, 104, 111, 112, 101, 32, 116, 104,
-            105, 115, 32, 74, 83, 79, 78, 32, 98, 108, 111, 98, 32, 105, 115, 32, 108, 97, 114,
-            103, 101, 32, 101, 110, 111, 117, 103, 104, 10, 34, 10, 3, 98, 97, 122, 18, 27, 66, 25,
-            73, 32, 97, 109, 32, 114, 117, 110, 110, 105, 110, 103, 32, 111, 117, 116, 32, 111,
-            102, 32, 105, 100, 101, 97, 115, 10, 56, 10, 3, 102, 111, 111, 18, 49, 186, 1, 46, 10,
-            44, 10, 18, 116, 104, 114, 101, 101, 32, 108, 101, 116, 116, 101, 114, 32, 116, 104,
-            105, 110, 103, 18, 22, 66, 20, 116, 104, 105, 115, 32, 119, 105, 108, 108, 32, 104, 97,
-            118, 101, 32, 116, 111, 32, 100, 111,
-        ];
-
+    group.bench_function("encode/structured2", |b| {
+        let schema =
+            RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
         b.iter(|| {
-            let proto = ProtoRow::decode(std::hint::black_box(&bytes[..])).unwrap();
-            let row: Row = std::hint::black_box(proto).into_rust().unwrap();
-            std::hint::black_box(row);
+            let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+            for _ in 0..NUM_ROWS {
+                std::hint::black_box(&mut builder).push(&row, &(), 1, 1);
+            }
+            let part = builder.finish();
+            std::hint::black_box((part.key, part.key_stats));
         });
     });
 
     group.bench_function("decode/structured", |b| {
+        let schema =
+            RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
+        let mut builder = PartBuilder::new(&schema, &UnitSchema).unwrap();
+        builder.push(&row, &(), 1i64, 1u64);
+        let part = builder.finish();
+
+        let decoder =
+            <RelationDesc as Schema<Row>>::decoder(&schema, part.key_ref()).expect("success");
+        let mut row = Row::default();
+
+        b.iter(|| {
+            for _ in 0..NUM_ROWS {
+                decoder.decode(0, std::hint::black_box(&mut row));
+                std::hint::black_box(&mut row);
+            }
+        });
+    });
+
+    group.bench_function("decode/structured2", |b| {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
         let mut builder = PartBuilder2::new(&schema, &UnitSchema);
@@ -507,8 +506,91 @@ fn bench_json(c: &mut Criterion) {
         let mut row = Row::default();
 
         b.iter(|| {
-            decoder.decode(0, std::hint::black_box(&mut row));
-            std::hint::black_box(&mut row);
+            for _ in 0..NUM_ROWS {
+                decoder.decode(0, std::hint::black_box(&mut row));
+                std::hint::black_box(&mut row);
+            }
+        });
+    });
+}
+
+fn bench_string(c: &mut Criterion) {
+    const NUM_ROWS: u64 = 10_000;
+
+    let mut group = c.benchmark_group("string");
+    group.throughput(Throughput::Elements(NUM_ROWS));
+
+    let row = Row::pack_slice(&[Datum::String(
+        "I am a string that could be in a real row but I'm a fake row!",
+    )]);
+
+    group.bench_function("encode/structured", |b| {
+        let schema =
+            RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
+        b.iter(|| {
+            let mut builder = PartBuilder::new(&schema, &UnitSchema).unwrap();
+            for _ in 0..NUM_ROWS {
+                std::hint::black_box(&mut builder).push(&row, &(), 1i64, 1u64);
+            }
+            let part = builder.finish();
+            let stats = PartStats::new(std::hint::black_box(&part)).unwrap();
+            std::hint::black_box((part, stats));
+        });
+    });
+
+    group.bench_function("encode/structured2", |b| {
+        let schema =
+            RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
+        b.iter(|| {
+            let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+            for _ in 0..NUM_ROWS {
+                std::hint::black_box(&mut builder).push(&row, &(), 1, 1);
+            }
+            let part = builder.finish();
+            std::hint::black_box((part.key, part.key_stats));
+        });
+    });
+
+    group.bench_function("decode/structured", |b| {
+        let schema =
+            RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
+        let mut builder = PartBuilder::new(&schema, &UnitSchema).unwrap();
+        builder.push(&row, &(), 1i64, 1u64);
+        let part = builder.finish();
+
+        let decoder =
+            <RelationDesc as Schema<Row>>::decoder(&schema, part.key_ref()).expect("success");
+        let mut row = Row::default();
+
+        b.iter(|| {
+            for _ in 0..NUM_ROWS {
+                decoder.decode(0, std::hint::black_box(&mut row));
+                std::hint::black_box(&mut row);
+            }
+        });
+    });
+
+    group.bench_function("decode/structured2", |b| {
+        let schema =
+            RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
+        let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+        builder.push(&row, &(), 1, 1);
+        let part = builder.finish();
+
+        let col = part
+            .key
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("struct array");
+        let decoder =
+            <RelationDesc as Schema2<Row>>::decoder(&schema, col.clone()).expect("success");
+        let mut row = Row::default();
+
+        b.iter(|| {
+            for _ in 0..NUM_ROWS {
+                decoder.decode(0, std::hint::black_box(&mut row));
+                std::hint::black_box(&mut row);
+            }
         });
     });
 }
@@ -519,6 +601,7 @@ criterion_group!(
     bench_pack,
     bench_filter,
     bench_roundtrip,
-    bench_json
+    bench_json,
+    bench_string
 );
 criterion_main!(benches);

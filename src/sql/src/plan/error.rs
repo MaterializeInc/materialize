@@ -259,6 +259,7 @@ pub enum PlanError {
     },
     RetainHistoryRequired,
     SubsourceResolutionError(SubsourceResolutionError),
+    Replan(String),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -728,6 +729,7 @@ impl fmt::Display for PlanError {
                 write!(f, "RETAIN HISTORY cannot be disabled or set to 0")
             },
             Self::SubsourceResolutionError(e) => write!(f, "{}", e),
+            Self::Replan(msg) => write!(f, "internal error while replanning, please contact support: {msg}"),
         }
     }
 }

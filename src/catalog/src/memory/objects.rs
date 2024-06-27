@@ -41,14 +41,15 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ClusterSchedule, CreateSourcePlan, HirRelationExpr, Ingestion as PlanIngestion,
-    WebhookBodyFormat, WebhookHeaders, WebhookValidation,
+    ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterVariant, CreateSourcePlan,
+    HirRelationExpr, Ingestion as PlanIngestion, PlanError, WebhookBodyFormat, WebhookHeaders,
+    WebhookValidation,
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, Timeline,
@@ -346,6 +347,54 @@ impl Cluster {
             ClusterVariant::Unmanaged => None,
         }
     }
+
+    pub fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
+        let name = self.name.clone();
+        let variant = match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged {
+                size,
+                availability_zones,
+                logging,
+                replication_factor,
+                disk,
+                optimizer_feature_overrides,
+                schedule,
+            }) => {
+                let introspection = match logging {
+                    ReplicaLogging {
+                        log_logging,
+                        interval: Some(interval),
+                    } => Some(ComputeReplicaIntrospectionConfig {
+                        debugging: *log_logging,
+                        interval: interval.clone(),
+                    }),
+                    ReplicaLogging {
+                        log_logging: _,
+                        interval: None,
+                    } => None,
+                };
+                let compute = ComputeReplicaConfig { introspection };
+                CreateClusterVariant::Managed(CreateClusterManagedPlan {
+                    replication_factor: replication_factor.clone(),
+                    size: size.clone(),
+                    availability_zones: availability_zones.clone(),
+                    compute,
+                    disk: disk.clone(),
+                    optimizer_feature_overrides: optimizer_feature_overrides.clone(),
+                    schedule: schedule.clone(),
+                })
+            }
+            ClusterVariant::Unmanaged => {
+                // Unmanaged clusters are deprecated, so hopefully we can remove
+                // them before we have to implement this.
+                return Err(PlanError::Unsupported {
+                    feature: "SHOW CREATE for unmanaged clusters".to_string(),
+                    issue_no: Some(15435),
+                });
+            }
+        };
+        Ok(CreateClusterPlan { name, variant })
+    }
 }
 
 impl From<Cluster> for durable::Cluster {
@@ -497,17 +546,6 @@ impl Table {
     pub fn timeline(&self) -> Timeline {
         Timeline::EpochMilliseconds
     }
-}
-
-/// A description of a source ingestion
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct Ingestion {
-    /// The source description.
-    pub desc: SourceDesc<ReferencedConnection>,
-    /// The ID of the instance in which to install the source.
-    pub instance_id: StorageInstanceId,
-    /// The ID of this ingestion's remap/progress collection.
-    pub remap_collection_id: GlobalId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2215,6 +2253,10 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
             ClusterVariant::Managed(ClusterVariantManaged { schedule, .. }) => Some(schedule),
             _ => None,
         }
+    }
+
+    fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
+        self.try_to_plan()
     }
 }
 

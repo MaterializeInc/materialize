@@ -160,7 +160,7 @@ impl fmt::Display for Jsonb {
 /// A borrowed JSON value.
 ///
 /// `JsonbRef` is to [`Jsonb`] as [`&str`](prim@str) is to [`String`].
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct JsonbRef<'a> {
     datum: Datum<'a>,
 }

@@ -823,7 +823,7 @@ impl Coordinator {
                     &features,
                     &self.catalog().for_session(session),
                     Some(plan.finishing),
-                    Some(target_cluster.name.as_str()),
+                    Some(target_cluster),
                     df_meta,
                     insights_ctx,
                 )
@@ -1028,7 +1028,7 @@ impl Coordinator {
                 &features,
                 &expr_humanizer,
                 finishing,
-                Some(target_cluster.name.as_str()),
+                Some(target_cluster),
                 df_meta,
                 stage,
                 plan::ExplaineeStatementKind::Select,

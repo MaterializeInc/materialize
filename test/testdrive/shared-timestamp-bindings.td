@@ -166,5 +166,5 @@ $ kafka-ingest format=avro topic=data partition=15 schema=${schema}
 # In case the environment has other replicas
 > SET cluster_replica = r1
 
-> SELECT COUNT(*) FROM mz_internal.mz_records_per_dataflow WHERE name LIKE '%check_v%' AND records > 0;
+> SELECT COUNT(*) FROM mz_introspection.mz_records_per_dataflow WHERE name LIKE '%check_v%' AND records > 0;
 0

@@ -279,9 +279,9 @@ a
 > SET cluster_replica = r1
 
 > SELECT mdod.dataflow_name, mdod.name
-  FROM mz_internal.mz_arrangement_sharing mash
-  JOIN mz_internal.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
-  JOIN mz_internal.mz_compute_exports USING (dataflow_id)
+  FROM mz_introspection.mz_arrangement_sharing mash
+  JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
+  JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
   WHERE export_id LIKE 'u%'
 "Dataflow: materialize.public.v_other_primary_idx" ArrangeBy[[Column(0)]]
 "Dataflow: materialize.public.v_other_primary_idx" ArrangeBy[[Column(0)]]-errors

@@ -577,7 +577,7 @@ select
           or (((subq_0."c2" is not NULL)
               and ((numrange(0,0)) <= (numrange(0,0))))
             and ((((select "write_frontier" from mz_internal.mz_frontiers limit 1 offset 1)
-                  ) <> ((select pg_catalog.max("time") from mz_internal.mz_compute_import_frontiers_per_worker)
+                  ) <> ((select pg_catalog.max("time") from mz_introspection.mz_compute_import_frontiers_per_worker)
                   ))
               or (false))) then pg_catalog.abs(
           CAST((select "tgtype" from pg_catalog.pg_trigger limit 1 offset 6)
@@ -592,7 +592,7 @@ from
         ref_0."credits_per_hour" as c1,
         ref_0."replica_id" as c2,
         ref_0."cluster_name" as c3,
-        (select "id" from mz_internal.mz_scheduling_elapsed_raw limit 1 offset 57)
+        (select "id" from mz_introspection.mz_scheduling_elapsed_raw limit 1 offset 57)
            as c4
       from
         mz_internal.mz_cluster_replica_history as ref_0
@@ -600,7 +600,7 @@ from
       limit 102) as subq_0
 where (~ (select "replication_factor" from mz_catalog.mz_clusters limit 1 offset 5)
       ) <= (~ case when (case when (((((select "details" from mz_internal.mz_sink_statuses limit 1 offset 4)
-                    ) >= ((select pg_catalog.jsonb_agg("id") from mz_internal.mz_dataflow_operators)
+                    ) >= ((select pg_catalog.jsonb_agg("id") from mz_introspection.mz_dataflow_operators)
                     ))
                 or ((cast(0 as name)) >= (cast(null as name))))
               or (subq_0."c1" is NULL))

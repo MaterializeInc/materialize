@@ -54,7 +54,7 @@ use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::dyn_col::DynColumnMut;
 use crate::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use crate::part::PartBuilder;
-use crate::stats::{ColumnStats, StatsFrom};
+use crate::stats::{ColumnStats, DynStats, StatsFrom};
 use crate::Codec;
 
 /// A type understood by persist.
@@ -305,6 +305,8 @@ pub trait ColumnDecoder<T> {
 pub trait ColumnEncoder<T> {
     /// Type of column that this encoder returns when finalized.
     type FinishedColumn: arrow::array::Array + Debug + 'static;
+    /// Type of statistics this encoder returns when finalized.
+    type FinishedStats: DynStats + 'static;
 
     /// Appends `val` onto this encoder.
     fn append(&mut self, val: &T);
@@ -312,19 +314,22 @@ pub trait ColumnEncoder<T> {
     /// Appends a null value onto this encoder.
     fn append_null(&mut self);
 
-    /// Finish this encoder, returning an immutable column.
-    fn finish(self) -> Self::FinishedColumn;
+    /// Finish this encoder, returning an immutable column and statistics.
+    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats);
 }
 
 /// Description of a type that we encode into Persist.
 pub trait Schema2<T>: Debug + Send + Sync {
     /// The type of column we decode from, and encoder will finish into.
     type ArrowColumn: arrow::array::Array + Debug + 'static;
+    /// Statistics we collect for a schema of this type.
+    type Statistics: DynStats + 'static;
 
     /// Type that is able to decode values of `T` from [`Self::ArrowColumn`].
     type Decoder: ColumnDecoder<T> + Debug;
     /// Type that is able to encoder values of `T`.
-    type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn> + Debug;
+    type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn, FinishedStats = Self::Statistics>
+        + Debug;
 
     /// Returns a type that is able to decode instances of `T` from the provider column.
     fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error>;

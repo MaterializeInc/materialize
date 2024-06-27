@@ -870,6 +870,10 @@ impl Catalog {
         self.state.get_mz_internal_schema_id()
     }
 
+    pub fn get_mz_introspection_schema_id(&self) -> SchemaId {
+        self.state.get_mz_introspection_schema_id()
+    }
+
     pub fn get_mz_unsafe_schema_id(&self) -> SchemaId {
         self.state.get_mz_unsafe_schema_id()
     }
@@ -3116,6 +3120,39 @@ mod tests {
                 }
             }
             catalog.expire().await;
+        })
+        .await
+    }
+
+    // Make sure objects reside in the `mz_introspection` schema iff they depend on per-replica
+    // introspection relations.
+    #[mz_ore::test(tokio::test)]
+    async fn test_mz_introspection_builtins() {
+        Catalog::with_debug(|catalog| async move {
+            let conn_catalog = catalog.for_system_session();
+
+            let introspection_schema_id = catalog.get_mz_introspection_schema_id();
+            let introspection_schema_spec = SchemaSpecifier::Id(introspection_schema_id);
+
+            for entry in catalog.entries() {
+                let schema_spec = entry.name().qualifiers.schema_spec;
+                let introspection_deps = catalog.introspection_dependencies(entry.id);
+                if introspection_deps.is_empty() {
+                    assert!(
+                        schema_spec != introspection_schema_spec,
+                        "entry does not depend on introspection sources but is in \
+                         `mz_introspection`: {}",
+                        conn_catalog.resolve_full_name(entry.name()),
+                    );
+                } else {
+                    assert!(
+                        schema_spec == introspection_schema_spec,
+                        "entry depends on introspection sources but is not in \
+                         `mz_introspection`: {}",
+                        conn_catalog.resolve_full_name(entry.name()),
+                    );
+                }
+            }
         })
         .await
     }

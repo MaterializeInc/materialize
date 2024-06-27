@@ -15,83 +15,83 @@
 
 $ set-regex match=s\d+ replacement=SID
 
-> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_addresses);
+> SELECT count(*) FROM (SELECT count(*) FROM mz_introspection.mz_dataflow_addresses);
 1
 
-> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_channel_operators);
+> SELECT count(*) FROM (SELECT count(*) FROM mz_introspection.mz_dataflow_channel_operators);
 1
 
-> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_channels);
+> SELECT count(*) FROM (SELECT count(*) FROM mz_introspection.mz_dataflow_channels);
 1
 
-> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_operator_dataflows);
+> SELECT count(*) FROM (SELECT count(*) FROM mz_introspection.mz_dataflow_operator_dataflows);
 1
 
-> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_operator_parents);
+> SELECT count(*) FROM (SELECT count(*) FROM mz_introspection.mz_dataflow_operator_parents);
 1
 
-> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_operator_reachability);
+> SELECT count(*) FROM (SELECT count(*) FROM mz_introspection.mz_dataflow_operator_reachability);
 1
 
-> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_operators);
+> SELECT count(*) FROM (SELECT count(*) FROM mz_introspection.mz_dataflow_operators);
 1
 
-> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflows);
+> SELECT count(*) FROM (SELECT count(*) FROM mz_introspection.mz_dataflows);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_scheduling_elapsed);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_scheduling_elapsed);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_scheduling_parks_histogram);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_scheduling_parks_histogram);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_operator_durations_histogram);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_compute_operator_durations_histogram);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_arrangement_sharing);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_arrangement_sharing);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_arrangement_sizes);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_arrangement_sizes);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_exports);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_compute_exports);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_frontiers);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_compute_frontiers);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_import_frontiers);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_compute_import_frontiers);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_error_counts);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_compute_error_counts);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_active_peeks);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_active_peeks);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_peek_durations_histogram);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_peek_durations_histogram);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_dataflow_shutdown_durations_histogram);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_dataflow_shutdown_durations_histogram);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_records_per_dataflow);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_records_per_dataflow);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_records_per_dataflow_operator);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_records_per_dataflow_operator);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_message_counts);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_introspection.mz_message_counts);
 1
 
-! DROP SCHEMA mz_internal
-contains:cannot drop schema mz_internal because it is required by the database system
+! DROP SCHEMA mz_introspection
+contains:cannot drop schema mz_introspection because it is required by the database system
 
-! DROP VIEW mz_internal.mz_compute_frontiers
-contains:cannot drop view mz_internal.mz_compute_frontiers because it is required by the database system
+! DROP VIEW mz_introspection.mz_compute_frontiers
+contains:cannot drop view mz_introspection.mz_compute_frontiers because it is required by the database system
 
-! DROP SOURCE mz_internal.mz_compute_frontiers_per_worker
-contains:cannot drop source mz_internal.mz_compute_frontiers_per_worker because it is required by the database system
+! DROP SOURCE mz_introspection.mz_compute_frontiers_per_worker
+contains:cannot drop source mz_introspection.mz_compute_frontiers_per_worker because it is required by the database system
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)

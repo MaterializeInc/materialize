@@ -6940,6 +6940,12 @@ impl<'a> Parser<'a> {
                     connection_name: self.parse_raw_name()?,
                 },
             ))
+        } else if self.parse_keywords(&[CREATE, CLUSTER]) {
+            Ok(ShowStatement::ShowCreateCluster(
+                ShowCreateClusterStatement {
+                    cluster_name: RawClusterName::Unresolved(self.parse_identifier()?),
+                },
+            ))
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
                 ident!("transaction_isolation")

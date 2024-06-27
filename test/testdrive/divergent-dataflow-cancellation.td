@@ -34,7 +34,7 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 
 # Ensure the dataflow was successfully installed.
 > SELECT count(*)
-  FROM mz_internal.mz_dataflows
+  FROM mz_introspection.mz_dataflows
   WHERE name LIKE '%divergent%'
 2
 
@@ -69,70 +69,70 @@ contains: canceling statement due to statement timeout
 
 # Confirm that all dataflows are now cancelled
 
-> SELECT count(*) FROM mz_internal.mz_active_peeks_per_worker
+> SELECT count(*) FROM mz_introspection.mz_active_peeks_per_worker
 0
 
-> SELECT count(*) FROM mz_internal.mz_arrangement_batches_raw
+> SELECT count(*) FROM mz_introspection.mz_arrangement_batches_raw
 0
 
-> SELECT count(*) FROM mz_internal.mz_arrangement_records_raw
+> SELECT count(*) FROM mz_introspection.mz_arrangement_records_raw
 0
 
-> SELECT count(*) FROM mz_internal.mz_arrangement_sharing_raw
+> SELECT count(*) FROM mz_introspection.mz_arrangement_sharing_raw
 0
 
-> SELECT count(*) FROM mz_internal.mz_compute_error_counts_raw
+> SELECT count(*) FROM mz_introspection.mz_compute_error_counts_raw
 0
 
 # One export for each introspection arrangement.
 > SELECT count(*)
-  FROM mz_internal.mz_compute_exports_per_worker
+  FROM mz_introspection.mz_compute_exports_per_worker
   WHERE worker_id = 0
 28
 
 # One frontier for each introspection arrangement.
 > SELECT count(*)
-  FROM mz_internal.mz_compute_frontiers_per_worker
+  FROM mz_introspection.mz_compute_frontiers_per_worker
   WHERE worker_id = 0
 28
 
-> SELECT count(*) FROM mz_internal.mz_compute_import_frontiers_per_worker
+> SELECT count(*) FROM mz_introspection.mz_compute_import_frontiers_per_worker
 0
 
-> SELECT count(*) FROM mz_internal.mz_compute_operator_durations_histogram_raw
+> SELECT count(*) FROM mz_introspection.mz_compute_operator_durations_histogram_raw
 0
 
-> SELECT count(*) FROM mz_internal.mz_dataflow_addresses_per_worker
+> SELECT count(*) FROM mz_introspection.mz_dataflow_addresses_per_worker
 0
 
-> SELECT count(*) FROM mz_internal.mz_dataflow_channels_per_worker
+> SELECT count(*) FROM mz_introspection.mz_dataflow_channels_per_worker
 0
 
-> SELECT count(*) FROM mz_internal.mz_dataflow_operator_reachability_raw
+> SELECT count(*) FROM mz_introspection.mz_dataflow_operator_reachability_raw
 0
 
-> SELECT count(*) FROM mz_internal.mz_dataflow_operators_per_worker
+> SELECT count(*) FROM mz_introspection.mz_dataflow_operators_per_worker
 0
 
 # This source never sees retractions.
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_shutdown_durations_histogram_raw
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_shutdown_durations_histogram_raw
 true
 
-> SELECT count(*) FROM mz_internal.mz_message_counts_received_raw
+> SELECT count(*) FROM mz_introspection.mz_message_counts_received_raw
 0
 
-> SELECT count(*) FROM mz_internal.mz_message_counts_sent_raw
+> SELECT count(*) FROM mz_introspection.mz_message_counts_sent_raw
 0
 
 # This source never sees retractions.
-> SELECT count(*) > 0 FROM mz_internal.mz_peek_durations_histogram_raw
+> SELECT count(*) > 0 FROM mz_introspection.mz_peek_durations_histogram_raw
 true
 
-> SELECT count(*) FROM mz_internal.mz_scheduling_elapsed_raw
+> SELECT count(*) FROM mz_introspection.mz_scheduling_elapsed_raw
 0
 
 # This source never sees retractions.
-> SELECT count(*) > 0 FROM mz_internal.mz_scheduling_parks_histogram_raw
+> SELECT count(*) > 0 FROM mz_introspection.mz_scheduling_parks_histogram_raw
 true
 
 # Cleanup.

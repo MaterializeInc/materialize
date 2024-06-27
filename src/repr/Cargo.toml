@@ -79,9 +79,9 @@ uuid = { version = "1.7.0", features = ["serde"] }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 thiserror = "1.0.37"
+tracing = { version = "0.1.37" }
 
 # for the tracing_ feature
-tracing = { version = "0.1.37", optional = true }
 tracing-subscriber = { version = "0.3.16", default-features = false, optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
@@ -103,7 +103,7 @@ default = [
     "mz-proto/default",
     "workspace-hack",
 ]
-tracing_ = ["tracing", "tracing-subscriber"]
+tracing_ = ["tracing-subscriber"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

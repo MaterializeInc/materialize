@@ -13,6 +13,7 @@ workspace = true
 differential-dataflow = "0.12.0"
 either = "1"
 lgalloc = "0.3"
+columnation = { git = "https://github.com/frankmcsherry/columnation" }
 futures-util = "0.3.25"
 proptest = { version = "1.0.0", default-features = false, features = ["std"]}
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }

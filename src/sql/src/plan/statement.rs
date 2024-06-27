@@ -175,6 +175,9 @@ pub fn describe(
         Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
             show::describe_show_create_connection(&scx, stmt)?
         }
+        Statement::Show(ShowStatement::ShowCreateCluster(stmt)) => {
+            show::describe_show_create_cluster(&scx, stmt)?
+        }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
             show::describe_show_create_index(&scx, stmt)?
         }
@@ -362,6 +365,9 @@ pub fn plan(
         Statement::Show(ShowStatement::ShowColumns(stmt)) => show::show_columns(scx, stmt)?.plan(),
         Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
             show::plan_show_create_connection(scx, stmt).map(Plan::ShowCreate)
+        }
+        Statement::Show(ShowStatement::ShowCreateCluster(stmt)) => {
+            show::plan_show_create_cluster(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
             show::plan_show_create_index(scx, stmt).map(Plan::ShowCreate)
@@ -650,6 +656,10 @@ impl<'a> StatementContext<'a> {
         }
     }
 
+    pub fn get_cluster(&self, id: &ClusterId) -> &dyn CatalogCluster {
+        self.catalog.get_cluster(*id)
+    }
+
     pub fn resolve_database(
         &self,
         name: &UnresolvedDatabaseName,
@@ -812,6 +822,12 @@ impl<'a> StatementContext<'a> {
     ) -> Result<(), PlanError> {
         flag.enabled(Some(self.catalog.system_vars()), Some(desc), Some(detail))?;
         Ok(())
+    }
+
+    /// Returns true if the named [`FeatureFlag`] is set to `on`, returns false otherwise.
+    pub fn is_feature_flag_enabled(&self, flag: &FeatureFlag) -> bool {
+        flag.enabled(Some(self.catalog.system_vars()), None, None)
+            .is_ok()
     }
 
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {

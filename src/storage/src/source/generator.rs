@@ -10,21 +10,22 @@
 use std::convert::Infallible;
 use std::time::Duration;
 
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::AsCollection;
 use futures::StreamExt;
-use mz_repr::{Diff, Row};
+use mz_repr::Row;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{
     Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
 };
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
+use crate::source::types::{ProgressStatisticsUpdate, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod auction;
@@ -132,7 +133,7 @@ impl GeneratorKind {
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
+        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -174,7 +175,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
+        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -200,7 +201,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     required_exports: usize,
 ) -> (
-    Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
+    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Option<Stream<G, Infallible>>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
@@ -208,7 +209,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 ) {
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (mut data_output, stream) = builder.new_output();
+    let (mut data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (mut stats_output, stats_stream) = builder.new_output();
 
     let button = builder.build(move |caps| async move {
@@ -288,7 +289,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                     // generate a significant amount of data that will overwhelm the dataflow.
                     // Since those are not required downstream we eagerly ignore them here.
                     if resume_offset <= offset {
-                        data_output.give(&cap, (message, offset, diff));
+                        data_output.give_fueled(&cap, (message, offset, diff)).await;
                     }
                 }
                 Event::Progress(Some(offset)) => {

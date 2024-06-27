@@ -8,5 +8,5 @@
 -- by the Apache License, Version 2.0.
 
 select *
-from mz_internal.mz_compute_import_frontiers
+from mz_introspection.mz_compute_import_frontiers
 where to_timestamp(time::text::bigint/1000) < to_timestamp(mz_now()::text::bigint/1000) - INTERVAL '1 minute'

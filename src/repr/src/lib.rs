@@ -40,6 +40,7 @@ pub mod optimize;
 pub mod refresh_schedule;
 pub mod role_id;
 pub mod stats;
+pub mod stats2;
 pub mod strconv;
 pub mod timestamp;
 pub mod url;
@@ -49,8 +50,8 @@ pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
 pub use crate::global_id::GlobalId;
 pub use crate::relation::{
-    ColumnName, ColumnType, NotNullViolation, ProtoColumnName, ProtoColumnType, ProtoRelationDesc,
-    ProtoRelationType, RelationDesc, RelationType,
+    arb_row_for_relation, ColumnName, ColumnType, NotNullViolation, ProtoColumnName,
+    ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationType,
 };
 pub use crate::row::collection::{ProtoRowCollection, RowCollection, SortedRowCollectionIter};
 pub use crate::row::encoding::{
