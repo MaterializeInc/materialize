@@ -1615,48 +1615,69 @@ mod tests {
             encoder.append(row);
         }
         let (col, stats) = encoder.finish();
-
-        // Get the lower and upper bounds from our stats.
-        let stats = stats.some.cols.get("a").unwrap();
-        let (lower, upper) = crate::stats2::col_values(&ty.scalar_type, &stats.values);
-
         let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col).unwrap();
 
-        let mut null_count = 0;
-        for (idx, datum) in datums.into_iter().enumerate() {
-            decoder.decode(idx, &mut row);
-            let rnd_datum = row.unpack_first();
-            assert_eq!(datum, rnd_datum);
+        // Collect all of our lower and upper bounds.
+        let (stats, stat_nulls): (Vec<_>, Vec<_>) = desc
+            .iter()
+            .map(|(name, ty)| {
+                let col_stats = stats.some.cols.get(name.as_str()).unwrap();
+                let (lower, upper) = crate::stats2::col_values(&ty.scalar_type, &col_stats.values);
+                let null_count = col_stats.nulls.map_or(0, |n| n.count);
 
-            // Assert our stat bounds are correct.
-            if datum.is_null() {
-                null_count += 1;
-            } else if lower.is_some() || upper.is_some() {
-                if let Some(lower) = lower {
-                    assert!(rnd_datum >= lower, "{rnd_datum:?} is not >= {lower:?}");
-                }
-                if let Some(upper) = upper {
-                    assert!(rnd_datum <= upper, "{rnd_datum:?} is not <= {upper:?}");
-                }
-            } else {
-                match &ty.scalar_type {
-                    // JSON stats are handled separately.
-                    ScalarType::Jsonb => (),
-                    // We don't collect stats for these types.
-                    ScalarType::AclItem
-                    | ScalarType::MzAclItem
-                    | ScalarType::Range { .. }
-                    | ScalarType::Array(_)
-                    | ScalarType::Map { .. }
-                    | ScalarType::List { .. }
-                    | ScalarType::Record { .. }
-                    | ScalarType::Int2Vector => (),
-                    other => panic!("should have collected stats for {other:?}"),
+                ((lower, upper), null_count)
+            })
+            .unzip();
+        // Track how many nulls we saw for each column so we can assert stats match.
+        let mut actual_nulls = vec![0usize; stats.len()];
+
+        let mut rnd_row = Row::default();
+        for (idx, og_row) in rows.iter().enumerate() {
+            decoder.decode(idx, &mut rnd_row);
+            assert_eq!(og_row, &rnd_row);
+
+            // Check for each Datum in each Row that we're within our stats bounds.
+            for (c_idx, (rnd_datum, ty)) in rnd_row.iter().zip(desc.typ().columns()).enumerate() {
+                let (lower, upper) = stats[c_idx];
+
+                // Assert our stat bounds are correct.
+                if rnd_datum.is_null() {
+                    actual_nulls[c_idx] += 1;
+                } else if lower.is_some() || upper.is_some() {
+                    if let Some(lower) = lower {
+                        assert!(rnd_datum >= lower, "{rnd_datum:?} is not >= {lower:?}");
+                    }
+                    if let Some(upper) = upper {
+                        assert!(rnd_datum <= upper, "{rnd_datum:?} is not <= {upper:?}");
+                    }
+                } else {
+                    match &ty.scalar_type {
+                        // JSON stats are handled separately.
+                        ScalarType::Jsonb => (),
+                        // We don't collect stats for these types.
+                        ScalarType::AclItem
+                        | ScalarType::MzAclItem
+                        | ScalarType::Range { .. }
+                        | ScalarType::Array(_)
+                        | ScalarType::Map { .. }
+                        | ScalarType::List { .. }
+                        | ScalarType::Record { .. }
+                        | ScalarType::Int2Vector => (),
+                        other => panic!("should have collected stats for {other:?}"),
+                    }
                 }
             }
         }
 
-        assert_eq!(stats.nulls.map_or(0, |n| n.count), null_count);
+        // Validate that the null counts in our stats matched the actual counts.
+        for (col_idx, (stats_count, actual_count)) in
+            stat_nulls.iter().zip(actual_nulls.iter()).enumerate()
+        {
+            assert_eq!(
+                stats_count, actual_count,
+                "column {col_idx} has incorrect number of nulls!"
+            );
+        }
     }
 
     #[mz_ore::test]
@@ -1676,7 +1697,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn proptest_non_empty_relation_descs() {
         let strat = arb_relation_desc(1..8).prop_flat_map(|desc| {
-            proptest::collection::vec(arb_row_for_relation(&desc), 0..8)
+            proptest::collection::vec(arb_row_for_relation(&desc), 0..12)
                 .prop_map(move |rows| (desc.clone(), rows))
         });
 

@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use arrow::array::{BinaryArray, FixedSizeBinaryArray, StringArray};
 use chrono::{DateTime, NaiveTime};
 use dec::OrderedDecimal;
-use mz_persist_types::columnar::FixedSizeCodec;
+use mz_persist_types::columnar::{Data, FixedSizeCodec};
 use mz_persist_types::stats::bytes::{BytesStats, FixedSizeBytesStats, FixedSizeBytesStatsKind};
 use mz_persist_types::stats::json::{JsonMapElementStats, JsonStats};
 use mz_persist_types::stats::primitive::PrimitiveStats;
@@ -42,19 +42,27 @@ pub fn col_values<'a>(
 ) -> (Option<Datum<'a>>, Option<Datum<'a>>) {
     use PrimitiveStatsVariants::*;
 
+    /// Helper method to map the lower and upper bounds of some stats to Datums.
+    fn map_stats<'a, T, S, F>(stats: &'a T, f: F) -> (Option<Datum<'a>>, Option<Datum<'a>>)
+    where
+        S: Data,
+        T: ColumnStats<S>,
+        F: Fn(S::Ref<'a>) -> Datum<'a>,
+    {
+        (stats.lower().map(&f), stats.upper().map(&f))
+    }
+
     match (typ, stats) {
         (ScalarType::Bool, ColumnStatKinds::Primitive(Bool(stats))) => {
             let map_datum = |val| if val { Datum::True } else { Datum::False };
             (stats.lower().map(map_datum), stats.upper().map(map_datum))
         }
-        (ScalarType::PgLegacyChar, ColumnStatKinds::Primitive(U8(stats))) => (
-            stats.lower().map(Datum::UInt8),
-            stats.upper().map(Datum::UInt8),
-        ),
-        (ScalarType::UInt16, ColumnStatKinds::Primitive(U16(stats))) => (
-            stats.lower().map(Datum::UInt16),
-            stats.upper().map(Datum::UInt16),
-        ),
+        (ScalarType::PgLegacyChar, ColumnStatKinds::Primitive(U8(stats))) => {
+            map_stats(stats, Datum::UInt8)
+        }
+        (ScalarType::UInt16, ColumnStatKinds::Primitive(U16(stats))) => {
+            map_stats(stats, Datum::UInt16)
+        }
         (
             ScalarType::UInt32
             | ScalarType::Oid
@@ -62,34 +70,25 @@ pub fn col_values<'a>(
             | ScalarType::RegProc
             | ScalarType::RegType,
             ColumnStatKinds::Primitive(U32(stats)),
-        ) => (
-            stats.lower().map(Datum::UInt32),
-            stats.upper().map(Datum::UInt32),
-        ),
-        (ScalarType::UInt64, ColumnStatKinds::Primitive(U64(stats))) => (
-            stats.lower().map(Datum::UInt64),
-            stats.upper().map(Datum::UInt64),
-        ),
-        (ScalarType::Int16, ColumnStatKinds::Primitive(I16(stats))) => (
-            stats.lower().map(Datum::Int16),
-            stats.upper().map(Datum::Int16),
-        ),
-        (ScalarType::Int32, ColumnStatKinds::Primitive(I32(stats))) => (
-            stats.lower().map(Datum::Int32),
-            stats.upper().map(Datum::Int32),
-        ),
-        (ScalarType::Int64, ColumnStatKinds::Primitive(I64(stats))) => (
-            stats.lower().map(Datum::Int64),
-            stats.upper().map(Datum::Int64),
-        ),
-        (ScalarType::Float32, ColumnStatKinds::Primitive(F32(stats))) => (
-            stats.lower().map(|x| Datum::Float32(OrderedFloat(x))),
-            stats.upper().map(|x| Datum::Float32(OrderedFloat(x))),
-        ),
-        (ScalarType::Float64, ColumnStatKinds::Primitive(F64(stats))) => (
-            stats.lower().map(|x| Datum::Float64(OrderedFloat(x))),
-            stats.upper().map(|x| Datum::Float64(OrderedFloat(x))),
-        ),
+        ) => map_stats(stats, Datum::UInt32),
+        (ScalarType::UInt64, ColumnStatKinds::Primitive(U64(stats))) => {
+            map_stats(stats, Datum::UInt64)
+        }
+        (ScalarType::Int16, ColumnStatKinds::Primitive(I16(stats))) => {
+            map_stats(stats, Datum::Int16)
+        }
+        (ScalarType::Int32, ColumnStatKinds::Primitive(I32(stats))) => {
+            map_stats(stats, Datum::Int32)
+        }
+        (ScalarType::Int64, ColumnStatKinds::Primitive(I64(stats))) => {
+            map_stats(stats, Datum::Int64)
+        }
+        (ScalarType::Float32, ColumnStatKinds::Primitive(F32(stats))) => {
+            map_stats(stats, |x| Datum::Float32(OrderedFloat(x)))
+        }
+        (ScalarType::Float64, ColumnStatKinds::Primitive(F64(stats))) => {
+            map_stats(stats, |x| Datum::Float64(OrderedFloat(x)))
+        }
         (
             ScalarType::Numeric { .. },
             ColumnStatKinds::Bytes(BytesStats::FixedSize(FixedSizeBytesStats {
@@ -115,22 +114,14 @@ pub fn col_values<'a>(
             | ScalarType::Char { .. }
             | ScalarType::VarChar { .. },
             ColumnStatKinds::Primitive(String(stats)),
-        ) => (
-            stats.lower().map(Datum::String),
-            stats.upper().map(Datum::String),
-        ),
+        ) => map_stats(stats, Datum::String),
         (ScalarType::Bytes, ColumnStatKinds::Bytes(BytesStats::Primitive(stats))) => (
             Some(Datum::Bytes(&stats.lower)),
             Some(Datum::Bytes(&stats.upper)),
         ),
-        (ScalarType::Date, ColumnStatKinds::Primitive(I32(stats))) => (
-            stats
-                .lower()
-                .map(|x| Datum::Date(Date::from_pg_epoch(x).expect("failed to roundtrip Date"))),
-            stats
-                .upper()
-                .map(|x| Datum::Date(Date::from_pg_epoch(x).expect("failed to roundtrip Date"))),
-        ),
+        (ScalarType::Date, ColumnStatKinds::Primitive(I32(stats))) => map_stats(stats, |x| {
+            Datum::Date(Date::from_pg_epoch(x).expect("failed to roundtrip Date"))
+        }),
         (ScalarType::Time, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
             let lower = PackedNaiveTime::from_bytes(&stats.lower)
                 .expect("failed to roundtrip NaiveTime")
@@ -142,45 +133,25 @@ pub fn col_values<'a>(
             (Some(Datum::Time(lower)), Some(Datum::Time(upper)))
         }
         (ScalarType::Timestamp { .. }, ColumnStatKinds::Primitive(I64(stats))) => {
-            let lower = stats
-                .lower()
-                .and_then(DateTime::from_timestamp_micros)
-                .map(|x| x.naive_utc())
-                .and_then(|x| CheckedTimestamp::from_timestamplike(x).ok())
-                .expect("failed to roundtrip Timestamp");
-            let upper = stats
-                .upper()
-                .and_then(DateTime::from_timestamp_micros)
-                .map(|x| x.naive_utc())
-                .and_then(|x| CheckedTimestamp::from_timestamplike(x).ok())
-                .expect("failed to roundtrip Timestamp");
-            (Some(Datum::Timestamp(lower)), Some(Datum::Timestamp(upper)))
+            map_stats(stats, |x| {
+                DateTime::from_timestamp_micros(x)
+                    .map(|x| x.naive_utc())
+                    .and_then(|x| CheckedTimestamp::from_timestamplike(x).ok())
+                    .map(Datum::Timestamp)
+                    .expect("failed to roundtrip Timestamp")
+            })
         }
         (ScalarType::TimestampTz { .. }, ColumnStatKinds::Primitive(I64(stats))) => {
-            let lower = stats
-                .lower()
-                .and_then(DateTime::from_timestamp_micros)
-                .and_then(|x| CheckedTimestamp::from_timestamplike(x).ok())
-                .expect("failed to roundtrip Timestamp");
-            let upper = stats
-                .upper()
-                .and_then(DateTime::from_timestamp_micros)
-                .and_then(|x| CheckedTimestamp::from_timestamplike(x).ok())
-                .expect("failed to roundtrip Timestamp");
-
-            (
-                Some(Datum::TimestampTz(lower)),
-                Some(Datum::TimestampTz(upper)),
-            )
+            map_stats(stats, |x| {
+                DateTime::from_timestamp_micros(x)
+                    .and_then(|x| CheckedTimestamp::from_timestamplike(x).ok())
+                    .map(Datum::TimestampTz)
+                    .expect("failed to roundtrip TimestampTz")
+            })
         }
-        (ScalarType::MzTimestamp, ColumnStatKinds::Primitive(U64(stats))) => (
-            stats
-                .lower()
-                .map(|x| Datum::MzTimestamp(crate::Timestamp::from(x))),
-            stats
-                .upper()
-                .map(|x| Datum::MzTimestamp(crate::Timestamp::from(x))),
-        ),
+        (ScalarType::MzTimestamp, ColumnStatKinds::Primitive(U64(stats))) => {
+            map_stats(stats, |x| Datum::MzTimestamp(crate::Timestamp::from(x)))
+        }
         (ScalarType::Interval, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
             let lower = PackedInterval::from_bytes(&stats.lower)
                 .map(|x| x.into_value())

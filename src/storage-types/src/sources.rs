@@ -1810,9 +1810,22 @@ impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
 
         let err_column = BinaryBuilder::finish(&mut err_encoder);
         let err_stats = OptionStats::<PrimitiveStats<Vec<u8>>>::from_column(&err_column).finish();
-        let row_column: Arc<dyn Array> = match row_encoder {
-            SourceDataRowColumnarEncoder::Row(encoder) => Arc::new(encoder.finish()),
-            SourceDataRowColumnarEncoder::EmptyRow => Arc::new(NullArray::new(err_column.len())),
+        let (row_column, row_stats): (Arc<dyn Array>, _) = match row_encoder {
+            SourceDataRowColumnarEncoder::Row(encoder) => {
+                let (column, stats) = encoder.finish();
+                (Arc::new(column), stats)
+            }
+            SourceDataRowColumnarEncoder::EmptyRow => {
+                let column = Arc::new(NullArray::new(err_column.len()));
+                let stats = OptionStats {
+                    none: err_column.len() - err_column.null_count(),
+                    some: StructStats {
+                        len: err_column.len(),
+                        cols: BTreeMap::default(),
+                    },
+                };
+                (column, stats)
+            }
         };
 
         let stats = [
@@ -1934,7 +1947,7 @@ mod tests {
         for data in &datas {
             encoder.append(data);
         }
-        let col = encoder.finish();
+        let (col, _stats) = encoder.finish();
 
         // Encode to Parquet.
         let mut buf = Vec::new();

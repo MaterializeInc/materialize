@@ -63,7 +63,7 @@ pub trait ColumnarStatsBuilder<T>: Debug {
 /// We collect stats for all primitive types in exactly the same way. This
 /// macro de-duplicates some of that logic.
 ///
-/// Note: If at any point someone finds this macro too complext, they should
+/// Note: If at any point someone finds this macro too complex, they should
 /// feel free to refactor it away!
 macro_rules! primitive_stats {
     ($native:ty, $arrow_col:ty, $min_fn:path, $max_fn:path) => {

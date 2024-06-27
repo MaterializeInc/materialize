@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::sync::Arc;
 use std::{fmt, iter, vec};
 
 use anyhow::bail;
@@ -601,9 +600,8 @@ pub fn arb_relation_desc(num_cols: std::ops::Range<usize>) -> impl Strategy<Valu
         .prop_flat_map(|length| proptest::collection::vec(any::<char>(), length))
         .prop_map(|chars| chars.into_iter().collect::<String>())
         .no_shrink();
-    let name_strat = Arc::new(name_strat);
 
-    proptest::collection::vec((Arc::clone(&name_strat), any::<ColumnType>()), num_cols)
+    proptest::collection::btree_map(name_strat, any::<ColumnType>(), num_cols)
         .prop_map(RelationDesc::from_names_and_types)
 }
 
