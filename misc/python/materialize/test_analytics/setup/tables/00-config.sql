@@ -14,7 +14,17 @@
 -- limitations under the License.
 
 CREATE TABLE config (
-   min_required_data_version_for_uploads INT
+   uploads_enabled BOOL NOT NULL,
+   min_required_data_version_for_uploads INT NOT NULL
 );
 
-INSERT INTO config (min_required_data_version_for_uploads) VALUES (6);
+INSERT INTO config
+(
+    uploads_enabled,
+    min_required_data_version_for_uploads
+)
+VALUES
+(
+    TRUE,
+    6
+);

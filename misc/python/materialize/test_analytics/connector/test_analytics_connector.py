@@ -9,6 +9,7 @@
 
 import re
 import ssl
+from dataclasses import dataclass
 from textwrap import dedent
 
 import pg8000
@@ -26,6 +27,12 @@ class TestAnalyticsUploadError(Exception):
 
     def __str__(self) -> str:
         return f"{self.message} (last executed sql: {self.sql})"
+
+
+@dataclass
+class TestAnalyticsSettings:
+    uploads_enabled: bool
+    min_required_data_version_for_uploads: int
 
 
 class DatabaseConnector:
@@ -85,9 +92,24 @@ class DatabaseConnector:
     def set_read_only(self) -> None:
         self._read_only = True
 
-    def query_min_required_data_version(self, cursor: Cursor) -> int:
-        cursor.execute("SELECT min_required_data_version_for_uploads FROM config;")
-        return int(cursor.fetchall()[0][0])
+    def query_settings(self, cursor: Cursor) -> TestAnalyticsSettings:
+        cursor.execute(
+            """
+            SELECT
+                uploads_enabled,
+                min_required_data_version_for_uploads
+            FROM config;
+            """
+        )
+
+        rows = cursor.fetchall()
+        assert len(rows) == 1, f"Expected exactly one row, got {len(rows)}"
+
+        row = rows[0]
+
+        return TestAnalyticsSettings(
+            uploads_enabled=row[0], min_required_data_version_for_uploads=row[1]
+        )
 
     def add_update_statements(self, sql_statements: list[str]) -> None:
         self.update_statements.extend(sql_statements)
@@ -98,7 +120,7 @@ class DatabaseConnector:
 
         cursor = self.create_cursor(autocommit=not self._use_transaction)
 
-        self._disable_if_on_unsupported_version(cursor)
+        self._disable_if_uploads_not_allowed(cursor)
 
         if self._read_only:
             print(
@@ -155,16 +177,25 @@ class DatabaseConnector:
                 print("-- FAILED!")
             raise
 
-    def _disable_if_on_unsupported_version(
+    def _disable_if_uploads_not_allowed(
         self,
         cursor: Cursor,
     ) -> None:
-        min_required_data_version = self.query_min_required_data_version(cursor)
+        test_analytics_settings = self.query_settings(cursor)
+
+        if not test_analytics_settings.uploads_enabled:
+            print("Uploading test_analytics data is disabled!")
+            self.set_read_only()
+            return
+
         print(
-            f"Current data version is {self.current_data_version}, min required version is {min_required_data_version}"
+            f"Current data version is {self.current_data_version}, min required version is {test_analytics_settings.min_required_data_version_for_uploads}"
         )
 
-        if self.current_data_version < min_required_data_version:
+        if (
+            self.current_data_version
+            < test_analytics_settings.min_required_data_version_for_uploads
+        ):
             print(
                 f"Uploading test_analytics data is not supported from this data version ({self.current_data_version})"
             )
