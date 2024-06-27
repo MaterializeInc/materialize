@@ -79,7 +79,7 @@ class DatabaseConnector:
         cursor = connection.cursor()
         cursor.execute(f"SET database = {self.config.database}")
         cursor.execute(f"SET search_path = {self.config.search_path}")
-        cursor.execute(f"SET statement_timeout = {statement_timeout}")
+        cursor.execute(f"SET statement_timeout = '{statement_timeout}'")
         return cursor
 
     def set_read_only(self) -> None:
