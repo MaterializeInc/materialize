@@ -31,6 +31,7 @@ pub mod dyn_struct;
 pub mod parquet;
 pub mod part;
 pub mod stats;
+pub mod stats2;
 pub mod timestamp;
 pub mod txn;
 

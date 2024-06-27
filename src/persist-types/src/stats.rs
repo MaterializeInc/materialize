@@ -175,6 +175,12 @@ impl<T: Into<PrimitiveStatsVariants>> From<T> for ColumnStatKinds {
     }
 }
 
+impl From<PrimitiveStats<Vec<u8>>> for ColumnStatKinds {
+    fn from(value: PrimitiveStats<Vec<u8>>) -> Self {
+        ColumnStatKinds::Bytes(BytesStats::Primitive(value))
+    }
+}
+
 impl From<StructStats> for ColumnStatKinds {
     fn from(value: StructStats) -> Self {
         ColumnStatKinds::Struct(value)
