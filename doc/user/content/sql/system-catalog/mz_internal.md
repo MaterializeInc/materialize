@@ -181,28 +181,6 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
 | `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes.                                                                                                                             |
 
-<!-- TODO(chaas): remove after v0.99 release -->
-### `mz_cluster_replica_sizes`
-
-The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
-(e.g. `100cc`) to physical sizes (number of processes, and CPU and memory allocations per process).
-
-{{< warning >}}
-The values in this table may change at any time. You should not rely on them for
-any kind of capacity planning.
-{{< /warning >}}
-
-| Field                  | Type        | Meaning                                                                                                                                                      |
-|------------------------|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `size`                 | [`text`]    | The human-readable replica size.                                                                                                                             |
-| `processes`            | [`uint8`]   | The number of processes in the replica.                                                                                                                      |
-| `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.                                                                                                           |
-| `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core.                                                                                                |
-| `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.                                                                                                |
-| `disk_bytes`           | [`uint8`]   | The disk allocation per process.                                                                                                                             |
-| `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
-
-
 ### `mz_cluster_replica_statuses`
 
 The `mz_cluster_replica_statuses` table contains a row describing the status
