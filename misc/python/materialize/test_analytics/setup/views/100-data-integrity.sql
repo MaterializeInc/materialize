@@ -70,4 +70,8 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     FROM build_annotation
     GROUP BY build_job_id
     HAVING count(*) > 1
+    UNION
+    SELECT 'config', 'config', NULL, 'more than one config entry exists'
+    FROM config
+    HAVING count(*) > 1
 ;
