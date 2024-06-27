@@ -9,6 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import time
 
 from materialize.buildkite_insights.annotation_search.annotation_search_presentation import (
     print_annotation_match,
@@ -41,6 +42,7 @@ def start_search(
     if not like_pattern.endswith("%"):
         like_pattern = f"{like_pattern}%"
 
+    start_time = time.time()
     matches: list[tuple[Build, BuildAnnotation]] = search_source.search_annotations(
         pipeline=pipeline_slug,
         branch=branch,
@@ -50,6 +52,8 @@ def start_search(
         max_entries=max_results + 1,
         only_failed_builds=only_failed_builds,
     )
+    end_time = time.time()
+    duration_in_sec = round(end_time - start_time, 2)
 
     more_results_exist = len(matches) > max_results
 
@@ -76,16 +80,25 @@ def start_search(
             one_line_match_presentation=one_line_match_presentation,
         )
 
+    _print_summary(pipeline_slug, matches, duration_in_sec, more_results_exist)
+
+
+def _print_summary(
+    pipeline: str,
+    matches: list[tuple[Build, BuildAnnotation]],
+    duration_in_sec: float,
+    more_results_exist: bool,
+) -> None:
     newest_build_number_with_match = matches[0][0].number
     oldest_build_number_with_match = matches[-1][0].number
     search_scope = (
-        f"builds #{oldest_build_number_with_match} to #{newest_build_number_with_match} of pipeline {pipeline_slug}"
-        if pipeline_slug != ANY_PIPELINE_VALUE
+        f"builds #{oldest_build_number_with_match} to #{newest_build_number_with_match} of pipeline {pipeline }"
+        if pipeline != ANY_PIPELINE_VALUE
         else "all pipelines"
     )
 
     print(
-        f"Found {len(matches)} matches in {search_scope}.\n"
+        f"Found {len(matches)} matches in {search_scope}. Search took {duration_in_sec}s.\n"
         "More matches exist in earlier builds."
         if more_results_exist
         else ""

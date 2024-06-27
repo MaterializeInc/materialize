@@ -9,6 +9,7 @@
 
 import re
 import ssl
+import time
 from dataclasses import dataclass
 from textwrap import dedent
 
@@ -145,9 +146,10 @@ class DatabaseConnector:
                 self._execute_sql(cursor, "COMMIT;")
             print("Upload completed.")
         except Exception as e:
-            print("Upload failed, triggering rollback.")
+            print("Upload failed.")
             try:
                 if self._use_transaction:
+                    print("Triggering rollback.")
                     self._execute_sql(cursor, "ROLLBACK;")
             except:
                 pass
@@ -165,12 +167,15 @@ class DatabaseConnector:
             print(f"> {printable_sql}")
 
         try:
+            start_time = time.time()
             cursor.execute(sql)
+            end_time = time.time()
 
             if print_status:
                 affected_rows = cursor.rowcount
+                duration_in_sec = round(end_time - start_time, 2)
                 print(
-                    f"-- OK ({affected_rows} row{'s' if affected_rows != 1 else ''} affected)"
+                    f"-- OK ({affected_rows} row{'s' if affected_rows != 1 else ''} affected, {duration_in_sec}s)"
                 )
         except:
             if print_status:
@@ -181,6 +186,7 @@ class DatabaseConnector:
         self,
         cursor: Cursor,
     ) -> None:
+        print("Fetching test_analytics settings")
         test_analytics_settings = self.query_settings(cursor)
 
         if not test_analytics_settings.uploads_enabled:
