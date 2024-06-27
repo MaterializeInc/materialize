@@ -1532,12 +1532,11 @@ impl CollectionState {
 /// State remembered about a dropped compute collection.
 ///
 /// This is the subset of the full [`CollectionState`] that survives the invocation of
-/// [`ActiveComputeState::drop_collection`], until it is finally dropped in
-/// [`ActiveComputeState::report_dropped_collections`]. It includes any information required to
-/// report the dropping of a collection to the controller.
+/// `drop_collection`, until it is finally dropped in `report_dropped_collections`. It includes any
+/// information required to report the dropping of a collection to the controller.
 ///
 /// Note that this state must _not_ store any state (such as tokens) whose dropping releases
-/// resources elsewhere in the system. A [`DroppedCollectionState`] for a collection dropped during
+/// resources elsewhere in the system. A `DroppedCollection` for a collection dropped during
 /// reconciliation might be alive at the same time as the [`CollectionState`] for the re-created
 /// collection, and if the dropped collection hasn't released all its held resources by the time
 /// the new one is created, conflicts can ensue.
