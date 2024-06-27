@@ -719,6 +719,7 @@ pub enum ConnectionOptionName {
     Password,
     Port,
     ProgressTopic,
+    ProgressTopicReplicationFactor,
     Region,
     SaslMechanisms,
     SaslPassword,
@@ -750,6 +751,9 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::Password => "PASSWORD",
             ConnectionOptionName::Port => "PORT",
             ConnectionOptionName::ProgressTopic => "PROGRESS TOPIC",
+            ConnectionOptionName::ProgressTopicReplicationFactor => {
+                "PROGRESS TOPIC REPLICATION FACTOR"
+            }
             ConnectionOptionName::Region => "REGION",
             ConnectionOptionName::AssumeRoleArn => "ASSUME ROLE ARN",
             ConnectionOptionName::AssumeRoleSessionName => "ASSUME ROLE SESSION NAME",
@@ -791,6 +795,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::Password
             | ConnectionOptionName::Port
             | ConnectionOptionName::ProgressTopic
+            | ConnectionOptionName::ProgressTopicReplicationFactor
             | ConnectionOptionName::Region
             | ConnectionOptionName::AssumeRoleArn
             | ConnectionOptionName::AssumeRoleSessionName
@@ -956,7 +961,6 @@ pub enum KafkaSinkConfigOptionName {
     TopicConfig,
     TopicPartitionCount,
     TopicReplicationFactor,
-    ProgressTopicReplicationFactor,
 }
 
 impl AstDisplay for KafkaSinkConfigOptionName {
@@ -970,9 +974,6 @@ impl AstDisplay for KafkaSinkConfigOptionName {
             KafkaSinkConfigOptionName::TopicConfig => "TOPIC CONFIG",
             KafkaSinkConfigOptionName::TopicPartitionCount => "TOPIC PARTITION COUNT",
             KafkaSinkConfigOptionName::TopicReplicationFactor => "TOPIC REPLICATION FACTOR",
-            KafkaSinkConfigOptionName::ProgressTopicReplicationFactor => {
-                "PROGRESS TOPIC REPLICATION FACTOR"
-            }
         })
     }
 }
@@ -993,8 +994,7 @@ impl WithOptionName for KafkaSinkConfigOptionName {
             | KafkaSinkConfigOptionName::LegacyIds
             | KafkaSinkConfigOptionName::TopicConfig
             | KafkaSinkConfigOptionName::TopicPartitionCount
-            | KafkaSinkConfigOptionName::TopicReplicationFactor
-            | KafkaSinkConfigOptionName::ProgressTopicReplicationFactor => false,
+            | KafkaSinkConfigOptionName::TopicReplicationFactor => false,
         }
     }
 }

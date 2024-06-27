@@ -811,6 +811,7 @@ async fn determine_sink_progress(
     let progress_topic = connection
         .progress_topic(&storage_configuration.connection_context)
         .into_owned();
+    let progress_topic_options = &connection.connection.progress_topic_options;
     let progress_key = ProgressKey::new(sink_id);
 
     let common_options = btreemap! {
@@ -855,7 +856,7 @@ async fn determine_sink_progress(
         connection,
         storage_configuration,
         &progress_topic,
-        &connection.progress_topic_options,
+        progress_topic_options,
     )
     .await
     .add_context("error registering kafka progress topic for sink")?;
