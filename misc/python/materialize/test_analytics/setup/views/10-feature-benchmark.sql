@@ -21,9 +21,13 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_day AS
         res.scenario_version,
         res.scale,
         date_trunc('day', b.date) AS day,
+        min(res.wallclock) AS min_wallclock,
         max(res.wallclock) AS max_wallclock,
+        min(res.messages) AS min_messages,
         max(res.messages) AS max_messages,
+        min(res.memory_mz) AS min_memory_mz,
         max(res.memory_mz) AS max_memory_mz,
+        min(res.memory_clusterd) AS min_memory_clusterd,
         max(res.memory_clusterd) AS max_memory_clusterd
     FROM feature_benchmark_result res
     INNER JOIN build_job bj
@@ -48,9 +52,13 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_week AS
         res.scenario_version,
         res.scale,
         date_trunc('week', b.date) AS day,
+        min(res.wallclock) AS min_wallclock,
         max(res.wallclock) AS max_wallclock,
+        min(res.messages) AS min_messages,
         max(res.messages) AS max_messages,
+        min(res.memory_mz) AS min_memory_mz,
         max(res.memory_mz) AS max_memory_mz,
+        min(res.memory_clusterd) AS min_memory_clusterd,
         max(res.memory_clusterd) AS max_memory_clusterd
     FROM feature_benchmark_result res
     INNER JOIN build_job bj
