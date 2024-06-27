@@ -103,7 +103,7 @@ This macro creates a cluster with the specified properties.
                         If you are certain the objects in this cluster are supposed to exist, you can ignore this
                         error by setting ignore_existing_objects to True.
 
-                        dbt run-operation create_deployment_environment --args '{ignore_existing_objects: True}'
+                        dbt run-operation create_cluster --args '{ignore_existing_objects: True}'
                     ") }}
                 {% endif %}
             {% endif %}
