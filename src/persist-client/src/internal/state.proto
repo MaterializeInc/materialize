@@ -16,6 +16,7 @@ syntax = "proto3";
 
 package mz_persist_client.internal.state;
 
+import "google/protobuf/empty.proto";
 import "persist/src/persist.proto";
 
 message ProtoU64Antichain {
@@ -39,6 +40,11 @@ message ProtoHollowBatchPart {
     uint64 encoded_size_bytes = 2;
     bytes key_lower = 3;
     optional int64 diffs_sum = 6;
+    oneof format {
+        google.protobuf.Empty row = 7;
+        uint64 row_and_columnar = 8;
+    }
+
     optional bytes key_stats = 536870906;
 
     reserved 536870907 to 536870911;
