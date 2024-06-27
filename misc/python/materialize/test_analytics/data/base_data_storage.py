@@ -23,7 +23,7 @@ class BaseDataStorage:
     def query_data(
         self,
         query: str,
-        verbose: bool = False,
+        verbose: bool = True,
         statement_timeout: str = "1s",
     ) -> Sequence[Sequence[Any]]:
         cursor = self.database_connector.create_cursor(
