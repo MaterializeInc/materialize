@@ -636,19 +636,15 @@ class TestEndToEndDeployment:
         project.run_sql(
             "CREATE SOURCE sink_validation_source FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-sink-1') FORMAT JSON"
         )
-        time.sleep(3)
-        result = project.run_sql(
-            "SELECT count(*) FROM sink_validation_source", fetch="one"
+        run_with_retry(
+            project, "SELECT count(*) FROM sink_validation_source", expected_count=1
         )
-        assert result[0] == 1, f"Expected count to be 1, but got {result[0]}"
 
         # Insert another row and validate the sink
         project.run_sql("INSERT INTO source_table VALUES (2)")
-        time.sleep(3)
-        result = project.run_sql(
-            "SELECT count(*) FROM sink_validation_source", fetch="one"
+        run_with_retry(
+            project, "SELECT count(*) FROM sink_validation_source", expected_count=2
         )
-        assert result[0] == 2, f"Expected count to be 2, but got {result[0]}"
 
         # Initialize the deployment environment
         run_dbt(["run-operation", "deploy_init", "--vars", project_config])
@@ -665,19 +661,15 @@ class TestEndToEndDeployment:
         )
 
         # Ensure the validation source has not changed
-        result = project.run_sql(
-            "SELECT count(*) FROM sink_validation_source", fetch="one"
+        run_with_retry(
+            project, "SELECT count(*) FROM sink_validation_source", expected_count=2
         )
-        time.sleep(3)
-        assert result[0] == 2, f"Expected count to be 2, but got {result[0]}"
 
         # Insert a new row and validate the new sink result after the deploy
         project.run_sql("INSERT INTO source_table VALUES (3)")
-        time.sleep(3)
-        result = project.run_sql(
-            "SELECT count(*) FROM sink_validation_source", fetch="one"
+        run_with_retry(
+            project, "SELECT count(*) FROM sink_validation_source", expected_count=3
         )
-        assert result[0] == 3, f"Expected count to be 3, but got {result[0]}"
 
         # Get the IDs of the materialized views
         before_view_id = project.run_sql(
@@ -742,3 +734,14 @@ class TestEndToEndDeployment:
         ), "Sink's view ID should be different after deployment"
 
         run_dbt(["run-operation", "deploy_cleanup", "--vars", project_config])
+
+
+def run_with_retry(project, sql, expected_count, retries=5, delay=3, fetch="one"):
+    for i in range(retries):
+        result = project.run_sql(sql, fetch=fetch)
+        if result[0] == expected_count:
+            return result
+        time.sleep(delay)
+    raise AssertionError(
+        f"Expected count to be {expected_count}, but got {result[0]} after {retries} retries"
+    )
