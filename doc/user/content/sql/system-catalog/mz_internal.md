@@ -179,28 +179,6 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
 | `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes.                                                                                                                             |
 
-<!-- TODO(chaas): remove after v0.99 release -->
-## `mz_cluster_replica_sizes`
-
-The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
-(e.g. `100cc`) to physical sizes (number of processes, and CPU and memory allocations per process).
-
-{{< warning >}}
-The values in this table may change at any time. You should not rely on them for
-any kind of capacity planning.
-{{< /warning >}}
-
-| Field                  | Type        | Meaning                                                                                                                                                      |
-|------------------------|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `size`                 | [`text`]    | The human-readable replica size.                                                                                                                             |
-| `processes`            | [`uint8`]   | The number of processes in the replica.                                                                                                                      |
-| `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.                                                                                                           |
-| `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core.                                                                                                |
-| `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.                                                                                                |
-| `disk_bytes`           | [`uint8`]   | The disk allocation per process.                                                                                                                             |
-| `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
-
-
 ## `mz_cluster_replica_statuses`
 
 The `mz_cluster_replica_statuses` table contains a row describing the status
@@ -241,12 +219,12 @@ each replica, including the times at which it was created and dropped
 | Field                 | Type                         | Meaning                                                                                                                                   |
 |-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
 | `replica_id`          | [`text`]                     | The ID of a cluster replica.                                                                                                              |
-| `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](#mz_cluster_replica_sizes).                             |
+| `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](../mz_catalog#mz_cluster_replica_sizes).                             |
 | `cluster_name`        | [`text`]                     | The name of the cluster associated with the replica.                                                                                      |
 | `replica_name`        | [`text`]                     | The name of the replica.                                                                                                                  |
 | `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
-| `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
+| `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](../mz_catalog#mz_cluster_replica_sizes). |
 
 ## `mz_internal_cluster_replicas`
 
