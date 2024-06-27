@@ -65,6 +65,7 @@ class DatabaseConnector:
         connection: Connection | None = None,
         autocommit: bool = False,
         allow_reusing_connection: bool = False,
+        statement_timeout: str = "1s",
     ) -> Cursor:
         if connection is None:
             if allow_reusing_connection:
@@ -75,6 +76,7 @@ class DatabaseConnector:
         cursor = connection.cursor()
         cursor.execute(f"SET database = {self.config.database}")
         cursor.execute(f"SET search_path = {self.config.search_path}")
+        cursor.execute(f"SET statement_timeout = {statement_timeout}")
         return cursor
 
     def set_read_only(self) -> None:
