@@ -47,13 +47,16 @@ class DatabaseConnector:
 
         return self.open_connection
 
-    def create_connection(self, autocommit: bool = False) -> Connection:
+    def create_connection(
+        self, autocommit: bool = False, timeout_in_seconds: int = 5
+    ) -> Connection:
         connection = pg8000.connect(
             host=self.config.hostname,
             user=self.config.username,
             password=self.config.app_password,
             port=self.config.port,
             ssl_context=ssl.SSLContext(),
+            timeout=timeout_in_seconds,
         )
 
         connection.autocommit = autocommit
