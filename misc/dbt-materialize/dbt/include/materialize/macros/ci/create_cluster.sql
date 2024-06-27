@@ -21,7 +21,7 @@ This macro creates a cluster with the specified properties.
   - size (str): The size of the cluster. This parameter is required.
   - replication_factor (int, optional): The replication factor for the cluster. Only applicable when schedule_type is 'manual'.
   - schedule_type (str, optional): The type of schedule for the cluster. Accepts 'manual' or 'on-refresh'.
-  - refresh_rehydration_time_estimate (str, optional): The estimated rehydration time for the cluster when schedule_type is 'on-refresh'.
+  - refresh_rehydration_time_estimate (str, optional): The estimated rehydration time for the cluster. Only applicable when schedule_type is 'on-refresh'.
   - ignore_existing_objects (bool, optional): Whether to ignore existing objects in the cluster. Defaults to false.
   - force_deploy_suffix (bool, optional): Whether to forcefully add a deploy suffix to the cluster name. Defaults to false.
 
