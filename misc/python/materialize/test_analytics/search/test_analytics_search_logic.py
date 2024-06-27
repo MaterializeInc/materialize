@@ -76,11 +76,19 @@ def start_search(
             one_line_match_presentation=one_line_match_presentation,
         )
 
+    _print_summary(pipeline_slug, matches, more_results_exist)
+
+
+def _print_summary(
+    pipeline: str,
+    matches: list[tuple[Build, BuildAnnotation]],
+    more_results_exist: bool,
+) -> None:
     newest_build_number_with_match = matches[0][0].number
     oldest_build_number_with_match = matches[-1][0].number
     search_scope = (
-        f"builds #{oldest_build_number_with_match} to #{newest_build_number_with_match} of pipeline {pipeline_slug}"
-        if pipeline_slug != ANY_PIPELINE_VALUE
+        f"builds #{oldest_build_number_with_match} to #{newest_build_number_with_match} of pipeline {pipeline }"
+        if pipeline != ANY_PIPELINE_VALUE
         else "all pipelines"
     )
 
