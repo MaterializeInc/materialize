@@ -44,6 +44,13 @@ class TestClusterOps:
         )
         assert result is not None, "Cluster was not created successfully"
 
+        # Verify cluster properties
+        properties = get_cluster_properties(project, "test_cluster_dbt_deploy")
+        assert properties[1] == "1"
+        assert properties[2] == "1"
+        assert properties[5] == "manual"
+        assert properties[6] == None
+
         # Test dropping the cluster
         run_dbt(
             [
@@ -90,6 +97,13 @@ class TestClusterOps:
         assert (
             result is not None
         ), "Cluster should exist after attempting to create it again"
+
+        # Verify cluster properties
+        properties = get_cluster_properties(project, "test_cluster_dbt_deploy")
+        assert properties[1] == "1"
+        assert properties[2] == "1"
+        assert properties[5] == "manual"
+        assert properties[6] == None
 
         # Cleanup
         run_dbt(
@@ -174,6 +188,13 @@ class TestClusterOps:
             result is not None
         ), "Cluster with manual schedule was not created successfully"
 
+        # Verify cluster properties
+        properties = get_cluster_properties(project, "test_manual_schedule_dbt_deploy")
+        assert properties[1] == "1"
+        assert properties[2] == "2"
+        assert properties[5] == "manual"
+        assert properties[6] == None
+
         # Cleanup
         run_dbt(
             [
@@ -203,6 +224,14 @@ class TestClusterOps:
         assert (
             result is not None
         ), "Cluster with on-refresh schedule was not created successfully"
+
+        # Verify cluster properties
+        properties = get_cluster_properties(
+            project, "test_on_refresh_schedule_dbt_deploy"
+        )
+        assert properties[1] == "1"
+        assert properties[5] == "on-refresh"
+        assert str(properties[6]) == "0:10:00"
 
         # Cleanup
         run_dbt(
@@ -234,6 +263,13 @@ class TestClusterOps:
             result is not None
         ), "Cluster without force deploy suffix was not created successfully"
 
+        # Verify cluster properties
+        properties = get_cluster_properties(project, "test_cluster")
+        assert properties[1] == "1"
+        assert properties[2] == "1"
+        assert properties[5] == "manual"
+        assert properties[6] == None
+
         # Cleanup
         run_dbt(
             [
@@ -241,36 +277,6 @@ class TestClusterOps:
                 "drop_cluster",
                 "--args",
                 '{"cluster_name": "test_cluster"}',
-            ]
-        )
-
-    def test_create_cluster_with_replication_and_schedule(self, project):
-        # Test creating a cluster with both replication factor and schedule type
-        run_dbt(
-            [
-                "run-operation",
-                "create_cluster",
-                "--args",
-                '{"cluster_name": "test_cluster", "size": "1", "replication_factor": 2, "schedule_type": "manual", "refresh_rehydration_time_estimate": "10m", "ignore_existing_objects": true, "force_deploy_suffix": true}',
-            ]
-        )
-
-        # Verify cluster creation
-        result = project.run_sql(
-            "SELECT name FROM mz_clusters WHERE name = 'test_cluster_dbt_deploy'",
-            fetch="one",
-        )
-        assert (
-            result is not None
-        ), "Cluster with replication factor and schedule was not created successfully"
-
-        # Cleanup
-        run_dbt(
-            [
-                "run-operation",
-                "drop_cluster",
-                "--args",
-                '{"cluster_name": "test_cluster_dbt_deploy"}',
             ]
         )
 
@@ -307,3 +313,20 @@ class TestClusterOps:
             ],
             expect_pass=False,
         )
+
+
+def get_cluster_properties(project, cluster_name):
+    query = f"""
+    SELECT
+        c.managed,
+        c.size,
+        c.replication_factor,
+        c.id AS cluster_id,
+        c.name AS cluster_name,
+        cs.type AS schedule_type,
+        cs.refresh_rehydration_time_estimate
+    FROM mz_clusters c
+    LEFT JOIN mz_internal.mz_cluster_schedules cs ON cs.cluster_id = c.id
+    WHERE c.name = '{cluster_name}'
+    """
+    return project.run_sql(query, fetch="one")

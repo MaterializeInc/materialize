@@ -115,8 +115,12 @@ This macro creates a cluster with the specified properties.
                 SIZE = {{ dbt.string_literal(size) }}
                 {% if replication_factor is not none and ( schedule_type == 'manual' or schedule_type is none ) %}
                     , REPLICATION FACTOR = {{ replication_factor }}
-                {% elif schedule_type == 'on-refresh' and refresh_rehydration_time_estimate is not none %}
-                    , SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = {{ dbt.string_literal(refresh_rehydration_time_estimate) }})
+                {% elif schedule_type == 'on-refresh' %}
+                    {% if refresh_rehydration_time_estimate is not none %}
+                        , SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = {{ dbt.string_literal(refresh_rehydration_time_estimate) }})
+                    {% else %}
+                        , SCHEDULE = ON REFRESH
+                    {% endif %}
                 {% endif %}
             )
         {% endset %}
