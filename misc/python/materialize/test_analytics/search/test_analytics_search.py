@@ -83,15 +83,21 @@ if __name__ == "__main__":
         test_analytics_app_password=args.test_analytics_app_password,
     )
 
-    test_analytics_search_logic.start_search(
-        search_source=source,
-        pipeline_slug=args.pipeline,
-        branch=args.branch,
-        build_step_keys=args.build_step_key,
-        only_failed_builds=args.only_failed_builds,
-        not_newer_than_build_number=args.not_newer_than_build_number,
-        like_pattern=args.pattern,
-        max_results=args.max_results,
-        short_result_presentation=args.short,
-        one_line_match_presentation=args.oneline,
-    )
+    try:
+        test_analytics_search_logic.start_search(
+            search_source=source,
+            pipeline_slug=args.pipeline,
+            branch=args.branch,
+            build_step_keys=args.build_step_key,
+            only_failed_builds=args.only_failed_builds,
+            not_newer_than_build_number=args.not_newer_than_build_number,
+            like_pattern=args.pattern,
+            max_results=args.max_results,
+            short_result_presentation=args.short,
+            one_line_match_presentation=args.oneline,
+        )
+    except Exception as e:
+        print(f"Searching the test analytics database failed: {e}")
+        print(
+            "Please report the problem and consider using bin/buildkite-annotation-search in the mean time."
+        )
