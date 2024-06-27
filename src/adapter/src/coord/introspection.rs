@@ -137,23 +137,21 @@ impl Coordinator {
         let catalog = self.catalog().for_system_session();
         let plan = spec.to_plan(&catalog).expect("valid spec");
 
-        let role_metadata = RoleMetadata {
-            authenticated_role: MZ_SYSTEM_ROLE_ID,
-            session_role: MZ_SYSTEM_ROLE_ID,
-            current_role: MZ_SYSTEM_ROLE_ID,
-        };
-        let validity = PlanValidity {
-            transient_revision: self.catalog.transient_revision(),
-            dependency_ids: plan.from.depends_on(),
-            cluster_id: Some(cluster_id),
-            replica_id: Some(replica_id),
+        let role_metadata = RoleMetadata::new(MZ_SYSTEM_ROLE_ID);
+        let validity = PlanValidity::new(
+            self.catalog.transient_revision(),
+            plan.from.depends_on(),
+            Some(cluster_id),
+            Some(replica_id),
             role_metadata,
-        };
+        );
 
         let stage = IntrospectionSubscribeStage::OptimizeMir(IntrospectionSubscribeOptimizeMir {
             validity,
             plan,
             subscribe_id,
+            cluster_id,
+            replica_id,
         });
         self.sequence_staged((), Span::current(), stage).await;
     }
@@ -166,9 +164,10 @@ impl Coordinator {
             mut validity,
             plan,
             subscribe_id,
+            cluster_id,
+            replica_id,
         } = stage;
 
-        let cluster_id = validity.cluster_id.expect("always set");
         let compute_instance = self.instance_snapshot(cluster_id).expect("must exist");
         let view_id = self.allocate_transient_id();
 
@@ -198,13 +197,15 @@ impl Coordinator {
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.from)?;
                     // Add introduced indexes as validity dependencies.
                     let id_bundle = global_mir_plan.id_bundle(cluster_id);
-                    validity.dependency_ids.extend(id_bundle.iter());
+                    validity.extend_dependencies(id_bundle.iter());
 
                     let stage = IntrospectionSubscribeStage::TimestampOptimizeLir(
                         IntrospectionSubscribeTimestampOptimizeLir {
                             validity,
                             optimizer,
                             global_mir_plan,
+                            cluster_id,
+                            replica_id,
                         },
                     );
                     Ok(Box::new(stage))
@@ -221,9 +222,9 @@ impl Coordinator {
             validity,
             mut optimizer,
             global_mir_plan,
+            cluster_id,
+            replica_id,
         } = stage;
-
-        let cluster_id = validity.cluster_id.expect("always set");
 
         // Timestamp selection.
         let id_bundle = global_mir_plan.id_bundle(cluster_id);
@@ -245,6 +246,8 @@ impl Coordinator {
                         validity,
                         global_lir_plan,
                         read_holds,
+                        cluster_id,
+                        replica_id,
                     });
                     Ok(Box::new(stage))
                 })
@@ -257,13 +260,13 @@ impl Coordinator {
         stage: IntrospectionSubscribeFinish,
     ) -> Result<StageResult<Box<IntrospectionSubscribeStage>>, AdapterError> {
         let IntrospectionSubscribeFinish {
-            validity,
+            validity: _,
             global_lir_plan,
             read_holds,
+            cluster_id,
+            replica_id,
         } = stage;
 
-        let cluster_id = validity.cluster_id.expect("always set");
-        let replica_id = validity.replica_id.expect("always set");
         let subscribe_id = global_lir_plan.sink_id();
 
         // The subscribe may already have been dropped, in which case we must not install a
