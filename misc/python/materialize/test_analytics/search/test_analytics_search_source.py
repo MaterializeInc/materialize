@@ -96,7 +96,8 @@ class TestAnalyticsDataSource:
                 {order_clause}
             LIMIT {max_entries}
             """
-            )
+            ),
+            verbose=False,
         )
 
         result = []
