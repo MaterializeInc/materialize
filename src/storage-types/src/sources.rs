@@ -1967,9 +1967,12 @@ mod tests {
                 .prop_map(move |datas| (desc.clone(), datas))
         });
 
-        proptest!(|((desc, source_datas) in strat)| {
-            roundtrip_source_data(desc, source_datas);
-        });
+        proptest!(
+            ProptestConfig::with_cases(100),
+            |((desc, source_datas) in strat)| {
+                roundtrip_source_data(desc, source_datas);
+            }
+        );
     }
 
     #[mz_ore::test]
