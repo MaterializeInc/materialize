@@ -4683,6 +4683,25 @@ HAVING pg_catalog.sum(count) != 0",
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    // TODO(#27831): Rename this source to `mz_compute_error_counts_raw`. Currently this causes a
+    // naming conflict because the resolver stumbles over the source with the same name in
+    // `mz_introspection` due to the automatic schema translation.
+    name: "mz_compute_error_counts_raw_unified",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED_OID,
+    desc: RelationDesc::empty()
+        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column(
+            "count",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        ),
+    data_source: IntrospectionType::ComputeErrorCounts,
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_operator_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -7497,6 +7516,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
+        Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
         Builtin::View(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
