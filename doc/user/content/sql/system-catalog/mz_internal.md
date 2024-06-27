@@ -219,12 +219,12 @@ each replica, including the times at which it was created and dropped
 | Field                 | Type                         | Meaning                                                                                                                                   |
 |-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
 | `replica_id`          | [`text`]                     | The ID of a cluster replica.                                                                                                              |
-| `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](#mz_cluster_replica_sizes).                             |
+| `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](../mz_catalog#mz_cluster_replica_sizes).                             |
 | `cluster_name`        | [`text`]                     | The name of the cluster associated with the replica.                                                                                      |
 | `replica_name`        | [`text`]                     | The name of the replica.                                                                                                                  |
 | `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
-| `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
+| `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](../mz_catalog#mz_cluster_replica_sizes). |
 
 ## `mz_internal_cluster_replicas`
 
