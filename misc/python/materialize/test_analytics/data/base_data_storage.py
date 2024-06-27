@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -34,10 +35,13 @@ class BaseDataStorage:
                 f"Executing query: {self.database_connector.to_short_printable_sql(query)}"
             )
 
+        start_time = time.time()
         cursor.execute(query)
         result = cursor.fetchall()
+        end_time = time.time()
 
         if verbose:
-            print(f"Query returned {len(result)} rows")
+            duration_in_sec = round(end_time - start_time, 2)
+            print(f"Query returned {len(result)} rows in {duration_in_sec}s")
 
         return result
