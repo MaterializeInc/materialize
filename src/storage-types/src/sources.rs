@@ -20,6 +20,7 @@ use std::time::Duration;
 use arrow::array::{Array, BinaryArray, BinaryBuilder, NullArray, StructArray};
 use arrow::datatypes::{Field, Fields};
 use bytes::BufMut;
+use columnation::Columnation;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
@@ -420,7 +421,7 @@ impl ProtoMapEntry<GlobalId, SourceExport<Option<ExportReference>, CollectionMet
     }
 }
 
-pub trait SourceTimestamp: timely::progress::Timestamp + Refines<()> + std::fmt::Display {
+pub trait SourceTimestamp: Timestamp + Columnation + Refines<()> + std::fmt::Display {
     fn encode_row(&self) -> Row;
     fn decode_row(row: &Row) -> Self;
 }
@@ -486,6 +487,10 @@ impl mz_persist_types::Codec64 for MzOffset {
             offset: mz_persist_types::Codec64::decode(buf),
         }
     }
+}
+
+impl columnation::Columnation for MzOffset {
+    type InnerRegion = columnation::CopyRegion<MzOffset>;
 }
 
 impl RustType<ProtoMzOffset> for MzOffset {

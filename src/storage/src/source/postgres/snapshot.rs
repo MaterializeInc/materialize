@@ -138,14 +138,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::bail;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::AsCollection;
 use futures::TryStreamExt;
 use mz_expr::MirScalarExpr;
 use mz_ore::future::InTask;
-use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{simple_query_opt, PostgresError};
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
+use mz_repr::{Datum, DatumVec, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::postgres::CastType;
@@ -153,9 +152,10 @@ use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::operator::StreamExt as TimelyStreamExt;
+use mz_timely_util::operator::StreamExt;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback, Map};
+use timely::dataflow::operators::core::Map;
+use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use tokio_postgres::types::{Oid, PgLsn};
@@ -165,7 +165,7 @@ use tracing::{error, trace};
 use crate::metrics::source::postgres::PgSnapshotMetrics;
 use crate::source::postgres::replication::RewindRequest;
 use crate::source::postgres::{verify_schema, DefiniteError, ReplicationError, TransientError};
-use crate::source::types::ProgressStatisticsUpdate;
+use crate::source::types::{ProgressStatisticsUpdate, SourceMessage, StackedCollection};
 use crate::source::RawSourceCreationConfig;
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -177,7 +177,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<(CastType, MirScalarExpr)>)>,
     metrics: PgSnapshotMetrics,
 ) -> (
-    Collection<G, (usize, Result<Row, DataflowError>), Diff>,
+    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, RewindRequest>,
     Stream<G, ProgressStatisticsUpdate>,
     Stream<G, ReplicationError>,
@@ -349,8 +349,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         // We pick `u64::MAX` as the LSN which will (in
                         // practice) never conflict any previously revealed
                         // portions of the TVC.
-                        let update = ((*oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
-                        raw_handle.give(&data_cap_set[0], update);
+                        let update = ((*oid, Err(err.clone().into())), MzOffset::from(u64::MAX), 1);
+                        raw_handle.give_fueled(&data_cap_set[0], update).await;
                     }
 
                     definite_error_handle.give(
@@ -396,7 +396,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     Ok(()) => expected_desc,
                     Err(err) => {
                         raw_handle
-                            .give(&data_cap_set[0], ((oid, Err(err)), MzOffset::minimum(), 1));
+                            .give_fueled(
+                                &data_cap_set[0],
+                                ((oid, Err(err.into())), MzOffset::minimum(), 1),
+                            )
+                            .await;
                         continue;
                     }
                 };
@@ -416,8 +420,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 );
                 let mut stream = pin!(client.copy_out_simple(&query).await?);
 
+                let mut update = ((oid, Ok(vec![])), MzOffset::minimum(), 1);
                 while let Some(bytes) = stream.try_next().await? {
-                    raw_handle.give(&data_cap_set[0], ((oid, Ok(bytes)), MzOffset::minimum(), 1));
+                    let data = update.0 .1.as_mut().unwrap();
+                    data.clear();
+                    data.extend_from_slice(&bytes);
+                    raw_handle.give_fueled(&data_cap_set[0], &update).await;
                     snapshot_staged += 1;
                     // TODO(guswynn): does this 1000 need to be configurable?
                     if snapshot_staged % 1000 == 0 {
@@ -481,25 +489,32 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         })
     });
 
-    // Distribute the raw COPY data to all workers and turn it into a collection
-    let raw_collection = raw_data.distribute().as_collection();
-
     // We now decode the COPY protocol and apply the cast expressions
     let mut text_row = Row::default();
     let mut final_row = Row::default();
     let mut datum_vec = DatumVec::new();
-    let snapshot_updates = raw_collection.map(move |(oid, event)| {
-        let (output_index, _, casts) = &table_info[&oid];
+    let snapshot_updates = raw_data
+        .distribute()
+        .map(move |((oid, event), time, diff)| {
+            let (output_index, _, casts) = &table_info[oid];
 
-        let event = event.and_then(|bytes| {
-            decode_copy_row(&bytes, casts.len(), &mut text_row)?;
-            let datums = datum_vec.borrow_with(&text_row);
-            super::cast_row(casts, &datums, &mut final_row)?;
-            Ok(final_row.clone())
-        });
+            let event = event
+                .as_ref()
+                .map_err(|e: &DataflowError| e.clone())
+                .and_then(|bytes| {
+                    decode_copy_row(bytes, casts.len(), &mut text_row)?;
+                    let datums = datum_vec.borrow_with(&text_row);
+                    super::cast_row(casts, &datums, &mut final_row)?;
+                    Ok(SourceMessage {
+                        key: Row::default(),
+                        value: final_row.clone(),
+                        metadata: Row::default(),
+                    })
+                });
 
-        (*output_index, event.err_into())
-    });
+            ((*output_index, event), *time, *diff)
+        })
+        .as_collection();
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 

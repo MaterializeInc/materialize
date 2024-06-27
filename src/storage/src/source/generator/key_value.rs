@@ -9,7 +9,7 @@
 
 use std::convert::Infallible;
 
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::AsCollection;
 use futures::stream::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row};
@@ -17,6 +17,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::KeyValueLoadGenerator;
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::containers::stack::AccountedStackBuilder;
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
 use timely::container::CapacityContainerBuilder;
@@ -25,7 +26,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::ProgressStatisticsUpdate;
+use crate::source::types::{ProgressStatisticsUpdate, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 pub fn render<G: Scope<Timestamp = MzOffset>>(
@@ -35,7 +36,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    Collection<G, (usize, Result<SourceMessage, DataflowError>), Diff>,
+    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Option<Stream<G, Infallible>>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
@@ -46,7 +47,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (mut data_output, stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
@@ -127,7 +128,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             while local_partitions.iter().any(|si| !si.finished()) {
                 for sp in local_partitions.iter_mut() {
                     for u in sp.produce_batch(&mut value_buffer) {
-                        data_output.give(&cap, u);
+                        data_output.give_fueled(&cap, u).await;
                         emitted += 1;
                     }
 
@@ -139,7 +140,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                         },
                     );
                 }
-                tokio::task::yield_now().await;
             }
 
             cap.downgrade(&MzOffset::from(snapshot_rounds));
@@ -176,12 +176,11 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                     let (new_upper, iter) = up.produce_batch(&mut value_buffer);
                     upper_offset = new_upper;
                     for u in iter {
-                        data_output.give(&cap, u);
+                        data_output.give_fueled(&cap, u).await;
                     }
                 }
                 cap.downgrade(&MzOffset::from(upper_offset));
                 progress_cap.downgrade(&MzOffset::from(upper_offset));
-                tokio::task::yield_now().await;
             }
         }
 
