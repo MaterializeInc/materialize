@@ -29,6 +29,6 @@ CREATE TABLE build_job (
     remarks TEXT
 );
 
-CREATE INDEX pk_build_job ON build_job(build_job_id);
+CREATE INDEX pk_build_job IN CLUSTER test_analytics ON build_job(build_job_id);
 
-CREATE INDEX fk_build_job_build ON build_job(build_id);
+CREATE INDEX fk_build_job_build IN CLUSTER test_analytics ON build_job(build_id);

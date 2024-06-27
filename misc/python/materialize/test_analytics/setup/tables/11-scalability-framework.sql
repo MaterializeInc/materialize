@@ -26,6 +26,6 @@ CREATE TABLE scalability_framework_result (
    tps DOUBLE
 );
 
-CREATE INDEX pk_scalability_framework_result ON scalability_framework_result(build_job_id, framework_version, workload_name, workload_version, concurrency);
+CREATE INDEX pk_scalability_framework_result IN CLUSTER test_analytics ON scalability_framework_result(build_job_id, framework_version, workload_name, workload_version, concurrency);
 
-CREATE INDEX fk_scalability_framework_result_build_job_id ON scalability_framework_result(build_job_id);
+CREATE INDEX fk_scalability_framework_result_build_job_id IN CLUSTER test_analytics ON scalability_framework_result(build_job_id);

@@ -28,4 +28,4 @@ CREATE TABLE build (
    remarks TEXT
 );
 
-CREATE INDEX pk_build ON build(build_id);
+CREATE INDEX pk_build IN CLUSTER test_analytics ON build(build_id);

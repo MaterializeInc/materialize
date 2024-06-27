@@ -22,10 +22,10 @@ CREATE TABLE build_annotation (
    insert_date TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX pk_build_annotation ON build_annotation(build_job_id, test_suite, test_retry_count);
+CREATE INDEX pk_build_annotation IN CLUSTER test_analytics ON build_annotation(build_job_id, test_suite, test_retry_count);
 
-CREATE INDEX fk_build_annotation_build_id ON build_annotation(build_id);
-CREATE INDEX fk_build_annotation_build_job_id ON build_annotation(build_job_id);
+CREATE INDEX fk_build_annotation_build_id IN CLUSTER test_analytics ON build_annotation(build_id);
+CREATE INDEX fk_build_annotation_build_job_id IN CLUSTER test_analytics ON build_annotation(build_job_id);
 
 CREATE TABLE build_annotation_error (
    build_job_id TEXT NOT NULL,
@@ -35,6 +35,6 @@ CREATE TABLE build_annotation_error (
    occurrence_count UINT4 NOT NULL
 );
 
-CREATE INDEX fk_build_annotation_error_build_job_id ON build_annotation_error(build_job_id);
+CREATE INDEX fk_build_annotation_error_build_job_id IN CLUSTER test_analytics ON build_annotation_error(build_job_id);
 
-CREATE INDEX idx_build_annotation_error_content ON build_annotation_error(content);
+CREATE INDEX idx_build_annotation_error_content IN CLUSTER test_analytics ON build_annotation_error(content);
