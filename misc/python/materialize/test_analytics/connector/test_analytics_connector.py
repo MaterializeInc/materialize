@@ -145,9 +145,10 @@ class DatabaseConnector:
                 self._execute_sql(cursor, "COMMIT;")
             print("Upload completed.")
         except Exception as e:
-            print("Upload failed, triggering rollback.")
+            print("Upload failed.")
             try:
                 if self._use_transaction:
+                    print("Triggering rollback.")
                     self._execute_sql(cursor, "ROLLBACK;")
             except:
                 pass
@@ -181,6 +182,7 @@ class DatabaseConnector:
         self,
         cursor: Cursor,
     ) -> None:
+        print("Fetching test_analytics settings")
         test_analytics_settings = self.query_settings(cursor)
 
         if not test_analytics_settings.uploads_enabled:
