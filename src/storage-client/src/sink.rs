@@ -16,8 +16,9 @@ use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::CollectionExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::KafkaTopicOptions;
 use mz_storage_types::errors::ContextCreationErrorExt;
-use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkTopicOptions};
+use mz_storage_types::sinks::KafkaSinkConnection;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::ClientContext;
 use tracing::warn;
@@ -153,11 +154,11 @@ pub async fn ensure_kafka_topic(
     connection: &KafkaSinkConnection,
     storage_configuration: &StorageConfiguration,
     topic: &str,
-    KafkaSinkTopicOptions {
+    KafkaTopicOptions {
         partition_count,
         replication_factor,
         topic_config,
-    }: &KafkaSinkTopicOptions,
+    }: &KafkaTopicOptions,
 ) -> Result<bool, anyhow::Error> {
     let client: AdminClient<_> = connection
         .connection

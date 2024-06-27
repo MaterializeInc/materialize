@@ -53,6 +53,8 @@ breaking:
     - storage-client/src/statistics.proto
     # reason: currently does not require backward-compatibility
     - storage-types/src/connections/aws.proto
+    # reason: no reason specified
+    - storage-types/src/sinks.proto
 lint:
   use:
     - DEFAULT

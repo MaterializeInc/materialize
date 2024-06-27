@@ -43,6 +43,9 @@ contains: option SSL KEY not supported with this configuration
 ! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, SASL USERNAME 'materialize')
 contains: option SASL USERNAME not supported with this configuration
 
+! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, PROGRESS TOPIC REPLICATION FACTOR -4)
+contains:PROGRESS TOPIC REPLICATION FACTOR must be greater than 0
+
 > CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > SELECT name, type from mz_connections
@@ -71,6 +74,7 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 > CREATE CONNECTION progress_override TO KAFKA (
     BROKER '${testdrive.kafka-addr}',
     PROGRESS TOPIC 'override_topic',
+    PROGRESS TOPIC REPLICATION FACTOR 1,
     SECURITY PROTOCOL PLAINTEXT
   )
 
