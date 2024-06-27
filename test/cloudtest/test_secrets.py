@@ -33,7 +33,7 @@ def test_secrets(mz: MaterializeApplication) -> None:
                 SASL USERNAME = SECRET username,
                 SASL PASSWORD = SECRET password
               );
-            contains:Broker does not support SSL connections
+            contains:SSL handshake failed
             """
         )
     )
