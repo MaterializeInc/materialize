@@ -47,13 +47,16 @@ class DatabaseConnector:
 
         return self.open_connection
 
-    def create_connection(self, autocommit: bool = False) -> Connection:
+    def create_connection(
+        self, autocommit: bool = False, timeout_in_seconds: int = 5
+    ) -> Connection:
         connection = pg8000.connect(
             host=self.config.hostname,
             user=self.config.username,
             password=self.config.app_password,
             port=self.config.port,
             ssl_context=ssl.SSLContext(),
+            timeout=timeout_in_seconds,
         )
 
         connection.autocommit = autocommit
@@ -65,6 +68,7 @@ class DatabaseConnector:
         connection: Connection | None = None,
         autocommit: bool = False,
         allow_reusing_connection: bool = False,
+        statement_timeout: str = "1s",
     ) -> Cursor:
         if connection is None:
             if allow_reusing_connection:
@@ -75,6 +79,7 @@ class DatabaseConnector:
         cursor = connection.cursor()
         cursor.execute(f"SET database = {self.config.database}")
         cursor.execute(f"SET search_path = {self.config.search_path}")
+        cursor.execute(f"SET statement_timeout = {statement_timeout}")
         return cursor
 
     def set_read_only(self) -> None:

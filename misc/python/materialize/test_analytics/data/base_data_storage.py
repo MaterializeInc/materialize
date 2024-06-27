@@ -19,8 +19,15 @@ class BaseDataStorage:
     def __init__(self, database_connector: DatabaseConnector):
         self.database_connector = database_connector
 
-    def query_data(self, query: str, verbose: bool = False) -> Sequence[Sequence[Any]]:
-        cursor = self.database_connector.create_cursor(allow_reusing_connection=True)
+    def query_data(
+        self,
+        query: str,
+        verbose: bool = False,
+        statement_timeout: str = "1s",
+    ) -> Sequence[Sequence[Any]]:
+        cursor = self.database_connector.create_cursor(
+            allow_reusing_connection=True, statement_timeout=statement_timeout
+        )
 
         if verbose:
             print(
