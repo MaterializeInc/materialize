@@ -113,7 +113,7 @@ This macro creates a cluster with the specified properties.
         {% set create_cluster_ddl %}
             CREATE CLUSTER {{ deploy_cluster }} (
                 SIZE = {{ dbt.string_literal(size) }}
-                {% if schedule_type == 'manual' and replication_factor is not none %}
+                {% if replication_factor is not none and ( schedule_type == 'manual' or schedule_type is none ) %}
                     , REPLICATION FACTOR = {{ replication_factor }}
                 {% elif schedule_type == 'on-refresh' and refresh_rehydration_time_estimate is not none %}
                     , SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = {{ dbt.string_literal(refresh_rehydration_time_estimate) }})
