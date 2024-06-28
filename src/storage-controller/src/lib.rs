@@ -341,6 +341,8 @@ where
             self.run_ingestion(id)
                 .expect("cannot fail to run ingestions now");
         }
+
+        self.storage_collections.allow_writes(register_ts).await;
     }
 
     fn update_parameters(&mut self, config_params: StorageParameters) {
