@@ -399,7 +399,6 @@ mod vec {
     use std::fmt::{Debug, Formatter};
     use std::mem::{ManuallyDrop, MaybeUninit};
     use std::ops::Deref;
-    use std::ptr;
 
     /// A fixed-length region in memory, which is either allocated from heap or lgalloc.
     pub struct LgAllocVec<T> {
@@ -479,7 +478,7 @@ mod vec {
                     self.reserve(lower.saturating_add(1));
                 }
                 unsafe {
-                    ptr::write(
+                    std::ptr::write(
                         self.elements.as_mut_ptr().add(len),
                         MaybeUninit::new(element),
                     );
@@ -497,7 +496,7 @@ mod vec {
             self.reserve(count);
             let len = self.len();
             unsafe {
-                ptr::copy_nonoverlapping(
+                std::ptr::copy_nonoverlapping(
                     slice.as_ptr(),
                     self.elements.as_mut_ptr().add(len) as *const MaybeUninit<T> as *mut T,
                     count,
@@ -513,7 +512,7 @@ mod vec {
             let len = self.len();
             unsafe {
                 data.set_len(0);
-                ptr::copy_nonoverlapping(
+                std::ptr::copy_nonoverlapping(
                     data.as_ptr(),
                     self.elements.as_mut_ptr().add(len) as *const MaybeUninit<T> as *mut T,
                     count,
@@ -528,6 +527,11 @@ mod vec {
         pub unsafe fn set_len(&mut self, length: usize) {
             debug_assert!(length <= self.capacity());
             self.length = length;
+        }
+
+        /// The number of elements in the array.
+        pub fn len(&self) -> usize {
+            self.length
         }
 
         /// The number of elements this array can absorb.
@@ -553,6 +557,11 @@ mod vec {
         /// Grow the array to at least `new_len` elements. Reallocates the underlying storage.
         fn grow(&mut self, new_len: usize) {
             let new_capacity = std::cmp::max(self.capacity() * 2, new_len);
+            println!(
+                "Reallocating {} -> {}, requested {new_len}",
+                self.capacity(),
+                new_capacity
+            );
             let mut new_vec = LgAllocVec::with_capacity(new_capacity);
 
             let src_ptr = self.elements.as_ptr();
@@ -643,7 +652,7 @@ mod vec {
 
         use super::*;
 
-        #[mz_ore::test]
+        #[crate::test]
         fn double_drop() {
             static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
             struct DropGuard;

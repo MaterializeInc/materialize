@@ -16,6 +16,7 @@ use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
 use mz_repr::{Diff, Timestamp};
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::containers::PreallocatingCapacityContainerBuilder;
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::flatcontainer::FlatStack;
@@ -184,10 +185,8 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
 
     fn reachability_logger(&self) -> Logger<TrackerEvent> {
         let event_queue = self.r_event_queue.clone();
-        let mut logger = BatchLogger::<
-            CapacityContainerBuilder<FlatStack<ReachabilityEventRegion>>,
-            _,
-        >::new(event_queue.link, self.interval_ms);
+        type CB = PreallocatingCapacityContainerBuilder<FlatStack<ReachabilityEventRegion>>;
+        let mut logger = BatchLogger::<CB, _>::new(event_queue.link, self.interval_ms);
         Logger::new(
             self.now,
             self.start_offset,

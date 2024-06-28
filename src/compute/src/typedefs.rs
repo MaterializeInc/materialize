@@ -19,10 +19,9 @@ use differential_dataflow::trace::implementations::merge_batcher_col::Columnatio
 use differential_dataflow::trace::implementations::ord_neu::{FlatValSpine, OrdValBatch};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
-use mz_ore::flatcontainer::MzRegionPreference;
+use mz_ore::flatcontainer::{MzRegionPreference, MzTupleABCRegion, MzTupleABRegion};
 use mz_repr::Diff;
 use mz_storage_types::errors::DataflowError;
-use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
 use timely::dataflow::ScopeParent;
 
 pub use crate::row_spine::{RowRowSpine, RowSpine, RowValSpine};
@@ -40,9 +39,10 @@ pub(crate) mod spines {
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::implementations::{Layout, Update};
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+    use mz_ore::flatcontainer::MzRegion;
     use mz_timely_util::containers::stack::StackWrapper;
     use timely::container::columnation::{Columnation, TimelyStack};
-    use timely::container::flatcontainer::{FlatStack, Push, Region};
+    use timely::container::flatcontainer::FlatStack;
     use timely::progress::Timestamp;
 
     use crate::row_spine::OffsetOptimized;
@@ -83,63 +83,109 @@ pub(crate) mod spines {
     }
 
     /// A layout based on flat container stacks
-    pub struct MzFlatLayout<K, V, T, R> {
-        phantom: std::marker::PhantomData<(K, V, T, R)>,
+    pub struct MzFlatLayout<KR, VR, TR, RR> {
+        phantom: std::marker::PhantomData<(KR, VR, TR, RR)>,
     }
 
-    impl<K, V, T, R> Update for MzFlatLayout<K, V, T, R>
+    impl<KR, VR, TR, RR> Update for MzFlatLayout<KR, VR, TR, RR>
     where
-        K: Region,
-        V: Region,
-        T: Region,
-        R: Region,
-        K::Owned: Ord + Clone + 'static,
-        V::Owned: Ord + Clone + 'static,
-        T::Owned: Ord + Clone + Lattice + Timestamp + 'static,
-        R::Owned: Ord + Semigroup + 'static,
+        KR: MzRegion,
+        VR: MzRegion,
+        TR: MzRegion,
+        RR: MzRegion,
+        KR::Owned: Ord + Clone + 'static,
+        VR::Owned: Ord + Clone + 'static,
+        TR::Owned: Ord + Clone + Lattice + Timestamp + 'static,
+        RR::Owned: Ord + Semigroup + 'static,
+        for<'a> KR::ReadItem<'a>: Copy + Ord,
+        for<'a> VR::ReadItem<'a>: Copy + Ord,
+        for<'a> TR::ReadItem<'a>: Copy + Ord,
+        for<'a> RR::ReadItem<'a>: Copy + Ord,
     {
-        type Key = K::Owned;
-        type Val = V::Owned;
-        type Time = T::Owned;
-        type Diff = R::Owned;
+        type Key = KR::Owned;
+        type Val = VR::Owned;
+        type Time = TR::Owned;
+        type Diff = RR::Owned;
+        type ItemRef<'a> = ((Self::KeyGat<'a>, Self::ValGat<'a>), Self::TimeGat<'a>, Self::DiffGat<'a>)
+        where
+            Self: 'a;
+        type KeyGat<'a> = KR::ReadItem<'a>
+        where
+            Self: 'a;
+        type ValGat<'a> = VR::ReadItem<'a>
+        where
+            Self: 'a;
+        type TimeGat<'a> = TR::ReadItem<'a>
+        where
+            Self: 'a;
+        type DiffGat<'a> = RR::ReadItem<'a>
+        where
+            Self: 'a;
+
+        fn into_parts<'a>(
+            ((key, val), time, diff): Self::ItemRef<'a>,
+        ) -> (
+            Self::KeyGat<'a>,
+            Self::ValGat<'a>,
+            Self::TimeGat<'a>,
+            Self::DiffGat<'a>,
+        ) {
+            (key, val, time, diff)
+        }
+
+        fn reborrow_key<'b, 'a: 'b>(item: Self::KeyGat<'a>) -> Self::KeyGat<'b>
+        where
+            Self: 'a,
+        {
+            KR::reborrow(item)
+        }
+
+        fn reborrow_val<'b, 'a: 'b>(item: Self::ValGat<'a>) -> Self::ValGat<'b>
+        where
+            Self: 'a,
+        {
+            VR::reborrow(item)
+        }
+
+        fn reborrow_time<'b, 'a: 'b>(item: Self::TimeGat<'a>) -> Self::TimeGat<'b>
+        where
+            Self: 'a,
+        {
+            TR::reborrow(item)
+        }
+
+        fn reborrow_diff<'b, 'a: 'b>(item: Self::DiffGat<'a>) -> Self::DiffGat<'b>
+        where
+            Self: 'a,
+        {
+            RR::reborrow(item)
+        }
     }
 
     /// Layout implementation for [`MzFlatLayout`]. Mostly equivalent to differential's
     /// flat layout but with a different opinion for the offset container. Here, we use
     /// [`OffsetOptimized`] instead of an offset list. If differential should gain access
     /// to the optimized variant, we might be able to remove this implementation.
-    impl<K, V, T, R> Layout for MzFlatLayout<K, V, T, R>
+    impl<KR, VR, TR, RR> Layout for MzFlatLayout<KR, VR, TR, RR>
     where
-        K: Region
-            + Push<<K as Region>::Owned>
-            + for<'a> Push<<K as Region>::ReadItem<'a>>
-            + 'static,
-        V: Region
-            + Push<<V as Region>::Owned>
-            + for<'a> Push<<V as Region>::ReadItem<'a>>
-            + 'static,
-        T: Region
-            + Push<<T as Region>::Owned>
-            + for<'a> Push<<T as Region>::ReadItem<'a>>
-            + 'static,
-        R: Region
-            + Push<<R as Region>::Owned>
-            + for<'a> Push<<R as Region>::ReadItem<'a>>
-            + 'static,
-        K::Owned: Ord + Clone + 'static,
-        V::Owned: Ord + Clone + 'static,
-        T::Owned: Ord + Clone + Lattice + Timestamp + 'static,
-        R::Owned: Ord + Semigroup + 'static,
-        for<'a> K::ReadItem<'a>: Copy + Ord,
-        for<'a> V::ReadItem<'a>: Copy + Ord,
-        for<'a> T::ReadItem<'a>: Copy + Ord,
-        for<'a> R::ReadItem<'a>: Copy + Ord,
+        KR: MzRegion,
+        VR: MzRegion,
+        TR: MzRegion,
+        RR: MzRegion,
+        KR::Owned: Ord + Clone + 'static,
+        VR::Owned: Ord + Clone + 'static,
+        TR::Owned: Ord + Clone + Lattice + Timestamp + 'static,
+        RR::Owned: Ord + Semigroup + 'static,
+        for<'a> KR::ReadItem<'a>: Copy + Ord,
+        for<'a> VR::ReadItem<'a>: Copy + Ord,
+        for<'a> TR::ReadItem<'a>: Copy + Ord,
+        for<'a> RR::ReadItem<'a>: Copy + Ord,
     {
         type Target = Self;
-        type KeyContainer = FlatStack<K>;
-        type ValContainer = FlatStack<V>;
-        type TimeContainer = FlatStack<T>;
-        type DiffContainer = FlatStack<R>;
+        type KeyContainer = FlatStack<KR>;
+        type ValContainer = FlatStack<VR>;
+        type TimeContainer = FlatStack<TR>;
+        type DiffContainer = FlatStack<RR>;
         type OffsetContainer = OffsetOptimized;
     }
 }
@@ -148,10 +194,10 @@ pub(crate) mod spines {
 // Agents are wrappers around spines that allow shared read access.
 
 // Fully generic spines and agents.
-pub type KeyValSpine<K, V, T, R> = ColValSpine<K, V, T, R>;
-pub type KeyValAgent<K, V, T, R> = TraceAgent<KeyValSpine<K, V, T, R>>;
-pub type KeyValEnter<K, V, T, R, TEnter> =
-    TraceEnter<TraceFrontier<KeyValAgent<K, V, T, R>>, TEnter>;
+pub type KeyValSpine<K, V, T, R, C> = FlatKeyValSpineDefault<K, V, T, R, C>;
+pub type KeyValAgent<K, V, T, R, C> = TraceAgent<KeyValSpine<K, V, T, R, C>>;
+pub type KeyValEnter<K, V, T, R, C, TEnter> =
+    TraceEnter<TraceFrontier<KeyValAgent<K, V, T, R, C>>, TEnter>;
 
 // Fully generic key-only spines and agents
 pub type KeySpine<K, T, R> = ColKeySpine<K, T, R>;
@@ -189,7 +235,7 @@ pub type KeyValBatcher<K, V, T, D> = MergeBatcher<
 
 pub type FlatKeyValBatch<K, V, T, R> = OrdValBatch<MzFlatLayout<K, V, T, R>>;
 pub type FlatKeyValSpine<K, V, T, R, C> =
-    FlatValSpine<MzFlatLayout<K, V, T, R>, TupleABCRegion<TupleABRegion<K, V>, T, R>, C>;
+    FlatValSpine<MzFlatLayout<K, V, T, R>, MzTupleABCRegion<MzTupleABRegion<K, V>, T, R>, C>;
 pub type FlatKeyValSpineDefault<K, V, T, R, C> = FlatKeyValSpine<
     <K as MzRegionPreference>::Region,
     <V as MzRegionPreference>::Region,

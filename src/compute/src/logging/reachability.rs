@@ -19,10 +19,10 @@ use mz_ore::cast::CastFrom;
 use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, RowArena, SharedRow, Timestamp};
+use mz_timely_util::containers::PreallocatingCapacityContainerBuilder;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::container::flatcontainer::FlatStack;
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 
 use crate::extensions::arrange::{MzArrange, MzArrangeCore};
@@ -57,7 +57,7 @@ pub(super) fn construct<A: Allocate>(
         );
         type UpdatesRegion = <((UpdatesKey, ()), Timestamp, Diff) as MzRegionPreference>::Region;
 
-        type CB = CapacityContainerBuilder<FlatStack<UpdatesRegion>>;
+        type CB = PreallocatingCapacityContainerBuilder<FlatStack<UpdatesRegion>>;
         let (updates, token) = Some(event_queue.link).mz_replay::<_, CB, _>(
             scope,
             "reachability logs",
@@ -102,7 +102,7 @@ pub(super) fn construct<A: Allocate>(
                 );
 
                 let updates =
-                    updates.as_collection(move |(update_type, addr, source, port, ts), _| {
+                    updates.as_collection(move |(&update_type, addr, &source, &port, ts), _| {
                         let row_arena = RowArena::default();
                         let update_type = if update_type { "source" } else { "target" };
                         let binding = SharedRow::get();
@@ -118,7 +118,7 @@ pub(super) fn construct<A: Allocate>(
                             Datum::UInt64(u64::cast_from(port)),
                             Datum::UInt64(u64::cast_from(worker_index)),
                             Datum::String(update_type),
-                            Datum::from(ts.clone()),
+                            Datum::from(ts.copied()),
                         ];
                         row_builder.packer().extend(key.iter().map(|k| datums[*k]));
                         let key_row = row_builder.clone();
