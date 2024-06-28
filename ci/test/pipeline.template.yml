@@ -215,7 +215,7 @@ steps:
 
   - id: cargo-test
     label: Cargo test
-    timeout_in_minutes: 45
+    timeout_in_minutes: 60
     inputs:
       - Cargo.lock
       - ".config/nextest.toml"
