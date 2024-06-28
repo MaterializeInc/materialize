@@ -666,6 +666,7 @@ where
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let txn_wal_tables = self.txn_wal_tables;
         let secrets_args = self.secrets_args.to_flags();
+        let is_cluster_size_v2 = is_cluster_size_v2(&location.size);
         let service = self
             .orchestrator
             .ensure_service(
@@ -673,7 +674,7 @@ where
                 ServiceConfig {
                     image: self.clusterd_image.clone(),
                     init_container_image: self.init_container_image.clone(),
-                    args: &|assigned| {
+                    args: Box::new(move |assigned| {
                         let mut args = vec![
                             format!(
                                 "--storage-controller-listen-addr={}",
@@ -711,14 +712,14 @@ where
                         if location.allocation.cpu_exclusive && enable_worker_core_affinity {
                             args.push("--worker-core-affinity".into());
                         }
-                        if is_cluster_size_v2(&location.size) {
+                        if is_cluster_size_v2 {
                             args.push("--is-cluster-size-v2".into());
                         }
 
                         args.extend(secrets_args.clone());
 
                         args
-                    },
+                    }),
                     ports: vec![
                         ServicePort {
                             name: "storagectl".into(),

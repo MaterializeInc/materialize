@@ -702,7 +702,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             disk,
             disk_limit,
             node_selector,
-        }: ServiceConfig<'_>,
+        }: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         // This is extremely cheap to clone, so just look into the lock once.
         let scheduling_config: ServiceSchedulingConfig =

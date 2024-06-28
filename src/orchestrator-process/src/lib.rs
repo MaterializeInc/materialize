@@ -362,7 +362,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             disk,
             disk_limit: _,
             node_selector: _,
-        }: ServiceConfig<'_>,
+        }: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let full_id = format!("{}-{}", self.namespace, id);
 
@@ -421,7 +421,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         scratch_dir: scratch_dir.clone(),
                         i,
                         image: image.clone(),
-                        args,
+                        args: &args,
                         ports,
                         memory_limit,
                         cpu_limit,
