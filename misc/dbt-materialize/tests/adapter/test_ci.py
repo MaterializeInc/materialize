@@ -49,7 +49,7 @@ class TestClusterOps:
         assert properties[1] == "1"
         assert properties[2] == "1"
         assert properties[5] == "manual"
-        assert properties[6] == None
+        assert properties[6] is None
 
         # Test dropping the cluster
         run_dbt(
@@ -103,7 +103,7 @@ class TestClusterOps:
         assert properties[1] == "1"
         assert properties[2] == "1"
         assert properties[5] == "manual"
-        assert properties[6] == None
+        assert properties[6] is None
 
         # Cleanup
         run_dbt(
@@ -193,7 +193,7 @@ class TestClusterOps:
         assert properties[1] == "1"
         assert properties[2] == "2"
         assert properties[5] == "manual"
-        assert properties[6] == None
+        assert properties[6] is None
 
         # Cleanup
         run_dbt(
@@ -268,7 +268,7 @@ class TestClusterOps:
         assert properties[1] == "1"
         assert properties[2] == "1"
         assert properties[5] == "manual"
-        assert properties[6] == None
+        assert properties[6] is None
 
         # Cleanup
         run_dbt(
