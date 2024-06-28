@@ -2456,17 +2456,10 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(TYPE)?;
                 KafkaSinkConfigOptionName::CompressionType
             }
-            PROGRESS => match self.expect_one_of_keywords(&[GROUP, TOPIC])? {
-                GROUP => {
-                    self.expect_keywords(&[ID, PREFIX])?;
-                    KafkaSinkConfigOptionName::ProgressGroupIdPrefix
-                }
-                TOPIC => {
-                    self.expect_keywords(&[REPLICATION, FACTOR])?;
-                    KafkaSinkConfigOptionName::ProgressTopicReplicationFactor
-                }
-                _ => unreachable!(),
-            },
+            PROGRESS => {
+                self.expect_keywords(&[GROUP, ID, PREFIX])?;
+                KafkaSinkConfigOptionName::ProgressGroupIdPrefix
+            }
             TOPIC => match self.parse_one_of_keywords(&[PARTITION, REPLICATION, CONFIG]) {
                 None => KafkaSinkConfigOptionName::Topic,
                 Some(PARTITION) => {
@@ -2558,7 +2551,10 @@ impl<'a> Parser<'a> {
                 PORT => ConnectionOptionName::Port,
                 PROGRESS => {
                     self.expect_keyword(TOPIC)?;
-                    ConnectionOptionName::ProgressTopic
+                    match self.parse_keywords(&[REPLICATION, FACTOR]) {
+                        true => ConnectionOptionName::ProgressTopicReplicationFactor,
+                        false => ConnectionOptionName::ProgressTopic,
+                    }
                 }
                 SECURITY => {
                     self.expect_keyword(PROTOCOL)?;

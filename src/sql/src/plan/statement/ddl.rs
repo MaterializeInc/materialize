@@ -18,7 +18,6 @@ use std::iter;
 use std::time::Duration;
 
 use itertools::{Either, Itertools};
-use maplit::btreemap;
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
 use mz_controller_types::{
     is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
@@ -77,10 +76,9 @@ use mz_sql_parser::ast::{
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
-use mz_storage_types::connections::Connection;
+use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
-    KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkTopicOptions, SinkEnvelope,
-    StorageSinkConnection,
+    KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
@@ -2961,7 +2959,6 @@ fn kafka_sink_builder(
         topic_config,
         topic_partition_count,
         topic_replication_factor,
-        progress_topic_replication_factor,
         seen: _,
     }: KafkaSinkConfigOptionExtracted = options.try_into()?;
 
@@ -2997,10 +2994,6 @@ fn kafka_sink_builder(
     let topic_partition_count = assert_positive(topic_partition_count, "TOPIC PARTITION COUNT")?;
     let topic_replication_factor =
         assert_positive(topic_replication_factor, "TOPIC REPLICATION FACTOR")?;
-    let progress_topic_replication_factor = assert_positive(
-        progress_topic_replication_factor,
-        "PROGRESS TOPIC REPLICATION FACTOR",
-    )?;
 
     let format = match format {
         Some(Format::Avro(AvroSchema::Csr {
@@ -3108,20 +3101,10 @@ fn kafka_sink_builder(
         compression_type,
         progress_group_id,
         transactional_id,
-        topic_options: KafkaSinkTopicOptions {
+        topic_options: KafkaTopicOptions {
             partition_count: topic_partition_count,
             replication_factor: topic_replication_factor,
             topic_config: topic_config.unwrap_or_default(),
-        },
-        progress_topic_options: KafkaSinkTopicOptions {
-            // We only allow configuring the progress topic replication factor for now.
-            // For correctness, the partition count MUST be one and for performance the compaction
-            // policy MUST be enabled.
-            partition_count: Some(NonNeg::try_from(1).expect("1 is positive")),
-            replication_factor: progress_topic_replication_factor,
-            topic_config: btreemap! {
-                "cleanup.policy".to_string() => "compact".to_string(),
-            },
         },
     }))
 }

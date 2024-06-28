@@ -7,6 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (a compatible change: Field "23" on message
+// "ProtoKafkaSinkConnectionV2" changed type from
+// "mz_storage_types.sinks.ProtoKafkaSinkTopicOptions" to
+// "mz_storage_types.connections.ProtoKafkaTopicOptions".)
+
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
@@ -19,7 +24,6 @@ import "storage-types/src/controller.proto";
 import "storage-types/src/connections.proto";
 
 package mz_storage_types.sinks;
-
 
 message ProtoStorageSinkDesc {
     reserved 5, 8, 9, 10;
@@ -91,7 +95,7 @@ message ProtoKafkaSinkConnectionV2 {
         repeated uint64 relation_key_indices = 1;
     }
 
-    reserved 7 to 10, 12, 13, 21;
+    reserved 7 to 10, 12, 13, 21, 24;
 
     mz_repr.global_id.ProtoGlobalId connection_id = 1;
     mz_storage_types.connections.ProtoKafkaConnection connection = 2;
@@ -110,14 +114,7 @@ message ProtoKafkaSinkConnectionV2 {
     }
     ProtoKafkaIdStyle progress_group_id = 19;
     ProtoKafkaIdStyle transactional_id = 20;
-    ProtoKafkaSinkTopicOptions topic_options = 23;
-    ProtoKafkaSinkTopicOptions progress_topic_options = 24;
-}
-
-message ProtoKafkaSinkTopicOptions {
-    optional int32 replication_factor = 1;
-    optional int32 partition_count = 2;
-    map<string, string> topic_config = 3;
+    mz_storage_types.connections.ProtoKafkaTopicOptions topic_options = 23;
 }
 
 message ProtoKafkaIdStyle {
