@@ -63,6 +63,15 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|
         .with_column("cluster_id", ScalarType::String.nullable(true))
         .with_column("application_name", ScalarType::String.nullable(false))
         .with_column("cluster_name", ScalarType::String.nullable(true))
+        .with_column("database_name", ScalarType::String.nullable(false))
+        .with_column(
+            "search_path",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::String),
+                custom_id: None,
+            }
+            .nullable(false),
+        )
         .with_column("transaction_isolation", ScalarType::String.nullable(false))
         // Note that this can't be a timestamp, as it might be u64::max,
         // which is out of range.
