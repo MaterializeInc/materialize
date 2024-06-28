@@ -94,7 +94,6 @@
 /src/pgwire                         @MaterializeInc/adapter
 /src/postgres-util                  @MaterializeInc/cluster
 /src/prof                           @teskje
-/src/proto                          @aalexandrov
 /src/repr                           @MaterializeInc/cluster
 # The `explain` and `optimize` modules are owned solely by the cluster team.
 /src/repr/src/explain               @MaterializeInc/cluster
