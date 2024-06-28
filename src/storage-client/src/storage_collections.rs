@@ -58,6 +58,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
 
 use crate::controller::{
@@ -360,6 +361,7 @@ pub struct StorageCollectionsImpl<
 
     /// Handles to tasks we own, making sure they're dropped when we are.
     _background_task: Arc<AbortOnDropHandle<()>>,
+    _finalize_shards_task: Arc<AbortOnDropHandle<()>>,
 }
 
 // Supporting methods for implementing [StorageCollections].
@@ -457,16 +459,12 @@ where
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (holds_tx, holds_rx) = mpsc::unbounded_channel();
         let mut background_task = BackgroundTask {
-            envd_epoch: envd_epoch.clone(),
-            persist_location: persist_location.clone(),
-            persist: Arc::clone(&persist_clients),
             config: Arc::clone(&config),
             cmds_tx: cmd_tx.clone(),
             cmds_rx: cmd_rx,
             holds_rx,
             collections: Arc::clone(&collections),
             finalizable_shards: Arc::clone(&finalizable_shards),
-            finalized_shards: Arc::clone(&finalized_shards),
             shard_by_id: BTreeMap::new(),
             since_handles: BTreeMap::new(),
             txns_handle: Some(txns_write),
@@ -477,6 +475,18 @@ where
             mz_ore::task::spawn(|| "storage_collections::background_task", async move {
                 background_task.run().await
             });
+
+        let finalize_shards_task = mz_ore::task::spawn(
+            || "storage_collections::finalize_shards_task",
+            finalize_shards_task::<T>(FinalizeShardsTaskConfig {
+                envd_epoch: envd_epoch.clone(),
+                config: Arc::clone(&config),
+                finalizable_shards: Arc::clone(&finalizable_shards),
+                finalized_shards: Arc::clone(&finalized_shards),
+                persist_location: persist_location.clone(),
+                persist: Arc::clone(&persist_clients),
+            }),
+        );
 
         Self {
             finalizable_shards,
@@ -490,6 +500,7 @@ where
             cmd_tx,
             holds_tx,
             _background_task: Arc::new(background_task.abort_on_drop()),
+            _finalize_shards_task: Arc::new(finalize_shards_task.abort_on_drop()),
         }
     }
 
@@ -1879,13 +1890,11 @@ impl<T: TimelyTimestamp> CollectionState<T> {
 /// This shares state with [StorageCollectionsImpl] via `Arcs` and channels.
 #[derive(Debug)]
 struct BackgroundTask<T: TimelyTimestamp + Lattice + Codec64> {
-    envd_epoch: NonZeroI64,
     config: Arc<Mutex<StorageConfiguration>>,
     cmds_tx: mpsc::UnboundedSender<BackgroundCmd<T>>,
     cmds_rx: mpsc::UnboundedReceiver<BackgroundCmd<T>>,
     holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
     finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
-    finalized_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState<T>>>>,
     // So we know what shard ID corresponds to what global ID, which we need
     // when re-enqueing futures for determining the next upper update.
@@ -1893,8 +1902,6 @@ struct BackgroundTask<T: TimelyTimestamp + Lattice + Codec64> {
     since_handles: BTreeMap<GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>>,
     txns_handle: Option<WriteHandle<SourceData, (), T, Diff>>,
     txns_shards: BTreeSet<GlobalId>,
-    persist_location: PersistLocation,
-    persist: Arc<PersistClientCache>,
 }
 
 #[derive(Debug)]
@@ -1970,11 +1977,6 @@ where
             }
             None => async { std::future::pending().await }.boxed(),
         };
-
-        // We check periodically if there's any shards that we need to finalize
-        // and do so if yes.
-        let mut finalization_interval = tokio::time::interval(Duration::from_secs(5));
-        finalization_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -2124,9 +2126,6 @@ where
                         &mut batched_changes,
                     );
                 }
-                _time = finalization_interval.tick() => {
-                    self.finalize_shards().await;
-                }
             }
         }
 
@@ -2256,52 +2255,70 @@ where
             }
         }
     }
+}
 
-    /// Attempts to close all shards marked for finalization.
-    #[instrument(level = "debug")]
-    async fn finalize_shards(&mut self) {
-        if !self
-            .config
+struct FinalizeShardsTaskConfig {
+    envd_epoch: NonZeroI64,
+    config: Arc<Mutex<StorageConfiguration>>,
+    finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
+    finalized_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
+    persist_location: PersistLocation,
+    persist: Arc<PersistClientCache>,
+}
+
+async fn finalize_shards_task<T>(
+    FinalizeShardsTaskConfig {
+        envd_epoch,
+        config,
+        finalizable_shards,
+        finalized_shards,
+        persist_location,
+        persist,
+    }: FinalizeShardsTaskConfig,
+) where
+    T: TimelyTimestamp + Lattice + Codec64,
+{
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+
+        if !config
             .lock()
             .expect("lock poisoned")
             .parameters
             .finalize_shards
         {
             debug!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false");
-            return;
+            continue;
         }
 
-        let finalizable_shards = {
+        let current_finalizable_shards = {
             // We hold the lock for as short as possible and pull our cloned set
             // of shards.
-            let shared_shards = self.finalizable_shards.lock().expect("lock poisoned");
+            let shared_shards = finalizable_shards.lock().expect("lock poisoned");
             shared_shards.iter().cloned().collect_vec()
         };
 
-        if finalizable_shards.is_empty() {
+        if current_finalizable_shards.is_empty() {
             debug!("no shards to finalize");
-            return;
+            continue;
         }
 
-        debug!(?finalizable_shards, "attempting to finalize shards");
+        debug!(?current_finalizable_shards, "attempting to finalize shards");
 
         // Open a persist client to delete unused shards.
-        let persist_client = self
-            .persist
-            .open(self.persist_location.clone())
-            .await
-            .unwrap();
+        let persist_client = persist.open(persist_location.clone()).await.unwrap();
 
         let persist_client = &persist_client;
         let diagnostics = &Diagnostics::from_purpose("finalizing shards");
 
         let force_downgrade_since = STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION
-            .get(self.config.lock().expect("lock poisoned").config_set());
+            .get(config.lock().expect("lock poisoned").config_set());
 
-        let epoch = &PersistEpoch::from(self.envd_epoch);
+        let epoch = &PersistEpoch::from(envd_epoch);
 
-        use futures::stream::StreamExt;
-        let finalized_shards: BTreeSet<ShardId> = futures::stream::iter(finalizable_shards.clone())
+        let current_finalized_shards: BTreeSet<ShardId> = futures::stream::iter(current_finalizable_shards.clone())
             .map(|shard_id| async move {
                 let persist_client = persist_client.clone();
                 let diagnostics = diagnostics.clone();
@@ -2316,109 +2333,103 @@ where
                     debug!(%shard_id, "shard is already finalized!");
                     Some(shard_id)
                 } else {
-                    debug!(%shard_id, "spawning new finalization task");
-                    // Finalizing a shard can take a long time cleaning up
-                    // existing data. Spawning a task means that we can't
-                    // proactively remove this shard from the finalization
-                    // register, unfortunately... but a future run of
-                    // `finalize_shards` should notice the shard has been
-                    // finalized and tidy up.
-                    mz_ore::task::spawn(|| format!("finalize_shard({shard_id})"), async move {
+                    debug!(%shard_id, "finalizing shard");
                         let finalize = || async move {
-                            let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
-                            let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
-                                persist_client
-                                    .open_writer(
-                                        shard_id,
-                                        Arc::new(RelationDesc::empty()),
-                                        Arc::new(UnitSchema),
-                                        // TODO: thread the global ID into the shard finalization WAL
-                                        Diagnostics::from_purpose("finalizing shards"),
-                                    )
-                                    .await
-                                    .expect("invalid persist usage");
-
-                            let upper = write_handle.upper();
-
-                            if !upper.is_empty() {
-                                let append = write_handle
-                                    .append(empty_batch, upper.clone(), Antichain::new())
-                                    .await?;
-
-                                if let Err(e) = append {
-                                    warn!(%shard_id, "tried to finalize a shard with an advancing upper: {e:?}");
-                                    return Ok(());
-                                }
-                            }
-                            write_handle.expire().await;
-
-                            if force_downgrade_since {
-                                let mut since_handle: SinceHandle<
-                                    SourceData,
-                                    (),
-                                    T,
-                                    Diff,
-                                    PersistEpoch,
-                                > = persist_client
-                                    .open_critical_since(
-                                        shard_id,
-                                        PersistClient::CONTROLLER_CRITICAL_SINCE,
-                                        Diagnostics::from_purpose("finalizing shards"),
-                                    )
-                                    .await
-                                    .expect("invalid persist usage");
-                                let handle_epoch = since_handle.opaque().clone();
-                                let our_epoch = epoch.clone();
-                                let epoch = if our_epoch.0 > handle_epoch.0 {
-                                    // We're newer, but it's fine to use the
-                                    // handle's old epoch to try and downgrade.
-                                    handle_epoch
-                                } else {
-                                    // Good luck, buddy! The downgrade below
-                                    // will not succeed. There's a process with
-                                    // a newer epoch out there and someone at
-                                    // some juncture will fence out this
-                                    // process.
-                                    our_epoch
-                                };
-                                let new_since = Antichain::new();
-                                let downgrade = since_handle
-                                    .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
-                                    .await;
-                                if let Err(e) = downgrade {
-                                    warn!(
-                                        "tried to finalize a shard with an advancing epoch: {e:?}"
-                                    );
-                                    return Ok(());
-                                }
-                                // Not available now, so finalization is broken.
-                                // since_handle.expire().await;
-                            }
-
+                        let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
+                        let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
                             persist_client
-                                .finalize_shard::<SourceData, (), T, Diff>(
+                                .open_writer(
                                     shard_id,
+                                    Arc::new(RelationDesc::empty()),
+                                    Arc::new(UnitSchema),
+                                    // TODO: thread the global ID into the shard finalization WAL
                                     Diagnostics::from_purpose("finalizing shards"),
                                 )
                                 .await
-                        };
+                                .expect("invalid persist usage");
 
-                        match finalize().await {
-                            Err(e) => {
-                                // Rather than error, just leave this shard as
-                                // one to finalize later.
-                                warn!("error during background finalization of shard {shard_id}: {e:?}");
-                            }
-                            Ok(()) => {
-                                debug!(%shard_id, "finalize success!");
+                        let upper = write_handle.upper();
+
+                        if !upper.is_empty() {
+                            let append = write_handle
+                                .append(empty_batch, upper.clone(), Antichain::new())
+                                .await?;
+
+                            if let Err(e) = append {
+                                warn!(%shard_id, "tried to finalize a shard with an advancing upper: {e:?}");
+                                return Ok(());
                             }
                         }
-                    });
-                    None
+                        write_handle.expire().await;
+
+                        if force_downgrade_since {
+                            let mut since_handle: SinceHandle<
+                                SourceData,
+                                (),
+                                T,
+                                Diff,
+                                PersistEpoch,
+                            > = persist_client
+                                .open_critical_since(
+                                    shard_id,
+                                    PersistClient::CONTROLLER_CRITICAL_SINCE,
+                                    Diagnostics::from_purpose("finalizing shards"),
+                                )
+                                .await
+                                .expect("invalid persist usage");
+                            let handle_epoch = since_handle.opaque().clone();
+                            let our_epoch = epoch.clone();
+                            let epoch = if our_epoch.0 > handle_epoch.0 {
+                                // We're newer, but it's fine to use the
+                                // handle's old epoch to try and downgrade.
+                                handle_epoch
+                            } else {
+                                // Good luck, buddy! The downgrade below will
+                                // not succeed. There's a process with a newer
+                                // epoch out there and someone at some juncture
+                                // will fence out this process.
+                                our_epoch
+                            };
+                            let new_since = Antichain::new();
+                            let downgrade = since_handle
+                                .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+                                .await;
+                            if let Err(e) = downgrade {
+                                warn!(
+                                    "tried to finalize a shard with an advancing epoch: {e:?}"
+                                );
+                                return Ok(());
+                            }
+                            // Not available now, so finalization is broken.
+                            // since_handle.expire().await;
+                        }
+
+                        persist_client
+                            .finalize_shard::<SourceData, (), T, Diff>(
+                                shard_id,
+                                Diagnostics::from_purpose("finalizing shards"),
+                            )
+                            .await
+                    };
+
+                    match finalize().await {
+                        Err(e) => {
+                            // Rather than error, just leave this shard as
+                            // one to finalize later.
+                            warn!("error during finalization of shard {shard_id}: {e:?}");
+                            None
+                        }
+                        Ok(()) => {
+                            debug!(%shard_id, "finalize success!");
+                            Some(shard_id)
+                        }
+                    }
                 }
             })
             // Poll each future for each collection concurrently, maximum of 10
             // at a time.
+            // TODO(benesch): the concurrency here should be configurable
+            // via LaunchDarkly.
             .buffer_unordered(10)
             // HERE BE DRAGONS: see warning on other uses of buffer_unordered
             // before any changes to `collect`
@@ -2428,17 +2439,17 @@ where
             .filter_map(|shard| shard)
             .collect();
 
-        let mut shared_finalizable_shards = self.finalizable_shards.lock().expect("lock poisoned");
-        let mut shared_finalized_shards = self.finalized_shards.lock().expect("lock poisoned");
+        let mut shared_finalizable_shards = finalizable_shards.lock().expect("lock poisoned");
+        let mut shared_finalized_shards = finalized_shards.lock().expect("lock poisoned");
 
-        for id in finalized_shards.iter() {
+        for id in current_finalized_shards.iter() {
             shared_finalizable_shards.remove(id);
             shared_finalized_shards.insert(*id);
         }
 
         debug!(
-            ?finalizable_shards,
-            ?finalized_shards,
+            ?current_finalizable_shards,
+            ?current_finalized_shards,
             ?shared_finalizable_shards,
             ?shared_finalized_shards,
             "done finalizing shards"
@@ -2622,7 +2633,6 @@ mod tests {
                 ConnectionContext::for_tests(Arc::new(InMemorySecretsController::new()));
 
             let task = Self {
-                envd_epoch: NonZeroI64::new(1).unwrap(),
                 config: Arc::new(Mutex::new(StorageConfiguration::new(
                     connection_context,
                     ConfigSet::default(),
@@ -2631,14 +2641,11 @@ mod tests {
                 cmds_rx,
                 holds_rx,
                 finalizable_shards: Arc::new(Mutex::new(BTreeSet::new())),
-                finalized_shards: Arc::new(Mutex::new(BTreeSet::new())),
                 collections: Arc::new(Mutex::new(BTreeMap::new())),
                 shard_by_id: BTreeMap::new(),
                 since_handles: BTreeMap::new(),
                 txns_handle: None,
                 txns_shards: BTreeSet::new(),
-                persist_location,
-                persist: persist_client,
             };
 
             (cmds_tx, task)
