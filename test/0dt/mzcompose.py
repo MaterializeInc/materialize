@@ -17,7 +17,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
-    Materialized(),
+    Materialized(sanity_restart=False),
     Testdrive(materialize_params={"cluster": "cluster"}, no_reset=True),
 ]
 
