@@ -3127,6 +3127,7 @@ mod tests {
     // Make sure objects reside in the `mz_introspection` schema iff they depend on per-replica
     // introspection relations.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn test_mz_introspection_builtins() {
         Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
