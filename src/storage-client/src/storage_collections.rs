@@ -329,6 +329,13 @@ pub struct StorageCollectionsImpl<
     /// all of the controllers and Coordinator.
     envd_epoch: NonZeroI64,
 
+    /// Whether or not this [StorageCollections] is in read-only mode.
+    ///
+    /// When in read-only mode, we are not allowed to affect changes to external
+    /// systems, including, for example, acquiring and downgrading critical
+    /// [SinceHandles](SinceHandle)
+    read_only: bool,
+
     /// The set of [ShardIds](ShardId) that we have to finalize. These will have
     /// been persisted by the caller of [StorageCollections::prepare_state].
     finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
@@ -396,6 +403,7 @@ where
         _now: NowFn,
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
+        read_only: bool,
         txn_wal_tables: TxnWalTablesImpl,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
@@ -494,6 +502,7 @@ where
             collections,
             txns,
             envd_epoch,
+            read_only,
             config,
             persist_location,
             persist: persist_clients,
@@ -519,14 +528,34 @@ where
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
     ) -> (WriteHandle<SourceData, (), T, Diff>, SinceHandleWrapper<T>) {
-        let write_handle = self
+        let since_handle = if self.read_only {
+            let read_handle = self
+                .open_leased_handle(id, shard, relation_desc.clone(), since, persist_client)
+                .await;
+            SinceHandleWrapper::Leased(read_handle)
+        } else {
+            let since_handle = self
+                .open_critical_handle(id, shard, since, persist_client)
+                .await;
+
+            SinceHandleWrapper::Critical(since_handle)
+        };
+
+        let mut write_handle = self
             .open_write_handle(id, shard, relation_desc, persist_client)
             .await;
-        let since_handle = self
-            .open_critical_handle(id, shard, since, persist_client)
-            .await;
 
-        let since_handle = SinceHandleWrapper::Critical(since_handle);
+        // N.B.
+        // Fetch the most recent upper for the write handle. Otherwise, this may
+        // be behind the since of the since handle. Its vital this happens AFTER
+        // we create the since handle as it needs to be linearized with that
+        // operation. It may be true that creating the write handle after the
+        // since handle already ensures this, but we do this out of an abundance
+        // of caution.
+        //
+        // Note that this returns the upper, but also sets it on the handle to
+        // be fetched later.
+        write_handle.fetch_recent_upper().await;
 
         (write_handle, since_handle)
     }
@@ -544,7 +573,7 @@ where
             handle_purpose: format!("controller data for {}", id),
         };
 
-        let mut write = persist_client
+        let write = persist_client
             .open_writer(
                 shard,
                 Arc::new(relation_desc),
@@ -553,18 +582,6 @@ where
             )
             .await
             .expect("invalid persist usage");
-
-        // N.B.
-        // Fetch the most recent upper for the write handle. Otherwise, this may
-        // be behind the since of the since handle. Its vital this happens AFTER
-        // we create the since handle as it needs to be linearized with that
-        // operation. It may be true that creating the write handle after the
-        // since handle already ensures this, but we do this out of an abundance
-        // of caution.
-        //
-        // Note that this returns the upper, but also sets it on the handle to
-        // be fetched later.
-        write.fetch_recent_upper().await;
 
         write
     }
@@ -583,6 +600,13 @@ where
         since: Option<&Antichain<T>>,
         persist_client: &PersistClient,
     ) -> SinceHandle<SourceData, (), T, Diff, PersistEpoch> {
+        tracing::debug!(%id, ?since, "opening critical handle");
+
+        assert!(
+            !self.read_only,
+            "attempting to open critical SinceHandle in read-only mode"
+        );
+
         let diagnostics = Diagnostics {
             shard_name: id.to_string(),
             handle_purpose: format!("controller data for {}", id),
@@ -652,6 +676,8 @@ where
         since: Option<&Antichain<T>>,
         persist_client: &PersistClient,
     ) -> ReadHandle<SourceData, (), T, Diff> {
+        tracing::debug!(%id, ?since, "opening leased handle");
+
         let diagnostics = Diagnostics {
             shard_name: id.to_string(),
             handle_purpose: format!("controller data for {}", id),
@@ -1886,7 +1912,7 @@ where
 /// Wraps either a "critical" [SinceHandle] or a leased [ReadHandle].
 ///
 /// When a [StorageCollections] is in read-only mode, we will only ever acquire
-/// [ReadHandle], because acquiring the [SinceHandle] and driving forward it's
+/// [ReadHandle], because acquiring the [SinceHandle] and driving forward its
 /// since is considered a write. Conversely, when in read-write mode, we acquire
 /// [SinceHandle].
 #[derive(Debug)]
@@ -2001,17 +2027,6 @@ where
             ),
         }
     }
-
-    pub async fn expire(self) {
-        match self {
-            Self::Critical(_handle) => {
-                unreachable!("not trying to expire critical handles this way");
-            }
-            Self::Leased(handle) => {
-                handle.expire().await;
-            }
-        }
-    }
 }
 
 /// State maintained about individual collections.
@@ -2099,15 +2114,6 @@ struct BackgroundTask<T: TimelyTimestamp + Lattice + Codec64> {
 #[derive(Debug)]
 enum BackgroundCmd<T: TimelyTimestamp + Lattice + Codec64> {
     Register {
-        id: GlobalId,
-        is_in_txns: bool,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
-        since_handle: SinceHandleWrapper<T>,
-    },
-    // This was also dead code in the StorageController. I think we keep around
-    // these code paths for when we need to do migrations in the future.
-    #[allow(dead_code)]
-    Update {
         id: GlobalId,
         is_in_txns: bool,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
@@ -2235,23 +2241,6 @@ where
                         }
                         BackgroundCmd::DowngradeSince(cmds) => {
                             self.downgrade_sinces(cmds).await;
-                        }
-                        BackgroundCmd::Update { id, is_in_txns, write_handle, since_handle } => {
-                            self.shard_by_id.insert(id, write_handle.shard_id()).expect(
-                                "BackgroundCmd::Update only valid for updating extant write handles",
-                            );
-
-                            self.since_handles.insert(id, since_handle).expect(
-                                "BackgroundCmd::Update only valid for updating extant since handles",
-                            );
-
-                            if is_in_txns {
-                                self.txns_shards.insert(id);
-                            } else {
-                                let fut = gen_upper_future(id, write_handle);
-                                upper_futures.push(fut.boxed());
-                            }
-
                         }
                         BackgroundCmd::SnapshotStats(id, as_of, tx) => {
                             // NB: The requested as_of could be arbitrarily far
