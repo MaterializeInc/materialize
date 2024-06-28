@@ -100,10 +100,10 @@ contains:Client creation error
 > ALTER CONNECTION kafka RESET (SSL CERTIFICATE) WITH (VALIDATE = true);
 
 ! ALTER CONNECTION kafka RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = true);
-contains:Invalid CA certificate
+contains:certificate verify failed
 
 ! ALTER CONNECTION kafka RESET (SSL KEY), RESET (SSL CERTIFICATE), RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = true);
-contains:Invalid CA certificate
+contains:certificate verify failed
 
 > ALTER CONNECTION kafka RESET (SSL KEY), RESET (SSL CERTIFICATE), RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = false);
 
