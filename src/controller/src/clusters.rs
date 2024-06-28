@@ -314,15 +314,6 @@ pub struct ClusterEvent {
     pub time: DateTime<Utc>,
 }
 
-/// A struct describing a replica that needs to be created,
-/// using `Controller::create_replicas`.
-pub struct CreateReplicaConfig {
-    pub cluster_id: ClusterId,
-    pub replica_id: ReplicaId,
-    pub role: ClusterRole,
-    pub config: ReplicaConfig,
-}
-
 impl<T> Controller<T>
 where
     T: ComputeControllerTimestamp,
@@ -355,148 +346,73 @@ where
 
     /// Creates a replica of the specified cluster with the specified identifier
     /// and configuration.
-    ///
-    /// This method is NOT idempotent; It can fail between processing of different
-    /// replicas and leave the controller in an inconsistent state. It is almost
-    /// always wrong to do anything but abort the process on `Err`.
-    pub async fn create_replicas(
+    pub fn create_replica(
         &mut self,
-        replicas: Vec<CreateReplicaConfig>,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        role: ClusterRole,
+        config: ReplicaConfig,
         enable_worker_core_affinity: bool,
     ) -> Result<(), anyhow::Error> {
-        /// A intermediate struct to hold info about a replica, to avoid
-        /// a large tuple.
-        struct ReplicaInfo {
-            replica_id: ReplicaId,
-            compute_config: ComputeReplicaConfig,
-            storage_location: ClusterReplicaLocation,
-            compute_location: ClusterReplicaLocation,
-            metrics_task_join_handle: Option<AbortOnDropHandle<()>>,
-        }
+        let storage_location: ClusterReplicaLocation;
+        let compute_location: ClusterReplicaLocation;
+        let metrics_task: Option<AbortOnDropHandle<()>>;
 
-        // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
-        // this stream cannot all have exclusive access.
-        let this = &*self;
-        let mut replica_stream = futures::stream::iter(replicas)
-            .map(|config| async move {
-                let CreateReplicaConfig {
+        match config.location {
+            ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
+                storagectl_addrs,
+                storage_addrs,
+                computectl_addrs,
+                compute_addrs,
+                workers,
+            }) => {
+                compute_location = ClusterReplicaLocation {
+                    ctl_addrs: computectl_addrs,
+                    dataflow_addrs: compute_addrs,
+                    workers,
+                };
+                storage_location = ClusterReplicaLocation {
+                    ctl_addrs: storagectl_addrs,
+                    dataflow_addrs: storage_addrs,
+                    // Storage and compute on the same replica have linked sizes.
+                    workers,
+                };
+                metrics_task = None;
+            }
+            ReplicaLocation::Managed(m) => {
+                let workers = m.allocation.workers;
+                let (service, metrics_task_join_handle) = self.provision_replica(
                     cluster_id,
                     replica_id,
                     role,
-                    config,
-                } = config;
-
-                match config.location {
-                    // This branch doesn't do any async work, so there is a slight performance
-                    // opportunity to serially process it, but it makes the code worse to read.
-                    ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                        storagectl_addrs,
-                        storage_addrs,
-                        computectl_addrs,
-                        compute_addrs,
-                        workers,
-                    }) => {
-                        let compute_location = ClusterReplicaLocation {
-                            ctl_addrs: computectl_addrs,
-                            dataflow_addrs: compute_addrs,
-                            workers,
-                        };
-                        let storage_location = ClusterReplicaLocation {
-                            ctl_addrs: storagectl_addrs,
-                            dataflow_addrs: storage_addrs,
-                            // Storage and compute on the same replica have linked sizes.
-                            workers,
-                        };
-
-                        Ok::<_, anyhow::Error>((
-                            cluster_id,
-                            ReplicaInfo {
-                                replica_id,
-                                compute_config: config.compute,
-                                storage_location,
-                                compute_location,
-                                metrics_task_join_handle: None,
-                            },
-                        ))
-                    }
-                    ReplicaLocation::Managed(m) => {
-                        let workers = m.allocation.workers;
-                        let (service, metrics_task_join_handle) = this.provision_replica(
-                            cluster_id,
-                            replica_id,
-                            role,
-                            m,
-                            enable_worker_core_affinity,
-                        )?;
-                        let storage_location = ClusterReplicaLocation {
-                            ctl_addrs: service.addresses("storagectl"),
-                            dataflow_addrs: service.addresses("storage"),
-                            workers,
-                        };
-                        let compute_location = ClusterReplicaLocation {
-                            ctl_addrs: service.addresses("computectl"),
-                            dataflow_addrs: service.addresses("compute"),
-                            workers,
-                        };
-                        Ok((
-                            cluster_id,
-                            ReplicaInfo {
-                                replica_id,
-                                compute_config: config.compute,
-                                storage_location,
-                                compute_location,
-                                metrics_task_join_handle: Some(metrics_task_join_handle),
-                            },
-                        ))
-                    }
-                }
-            })
-            // TODO(guswynn): make this configurable.
-            .buffer_unordered(50);
-
-        // _Usually_ `try_collect` and `collect` are the only safe ways to process a
-        // `buffer_unordered`, but if we ensure we don't do
-        // any async work in this loop, we are fine.
-        //
-        // If we do do async work in the loop, we could starve the stream itself of
-        // polls, which can cause errors.
-        // See the docs in `mz_storage_client::controller` for more info.
-        let mut replicas: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        while let Some(res) = replica_stream.next().await {
-            let (cluster_id, replica_info) = res?;
-
-            replicas.entry(cluster_id).or_default().push(replica_info);
-        }
-        drop(replica_stream);
-
-        for (cluster_id, replicas) in replicas {
-            let last_replica = replicas.last().unwrap();
-            // We only connect to the last replica (chosen arbitrarily)
-            // for storage, until we support multi-replica storage objects
-            self.storage.connect_replica(
-                cluster_id,
-                last_replica.replica_id,
-                last_replica.storage_location.clone(),
-            );
-
-            for ReplicaInfo {
-                replica_id,
-                compute_config,
-                storage_location: _,
-                compute_location,
-                metrics_task_join_handle,
-            } in replicas
-            {
-                if let Some(jh) = metrics_task_join_handle {
-                    self.metrics_tasks.insert(replica_id, jh);
-                }
-                self.compute.add_replica_to_instance(
-                    cluster_id,
-                    replica_id,
-                    compute_location,
-                    compute_config,
+                    m,
+                    enable_worker_core_affinity,
                 )?;
+                storage_location = ClusterReplicaLocation {
+                    ctl_addrs: service.addresses("storagectl"),
+                    dataflow_addrs: service.addresses("storage"),
+                    workers,
+                };
+                compute_location = ClusterReplicaLocation {
+                    ctl_addrs: service.addresses("computectl"),
+                    dataflow_addrs: service.addresses("compute"),
+                    workers,
+                };
+                metrics_task = Some(metrics_task_join_handle);
             }
+        }
+
+        self.storage
+            .connect_replica(cluster_id, replica_id, storage_location);
+        self.compute.add_replica_to_instance(
+            cluster_id,
+            replica_id,
+            compute_location,
+            config.compute,
+        )?;
+
+        if let Some(task) = metrics_task {
+            self.metrics_tasks.insert(replica_id, task);
         }
 
         Ok(())

@@ -98,9 +98,7 @@ use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
-use mz_controller::clusters::{
-    ClusterConfig, ClusterEvent, ClusterStatus, CreateReplicaConfig, ProcessId,
-};
+use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, ProcessId};
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr};
@@ -1819,7 +1817,8 @@ impl Coordinator {
             Default::default();
 
         debug!("coordinator init: creating compute replicas");
-        let mut replicas_to_start = vec![];
+        let enable_worker_core_affinity =
+            self.catalog().system_config().enable_worker_core_affinity();
         for instance in self.catalog.clusters() {
             self.controller.create_cluster(
                 instance.id,
@@ -1829,19 +1828,15 @@ impl Coordinator {
             )?;
             for replica in instance.replicas() {
                 let role = instance.role();
-                replicas_to_start.push(CreateReplicaConfig {
-                    cluster_id: instance.id,
-                    replica_id: replica.replica_id,
+                self.controller.create_replica(
+                    instance.id,
+                    replica.replica_id,
                     role,
-                    config: replica.config.clone(),
-                });
+                    replica.config.clone(),
+                    enable_worker_core_affinity,
+                )?;
             }
         }
-        let enable_worker_core_affinity =
-            self.catalog().system_config().enable_worker_core_affinity();
-        self.controller
-            .create_replicas(replicas_to_start, enable_worker_core_affinity)
-            .await?;
 
         debug!("coordinator init: initializing storage collections");
         self.bootstrap_storage_collections().await;
