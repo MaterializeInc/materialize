@@ -23,7 +23,6 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::num::NonZeroI64;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -199,18 +198,18 @@ pub enum Response<T> {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct StorageMetadata {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub collection_metadata: BTreeMap<GlobalId, String>,
-    pub unfinalized_shards: BTreeSet<String>,
+    pub collection_metadata: BTreeMap<GlobalId, ShardId>,
+    pub unfinalized_shards: BTreeSet<ShardId>,
 }
 
 impl StorageMetadata {
     pub fn get_collection_shard<T>(&self, id: GlobalId) -> Result<ShardId, StorageError<T>> {
-        let shard_str = self
+        let shard_id = self
             .collection_metadata
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))?;
 
-        ShardId::from_str(shard_str).map_err(|e| StorageError::Generic(anyhow::anyhow!(e)))
+        Ok(*shard_id)
     }
 }
 
@@ -224,7 +223,7 @@ pub trait StorageTxn<T> {
     /// Retrieve all of the visible storage metadata.
     ///
     /// The value of this map should be treated as opaque.
-    fn get_collection_metadata(&self) -> BTreeMap<GlobalId, String>;
+    fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId>;
 
     /// Add new storage metadata for a collection.
     ///
@@ -232,33 +231,33 @@ pub trait StorageTxn<T> {
     /// this data.
     fn insert_collection_metadata(
         &mut self,
-        s: BTreeMap<GlobalId, String>,
+        s: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError<T>>;
 
     /// Remove the metadata associated with the identified collections.
     ///
     /// Subsequent calls to [`StorageTxn::get_collection_metadata`] must not
     /// include these keys.
-    fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, String)>;
+    fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ShardId)>;
 
     /// Retrieve all of the shards that are no longer in use by an active
     /// collection but are yet to be finalized.
-    fn get_unfinalized_shards(&self) -> BTreeSet<String>;
+    fn get_unfinalized_shards(&self) -> BTreeSet<ShardId>;
 
     /// Insert the specified values as unfinalized shards.
-    fn insert_unfinalized_shards(&mut self, s: BTreeSet<String>) -> Result<(), StorageError<T>>;
+    fn insert_unfinalized_shards(&mut self, s: BTreeSet<ShardId>) -> Result<(), StorageError<T>>;
 
     /// Mark the specified shards as finalized, deleting them from the
     /// unfinalized shard collection.
-    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<String>);
+    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<ShardId>);
 
     /// Get the txn WAL shard for this environment if it exists.
-    fn get_txn_wal_shard(&self) -> Option<String>;
+    fn get_txn_wal_shard(&self) -> Option<ShardId>;
 
     /// Store the specified shard as the environment's txn WAL shard.
     ///
     /// The implementor should error if the shard is already specified.
-    fn write_txn_wal_shard(&mut self, shard: String) -> Result<(), StorageError<T>>;
+    fn write_txn_wal_shard(&mut self, shard: ShardId) -> Result<(), StorageError<T>>;
 }
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
