@@ -916,7 +916,7 @@ class FlipFlagsAction(Action):
         BOOLEAN_FLAG_VALUES = ["TRUE", "FALSE"]
 
         self.flags_with_values: dict[str, list[str]] = dict()
-        for flag in ["catalog", "snapshot", "txn"]:
+        for flag in ["catalog", "source", "snapshot", "txn"]:
             self.flags_with_values[f"persist_use_critical_since_{flag}"] = (
                 BOOLEAN_FLAG_VALUES
             )

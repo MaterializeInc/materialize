@@ -278,7 +278,7 @@ where
     }
     impl<H: FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static> ErrorHandler<H> {
         /// Report the error and enforce that we never return.
-        async fn report_and_stop(self, error: String) {
+        async fn report_and_stop(self, error: String) -> ! {
             (self.inner)(error).await;
 
             // We cannot continue, and we cannot shut down. Otherwise downstream
@@ -372,8 +372,7 @@ where
                         .report_and_stop(format!(
                             "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                         ))
-                        .await;
-                    unreachable!("error handler must diverge");
+                        .await
                 }
             },
             SnapshotMode::Exclude => vec![],
@@ -396,8 +395,7 @@ where
                     .report_and_stop(format!(
                         "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                     ))
-                    .await;
-                unreachable!("error handler must diverge");
+                    .await
             }
         };
 

@@ -96,8 +96,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_txn_tables": "lazy",
     "persist_use_critical_since_catalog": "true",
     "persist_use_critical_since_snapshot": "true",
-    # TODO: change to true when #27219 is resolved
-    "persist_use_critical_since_source": "false",
+    "persist_use_critical_since_source": "true",
     "persist_part_decode_format": "row_with_validate",
     "statement_logging_default_sample_rate": "0.01",
     "statement_logging_max_sample_rate": "0.01",

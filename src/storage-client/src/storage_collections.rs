@@ -28,6 +28,7 @@ use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -664,7 +665,9 @@ where
                     &dep_collection.implied_capability,
                     collection_implied_capability
                 ),
-                "dependency since cannot be in advance of dependent's since"
+                "dependency since ({dep}@{:?}) cannot be in advance of dependent's since ({id}@{:?})",
+                dep_collection.implied_capability,
+                collection_implied_capability,
             );
         }
 
@@ -683,7 +686,7 @@ where
     /// Currently, collections have either 0 or 1 dependencies.
     fn determine_collection_dependencies(
         &self,
-        self_collections: &mut BTreeMap<GlobalId, CollectionState<T>>,
+        self_collections: &BTreeMap<GlobalId, CollectionState<T>>,
         data_source: &DataSource,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
         let dependencies = match &data_source {
@@ -788,7 +791,7 @@ where
 
         // We create a new read handle every time someone requests a snapshot
         // and then immediately expire it instead of keeping a read handle
-        // permanently in our state to avoid having it heartbeat continously.
+        // permanently in our state to avoid having it heartbeat continually.
         // The assumption is that calls to snapshot are rare and therefore worth
         // it to always create a new handle.
         let read_handle = persist_client
@@ -800,7 +803,7 @@ where
                     shard_name: id.to_string(),
                     handle_purpose: format!("snapshot {}", id),
                 },
-                false,
+                USE_CRITICAL_SINCE_SNAPSHOT.get(&self.persist.cfg),
             )
             .await
             .expect("invalid persist usage");
@@ -1422,16 +1425,11 @@ where
         // Reorder in dependency order.
         to_register.sort_by_key(|(id, ..)| *id);
 
-        // New collections that are being created.
-        let mut new_collections = BTreeSet::new();
-
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
         for (id, mut description, write_handle, since_handle, metadata) in to_register {
-            new_collections.insert(id);
-
             // Ensure that the ingestion has an export for its primary source.
             // This is done in an akward spot to appease the borrow checker.
             if let DataSource::Ingestion(ingestion) = &mut description.data_source {
@@ -1448,10 +1446,8 @@ where
             let data_shard_since = since_handle.since().clone();
 
             // Determine if this collection has any dependencies.
-            let storage_dependencies = self.determine_collection_dependencies(
-                &mut *self_collections,
-                &description.data_source,
-            )?;
+            let storage_dependencies = self
+                .determine_collection_dependencies(&*self_collections, &description.data_source)?;
 
             // Determine the intial since of the collection.
             let initial_since = match storage_dependencies
