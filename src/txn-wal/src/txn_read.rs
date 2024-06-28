@@ -190,7 +190,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     }
 
     /// See [SinceHandle::snapshot_stats].
-    pub fn snapshot_stats<K, V, D, O>(
+    pub fn snapshot_stats_from_critical<K, V, D, O>(
         &self,
         data_since: &SinceHandle<K, V, T, D, O>,
     ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static
@@ -199,6 +199,36 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         V: Debug + Codec + Ord,
         D: Semigroup + Codec64 + Send + Sync,
         O: Opaque + Codec64,
+    {
+        // This is used by the optimizer in planning to get cost statistics, so
+        // it can't use `unblock_read`. Instead use the "translated as_of"
+        // trick we invented but didn't end up using for read of the shard
+        // contents. The reason we didn't use it for that was because we'd have
+        // to deal with advancing timestamps of the updates we read, but the
+        // stats we return here don't have that issue.
+        //
+        // TODO: If we don't have a `latest_write`, then the `None` option to
+        // `snapshot_stats` is not quite correct because of pubsub races
+        // (probably marginal) and historical `as_of`s (probably less marginal
+        // but not common in mz right now). Fixing this more precisely in a
+        // performant way (i.e. no crdb queries involved) seems to require that
+        // txn-wal always keep track of the latest write, even when it's
+        // known to have been applied. `snapshot_stats` is an estimate anyway,
+        // it doesn't even attempt to account for things like consolidation, so
+        // this seems fine for now.
+        let as_of = self.latest_write.clone().map(Antichain::from_elem);
+        data_since.snapshot_stats(as_of)
+    }
+
+    /// See [ReadHandle::snapshot_stats].
+    pub fn snapshot_stats_from_leased<K, V, D>(
+        &self,
+        data_since: &ReadHandle<K, V, T, D>,
+    ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static
+    where
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
+        D: Ord + Semigroup + Codec64 + Send + Sync,
     {
         // This is used by the optimizer in planning to get cost statistics, so
         // it can't use `unblock_read`. Instead use the "translated as_of"
