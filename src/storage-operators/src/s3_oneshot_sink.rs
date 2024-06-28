@@ -233,25 +233,30 @@ where
                 };
 
                 // Confirm we have DeleteObject permissions before proceeding by trying to
-                // delete a known non-existent file since S3 will return an AccessDenied error
-                // whether or not the object exists, and no error if we have permissions and
-                // it doesn't.
-                client
+                // delete a known non-existent file.
+                // S3 will return an AccessDenied error whether or not the object exists,
+                // and no error if we have permissions and it doesn't.
+                // Other S3-compatible APIs (e.g. GCS) return a 404 error if the object
+                // does not exist, so we ignore that error.
+                match client
                     .delete_object()
                     .bucket(&bucket)
                     .key(s3_key_manager.data_key(0, 0, "delete_object_test"))
                     .send()
                     .await
-                    .map_err(|err| {
-                        if err
-                            .raw_response()
-                            .map_or(false, |r| r.status().as_u16() == 403)
-                        {
-                            anyhow!("AccessDenied error when using DeleteObject")
+                {
+                    Err(err) => {
+                        let err_code = err.raw_response().map(|r| r.status().as_u16());
+                        if err_code.map_or(false, |r| r == 403) {
+                            Err(anyhow!("AccessDenied error when using DeleteObject"))?
+                        } else if err_code.map_or(false, |r| r == 404) {
+                            // ignore 404s
                         } else {
-                            err.into()
+                            Err(anyhow!("Error when using DeleteObject: {}", err))?
                         }
-                    })?;
+                    }
+                    Ok(_) => {}
+                };
 
                 debug!(%sink_id, %worker_id, "uploading INCOMPLETE sentinel file");
                 client
