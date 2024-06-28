@@ -487,7 +487,7 @@ If you drop an index from the catalog, but it is depended on by downstream objec
 To see if you have any residual dataflows on a given cluster, you can run the following query
 ```sql
 SET CLUSTER TO <clusterName>;
-SELECT s.name AS residual_index_name, s.id AS dataflow_id, ce.export_id AS former_object_id 
+SELECT s.name AS residual_index_name, s.id AS dataflow_id, ce.export_id AS former_object_id
 FROM mz_internal.mz_dataflow_arrangement_sizes AS s
 INNER JOIN mz_internal.mz_compute_exports AS ce ON ce.dataflow_id = s.id
 LEFT JOIN mz_catalog.mz_objects AS o ON o.id = ce.export_id
@@ -495,10 +495,10 @@ WHERE o.id IS NULL;
 ```
 To see the object dependencies on a given residual dataflow, you can run the following query:
 ```sql
-SELECT do.id AS dependent_object_id, do.name AS dependent_object_name, db.name AS dependent_object_database, s.name AS dependent_object_schema 
+SELECT do.id AS dependent_object_id, do.name AS dependent_object_name, db.name AS dependent_object_database, s.name AS dependent_object_schema
 FROM mz_internal.mz_compute_dependencies AS cd
 LEFT JOIN mz_catalog.mz_objects AS do ON cd.object_id = do.id
-LEFT JOIN mz_catalog.mz_schemas s ON do.schema_id = s.id 
+LEFT JOIN mz_catalog.mz_schemas s ON do.schema_id = s.id
 LEFT JOIN mz_catalog.mz_databases AS db ON s.database_id = db.id
 WHERE cd.dependency_id = <former_object_id from above>;
 ```
