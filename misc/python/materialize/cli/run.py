@@ -274,21 +274,43 @@ def main() -> int:
     else:
         raise UIError(f"unknown program {args.program}")
 
-    # Ensure we're running in our own process group, then arrange to kill any
-    # processes running in our process group when we exit. This avoids leaking
-    # "grandchild" processes--e.g., if we spawn an `environmentd` process that
-    # in turn spawns `clusterd` processes, and then `environmentd` panics, we
-    # want to clean up those `clusterd` processes before we exit.
+    # We fork off a process that moves to its own process group and then runs
+    # `command`. This parent process continues running until `command` exits,
+    # and then kills `command`'s process group. This avoids leaking "grandchild"
+    # processes--e.g., if we spawn an `environmentd` process that in turn spawns
+    # `clusterd` processes, and then `environmentd` panics, we want to clean up
+    # those `clusterd` processes before we exit.
     #
     # This isn't foolproof. If this script itself crashes, that can leak
     # processes. The subprocess can also intentionally daemonize (i.e., move to
     # another process group) to evade our detection. But this catches the vast
     # majority of cases and is simple to reason about.
-    os.setpgid(0, 0)
-    atexit.register(_kill_pgrp)
 
+    child_pid = os.fork()
+    assert child_pid >= 0
+    if child_pid > 0:
+        # This is the parent process, responsible for cleaning up after the
+        # child.
+
+        # First, arrange to terminate all processes in the child's process group
+        # when we exit.
+        def _kill_childpg():
+            try:
+                os.killpg(child_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+        atexit.register(_kill_childpg)
+
+        # Wait for the child to exit then propagate its exit status.
+        _, ws = os.waitpid(child_pid, 0)
+        exit(os.waitstatus_to_exitcode(ws))
+
+    # This is the child. First, move to a dedicated process group.
+    os.setpgid(child_pid, child_pid)
+
+    # Then, spawn the desired command.
     print(f"$ {' '.join(command)}")
-
     if args.program == "environmentd":
         # Automatically restart `environmentd` after it halts, but not more than
         # once every 5s to prevent hot loops. This simulates what happens when
@@ -419,14 +441,6 @@ def _handle_lingering_services(kill: bool = False) -> None:
                     )
         except psutil.NoSuchProcess:
             continue
-
-
-def _kill_pgrp() -> None:
-    # Send a SIGTERM to all processes in our process group while ignoring
-    # SIGTERM ourselves.
-    handler = signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    os.killpg(0, signal.SIGTERM)
-    signal.signal(signal.SIGTERM, handler)
 
 
 if __name__ == "__main__":
