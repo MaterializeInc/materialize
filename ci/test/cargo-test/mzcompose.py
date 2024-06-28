@@ -270,8 +270,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "--profile=ci",
                         "--cargo-profile=ci",
                         f"--partition=count:{partition}/{total}",
-                        # Most tests don't use 100% of a CPU core, so run two tests per CPU.
-                        f"--test-threads={cpu_count * 2}",
                         *args.args,
                     ],
                     env=env,
