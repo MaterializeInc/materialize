@@ -254,7 +254,7 @@ impl Coordinator {
             (StatementLifecycleHistory, statement_lifecycle_updates),
             (SqlText, sql_text_updates),
         ] {
-            if !updates.is_empty() {
+            if !updates.is_empty() && !self.controller.read_only() {
                 self.controller
                     .storage
                     .append_introspection_updates(type_, updates)

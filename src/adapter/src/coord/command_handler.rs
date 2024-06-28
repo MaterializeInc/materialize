@@ -230,7 +230,7 @@ impl Coordinator {
                 }
 
                 Command::ControllerAllowWrites { tx } => {
-                    self.controller.allow_writes();
+                    self.controller.allow_writes().await;
                     let _ = tx.send(Ok(true));
                 }
             }

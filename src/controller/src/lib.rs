@@ -316,7 +316,7 @@ where
 
     /// Allow this controller and instances controlled by it to write to
     /// external systems.
-    pub fn allow_writes(&mut self) {
+    pub async fn allow_writes(&mut self) {
         if !self.read_only {
             // Already transitioned out of read-only mode!
             return;
@@ -325,9 +325,7 @@ where
         self.read_only = false;
 
         self.compute.allow_writes();
-        // TODO: Storage does not yet understand the concept of read-only
-        // instances.
-
+        self.storage.allow_writes().await;
         self.remove_past_generation_replicas_in_background();
     }
 
@@ -674,6 +672,7 @@ where
             config.now,
             Arc::clone(&txns_metrics),
             envd_epoch,
+            read_only,
             config.metrics_registry.clone(),
             txn_wal_tables,
             config.connection_context,
@@ -726,7 +725,7 @@ where
         // `read_only = false` _and_ when later transitioning out of read-only
         // mode. This way we keep that logic in one place.
         if !read_only {
-            this.allow_writes();
+            this.allow_writes().await;
         }
 
         this

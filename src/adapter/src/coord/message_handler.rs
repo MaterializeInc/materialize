@@ -212,16 +212,18 @@ impl Coordinator {
                     self.drain_statement_log().await;
                 }
                 Message::PrivateLinkVpcEndpointEvents(events) => {
-                    self.controller
-                        .storage
-                        .append_introspection_updates(
-                            mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
-                            events
-                                .into_iter()
-                                .map(|e| (mz_repr::Row::from(e), 1))
-                                .collect(),
-                        )
-                        .await;
+                    if !self.controller.read_only() {
+                        self.controller
+                            .storage
+                            .append_introspection_updates(
+                                mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
+                                events
+                                    .into_iter()
+                                    .map(|e| (mz_repr::Row::from(e), 1))
+                                    .collect(),
+                            )
+                            .await;
+                    }
                 }
                 Message::CheckSchedulingPolicies => {
                     self.check_scheduling_policies().await;

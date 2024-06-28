@@ -140,6 +140,13 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
 
+    /// Whether or not this controller is in read-only mode.
+    ///
+    /// When in read-only mode, neither this controller nor the instances
+    /// controlled by it are allowed to affect changes to external systems
+    /// (largely persist).
+    read_only: bool,
+
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
@@ -247,6 +254,57 @@ where
 
         for client in self.clients.values_mut() {
             client.send(StorageCommand::InitializationComplete);
+        }
+    }
+
+    async fn allow_writes(&mut self) {
+        if !self.read_only {
+            // Already done!
+            return;
+        }
+
+        self.read_only = false;
+
+        // While in read-only mode, we didn't run ingestions or write to
+        // introspection collections. Start doing that now!
+        let mut ingestions_to_run = Vec::new();
+        let mut introspections_to_run = Vec::new();
+        for (id, collection) in self.collections.iter() {
+            match collection.data_source {
+                DataSource::Ingestion(_) => {
+                    ingestions_to_run.push(*id);
+                }
+                DataSource::IngestionExport { .. } => (),
+                DataSource::Introspection(i) => {
+                    introspections_to_run.push((*id, i));
+                }
+                DataSource::Webhook => (),
+                DataSource::Progress | DataSource::Other(_) => {}
+            };
+        }
+
+        for (id, introspection_type) in introspections_to_run {
+            // Introspection collections are registered with the
+            // CollectionManager when they are created. We only bring ourselves
+            // up to date with collection contents or do any preparatory
+            // consolidation work when we actually start writing to them!
+            self.prepare_introspection_collection(id, introspection_type)
+                .await
+                .expect("cannot fail to prepare introspection collections now");
+        }
+
+        // We first do any cleanup/truncation work above and then allow the
+        // CollectionManager to do writes. This prevents it from advancing the
+        // upper while we are trying to apply truncations.
+        //
+        // TODO(aljoscha): We should make the truncation/cleanup work that
+        // happens when we take over instead be a periodic thing, and make it
+        // resilient to the upper moving concurrently.
+        self.collection_manager.allow_writes();
+
+        for id in ingestions_to_run {
+            self.run_ingestion(id)
+                .expect("cannot fail to run ingestions now");
         }
     }
 
@@ -769,234 +827,24 @@ where
         for id in to_execute {
             match &self.collection(id)?.data_source {
                 DataSource::Ingestion(_) => {
-                    self.run_ingestion(id)?;
+                    if !self.read_only {
+                        self.run_ingestion(id)?;
+                    }
                 }
                 DataSource::IngestionExport { .. } => unreachable!(
                     "ingestion exports do not execute directly, but instead schedule their source to be re-executed"
                 ),
                 DataSource::Introspection(i) => {
-                    let prev = self
-                        .introspection_ids
-                        .lock()
-                        .expect("poisoned lock")
-                        .insert(*i, id);
-                    assert!(
-                        prev.is_none(),
-                        "cannot have multiple IDs for introspection type"
-                    );
 
-                    let metadata = self.storage_collections.collection_metadata(id)?.clone();
-                    let persist_client = self
-                        .persist
-                        .open(metadata.persist_location.clone())
-                        .await
-                        .unwrap();
 
-                    let read_handle_fn = move || {
-                        let persist_client = persist_client.clone();
-                        let metadata = metadata.clone();
-
-                        let fut = async move {
-                            let read_handle = persist_client
-                                .open_leased_reader::<SourceData, (), T, Diff>(
-                                    metadata.data_shard,
-                                    Arc::new(metadata.relation_desc.clone()),
-                                    Arc::new(UnitSchema),
-                                    Diagnostics {
-                                        shard_name: id.to_string(),
-                                        handle_purpose: format!("snapshot {}", id),
-                                    },
-                                    USE_CRITICAL_SINCE_SNAPSHOT.get(persist_client.dyncfgs()),
-                                )
-                                .await
-                                .expect("invalid persist usage");
-                            read_handle
-                        };
-
-                        fut.boxed()
-                    };
-
-                    // Types of storage-managed/introspection collections:
+                    // We always register the collection with the collection manager,
+                    // regardless of read-only mode. The CollectionManager itself is
+                    // aware of read-only mode and will not attempt to write before told
+                    // to do so.
                     //
-                    // Append-only: Only accepts blind writes, writes that can
-                    // be applied at any timestamp and don’t depend on current
-                    // collection contents.
-                    //
-                    // Pseudo append-only: We treat them largely as append-only
-                    // collections but periodically (currently on bootstrap)
-                    // retract old updates from them.
-                    //
-                    // Differential: at any given time `t` , collection contents
-                    // mirrors some (small cardinality) state. The cardinality
-                    // of the collection stays constant if the thing that is
-                    // mirrored doesn’t change in cardinality. At steady state,
-                    // updates always come in pairs of retractions/additions.
+                    self.register_introspection_collection(id, *i)
+                        .await?;
 
-                    match i {
-                        IntrospectionType::ShardMapping => {
-                            self.collection_manager.register_differential_collection(id, read_handle_fn);
-                            self.initialize_shard_mapping().await;
-                        }
-                        IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
-                            self.collection_manager.register_differential_collection(id, read_handle_fn);
-                            // Differential collections start with an empty
-                            // desired state. No need to manually reset.
-                        }
-                        IntrospectionType::StorageSourceStatistics => {
-                            self.collection_manager.register_differential_collection(id, read_handle_fn);
-
-                            let prev = self.snapshot_statistics(id).await;
-
-                            let scraper_token = statistics::spawn_statistics_scraper::<
-                                statistics::SourceStatistics,
-                                SourceStatisticsUpdate,
-                                _,
-                            >(
-                                id.clone(),
-                                // These do a shallow copy.
-                                self.collection_manager.clone(),
-                                Arc::clone(&self.source_statistics),
-                                prev,
-                                self.config.parameters.statistics_interval,
-                                self.statistics_interval_sender.subscribe(),
-                                self.metrics.clone(),
-                            );
-                            let web_token = statistics::spawn_webhook_statistics_scraper(
-                                Arc::clone(&self.source_statistics),
-                                self.config.parameters.statistics_interval,
-                                self.statistics_interval_sender.subscribe(),
-                            );
-
-                            // Make sure these are dropped when the controller is
-                            // dropped, so that the internal task will stop.
-                            self.introspection_tokens
-                                .insert(id, Box::new((scraper_token, web_token)));
-                        }
-                        IntrospectionType::StorageSinkStatistics => {
-                            self.collection_manager.register_differential_collection(id, read_handle_fn);
-
-                            let prev = self.snapshot_statistics(id).await;
-
-                            let scraper_token =
-                                statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
-                                    id.clone(),
-                                    // These do a shallow copy.
-                                    self.collection_manager.clone(),
-                                    Arc::clone(&self.sink_statistics),
-                                    prev,
-                                    self.config.parameters.statistics_interval,
-                                    self.statistics_interval_sender.subscribe(),
-                                    self.metrics.clone(),
-                                );
-
-                            // Make sure this is dropped when the controller is
-                            // dropped, so that the internal task will stop.
-                            self.introspection_tokens.insert(id, scraper_token);
-                        }
-                        IntrospectionType::SourceStatusHistory => {
-                            let last_status_per_id = self
-                                .partially_truncate_status_history(
-                                    IntrospectionType::SourceStatusHistory,
-                                )
-                                .await;
-
-                            // Only register afterwards, so the collection
-                            // manager doesn't accidentally bump the upper,
-                            // which would mess with our cleaning up/partial
-                            // truncation above.
-                            self.collection_manager.register_append_only_collection(id);
-
-                            let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
-                                .get_by_name(&ColumnName::from("status"))
-                                .expect("schema has not changed")
-                                .0;
-
-                            self.collection_status_manager.extend_previous_statuses(
-                                last_status_per_id.into_iter().map(|(id, row)| {
-                                    (
-                                        id,
-                                        Status::from_str(
-                                            row.iter()
-                                                .nth(status_col)
-                                                .expect("schema has not changed")
-                                                .unwrap_str(),
-                                        )
-                                        .expect("statuses must be uncorrupted"),
-                                    )
-                                }),
-                            )
-                        }
-                        IntrospectionType::SinkStatusHistory => {
-                            let last_status_per_id = self
-                                .partially_truncate_status_history(
-                                    IntrospectionType::SinkStatusHistory,
-                                )
-                                .await;
-
-                            // Only register afterwards, so the collection
-                            // manager doesn't accidentally bump the upper,
-                            // which would mess with our cleaning up/partial
-                            // truncation above.
-                            self.collection_manager.register_append_only_collection(id);
-
-                            let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
-                                .get_by_name(&ColumnName::from("status"))
-                                .expect("schema has not changed")
-                                .0;
-
-                            self.collection_status_manager.extend_previous_statuses(
-                                last_status_per_id.into_iter().map(|(id, row)| {
-                                    (
-                                        id,
-                                        Status::from_str(
-                                            row.iter()
-                                                .nth(status_col)
-                                                .expect("schema has not changed")
-                                                .unwrap_str(),
-                                        )
-                                        .expect("statuses must be uncorrupted"),
-                                    )
-                                }),
-                            )
-                        }
-                        IntrospectionType::PrivatelinkConnectionStatusHistory => {
-                            self.partially_truncate_status_history(
-                                IntrospectionType::PrivatelinkConnectionStatusHistory,
-                            )
-                            .await;
-
-                            // Only register afterwards, so the collection
-                            // manager doesn't accidentally bump the upper,
-                            // which would mess with our cleaning up/partial
-                            // truncation above.
-                            self.collection_manager.register_append_only_collection(id);
-                        }
-
-                        // Truncate compute-maintained collections.
-                        IntrospectionType::ComputeDependencies
-                        | IntrospectionType::ComputeHydrationStatus
-                        | IntrospectionType::ComputeOperatorHydrationStatus
-                        | IntrospectionType::ComputeMaterializedViewRefreshes
-                        | IntrospectionType::ComputeErrorCounts => {
-                            self.collection_manager.register_differential_collection(id, read_handle_fn);
-                            // Differential collections start with an empty
-                            // desired state. No need to manually reset.
-                        }
-
-                        // Note [btv] - we don't truncate these, because that uses
-                        // a huge amount of memory on environmentd startup.
-                        IntrospectionType::PreparedStatementHistory
-                        | IntrospectionType::StatementExecutionHistory
-                        | IntrospectionType::SessionHistory
-                        | IntrospectionType::StatementLifecycleHistory
-                        | IntrospectionType::SqlText => {
-                            // NOTE(aljoscha): We never remove from these
-                            // collections. Someone, at some point needs to
-                            // think about that! Issue:
-                            // https://github.com/MaterializeInc/materialize/issues/25696
-                            self.collection_manager.register_append_only_collection(id);
-                        }
-                    }
                 }
                 DataSource::Webhook => {
                     // Register the collection so our manager knows about it.
@@ -2066,9 +1914,11 @@ where
             dropped_sources.push(StatusUpdate::new(id, status_now, Status::Dropped));
         }
 
-        self.collection_status_manager
-            .append_updates(dropped_sources, IntrospectionType::SourceStatusHistory)
-            .await;
+        if !self.read_only {
+            self.collection_status_manager
+                .append_updates(dropped_sources, IntrospectionType::SourceStatusHistory)
+                .await;
+        }
 
         {
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
@@ -2087,9 +1937,12 @@ where
                 sink_statistics.remove(&id);
             }
         }
-        self.collection_status_manager
-            .append_updates(dropped_sinks, IntrospectionType::SinkStatusHistory)
-            .await;
+
+        if !self.read_only {
+            self.collection_status_manager
+                .append_updates(dropped_sinks, IntrospectionType::SinkStatusHistory)
+                .await;
+        }
 
         Ok(updated_frontiers)
     }
@@ -2437,6 +2290,7 @@ where
         now: NowFn,
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
+        read_only: bool,
         metrics_registry: MetricsRegistry,
         txn_wal_tables: TxnWalTablesImpl,
         connection_context: ConnectionContext,
@@ -2479,8 +2333,11 @@ where
         let persist_monotonic_worker = persist_handles::PersistMonotonicWriteWorker::new();
         let collection_manager_write_handle = persist_monotonic_worker.clone();
 
-        let collection_manager =
-            collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
+        let collection_manager = collection_mgmt::CollectionManager::new(
+            read_only,
+            collection_manager_write_handle,
+            now.clone(),
+        );
 
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
 
@@ -2513,6 +2370,7 @@ where
             introspection_tokens: BTreeMap::new(),
             now,
             envd_epoch,
+            read_only,
             source_statistics: Arc::new(Mutex::new(statistics::SourceStatistics {
                 source_statistics: BTreeMap::new(),
                 webhook_statistics: BTreeMap::new(),
@@ -2871,6 +2729,297 @@ where
         write
     }
 
+    /// Registers the given introspection collection and does any preparatory
+    /// work that we have to to do before we start writing to it. This
+    /// preparatory work will include partial truncation or other cleanup
+    /// schemes, depending on introspection type.
+    async fn register_introspection_collection(
+        &mut self,
+        id: GlobalId,
+        introspection_type: IntrospectionType,
+    ) -> Result<(), StorageError<T>> {
+        tracing::info!(%id, ?introspection_type, "registering introspection collection");
+
+        let prev = self
+            .introspection_ids
+            .lock()
+            .expect("poisoned lock")
+            .insert(introspection_type, id);
+        assert!(
+            prev.is_none(),
+            "cannot have multiple IDs for introspection type"
+        );
+
+        let metadata = self.storage_collections.collection_metadata(id)?.clone();
+        let persist_client = self
+            .persist
+            .open(metadata.persist_location.clone())
+            .await
+            .unwrap();
+
+        let read_handle_fn = move || {
+            let persist_client = persist_client.clone();
+            let metadata = metadata.clone();
+
+            let fut = async move {
+                let read_handle = persist_client
+                    .open_leased_reader::<SourceData, (), T, Diff>(
+                        metadata.data_shard,
+                        Arc::new(metadata.relation_desc.clone()),
+                        Arc::new(UnitSchema),
+                        Diagnostics {
+                            shard_name: id.to_string(),
+                            handle_purpose: format!("snapshot {}", id),
+                        },
+                        USE_CRITICAL_SINCE_SNAPSHOT.get(persist_client.dyncfgs()),
+                    )
+                    .await
+                    .expect("invalid persist usage");
+                read_handle
+            };
+
+            fut.boxed()
+        };
+
+        // Types of storage-managed/introspection collections:
+        //
+        // Append-only: Only accepts blind writes, writes that can
+        // be applied at any timestamp and don’t depend on current
+        // collection contents.
+        //
+        // Pseudo append-only: We treat them largely as append-only
+        // collections but periodically (currently on bootstrap)
+        // retract old updates from them.
+        //
+        // Differential: at any given time `t` , collection contents
+        // mirrors some (small cardinality) state. The cardinality
+        // of the collection stays constant if the thing that is
+        // mirrored doesn’t change in cardinality. At steady state,
+        // updates always come in pairs of retractions/additions.
+
+        match introspection_type {
+            // For these, we first register the collection and then prepare it,
+            // because the code that prepares differential collection expects to
+            // be able to update desired state via the collection manager
+            // already.
+            IntrospectionType::ShardMapping
+            | IntrospectionType::Frontiers
+            | IntrospectionType::ReplicaFrontiers
+            | IntrospectionType::StorageSourceStatistics
+            | IntrospectionType::StorageSinkStatistics => {
+                self.collection_manager
+                    .register_differential_collection(id, read_handle_fn);
+
+                if !self.read_only {
+                    self.prepare_introspection_collection(id, introspection_type)
+                        .await?;
+                }
+            }
+
+            // For these, we first have to prepare and then register with
+            // collection manager, because the preparation logic wants to read
+            // the shard's contents and then do uncontested writes.
+            //
+            // TODO(aljoscha): We should make the truncation/cleanup work that
+            // happens when we take over instead be a periodic thing, and make
+            // it resilient to the upper moving concurrently.
+            IntrospectionType::SourceStatusHistory
+            | IntrospectionType::SinkStatusHistory
+            | IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                if !self.read_only {
+                    self.prepare_introspection_collection(id, introspection_type)
+                        .await?;
+                }
+
+                self.collection_manager.register_append_only_collection(id);
+            }
+
+            // Same as our other differential collections, but for these the
+            // preparation logic currently doesn't do anything.
+            IntrospectionType::ComputeDependencies
+            | IntrospectionType::ComputeHydrationStatus
+            | IntrospectionType::ComputeOperatorHydrationStatus
+            | IntrospectionType::ComputeMaterializedViewRefreshes
+            | IntrospectionType::ComputeErrorCounts => {
+                self.collection_manager
+                    .register_differential_collection(id, read_handle_fn);
+
+                if !self.read_only {
+                    self.prepare_introspection_collection(id, introspection_type)
+                        .await?;
+                }
+            }
+
+            // Note [btv] - we don't truncate these, because that uses
+            // a huge amount of memory on environmentd startup.
+            IntrospectionType::PreparedStatementHistory
+            | IntrospectionType::StatementExecutionHistory
+            | IntrospectionType::SessionHistory
+            | IntrospectionType::StatementLifecycleHistory
+            | IntrospectionType::SqlText => {
+                if !self.read_only {
+                    self.prepare_introspection_collection(id, introspection_type)
+                        .await?;
+                }
+
+                self.collection_manager.register_append_only_collection(id);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Does any work that is required before this controller instance starts
+    /// writing to the given introspection collection.
+    ///
+    /// This migh include consolidation, deleting older entries or seeding
+    /// in-memory state of, say, scrapers, with current collection contents.
+    async fn prepare_introspection_collection(
+        &mut self,
+        id: GlobalId,
+        introspection_type: IntrospectionType,
+    ) -> Result<(), StorageError<T>> {
+        tracing::info!(%id, ?introspection_type, "preparing introspection collection for writes");
+
+        match introspection_type {
+            IntrospectionType::ShardMapping => {
+                self.initialize_shard_mapping().await;
+            }
+            IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
+                // Differential collections start with an empty
+                // desired state. No need to manually reset.
+            }
+            IntrospectionType::StorageSourceStatistics => {
+                let prev = self.snapshot_statistics(id).await;
+
+                let scraper_token = statistics::spawn_statistics_scraper::<
+                    statistics::SourceStatistics,
+                    SourceStatisticsUpdate,
+                    _,
+                >(
+                    id.clone(),
+                    // These do a shallow copy.
+                    self.collection_manager.clone(),
+                    Arc::clone(&self.source_statistics),
+                    prev,
+                    self.config.parameters.statistics_interval,
+                    self.statistics_interval_sender.subscribe(),
+                    self.metrics.clone(),
+                );
+                let web_token = statistics::spawn_webhook_statistics_scraper(
+                    Arc::clone(&self.source_statistics),
+                    self.config.parameters.statistics_interval,
+                    self.statistics_interval_sender.subscribe(),
+                );
+
+                // Make sure these are dropped when the controller is
+                // dropped, so that the internal task will stop.
+                self.introspection_tokens
+                    .insert(id, Box::new((scraper_token, web_token)));
+            }
+            IntrospectionType::StorageSinkStatistics => {
+                let prev = self.snapshot_statistics(id).await;
+
+                let scraper_token =
+                    statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
+                        id.clone(),
+                        // These do a shallow copy.
+                        self.collection_manager.clone(),
+                        Arc::clone(&self.sink_statistics),
+                        prev,
+                        self.config.parameters.statistics_interval,
+                        self.statistics_interval_sender.subscribe(),
+                        self.metrics.clone(),
+                    );
+
+                // Make sure this is dropped when the controller is
+                // dropped, so that the internal task will stop.
+                self.introspection_tokens.insert(id, scraper_token);
+            }
+            IntrospectionType::SourceStatusHistory => {
+                let last_status_per_id = self
+                    .partially_truncate_status_history(IntrospectionType::SourceStatusHistory)
+                    .await;
+
+                let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("status"))
+                    .expect("schema has not changed")
+                    .0;
+
+                self.collection_status_manager.extend_previous_statuses(
+                    last_status_per_id.into_iter().map(|(id, row)| {
+                        (
+                            id,
+                            Status::from_str(
+                                row.iter()
+                                    .nth(status_col)
+                                    .expect("schema has not changed")
+                                    .unwrap_str(),
+                            )
+                            .expect("statuses must be uncorrupted"),
+                        )
+                    }),
+                )
+            }
+            IntrospectionType::SinkStatusHistory => {
+                let last_status_per_id = self
+                    .partially_truncate_status_history(IntrospectionType::SinkStatusHistory)
+                    .await;
+
+                let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("status"))
+                    .expect("schema has not changed")
+                    .0;
+
+                self.collection_status_manager.extend_previous_statuses(
+                    last_status_per_id.into_iter().map(|(id, row)| {
+                        (
+                            id,
+                            Status::from_str(
+                                row.iter()
+                                    .nth(status_col)
+                                    .expect("schema has not changed")
+                                    .unwrap_str(),
+                            )
+                            .expect("statuses must be uncorrupted"),
+                        )
+                    }),
+                )
+            }
+            IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                self.partially_truncate_status_history(
+                    IntrospectionType::PrivatelinkConnectionStatusHistory,
+                )
+                .await;
+            }
+
+            // Truncate compute-maintained collections.
+            IntrospectionType::ComputeDependencies
+            | IntrospectionType::ComputeHydrationStatus
+            | IntrospectionType::ComputeOperatorHydrationStatus
+            | IntrospectionType::ComputeMaterializedViewRefreshes
+            | IntrospectionType::ComputeErrorCounts => {
+                // Differential collections start with an empty
+                // desired state. No need to manually reset.
+            }
+
+            // Note [btv] - we don't truncate these, because that uses
+            // a huge amount of memory on environmentd startup.
+            IntrospectionType::PreparedStatementHistory
+            | IntrospectionType::StatementExecutionHistory
+            | IntrospectionType::SessionHistory
+            | IntrospectionType::StatementLifecycleHistory
+            | IntrospectionType::SqlText => {
+                // NOTE(aljoscha): We never remove from these
+                // collections. Someone, at some point needs to
+                // think about that! Issue:
+                // https://github.com/MaterializeInc/materialize/issues/25696
+            }
+        }
+
+        Ok(())
+    }
+
     /// Get the current rows in the given statistics table. This is used to bootstrap
     /// the statistics tasks.
     ///
@@ -3109,7 +3258,7 @@ where
             })
             .collect();
 
-        let command = (id, updates, expected_upper, new_upper);
+        let command = (id, updates, expected_upper.clone(), new_upper);
 
         let res = self
             .persist_monotonic_worker
@@ -3141,7 +3290,7 @@ where
                         // NOTE: We might want to attempt these partial
                         // retractions on an interval, instead of only when
                         // starting up!
-                        info!(%id, current_upper = ?failed_ids[0].current_upper, "failed to append partial truncation");
+                        info!(%id, ?expected_upper, current_upper = ?failed_ids[0].current_upper, "failed to append partial truncation");
                     }
                     // Uh-oh, something else went wrong!
                     other => {
@@ -3349,6 +3498,10 @@ where
     /// Handles writing of status updates for sources/sinks to the appropriate
     /// status relation
     async fn record_status_updates(&mut self, updates: Vec<StatusUpdate>) {
+        if self.read_only {
+            return;
+        }
+
         let mut sink_status_updates = vec![];
         let mut source_status_updates = vec![];
 
@@ -3381,6 +3534,8 @@ where
     /// Runs the identified ingestion using the current definition of the
     /// ingestion in-memory.
     fn run_ingestion(&mut self, id: GlobalId) -> Result<(), StorageError<T>> {
+        tracing::info!(%id, "starting ingestion");
+
         let collection = self.collection(id)?;
         let ingestion_description = match &collection.data_source {
             DataSource::Ingestion(i) => i.clone(),
