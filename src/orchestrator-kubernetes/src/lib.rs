@@ -9,7 +9,9 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
@@ -17,6 +19,7 @@ use chrono::Utc;
 use clap::ArgEnum;
 use cloud_resource_controller::KubernetesResourceReader;
 use futures::stream::{BoxStream, StreamExt};
+use futures::TryFutureExt;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
@@ -31,7 +34,7 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
 use kube::api::{Api, DeleteParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
-use kube::error::Error;
+use kube::error::Error as K8sError;
 use kube::runtime::{watcher, WatchStreamExt};
 use kube::ResourceExt;
 use maplit::btreemap;
@@ -42,6 +45,7 @@ use mz_orchestrator::{
     NamespacedOrchestrator, NotReadyReason, Orchestrator, Service, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics, ServiceStatus,
 };
+use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -218,7 +222,7 @@ enum WorkerCommand {
     },
     ListServices {
         namespace: String,
-        result_tx: oneshot::Sender<Result<Vec<String>, anyhow::Error>>,
+        result_tx: oneshot::Sender<Vec<String>>,
     },
     FetchServiceMetrics {
         name: String,
@@ -1180,7 +1184,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             result_tx,
         });
 
-        result_rx.await.expect("worker task not dropped")
+        let list = result_rx.await.expect("worker task not dropped");
+        Ok(list)
     }
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
@@ -1270,31 +1275,50 @@ impl OrchestratorWorker {
 
     async fn run(mut self) {
         while let Some(cmd) = self.command_rx.recv().await {
-            use WorkerCommand::*;
-            let result = match cmd {
-                EnsureService { desc } => self.ensure_service(desc).await,
-                DropService { name } => self.drop_service(&name).await,
-                ListServices {
-                    namespace,
-                    result_tx,
-                } => {
-                    let result = self.list_services(&namespace).await;
-                    let _ = result_tx.send(result);
-                    Ok(())
-                }
-                FetchServiceMetrics {
-                    name,
-                    info,
-                    result_tx,
-                } => {
-                    let result = self.fetch_service_metrics(&name, &info).await;
-                    let _ = result_tx.send(result);
-                    Ok(())
-                }
-            };
+            self.handle_command(cmd).await;
+        }
+    }
 
-            if let Err(error) = result {
-                panic!("kubernetes orchestrator worker failed: {error}");
+    /// Handle a worker command.
+    ///
+    /// If handling the command fails, it is automatically retried. All command handlers return
+    /// [`K8sError`], so we can reasonably assume that a failure is caused by issues communicating
+    /// with the K8S server and that retrying resolves them eventually.
+    async fn handle_command(&mut self, cmd: WorkerCommand) {
+        async fn retry<F, U, R>(f: F, cmd_type: &str) -> R
+        where
+            F: Fn() -> U,
+            U: Future<Output = Result<R, K8sError>>,
+        {
+            Retry::default()
+                .clamp_backoff(Duration::from_secs(10))
+                .retry_async(|_| {
+                    f().map_err(
+                        |error| tracing::error!(%cmd_type, "orchestrator call failed: {error}"),
+                    )
+                })
+                .await
+                .expect("always retries on error")
+        }
+
+        use WorkerCommand::*;
+        match cmd {
+            EnsureService { desc } => retry(|| self.ensure_service(&desc), "EnsureService").await,
+            DropService { name } => retry(|| self.drop_service(&name), "DropService").await,
+            ListServices {
+                namespace,
+                result_tx,
+            } => {
+                let result = retry(|| self.list_services(&namespace), "ListServices").await;
+                let _ = result_tx.send(result);
+            }
+            FetchServiceMetrics {
+                name,
+                info,
+                result_tx,
+            } => {
+                let result = self.fetch_service_metrics(&name, &info).await;
+                let _ = result_tx.send(result);
             }
         }
     }
@@ -1366,7 +1390,7 @@ impl OrchestratorWorker {
 
                     let disk_usage = match disk_usage {
                         Some(Ok(disk_usage)) => Some(disk_usage),
-                        Some(Err(e)) if !matches!(&e, Error::Api(e) if e.code == 404) => {
+                        Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
                             warn!(
                                 "Failed to fetch `kubelet_volume_stats_used_bytes` for {name}: {e}"
                             );
@@ -1377,7 +1401,7 @@ impl OrchestratorWorker {
 
                     let disk_capacity = match disk_capacity {
                         Some(Ok(disk_capacity)) => Some(disk_capacity),
-                        Some(Err(e)) if !matches!(&e, Error::Api(e) if e.code == 404) => {
+                        Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
                             warn!("Failed to fetch `kubelet_volume_stats_capacity_bytes` for {name}: {e}");
                             None
                         }
@@ -1540,19 +1564,19 @@ impl OrchestratorWorker {
         ret.await
     }
 
-    async fn ensure_service(&self, desc: ServiceDescription) -> Result<(), anyhow::Error> {
+    async fn ensure_service(&self, desc: &ServiceDescription) -> Result<(), K8sError> {
         self.service_api
             .patch(
                 &desc.name,
                 &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(desc.service),
+                &Patch::Apply(desc.service.clone()),
             )
             .await?;
         self.stateful_set_api
             .patch(
                 &desc.name,
                 &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(desc.stateful_set),
+                &Patch::Apply(desc.stateful_set.clone()),
             )
             .await?;
 
@@ -1586,14 +1610,14 @@ impl OrchestratorWorker {
         Ok(())
     }
 
-    async fn drop_service(&self, name: &str) -> Result<(), anyhow::Error> {
+    async fn drop_service(&self, name: &str) -> Result<(), K8sError> {
         let res = self
             .stateful_set_api
             .delete(name, &DeleteParams::default())
             .await;
         match res {
             Ok(_) => (),
-            Err(Error::Api(e)) if e.code == 404 => (),
+            Err(K8sError::Api(e)) if e.code == 404 => (),
             Err(e) => return Err(e.into()),
         }
 
@@ -1603,12 +1627,12 @@ impl OrchestratorWorker {
             .await;
         match res {
             Ok(_) => Ok(()),
-            Err(Error::Api(e)) if e.code == 404 => Ok(()),
+            Err(K8sError::Api(e)) if e.code == 404 => Ok(()),
             Err(e) => Err(e.into()),
         }
     }
 
-    async fn list_services(&self, namespace: &str) -> Result<Vec<String>, anyhow::Error> {
+    async fn list_services(&self, namespace: &str) -> Result<Vec<String>, K8sError> {
         let stateful_sets = self.stateful_set_api.list(&Default::default()).await?;
         let name_prefix = format!("{namespace}-");
         Ok(stateful_sets
