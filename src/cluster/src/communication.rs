@@ -36,6 +36,7 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Display;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -109,7 +110,7 @@ where
         }
     }
 
-    match initialize_networking_from_sockets(sockets, process, workers, Box::new(|_| None)) {
+    match initialize_networking_from_sockets(sockets, process, workers, Arc::new(|_| None)) {
         Ok((stuff, guard)) => {
             info!(process = process, "successfully initialized network");
             Ok((

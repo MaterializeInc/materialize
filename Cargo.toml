@@ -263,6 +263,13 @@ debug = 2
 # tend to get rewritten or disappear (e.g., because a PR is force pushed or gets
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
+[patch."https://github.com/TimelyDataflow/timely-dataflow"]
+# Projects that do not reliably release to crates.io.
+timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 [patch.crates-io]
 # Projects that do not reliably release to crates.io.
 timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
@@ -270,8 +277,8 @@ timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
-dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
+differential-dataflow = { git = "https://github.com/antiguru/differential-dataflow.git", branch = "consolidate_layout_merger_chunk" }
+dogsdogsdogs = { git = "https://github.com/antiguru/differential-dataflow.git", branch = "consolidate_layout_merger_chunk" }
 
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
