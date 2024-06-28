@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -99,6 +100,10 @@ pub trait StorageCollections: Debug {
         init_ids: BTreeSet<GlobalId>,
         drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    /// Allow this controller and instances controlled by it to write to
+    /// external systems.
+    async fn allow_writes(&self);
 
     /// Update storage configuration with new parameters.
     fn update_parameters(&self, config_params: StorageParameters);
@@ -330,6 +335,13 @@ pub struct StorageCollectionsImpl<
     /// all of the controllers and Coordinator.
     envd_epoch: NonZeroI64,
 
+    /// Whether or not this [StorageCollections] is in read-only mode.
+    ///
+    /// When in read-only mode, we are allowed to affect changes to external
+    /// systems, including, for example, acquiring and downgrading critical
+    /// [SinceHandles](SinceHandle)
+    read_only: Arc<AtomicBool>,
+
     /// The set of [ShardIds](ShardId) that we have to finalize. These will have
     /// been persisted by the caller of [StorageCollections::prepare_state].
     finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
@@ -397,6 +409,7 @@ where
         _now: NowFn,
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
+        read_only: bool,
         txn_wal_tables: TxnWalTablesImpl,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
@@ -496,6 +509,7 @@ where
             collections,
             txns,
             envd_epoch,
+            read_only: Arc::new(AtomicBool::new(read_only)),
             config,
             persist_location,
             persist: persist_clients,
@@ -521,14 +535,22 @@ where
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
     ) -> (WriteHandle<SourceData, (), T, Diff>, SinceHandleWrapper<T>) {
+        let since_handle = if self.read_only.load(Ordering::SeqCst) {
+            let read_handle = self
+                .open_leased_handle(id, shard, relation_desc.clone(), since, persist_client)
+                .await;
+            SinceHandleWrapper::Leased(read_handle)
+        } else {
+            let since_handle = self
+                .open_critical_handle(id, shard, since, persist_client)
+                .await;
+
+            SinceHandleWrapper::Critical(since_handle)
+        };
+
         let write_handle = self
             .open_write_handle(id, shard, relation_desc, persist_client)
             .await;
-        let since_handle = self
-            .open_critical_handle(id, shard, since, persist_client)
-            .await;
-
-        let since_handle = SinceHandleWrapper::Critical(since_handle);
 
         (write_handle, since_handle)
     }
@@ -585,6 +607,13 @@ where
         since: Option<&Antichain<T>>,
         persist_client: &PersistClient,
     ) -> SinceHandle<SourceData, (), T, Diff, PersistEpoch> {
+        tracing::info!(%id, ?since, "opening critical handle");
+
+        assert!(
+            !self.read_only.load(Ordering::SeqCst),
+            "attempting to open critical SinceHandle in read-only mode"
+        );
+
         let diagnostics = Diagnostics {
             shard_name: id.to_string(),
             handle_purpose: format!("controller data for {}", id),
@@ -654,6 +683,8 @@ where
         since: Option<&Antichain<T>>,
         persist_client: &PersistClient,
     ) -> ReadHandle<SourceData, (), T, Diff> {
+        tracing::info!(%id, ?since, "opening leased handle");
+
         let diagnostics = Diagnostics {
             shard_name: id.to_string(),
             handle_purpose: format!("controller data for {}", id),
@@ -696,6 +727,10 @@ where
             since_handle,
             write_handle,
         });
+    }
+
+    fn upgrade_since_handle(&self, id: GlobalId, since_handle: SinceHandleWrapper<T>) {
+        self.send(BackgroundCmd::Upgrade { id, since_handle });
     }
 
     fn send(&self, cmd: BackgroundCmd<T>) {
@@ -1124,6 +1159,80 @@ where
             .extend(unfinalized_shards.into_iter());
 
         Ok(())
+    }
+
+    async fn allow_writes(&self) {
+        // This is a carefully choreographed dance!
+
+        // First acquire a lock on collections, so no-one can create any while
+        // we operate.
+        let collections_to_upgrade = {
+            let self_collections = self.collections.lock().expect("lock poisoned");
+
+            // Check if we're already switched over.
+            if !self.read_only.load(Ordering::SeqCst) {
+                // Already done!
+                return;
+            }
+
+            // Pull a copy of all collections whose leased handle we have to
+            // "upgrade" to a critical handle.
+            let mut collections_to_upgrade = Vec::new();
+
+            for (id, collection) in self_collections.iter() {
+                collections_to_upgrade.push((
+                    *id,
+                    collection.collection_metadata.data_shard.clone(),
+                    collection.read_capabilities.frontier().to_owned(),
+                ));
+            }
+
+            // Record that we're out of read-only mode.
+            self.read_only.store(false, Ordering::SeqCst);
+
+            // And only then allow adding collections again! This will make sure
+            // that any collections registered after this time will already have
+            // critical since handles.
+            drop(self_collections);
+
+            collections_to_upgrade
+        };
+
+        let persist_client = self
+            .persist
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
+
+        for (id, data_shard, since) in collections_to_upgrade {
+            let since_handle = self
+                .open_critical_handle(&id, data_shard, Some(&since), &persist_client)
+                .await;
+
+            // NOTE(aljoscha): This can happen when the "active" `environmentd`
+            // keeps driving forward the critical handle. If we wanted this to
+            // be guaranteed to work, we'd need a mechanism from persist that
+            // allows turning back a critical handle's since to a since that is
+            // held by a leased reader. In theory, this is possible, because the
+            // overall shard since is being held back by the leased handle that
+            // we hold here.
+            //
+            // We *shouldn't* invest into that for now, because the approach we
+            // use for zero-downtime upgrades does not require transitioning out
+            // of read-only mode within the process. We instead halt the new
+            // `environmentd` and let it come up fresh in read-write mode, at
+            // which time it will take over the critical since handles right at
+            // the beginning, as per the usual bootstrap process.
+            if PartialOrder::less_than(&since, since_handle.since()) {
+                panic!(
+                    "Tried upgrading leased handle of collection {id} to a critical handle, but the desired since ({:?}) is not beyond the critical since ({:?})",
+                    since, since_handle.since());
+            }
+
+            let since_handle = SinceHandleWrapper::Critical(since_handle);
+
+            self.upgrade_since_handle(id, since_handle);
+        }
     }
 
     fn update_parameters(&self, config_params: StorageParameters) {
@@ -2121,13 +2230,8 @@ enum BackgroundCmd<T: TimelyTimestamp + Lattice + Codec64> {
         write_handle: WriteHandle<SourceData, (), T, Diff>,
         since_handle: SinceHandleWrapper<T>,
     },
-    // This was also dead code in the StorageController. I think we keep around
-    // these code paths for when we need to do migrations in the future.
-    #[allow(dead_code)]
-    Update {
+    Upgrade {
         id: GlobalId,
-        is_in_txns: bool,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
         since_handle: SinceHandleWrapper<T>,
     },
     DowngradeSince(Vec<(GlobalId, Antichain<T>)>),
@@ -2250,25 +2354,20 @@ where
                             }
 
                         }
+                        BackgroundCmd::Upgrade { id, since_handle } => {
+                            assert!(matches!(since_handle, SinceHandleWrapper::Critical(_)), "can only upgrade a leased handle to a critical handle");
+
+                            let previous = self.since_handles.insert(id, since_handle);
+
+                            if let Some(previous) = previous {
+                                assert!(matches!(previous, SinceHandleWrapper::Leased(_)), "can only upgrade a leased handle to a critical handle");
+                                previous.expire().await;
+                            } else {
+                                 panic!("BackgroundCmd::Upgrade only valid for updating extant since handles");
+                            }
+                        }
                         BackgroundCmd::DowngradeSince(cmds) => {
                             self.downgrade_sinces(cmds).await;
-                        }
-                        BackgroundCmd::Update { id, is_in_txns, write_handle, since_handle } => {
-                            self.shard_by_id.insert(id, write_handle.shard_id()).expect(
-                                "BackgroundCmd::Update only valid for updating extant write handles",
-                            );
-
-                            self.since_handles.insert(id, since_handle).expect(
-                                "BackgroundCmd::Update only valid for updating extant since handles",
-                            );
-
-                            if is_in_txns {
-                                self.txns_shards.insert(id);
-                            } else {
-                                let fut = gen_upper_future(id, write_handle);
-                                upper_futures.push(fut.boxed());
-                            }
-
                         }
                         BackgroundCmd::SnapshotStats(id, as_of, tx) => {
                             // NB: The requested as_of could be arbitrarily far
