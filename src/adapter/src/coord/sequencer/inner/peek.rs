@@ -286,6 +286,7 @@ impl Coordinator {
         if cluster.replicas().next().is_none() && explain_ctx.needs_cluster() {
             return Err(AdapterError::NoClusterReplicasAvailable(
                 cluster.name.clone(),
+                cluster.is_managed(),
             ));
         }
 
@@ -322,6 +323,7 @@ impl Coordinator {
                     None => {
                         return Err(AdapterError::NoClusterReplicasAvailable(
                             cluster.name.clone(),
+                            cluster.is_managed(),
                         ))
                     }
                 };
