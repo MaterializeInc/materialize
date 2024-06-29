@@ -185,6 +185,10 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<BuiltinTableAppendNotify, AdapterError> {
+        if self.controller.read_only() {
+            return Err(AdapterError::ReadOnly);
+        }
+
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut sources_to_drop = vec![];

@@ -2358,6 +2358,11 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::InsertPlan,
     ) {
+        if self.controller.read_only() {
+            ctx.retire(Err(AdapterError::ReadOnly));
+            return;
+        }
+
         // The structure of this code originates from a time where
         // `ReadThenWritePlan` was carrying an `MirRelationExpr` instead of an
         // optimized `MirRelationExpr`.
@@ -2454,6 +2459,11 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
+        if self.controller.read_only() {
+            ctx.retire(Err(AdapterError::ReadOnly));
+            return;
+        }
+
         let mut source_ids = plan.selection.depends_on();
         source_ids.insert(plan.id);
         guard_write_critical_section!(self, ctx, Plan::ReadThenWrite(plan), source_ids);

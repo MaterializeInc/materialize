@@ -698,7 +698,7 @@ impl SessionClient {
     /// No authorization is performed, so access to this function must be
     /// limited to internal servers or superusers.
     pub async fn controller_allow_writes(&mut self) -> Result<bool, anyhow::Error> {
-        self.send_without_session(|tx| Command::ControllerAllowWrites { tx })
+        self.send_without_session(|tx| Command::AllowWrites { tx })
             .await
     }
 
@@ -871,7 +871,7 @@ impl SessionClient {
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }
                 | Command::Dump { .. } => {}
-                Command::ControllerAllowWrites { .. } => {}
+                Command::AllowWrites { .. } => {}
             };
             cmd
         });

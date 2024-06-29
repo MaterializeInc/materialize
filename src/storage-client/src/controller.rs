@@ -300,7 +300,10 @@ pub trait StorageController: Debug {
 
     /// Allow this controller and instances controlled by it to write to
     /// external systems.
-    async fn allow_writes(&mut self);
+    ///
+    /// Caller must provide a `register_ts`, the timestamp at which any tables
+    /// that are known to the controller should be registered in the txn system.
+    async fn allow_writes(&mut self, register_ts: Option<Self::Timestamp>);
 
     /// Update storage configuration with new parameters.
     fn update_parameters(&mut self, config_params: StorageParameters);
