@@ -128,7 +128,7 @@ pub enum Command {
         tx: oneshot::Sender<Result<serde_json::Value, anyhow::Error>>,
     },
 
-    ControllerAllowWrites {
+    AllowWrites {
         tx: oneshot::Sender<Result<bool, anyhow::Error>>,
     },
 }
@@ -148,7 +148,7 @@ impl Command {
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
-            | Command::ControllerAllowWrites { .. } => None,
+            | Command::AllowWrites { .. } => None,
         }
     }
 
@@ -166,7 +166,7 @@ impl Command {
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
-            | Command::ControllerAllowWrites { .. } => None,
+            | Command::AllowWrites { .. } => None,
         }
     }
 }
