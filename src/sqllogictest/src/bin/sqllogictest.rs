@@ -229,17 +229,25 @@ async fn main() -> ExitCode {
                                 writeln!(
                                     config.stdout,
                                     "{}",
-                                    util::indent(&o.display(config.no_fail).to_string(), 4)
+                                    util::indent(&o.display(config.no_fail, false).to_string(), 4)
                                 );
                             }
                             if let Some((_, junit_suite)) = &mut junit {
                                 let mut test_case = if o.any_failed() {
-                                    junit_report::TestCase::failure(
+                                    let mut result = junit_report::TestCase::failure(
                                         &entry.path().to_string_lossy(),
                                         start_time.elapsed(),
                                         "failure",
-                                        &o.display(false).to_string(),
-                                    )
+                                        "",
+                                    );
+                                    // Encode in system_out so we can display newlines
+                                    result.system_out = Some(
+                                        o.display(false, true)
+                                            .to_string()
+                                            .trim_end_matches('\n')
+                                            .to_string(),
+                                    );
+                                    result
                                 } else {
                                     junit_report::TestCase::success(
                                         &entry.path().to_string_lossy(),
@@ -275,7 +283,7 @@ async fn main() -> ExitCode {
         }
     }
 
-    writeln!(config.stdout, "{}", outcomes.display(config.no_fail));
+    writeln!(config.stdout, "{}", outcomes.display(config.no_fail, false));
 
     if let Some((mut junit_file, junit_suite)) = junit {
         let report = junit_report::ReportBuilder::new()
