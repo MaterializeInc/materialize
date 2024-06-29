@@ -11,9 +11,9 @@ For a complete step-by-step guide on how to use dbt and Materialize, check the
 `pip` (optionally using a virtual environment), run:
 
 ```nofmt
-python3 -m venv dbt-venv         # create the virtual environment
-source dbt-venv/bin/activate     # activate the virtual environment
-pip install dbt-materialize      # install the adapter
+python3 -m venv dbt-venv                  # create the virtual environment
+source dbt-venv/bin/activate              # activate the virtual environment
+pip install dbt-core dbt-materialize      # install dbt-core and the adapter
 ```
 
 ## Requirements
