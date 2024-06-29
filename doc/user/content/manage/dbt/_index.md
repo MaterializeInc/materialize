@@ -37,13 +37,13 @@ need to:
    (optionally using a virtual environment):
 
     ```bash
-    python3 -m venv dbt-venv         # create the virtual environment
-    source dbt-venv/bin/activate     # activate the virtual environment
-    pip install dbt-materialize      # install the adapter
+    python3 -m venv dbt-venv                  # create the virtual environment
+    source dbt-venv/bin/activate              # activate the virtual environment
+    pip install dbt-core dbt-materialize      # install dbt-core and the adapter
     ```
 
-    The installation will include `dbt-core` and the `dbt-postgres` dependency.
-    To check that the plugin was successfully installed, run:
+    The installation will include the `dbt-postgres` dependency. To check that
+    the plugin was successfully installed, run:
 
     ```bash
     dbt --version
@@ -421,6 +421,22 @@ unspecified, the default cluster for the connection is used.
 
 ```mzsql
 {{ config(materialized='materialized_view', cluster='cluster_a') }}
+```
+
+To dynamically generate the name of a cluster (e.g., based on the target
+environment), you can override the `generate_cluster_name` macro with your
+custom logic under the directory defined by [macro-paths](https://docs.getdbt.com/reference/project-configs/macro-paths)
+in `dbt_project.yml`.
+
+**Filename:** macros/generate_cluster_name.sql
+```mzsql
+{% macro generate_cluster_name(custom_cluster_name) -%}
+    {%- if target.name == 'prod' -%}
+        {{ custom_cluster_name }}
+    {%- else -%}
+        {{ target.name }}_{{ custom_cluster_name }}
+    {%- endif -%}
+{%- endmacro %}
 ```
 
 #### Databases
