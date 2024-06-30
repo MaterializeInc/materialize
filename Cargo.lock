@@ -5514,6 +5514,7 @@ version = "0.108.0-dev"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.4",
+ "arrow",
  "async-stream",
  "async-trait",
  "bytes",
@@ -5888,6 +5889,7 @@ dependencies = [
  "hex",
  "insta",
  "itertools 0.10.5",
+ "itoa",
  "mz-build-tools",
  "mz-lowertest",
  "mz-ore",
@@ -7409,6 +7411,7 @@ name = "persistcli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arrow",
  "async-trait",
  "axum",
  "bytes",
