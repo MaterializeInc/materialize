@@ -1149,8 +1149,18 @@ impl RowColumnarDecoder {
 
         // For performance reasons we downcast just a single time.
         let mut decoders = Vec::with_capacity(desc_columns.len());
-        for (col_array, col_type) in inner_columns.iter().zip(desc_columns.iter()) {
-            let decoder = array_to_decoder(col_array, &col_type.scalar_type)?;
+        let mut itoa = itoa::Buffer::new();
+
+        // The columns of the `StructArray` are named with their column index.
+        for (col_idx, col_type) in desc_columns.iter().enumerate() {
+            let field_name = itoa.format(col_idx);
+            let column = col.column_by_name(field_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "StructArray did not contain column name {field_name}, found {:?}",
+                    col.column_names()
+                )
+            })?;
+            let decoder = array_to_decoder(column, &col_type.scalar_type)?;
             decoders.push(decoder);
         }
 
@@ -1182,7 +1192,8 @@ impl ColumnDecoder<Row> for RowColumnarDecoder {
 #[derive(Debug)]
 pub struct RowColumnarEncoder {
     encoders: Vec<DatumEncoder>,
-    col_names: Vec<Arc<str>>,
+    // TODO(parkmycar): Replace the `usize` with a `ColumnIdx` type.
+    col_names: Vec<(usize, Arc<str>)>,
     // TODO(parkmycar): Optionally omit this.
     nullability: BooleanBufferBuilder,
 }
@@ -1202,22 +1213,25 @@ impl RowColumnarEncoder {
             return None;
         }
 
-        let encoders: Vec<_> = desc
-            .typ()
-            .columns()
+        let (col_names, encoders): (Vec<_>, Vec<_>) = desc
             .iter()
-            .map(|column_type| {
-                let encoder = scalar_type_to_encoder(&column_type.scalar_type)
+            .enumerate()
+            .map(|(idx, (col_name, col_type))| {
+                let encoder = scalar_type_to_encoder(&col_type.scalar_type)
                     .expect("failed to create encoder");
-                DatumEncoder {
-                    nullable: column_type.nullable,
+                let encoder = DatumEncoder {
+                    nullable: col_type.nullable,
                     encoder,
                     none_stats: 0,
-                }
+                };
+
+                // We name the Fields in Parquet with the column index, but for
+                // backwards compat use the column name for stats.
+                let name = (idx, col_name.as_str().into());
+
+                (name, encoder)
             })
-            .collect();
-        let col_names: Vec<_> = desc.iter_names().map(|name| name.as_str().into()).collect();
-        assert_eq!(encoders.len(), col_names.len());
+            .unzip();
 
         Some(RowColumnarEncoder {
             encoders,
@@ -1253,14 +1267,15 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
             ..
         } = self;
 
+        let mut itoa = itoa::Buffer::new();
         let (arrays, fields, stats): (Vec<_>, Vec<_>, Vec<_>) = col_names
             .iter()
             .zip(encoders.into_iter())
-            .map(|(name, encoder)| {
+            .map(|((col_idx, col_name), encoder)| {
                 let nullable = encoder.nullable;
                 let (array, stats) = encoder.finish();
-                let stats = (name.to_string(), stats);
-                let field = Field::new(name.as_ref(), array.data_type().clone(), nullable);
+                let stats = (col_name.to_string(), stats);
+                let field = Field::new(itoa.format(*col_idx), array.data_type().clone(), nullable);
 
                 (array, field, stats)
             })

@@ -321,7 +321,7 @@ pub trait ColumnEncoder<T> {
 /// Description of a type that we encode into Persist.
 pub trait Schema2<T>: Debug + Send + Sync {
     /// The type of column we decode from, and encoder will finish into.
-    type ArrowColumn: arrow::array::Array + Debug + 'static;
+    type ArrowColumn: arrow::array::Array + Debug + Clone + 'static;
     /// Statistics we collect for a schema of this type.
     type Statistics: DynStats + 'static;
 
@@ -333,6 +333,22 @@ pub trait Schema2<T>: Debug + Send + Sync {
 
     /// Returns a type that is able to decode instances of `T` from the provider column.
     fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error>;
+    /// Returns a type that is able to decode instances of `T` from a type erased
+    /// [`arrow::array::Array`], erroring if the provided array is not [`Self::ArrowColumn`].
+    fn decoder_any(&self, col: &dyn arrow::array::Array) -> Result<Self::Decoder, anyhow::Error> {
+        let col = col
+            .as_any()
+            .downcast_ref::<Self::ArrowColumn>()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "failed downcasting to {}",
+                    std::any::type_name::<Self::ArrowColumn>()
+                )
+            })?
+            .clone();
+        self.decoder(col)
+    }
+
     /// Returns a type that can encode values of `T`.
     fn encoder(&self) -> Result<Self::Encoder, anyhow::Error>;
 }
@@ -353,7 +369,7 @@ pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
     let mut actual = T::default();
     assert_eq!(part.len(), 1);
     let part = part.key_ref();
-    schema.decoder(part)?.decode(0, &mut actual);
+    Schema::decoder(schema, part)?.decode(0, &mut actual);
     if &actual != value {
         Err(format!(
             "validate_roundtrip expected {:?} but got {:?}",

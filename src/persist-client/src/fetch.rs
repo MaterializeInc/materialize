@@ -24,8 +24,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::{soft_assert_eq_no_log, soft_panic_no_log, soft_panic_or_log};
 use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
-use mz_persist_types::columnar::{PartDecoder, Schema};
-use mz_persist_types::dyn_struct::DynStructCol;
+use mz_persist_types::columnar::{ColumnDecoder, Schema2};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -693,8 +692,8 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     ts_filter: FetchBatchFilter<T>,
     part: EncodedPart<T>,
     structured_part: (
-        Option<Arc<<K::Schema as Schema<K>>::Decoder>>,
-        Option<Arc<<V::Schema as Schema<V>>::Decoder>>,
+        Option<Arc<<K::Schema as Schema2<K>>::Decoder>>,
+        Option<Arc<<V::Schema as Schema2<V>>::Decoder>>,
     ),
     schemas: Schemas<K, V>,
     filter_pushdown_audit: Option<LazyPartStats>,
@@ -757,9 +756,8 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                     .key
                     .as_ref()
                     .map(|col| {
-                        let col = DynStructCol::from_arrow(schemas.key.columns(), col)?;
-                        let decoder = schemas.key.decoder(col.as_ref())?;
-                        Ok::<_, String>(Arc::new(decoder))
+                        let decoder = Schema2::decoder_any(schemas.key.as_ref(), col)?;
+                        Ok::<_, anyhow::Error>(Arc::new(decoder))
                     })
                     .transpose();
                 let key = match maybe_key {
@@ -774,9 +772,8 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                     .val
                     .as_ref()
                     .map(|col| {
-                        let col = DynStructCol::from_arrow(schemas.val.columns(), col)?;
-                        let decoder = schemas.val.decoder(col.as_ref())?;
-                        Ok::<_, String>(Arc::new(decoder))
+                        let decoder = Schema2::decoder_any(schemas.val.as_ref(), col)?;
+                        Ok::<_, anyhow::Error>(Arc::new(decoder))
                     })
                     .transpose();
                 let val = match maybe_val {

@@ -92,14 +92,14 @@ pub fn encode_arrow_batch_kvtd_ks_vs(
         let key_field = Field::new("k_s", key_array.data_type().clone(), false);
 
         fields.push(Arc::new(key_field));
-        arrays.push(Arc::new(key_array.clone()));
+        arrays.push(Arc::clone(key_array));
     }
 
     if let Some(val_array) = &structured.val {
         let val_field = Field::new("v_s", val_array.data_type().clone(), false);
 
         fields.push(Arc::new(val_field));
-        arrays.push(Arc::new(val_array.clone()));
+        arrays.push(Arc::clone(val_array));
     }
 
     (fields, arrays)
@@ -182,8 +182,8 @@ pub fn decode_arrow_batch_kvtd(
 /// Converts an arrow [(K, V, T, D)] Chunk into a ColumnarRecords.
 pub fn decode_arrow_batch_kvtd_ks_vs(
     cols: &[Arc<dyn Array>],
-    maybe_key_col: Option<&dyn Array>,
-    maybe_val_col: Option<&dyn Array>,
+    maybe_key_col: Option<Arc<dyn Array>>,
+    maybe_val_col: Option<Arc<dyn Array>>,
     metrics: &ColumnarMetrics,
 ) -> Result<(ColumnarRecords, ColumnarRecordsStructuredExt), String> {
     let same_length = cols
@@ -199,26 +199,12 @@ pub fn decode_arrow_batch_kvtd_ks_vs(
 
     // We always have (K, V, T, D) columns.
     let primary_records = decode_arrow_batch_kvtd(cols, metrics)?;
+    let structured_ext = ColumnarRecordsStructuredExt {
+        key: maybe_key_col,
+        val: maybe_val_col,
+    };
 
-    // Optionally we might have 'K_S' and/or 'V_S' columns.
-    let key = maybe_key_col
-        .map(|col| {
-            col.as_any()
-                .downcast_ref::<arrow::array::StructArray>()
-                .ok_or_else(|| format!("k_s column doesn't match schema"))
-        })
-        .transpose()?
-        .cloned();
-    let val = maybe_val_col
-        .map(|col| {
-            col.as_any()
-                .downcast_ref::<arrow::array::StructArray>()
-                .ok_or_else(|| format!("v_s column doesn't match schema"))
-        })
-        .transpose()?
-        .cloned();
-
-    Ok((primary_records, ColumnarRecordsStructuredExt { key, val }))
+    Ok((primary_records, structured_ext))
 }
 
 /// Copies a slice of data into a possibly disk-backed lgalloc region.

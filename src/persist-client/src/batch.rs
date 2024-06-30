@@ -352,7 +352,7 @@ pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
 pub(crate) const BATCH_COLUMNAR_FORMAT: Config<&'static str> = Config::new(
     "persist_batch_columnar_format",
     BatchColumnarFormat::default().as_str(),
-    "Columnar format for a batch written to Persist, either 'row', 'both', or 'both_v1' (Materialize).",
+    "Columnar format for a batch written to Persist, either 'row' or 'both_v2' (Materialize).",
 );
 
 pub(crate) const BATCH_RECORD_PART_FORMAT: Config<bool> = Config::new(
@@ -1044,13 +1044,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 // Only encode our updates in a structured format if required, it's expensive.
                 let stats = 'collect_stats: {
                     if cfg.stats_collection_enabled || cfg.batch_columnar_format.is_structured() {
-                        let result = metrics_
-                            .columnar
-                            .arrow()
-                            .measure_part_build(|| encode_updates(&schemas, &updates.updates));
+                        let result = metrics_.columnar.arrow().measure_part_build(|| {
+                            encode_updates(&schemas, &updates.updates, &cfg.batch_columnar_format)
+                        });
 
                         // We can't collect stats if we failed to encode in a columnar format.
-                        let Ok((columnar_part, stats)) = result else {
+                        let Ok(((key_col, val_col), stats)) = result else {
                             tracing::error!(?result, "failed to encode in columnar format!");
                             break 'collect_stats None;
                         };
@@ -1061,8 +1060,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             if records.len() == 1 && cfg.batch_columnar_format.is_structured() {
                                 let record = records.pop().expect("checked length above");
                                 let record_ext = ColumnarRecordsStructuredExt {
-                                    key: columnar_part.to_key_arrow().map(|(_, array)| array),
-                                    val: columnar_part.to_val_arrow().map(|(_, array)| array),
+                                    key: key_col,
+                                    val: val_col,
                                 };
                                 updates.updates = BlobTraceUpdates::Both(record, record_ext)
                             }
