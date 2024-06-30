@@ -26,7 +26,7 @@ banana
     -- SECURITY PROTOCOL defaults to SASL_SSL when other SASL options are
     -- specified.
   )
-contains:SSL handshake failed
+contains:Broker does not support SSL connections
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9095',
@@ -35,7 +35,7 @@ contains:SSL handshake failed
     SASL PASSWORD SECRET password,
     SECURITY PROTOCOL SASL_SSL
   )
-contains:SSL handshake failed
+contains:Broker does not support SSL connections
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9095',
