@@ -2954,3 +2954,34 @@ Used Indexes:
 Target cluster: quickstart
 
 EOF
+
+
+query T
+SELECT LIST[1,4,3] @> LIST[3,1] AS contains
+----
+true
+
+query T
+SELECT LIST[1,4,3] <@ LIST[3,1] AS contains
+----
+false
+
+query T
+SELECT LIST[1,4,3] @> LIST[3,1,1] AS contains
+----
+false
+
+query T
+SELECT LIST[1,4,3] @> LIST[]::INT LIST AS contains
+----
+true
+
+query T
+SELECT LIST[2,7] <@ LIST[1,7,4,2,6] AS is_contained_by
+----
+true
+
+query T
+SELECT LIST[2,7] @> LIST[1,7,4,2,6] AS is_contained_by
+----
+false

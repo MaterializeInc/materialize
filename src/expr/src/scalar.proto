@@ -655,6 +655,7 @@ message ProtoBinaryFunc {
         google.protobuf.Empty timezone_offset = 190;
         google.protobuf.Empty pretty_sql = 191;
         ProtoRegexpReplaceResult regexp_replace = 192;
+        bool list_contains_list = 193;
     }
 }
 

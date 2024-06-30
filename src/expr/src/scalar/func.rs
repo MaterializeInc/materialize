@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 use std::cmp::{self, Ordering};
+use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
 use std::str::FromStr;
@@ -1626,6 +1627,19 @@ fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
+fn list_contains_list<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let mut counts = HashMap::new();
+
+    a.unwrap_list()
+        .iter()
+        .for_each(|item| *counts.entry(item).or_insert(0) += 1);
+    b.unwrap_list()
+        .iter()
+        .for_each(|item| *counts.entry(item).or_insert(0) += -1);
+
+    counts.iter().all(|(_item, count)| *count >= 0).into()
+}
+
 // TODO(jamii) nested loops are possibly not the fastest way to do this
 fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
@@ -2301,6 +2315,9 @@ pub enum BinaryFunc {
     ListElementConcat,
     ElementListConcat,
     ListRemove,
+    ListContainsList {
+        rev: bool,
+    },
     DigestString,
     DigestBytes,
     MzRenderTypmod,
@@ -2560,6 +2577,8 @@ impl BinaryFunc {
             BinaryFunc::ListElementConcat => Ok(list_element_concat(a, b, temp_storage)),
             BinaryFunc::ElementListConcat => Ok(element_list_concat(a, b, temp_storage)),
             BinaryFunc::ListRemove => Ok(list_remove(a, b, temp_storage)),
+            BinaryFunc::ListContainsList { rev: false } => Ok(list_contains_list(a, b)),
+            BinaryFunc::ListContainsList { rev: true } => Ok(list_contains_list(b, a)),
             BinaryFunc::DigestString => digest_string(a, b, temp_storage),
             BinaryFunc::DigestBytes => digest_bytes(a, b, temp_storage),
             BinaryFunc::MzRenderTypmod => mz_render_typmod(a, b, temp_storage),
@@ -2747,6 +2766,8 @@ impl BinaryFunc {
             }
 
             ElementListConcat => input2_type.scalar_type.without_modifiers().nullable(true),
+
+            ListContainsList { .. } =>  ScalarType::Bool.nullable(in_nullable),
 
             DigestString | DigestBytes => ScalarType::Bytes.nullable(in_nullable),
             Position => ScalarType::Int32.nullable(in_nullable),
@@ -2951,6 +2972,7 @@ impl BinaryFunc {
             | MapContainsAllKeys
             | MapContainsAnyKeys
             | MapContainsMap
+            | ListContainsList { .. }
             | ConvertFrom
             | Left
             | Position
@@ -3121,6 +3143,7 @@ impl BinaryFunc {
             | MapContainsAllKeys
             | MapContainsAnyKeys
             | MapContainsMap
+            | ListContainsList { .. }
             | TextConcat
             | IsLikeMatch { .. }
             | IsRegexpMatch { .. }
@@ -3438,6 +3461,7 @@ impl BinaryFunc {
             | BinaryFunc::ListListConcat
             | BinaryFunc::ListElementConcat
             | BinaryFunc::ElementListConcat
+            | BinaryFunc::ListContainsList { .. }
             | BinaryFunc::ListRemove
             | BinaryFunc::DigestString
             | BinaryFunc::DigestBytes
@@ -3641,6 +3665,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListElementConcat => f.write_str("||"),
             BinaryFunc::ElementListConcat => f.write_str("||"),
             BinaryFunc::ListRemove => f.write_str("list_remove"),
+            BinaryFunc::ListContainsList { rev, .. } => f.write_str(if *rev { "<@" } else { "@>" }),
             BinaryFunc::DigestString | BinaryFunc::DigestBytes => f.write_str("digest"),
             BinaryFunc::MzRenderTypmod => f.write_str("mz_render_typmod"),
             BinaryFunc::Encode => f.write_str("encode"),
@@ -4042,6 +4067,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::MapContainsAllKeys => MapContainsAllKeys(()),
             BinaryFunc::MapContainsAnyKeys => MapContainsAnyKeys(()),
             BinaryFunc::MapContainsMap => MapContainsMap(()),
+            BinaryFunc::ListContainsList { rev } => ListContainsList(*rev),
             BinaryFunc::ConvertFrom => ConvertFrom(()),
             BinaryFunc::Left => Left(()),
             BinaryFunc::Position => Position(()),
@@ -4257,6 +4283,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 MapContainsAllKeys(()) => Ok(BinaryFunc::MapContainsAllKeys),
                 MapContainsAnyKeys(()) => Ok(BinaryFunc::MapContainsAnyKeys),
                 MapContainsMap(()) => Ok(BinaryFunc::MapContainsMap),
+                ListContainsList(rev) => Ok(BinaryFunc::ListContainsList { rev }),
                 ConvertFrom(()) => Ok(BinaryFunc::ConvertFrom),
                 Left(()) => Ok(BinaryFunc::Left),
                 Position(()) => Ok(BinaryFunc::Position),
