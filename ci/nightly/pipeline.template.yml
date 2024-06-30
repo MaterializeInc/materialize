@@ -251,7 +251,7 @@ steps:
               composition: testdrive
               args: [
                 --system-param=persist_part_decode_format=row_with_validate,
-                --system-param=persist_batch_columnar_format=both,
+                --system-param=persist_batch_columnar_format=both_v2,
               ]
 
       - id: testdrive-in-cloudtest
