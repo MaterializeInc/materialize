@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 use std::cmp::{self, Ordering};
+use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
 use std::str::FromStr;
@@ -29,7 +30,6 @@ use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{self, CastFrom, ReinterpretCast};
-use mz_ore::collections::HashMap;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
@@ -1628,7 +1628,7 @@ fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn list_contains_list<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let mut counts = HashMap::new();
+    let mut counts = BTreeMap::new();
 
     a.unwrap_list()
         .iter()
