@@ -202,7 +202,7 @@ impl ColumnStats<Vec<u8>> for BytesStats {
     where
         Self: Sized,
     {
-        match stats.non_null_values()? {
+        match stats.as_non_null_values()? {
             ColumnStatKinds::Bytes(bytes) => Some(bytes.clone()),
             _ => None,
         }

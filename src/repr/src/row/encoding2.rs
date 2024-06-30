@@ -1599,7 +1599,7 @@ mod tests {
     use super::*;
     use crate::adt::array::ArrayDimension;
     use crate::relation::arb_relation_desc;
-    use crate::{arb_datum_for_column, arb_row_for_relation, ColumnName, ColumnType};
+    use crate::{arb_datum_for_column, arb_row_for_relation, ColumnName, ColumnType, RowArena};
 
     #[track_caller]
     fn roundtrip_datum<'a>(ty: ColumnType, datum: impl Iterator<Item = Datum<'a>>) {
@@ -1618,11 +1618,13 @@ mod tests {
         let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col).unwrap();
 
         // Collect all of our lower and upper bounds.
+        let arena = RowArena::new();
         let (stats, stat_nulls): (Vec<_>, Vec<_>) = desc
             .iter()
             .map(|(name, ty)| {
                 let col_stats = stats.some.cols.get(name.as_str()).unwrap();
-                let (lower, upper) = crate::stats2::col_values(&ty.scalar_type, &col_stats.values);
+                let (lower, upper) =
+                    crate::stats2::col_values(&ty.scalar_type, &col_stats.values, &arena);
                 let null_count = col_stats.nulls.map_or(0, |n| n.count);
 
                 ((lower, upper), null_count)
