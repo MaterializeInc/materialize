@@ -105,7 +105,7 @@ impl ColumnStats<DynStruct> for StructStats {
     where
         Self: Sized,
     {
-        match stats.non_null_values()? {
+        match stats.as_non_null_values()? {
             ColumnStatKinds::Struct(inner) => Some(inner.clone()),
             _ => None,
         }

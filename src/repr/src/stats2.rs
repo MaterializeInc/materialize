@@ -20,7 +20,9 @@ use mz_persist_types::columnar::{Data, FixedSizeCodec};
 use mz_persist_types::stats::bytes::{BytesStats, FixedSizeBytesStats, FixedSizeBytesStatsKind};
 use mz_persist_types::stats::json::{JsonMapElementStats, JsonStats};
 use mz_persist_types::stats::primitive::PrimitiveStats;
-use mz_persist_types::stats::{ColumnStatKinds, ColumnStats, PrimitiveStatsVariants};
+use mz_persist_types::stats::{
+    AtomicBytesStats, ColumnStatKinds, ColumnStats, PrimitiveStatsVariants,
+};
 use mz_persist_types::stats2::ColumnarStatsBuilder;
 use ordered_float::OrderedFloat;
 use prost::Message;
@@ -33,12 +35,13 @@ use crate::adt::jsonb::{JsonbPacker, JsonbRef};
 use crate::adt::numeric::{Numeric, PackedNumeric};
 use crate::adt::timestamp::CheckedTimestamp;
 use crate::row::ProtoDatum;
-use crate::{Datum, Row, ScalarType};
+use crate::{Datum, Row, RowArena, ScalarType};
 
 /// Returns a `(lower, upper)` bound from the provided [`ColumnStatKinds`], if applicable.
 pub fn col_values<'a>(
     typ: &ScalarType,
     stats: &'a ColumnStatKinds,
+    arena: &'a RowArena,
 ) -> (Option<Datum<'a>>, Option<Datum<'a>>) {
     use PrimitiveStatsVariants::*;
 
@@ -180,6 +183,29 @@ pub fn col_values<'a>(
             | ScalarType::Int2Vector,
             ColumnStatKinds::None,
         ) => (None, None),
+        // V0 Columnar Stat Types that differ from the above.
+        (
+            ScalarType::Numeric { .. }
+            | ScalarType::Time
+            | ScalarType::Timestamp { .. }
+            | ScalarType::TimestampTz { .. }
+            | ScalarType::Interval
+            | ScalarType::Uuid,
+            ColumnStatKinds::Bytes(BytesStats::Atomic(AtomicBytesStats { lower, upper })),
+        ) => {
+            let lower = ProtoDatum::decode(lower.as_slice()).expect("should be a valid ProtoDatum");
+            let lower = arena.make_datum(|p| {
+                p.try_push_proto(&lower)
+                    .expect("ProtoDatum should be valid Datum")
+            });
+            let upper = ProtoDatum::decode(upper.as_slice()).expect("should be a valid ProtoDatum");
+            let upper = arena.make_datum(|p| {
+                p.try_push_proto(&upper)
+                    .expect("ProtoDatum should be valid Datum")
+            });
+
+            (Some(lower), Some(upper))
+        }
         (typ, stats) => {
             mz_ore::soft_panic_or_log!("found unexpected {stats:?} for column {typ:?}");
             (None, None)
