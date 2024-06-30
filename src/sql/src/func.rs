@@ -4744,7 +4744,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             }) => Bool, 3890;
             params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListContainsList { rev: false }))
-            }) => Bool, 3893;
+            }) => Bool, 2751;
         },
         "<@" => Scalar {
             params!(Jsonb, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
@@ -4775,7 +4775,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             }) => Bool, 3892;
             params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListContainsList { rev: true }))
-            }) => Bool, 3894;
+            }) => Bool, 2752;
         },
         "?" => Scalar {
             params!(Jsonb, String) => JsonbContainsString => Bool, 3247;
