@@ -13,7 +13,6 @@
 
 use std::borrow::Cow;
 use std::cmp::{self, Ordering};
-use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
 use std::str::FromStr;
@@ -30,6 +29,7 @@ use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{self, CastFrom, ReinterpretCast};
+use mz_ore::collections::HashMap;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
