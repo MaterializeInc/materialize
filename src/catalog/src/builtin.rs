@@ -3143,7 +3143,8 @@ pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column(
             "connected_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
-        ),
+        )
+        .with_column("uuid", ScalarType::Uuid.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
