@@ -13,7 +13,6 @@
 
 use std::borrow::Cow;
 use std::cmp::{self, Ordering};
-use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
 use std::str::FromStr;
@@ -1628,16 +1627,13 @@ fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn list_contains_list<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let mut counts = BTreeMap::new();
+    let list_a = a.unwrap_list();
+    let list_b = b.unwrap_list();
 
-    a.unwrap_list()
+    list_b
         .iter()
-        .for_each(|item| *counts.entry(item).or_insert(0) += 1);
-    b.unwrap_list()
-        .iter()
-        .for_each(|item| *counts.entry(item).or_insert(0) += -1);
-
-    counts.iter().all(|(_item, count)| *count >= 0).into()
+        .all(|item_b| list_a.iter().any(|item_a| item_a == item_b))
+        .into()
 }
 
 // TODO(jamii) nested loops are possibly not the fastest way to do this
