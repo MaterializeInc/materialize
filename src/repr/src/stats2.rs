@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use arrow::array::{BinaryArray, FixedSizeBinaryArray, StringArray};
-use chrono::{DateTime, NaiveTime};
+use chrono::{NaiveDateTime, NaiveTime};
 use dec::OrderedDecimal;
 use mz_persist_types::columnar::{Data, FixedSizeCodec};
 use mz_persist_types::stats::bytes::{BytesStats, FixedSizeBytesStats, FixedSizeBytesStatsKind};
@@ -33,7 +33,7 @@ use crate::adt::datetime::PackedNaiveTime;
 use crate::adt::interval::{Interval, PackedInterval};
 use crate::adt::jsonb::{JsonbPacker, JsonbRef};
 use crate::adt::numeric::{Numeric, PackedNumeric};
-use crate::adt::timestamp::CheckedTimestamp;
+use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::ProtoDatum;
 use crate::{Datum, Row, RowArena, ScalarType};
 
@@ -135,22 +135,38 @@ pub fn col_values<'a>(
 
             (Some(Datum::Time(lower)), Some(Datum::Time(upper)))
         }
-        (ScalarType::Timestamp { .. }, ColumnStatKinds::Primitive(I64(stats))) => {
-            map_stats(stats, |x| {
-                DateTime::from_timestamp_micros(x)
-                    .map(|x| x.naive_utc())
-                    .and_then(|x| CheckedTimestamp::from_timestamplike(x).ok())
-                    .map(Datum::Timestamp)
-                    .expect("failed to roundtrip Timestamp")
-            })
+        (ScalarType::Timestamp { .. }, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+            let lower = PackedNaiveDateTime::from_bytes(&stats.lower)
+                .expect("failed to roundtrip PackedNaiveDateTime")
+                .into_value();
+            let lower =
+                CheckedTimestamp::from_timestamplike(lower).expect("failed to roundtrip timestamp");
+            let upper = PackedNaiveDateTime::from_bytes(&stats.upper)
+                .expect("failed to roundtrip Timestamp")
+                .into_value();
+            let upper =
+                CheckedTimestamp::from_timestamplike(upper).expect("failed to roundtrip timestamp");
+
+            (Some(Datum::Timestamp(lower)), Some(Datum::Timestamp(upper)))
         }
-        (ScalarType::TimestampTz { .. }, ColumnStatKinds::Primitive(I64(stats))) => {
-            map_stats(stats, |x| {
-                DateTime::from_timestamp_micros(x)
-                    .and_then(|x| CheckedTimestamp::from_timestamplike(x).ok())
-                    .map(Datum::TimestampTz)
-                    .expect("failed to roundtrip TimestampTz")
-            })
+        (ScalarType::TimestampTz { .. }, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+            let lower = PackedNaiveDateTime::from_bytes(&stats.lower)
+                .expect("failed to roundtrip PackedNaiveDateTime")
+                .into_value()
+                .and_utc();
+            let lower =
+                CheckedTimestamp::from_timestamplike(lower).expect("failed to roundtrip timestamp");
+            let upper = PackedNaiveDateTime::from_bytes(&stats.upper)
+                .expect("failed to roundtrip Timestamp")
+                .into_value()
+                .and_utc();
+            let upper =
+                CheckedTimestamp::from_timestamplike(upper).expect("failed to roundtrip timestamp");
+
+            (
+                Some(Datum::TimestampTz(lower)),
+                Some(Datum::TimestampTz(upper)),
+            )
         }
         (ScalarType::MzTimestamp, ColumnStatKinds::Primitive(U64(stats))) => {
             map_stats(stats, |x| Datum::MzTimestamp(crate::Timestamp::from(x)))
@@ -336,6 +352,79 @@ impl ColumnarStatsBuilder<NaiveTime> for NaiveTimeStatsBuilder {
             lower: PackedNaiveTime::from_value(self.lower).as_bytes().to_vec(),
             upper: PackedNaiveTime::from_value(self.upper).as_bytes().to_vec(),
             kind: FixedSizeBytesStatsKind::PackedTime,
+        })
+    }
+}
+
+/// Incrementally collects statistics for a column of `time`.
+#[derive(Default, Debug)]
+pub struct NaiveDateTimeStatsBuilder {
+    lower: NaiveDateTime,
+    upper: NaiveDateTime,
+}
+
+impl ColumnarStatsBuilder<NaiveDateTime> for NaiveDateTimeStatsBuilder {
+    type ArrowColumn = FixedSizeBinaryArray;
+    type FinishedStats = BytesStats;
+
+    fn new() -> Self
+    where
+        Self: Sized,
+    {
+        NaiveDateTimeStatsBuilder {
+            lower: NaiveDateTime::default(),
+            upper: NaiveDateTime::default(),
+        }
+    }
+
+    fn from_column(col: &Self::ArrowColumn) -> Self
+    where
+        Self: Sized,
+    {
+        // Note: Ideally here we'd use the arrow compute kernels for getting
+        // the min and max of a column, but aren't yet implemented for a
+        // `FixedSizedBinaryArray`.
+        //
+        // See: <https://github.com/apache/arrow-rs/issues/5934>
+
+        let lower = col.into_iter().filter_map(|x| x).min();
+        let upper = col.into_iter().filter_map(|x| x).max();
+
+        let lower = lower
+            .map(|b| {
+                PackedNaiveDateTime::from_bytes(b)
+                    .expect("failed to roundtrip PackedNaiveDateTime")
+                    .into_value()
+            })
+            .unwrap_or_default();
+        let upper = upper
+            .map(|b| {
+                PackedNaiveDateTime::from_bytes(b)
+                    .expect("failed to roundtrip PackedNaiveDateTime")
+                    .into_value()
+            })
+            .unwrap_or_default();
+
+        NaiveDateTimeStatsBuilder { lower, upper }
+    }
+
+    fn include(&mut self, val: NaiveDateTime) {
+        self.lower = val.min(self.lower);
+        self.upper = val.max(self.upper);
+    }
+
+    fn finish(self) -> Self::FinishedStats
+    where
+        Self::FinishedStats: Sized,
+    {
+        BytesStats::FixedSize(FixedSizeBytesStats {
+            lower: PackedNaiveDateTime::from_value(self.lower)
+                .as_bytes()
+                .to_vec(),
+            upper: PackedNaiveDateTime::from_value(self.upper)
+                .as_bytes()
+                .to_vec(),
+            kind: FixedSizeBytesStatsKind::PackedDateTime,
         })
     }
 }
