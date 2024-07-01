@@ -9,16 +9,16 @@
 
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.input_data.return_specs.collection_return_spec import (
+    CollectionReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.return_specs.dynamic_return_spec import (
     DynamicReturnTypeSpec,
-)
-from materialize.output_consistency.input_data.return_specs.map_return_spec import (
-    MapReturnTypeSpec,
 )
 from materialize.output_consistency.operation.return_type_spec import InputArgTypeHints
 
 
-class DynamicMapValueReturnTypeSpec(DynamicReturnTypeSpec):
+class CollectionEntryReturnTypeSpec(DynamicReturnTypeSpec):
     def __init__(self, param_index_to_take_type: int = 0):
         super().__init__(param_index_to_take_type)
         self.requires_return_type_spec_hints = True
@@ -37,5 +37,5 @@ class DynamicMapValueReturnTypeSpec(DynamicReturnTypeSpec):
             ]
         )
 
-        assert isinstance(input_arg_return_type_spec, MapReturnTypeSpec)
+        assert isinstance(input_arg_return_type_spec, CollectionReturnTypeSpec)
         return input_arg_return_type_spec.get_entry_value_type()

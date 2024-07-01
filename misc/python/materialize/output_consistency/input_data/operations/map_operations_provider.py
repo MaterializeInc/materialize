@@ -27,11 +27,11 @@ from materialize.output_consistency.input_data.params.string_operation_param imp
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
 )
+from materialize.output_consistency.input_data.return_specs.collection_entry_return_spec import (
+    CollectionEntryReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.return_specs.map_return_spec import (
     MapReturnTypeSpec,
-)
-from materialize.output_consistency.input_data.return_specs.map_value_return_spec import (
-    DynamicMapValueReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
@@ -49,7 +49,7 @@ MAP_OPERATION_TYPES.append(
     DbOperation(
         "$ -> $",
         [MapOperationParam(), MAP_FIELD_NAME_PARAM],
-        DynamicMapValueReturnTypeSpec(),
+        CollectionEntryReturnTypeSpec(),
     )
 )
 MAP_OPERATION_TYPES.append(
