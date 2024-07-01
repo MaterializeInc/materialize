@@ -56,14 +56,14 @@ use mz_sql_parser::ast::{
     CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
     CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
-    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
-    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
-    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
-    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
-    DropOwnedStatement, Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceOption, CreateSourceOptionName,
+    CreateSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    CreateSubsourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeListOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement,
+    CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName,
+    CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns,
+    DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr,
+    Format, FormatSpecifier, Ident, IfExistsBehavior, IndexOption, IndexOptionName,
     KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
     MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
     PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
@@ -78,7 +78,8 @@ use mz_sql_parser::parser::StatementParseResult;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
-    KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
+    KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType, SinkEnvelope,
+    StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
@@ -1237,7 +1238,7 @@ pub fn plan_create_source(
             scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
             //TODO check that key envelope is not set
             match format {
-                Some(CreateSourceFormat::Bare(Format::Avro(_))) => {}
+                Some(FormatSpecifier::Bare(Format::Avro(_))) => {}
                 _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
             }
             UnplannedSourceEnvelope::CdcV2
@@ -1816,12 +1817,12 @@ fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(Option<usize>, usize
 
 fn get_encoding(
     scx: &StatementContext,
-    format: &CreateSourceFormat<Aug>,
+    format: &FormatSpecifier<Aug>,
     envelope: &ast::SourceEnvelope,
 ) -> Result<SourceDataEncoding<ReferencedConnection>, PlanError> {
     let encoding = match format {
-        CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format)?,
-        CreateSourceFormat::KeyValue { key, value } => {
+        FormatSpecifier::Bare(format) => get_encoding_inner(scx, format)?,
+        FormatSpecifier::KeyValue { key, value } => {
             let key = {
                 let encoding = get_encoding_inner(scx, key)?;
                 Some(encoding.key.unwrap_or(encoding.value))
@@ -2932,7 +2933,7 @@ fn kafka_sink_builder(
     scx: &StatementContext,
     connection: ResolvedItemName,
     options: Vec<KafkaSinkConfigOption<Aug>>,
-    format: Option<Format<Aug>>,
+    format: Option<FormatSpecifier<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     headers_index: Option<usize>,
@@ -2996,74 +2997,161 @@ fn kafka_sink_builder(
     let topic_replication_factor =
         assert_positive(topic_replication_factor, "TOPIC REPLICATION FACTOR")?;
 
+    // Helper method to parse avro connection options for format specifiers that use avro
+    // for either key or value encoding.
+    let gen_avro_schema_options = |CsrConnectionAvro {
+                                       connection:
+                                           CsrConnection {
+                                               connection,
+                                               options,
+                                           },
+                                       seed,
+                                       key_strategy,
+                                       value_strategy,
+                                   }| {
+        if seed.is_some() {
+            sql_bail!("SEED option does not make sense with sinks");
+        }
+        if key_strategy.is_some() {
+            sql_bail!("KEY STRATEGY option does not make sense with sinks");
+        }
+        if value_strategy.is_some() {
+            sql_bail!("VALUE STRATEGY option does not make sense with sinks");
+        }
+
+        let item = scx.get_item_by_resolved_name(&connection)?;
+        let csr_connection = match item.connection()? {
+            Connection::Csr(_) => item.id(),
+            _ => {
+                sql_bail!(
+                    "{} is not a schema registry connection",
+                    scx.catalog
+                        .resolve_full_name(item.name())
+                        .to_string()
+                        .quoted()
+                )
+            }
+        };
+        let CsrConfigOptionExtracted {
+            avro_key_fullname,
+            avro_value_fullname,
+            null_defaults,
+            key_doc_options,
+            value_doc_options,
+            key_compatibility_level,
+            value_compatibility_level,
+            seen: _,
+        } = options.try_into()?;
+
+        if key_desc_and_indices.is_none() && avro_key_fullname.is_some() {
+            sql_bail!("Cannot specify AVRO KEY FULLNAME without a corresponding KEY field");
+        }
+
+        if key_desc_and_indices.is_some()
+            && (avro_key_fullname.is_some() ^ avro_value_fullname.is_some())
+        {
+            sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
+        }
+
+        let options = AvroSchemaOptions {
+            avro_key_fullname,
+            avro_value_fullname,
+            set_null_defaults: null_defaults,
+            is_debezium: matches!(envelope, SinkEnvelope::Debezium),
+            sink_from: Some(sink_from),
+            value_doc_options,
+            key_doc_options,
+        };
+        Ok((
+            csr_connection,
+            options,
+            key_compatibility_level,
+            value_compatibility_level,
+        ))
+    };
+
+    // Helper function to determine if a relation desc is valid for text or binary format.
+    // We only allow a single column of non-list/map type.
+    let valid_text_binary_desc = |desc: &RelationDesc| {
+        if desc.arity() != 1 {
+            false
+        } else if desc.iter().any(|(_, ty)| {
+            matches!(
+                ty.scalar_type,
+                ScalarType::List { .. } | ScalarType::Map { .. }
+            )
+        }) {
+            false
+        } else {
+            true
+        }
+    };
+
+    let map_format_non_avro = |format: &Format<Aug>, desc: &RelationDesc| match format {
+        Format::Json { array: false } => Ok::<_, PlanError>(KafkaSinkFormatType::Json),
+        Format::Bytes if valid_text_binary_desc(desc) => Ok(KafkaSinkFormatType::Bytes),
+        Format::Text if valid_text_binary_desc(desc) => Ok(KafkaSinkFormatType::Text),
+        Format::Bytes | Format::Text => {
+            bail_unsupported!("BYTE/TEXT format with multiple columns or non-scalar types")
+        }
+        Format::Json { array: true } => bail_unsupported!("JSON ARRAY format in sinks"),
+        format => bail_unsupported!(format!("sink format {:?}", format)),
+    };
+
+    // Map from the format specifier of the statement to the individual key/value formats for the sink.
     let format = match format {
-        Some(Format::Avro(AvroSchema::Csr {
-            csr_connection:
-                CsrConnectionAvro {
-                    connection:
-                        CsrConnection {
-                            connection,
-                            options,
-                        },
-                    seed,
-                    key_strategy,
-                    value_strategy,
+        Some(FormatSpecifier::KeyValue {
+            key: Format::Avro(..),
+            value: Format::Avro(..),
+        }) => {
+            // Since Avro format requires specifying CSR connection options, if we allow both key and value
+            // to be separately specified as Avro we would need to deconflict the CSR connection options
+            // between them, so we disallow this.
+            sql_bail!("Use FORMAT AVRO instead of KEY FORMAT AVRO..VALUE FORMAT AVRO..");
+        }
+        Some(FormatSpecifier::KeyValue {
+            key: Format::Avro(..),
+            value,
+        }) => {
+            // Supporting key as avro and value as non-avro is tricky without completely refactoring
+            // the AvroSchemaGenerator, so disable it since it is unlikely to be useful anways.
+            sql_bail!("KEY FORMAT AVRO..VALUE FORMAT {} is not supported", value);
+        }
+        Some(FormatSpecifier::KeyValue {
+            key,
+            value: Format::Avro(AvroSchema::Csr { csr_connection }),
+        }) => {
+            let (csr_connection, options, _, value_compatibility_level) =
+                gen_avro_schema_options(csr_connection)?;
+
+            let schema_generator = AvroSchemaGenerator::new(None, value_desc.clone(), options)?;
+            let key_format = match key_desc_and_indices.as_ref() {
+                Some((desc, _indices)) => Some(map_format_non_avro(&key, desc)?),
+                None => None,
+            };
+            KafkaSinkFormat {
+                value_format: KafkaSinkFormatType::Avro {
+                    schema: schema_generator.value_writer_schema().to_string(),
+                    compatibility_level: value_compatibility_level,
                 },
-        })) => {
-            if seed.is_some() {
-                sql_bail!("SEED option does not make sense with sinks");
+                key_format,
+                csr_connection: Some(csr_connection),
             }
-            if key_strategy.is_some() {
-                sql_bail!("KEY STRATEGY option does not make sense with sinks");
-            }
-            if value_strategy.is_some() {
-                sql_bail!("VALUE STRATEGY option does not make sense with sinks");
-            }
-
-            let item = scx.get_item_by_resolved_name(&connection)?;
-            let csr_connection = match item.connection()? {
-                Connection::Csr(_) => item.id(),
-                _ => {
-                    sql_bail!(
-                        "{} is not a schema registry connection",
-                        scx.catalog
-                            .resolve_full_name(item.name())
-                            .to_string()
-                            .quoted()
-                    )
-                }
+        }
+        Some(FormatSpecifier::KeyValue { key, value }) => {
+            let key_format = match key_desc_and_indices.as_ref() {
+                Some((desc, _indices)) => Some(map_format_non_avro(&key, desc)?),
+                None => None,
             };
-            let CsrConfigOptionExtracted {
-                avro_key_fullname,
-                avro_value_fullname,
-                null_defaults,
-                key_doc_options,
-                value_doc_options,
-                key_compatibility_level,
-                value_compatibility_level,
-                seen: _,
-            } = options.try_into()?;
-
-            if key_desc_and_indices.is_none() && avro_key_fullname.is_some() {
-                sql_bail!("Cannot specify AVRO KEY FULLNAME without a corresponding KEY field");
+            KafkaSinkFormat {
+                value_format: map_format_non_avro(&value, &value_desc)?,
+                key_format,
+                csr_connection: None,
             }
-
-            if key_desc_and_indices.is_some()
-                && (avro_key_fullname.is_some() ^ avro_value_fullname.is_some())
-            {
-                sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
-            }
-
-            let options = AvroSchemaOptions {
-                avro_key_fullname,
-                avro_value_fullname,
-                set_null_defaults: null_defaults,
-                is_debezium: matches!(envelope, SinkEnvelope::Debezium),
-                sink_from: Some(sink_from),
-                value_doc_options,
-                key_doc_options,
-            };
-
+        }
+        Some(FormatSpecifier::Bare(Format::Avro(AvroSchema::Csr { csr_connection }))) => {
+            let (csr_connection, options, key_compatibility_level, value_compatibility_level) =
+                gen_avro_schema_options(csr_connection)?;
             let schema_generator = AvroSchemaGenerator::new(
                 key_desc_and_indices
                     .as_ref()
@@ -3071,22 +3159,43 @@ fn kafka_sink_builder(
                 value_desc.clone(),
                 options,
             )?;
-            let value_schema = schema_generator.value_writer_schema().to_string();
-            let key_schema = schema_generator
-                .key_writer_schema()
-                .map(|key_schema| key_schema.to_string());
 
-            KafkaSinkFormat::Avro {
-                key_schema,
-                value_schema,
-                csr_connection,
-                key_compatibility_level,
-                value_compatibility_level,
+            KafkaSinkFormat {
+                value_format: KafkaSinkFormatType::Avro {
+                    schema: schema_generator.value_writer_schema().to_string(),
+                    compatibility_level: value_compatibility_level,
+                },
+                key_format: schema_generator.key_writer_schema().map(|key_schema| {
+                    KafkaSinkFormatType::Avro {
+                        schema: key_schema.to_string(),
+                        compatibility_level: key_compatibility_level,
+                    }
+                }),
+                csr_connection: Some(csr_connection),
             }
         }
-        Some(Format::Json { array: false }) => KafkaSinkFormat::Json,
-        Some(Format::Json { array: true }) => bail_unsupported!("JSON ARRAY format in sinks"),
-        Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
+        Some(FormatSpecifier::Bare(Format::Json { array: false })) => KafkaSinkFormat {
+            value_format: KafkaSinkFormatType::Json,
+            key_format: Some(KafkaSinkFormatType::Json),
+            csr_connection: None,
+        },
+        Some(FormatSpecifier::Bare(Format::Json { array: true })) => {
+            bail_unsupported!("JSON ARRAY format in sinks")
+        }
+        Some(FormatSpecifier::Bare(format @ (Format::Text | Format::Bytes))) => {
+            let key_format = match key_desc_and_indices.as_ref() {
+                Some((desc, _indices)) => Some(map_format_non_avro(&format, desc)?),
+                None => None,
+            };
+            KafkaSinkFormat {
+                value_format: map_format_non_avro(&format, &value_desc)?,
+                key_format,
+                csr_connection: None,
+            }
+        }
+        Some(FormatSpecifier::Bare(format)) => {
+            bail_unsupported!(format!("sink format {:?}", format))
+        }
         None => bail_unsupported!("sink without format"),
     };
 

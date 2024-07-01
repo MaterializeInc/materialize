@@ -1275,7 +1275,7 @@ impl CatalogState {
                 // size column now deprecated w/o linked clusters
                 Datum::Null,
                 Datum::from(envelope),
-                Datum::from(format),
+                Datum::from(format.as_ref()),
                 Datum::String(&sink.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
                 Datum::String(&sink.create_sql),

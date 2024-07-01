@@ -34,7 +34,7 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormat, S3SinkFormat, StorageSinkConnection,
+    KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType, S3SinkFormat, StorageSinkConnection,
     MAX_S3_SINK_FILE_SIZE, MIN_S3_SINK_FILE_SIZE,
 };
 
@@ -597,17 +597,24 @@ pub fn plan_explain_schema(
         Plan::CreateSink(CreateSinkPlan { sink, .. }) => match sink.connection {
             StorageSinkConnection::Kafka(KafkaSinkConnection {
                 format:
-                    KafkaSinkFormat::Avro {
-                        key_schema,
-                        value_schema,
+                    KafkaSinkFormat {
+                        key_format,
+                        value_format:
+                            KafkaSinkFormatType::Avro {
+                                schema: value_schema,
+                                ..
+                            },
                         ..
                     },
                 ..
             }) => {
                 let schema = match schema_for {
-                    ExplainSinkSchemaFor::Key => {
-                        key_schema.ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?
-                    }
+                    ExplainSinkSchemaFor::Key => key_format
+                        .and_then(|f| match f {
+                            KafkaSinkFormatType::Avro { schema, .. } => Some(schema),
+                            _ => None,
+                        })
+                        .ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?,
                     ExplainSinkSchemaFor::Value => value_schema,
                 };
 

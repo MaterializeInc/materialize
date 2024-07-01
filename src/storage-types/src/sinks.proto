@@ -54,16 +54,13 @@ message ProtoStorageSinkConnection {
     }
 }
 
-message ProtoKafkaSinkFormat {
+message ProtoKafkaSinkFormatType {
     message ProtoKafkaSinkAvroFormat {
-        optional string key_schema = 1;
-        string value_schema = 2;
-        mz_storage_types.connections.ProtoCsrConnection csr_connection = 3;
+        string schema = 1;
 
         enum CompatibilityLevel {
             // Used when this value is Option::None
             UNSET = 0;
-
             BACKWARD = 1;
             BACKWARD_TRANSITIVE = 2;
             FORWARD = 3;
@@ -73,16 +70,21 @@ message ProtoKafkaSinkFormat {
             NONE = 7;
         }
 
-        CompatibilityLevel key_compatibility_level = 4;
-        CompatibilityLevel value_compatibility_level = 5;
+        CompatibilityLevel compatibility_level = 2;
     }
 
-    reserved 1, 3;
-
-    oneof kind {
+    oneof type {
+        ProtoKafkaSinkAvroFormat avro = 1;
         google.protobuf.Empty json = 2;
-        ProtoKafkaSinkAvroFormat avro = 4;
+        google.protobuf.Empty text = 3;
+        google.protobuf.Empty bytes = 4;
     }
+}
+
+message ProtoKafkaSinkFormat {
+    optional ProtoKafkaSinkFormatType key_format = 1;
+    ProtoKafkaSinkFormatType value_format = 2;
+    mz_storage_types.connections.ProtoCsrConnection csr_connection = 10;
 }
 
 message ProtoKafkaSinkConnectionV2 {
