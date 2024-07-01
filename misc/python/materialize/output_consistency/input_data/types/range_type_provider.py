@@ -8,9 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.expression.expression_characteristics import (
-    ExpressionCharacteristics,
-)
 from materialize.output_consistency.input_data.return_specs.collection_return_spec import (
     CollectionReturnTypeSpec,
 )
@@ -20,7 +17,6 @@ from materialize.output_consistency.input_data.return_specs.range_return_spec im
 from materialize.output_consistency.input_data.types.collection_type_provider import (
     CollectionDataType,
 )
-from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 INT4_RANGE_TYPE_IDENTIFIER = "INT4RANGE"
 TIMESTAMPTZ_RANGE_TYPE_IDENTIFIER = "TSTZRANGE"
@@ -31,8 +27,8 @@ class RangeDataType(CollectionDataType):
         self,
         internal_identifier: str,
         type_name: str,
-        lower_range_value: str | None,
-        upper_range_value: str | None,
+        lower_range_value: str,
+        upper_range_value: str,
         value_type_category: DataTypeCategory,
     ):
         super().__init__(
@@ -47,11 +43,6 @@ class RangeDataType(CollectionDataType):
 
     def _create_collection_return_type_spec(self) -> CollectionReturnTypeSpec:
         return RangeReturnTypeSpec(range_value_type_category=self.value_type_category)
-
-    def resolve_return_type_spec(
-        self, characteristics: set[ExpressionCharacteristics]
-    ) -> ReturnTypeSpec:
-        return RangeReturnTypeSpec()
 
 
 def as_range(
