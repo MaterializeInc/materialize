@@ -20,6 +20,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use clap::Parser;
+use futures::future::FutureExt;
 use mz_adapter::catalog::Catalog;
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::{ClusterReplicaSizeMap, StateConfig};
@@ -52,7 +53,7 @@ use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use tracing::error;
+use tracing::{error, Instrument};
 use url::Url;
 use uuid::Uuid;
 
@@ -521,6 +522,9 @@ async fn upgrade_check(
         .clone();
 
     let boot_ts = now().into();
+    // BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
+    // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
+    // Because of that we purposefully move this Future onto the heap (i.e. Box it).
     let (_catalog, _, _, last_catalog_version) = Catalog::initialize_state(
         StateConfig {
             unsafe_mode: true,
@@ -549,6 +553,8 @@ async fn upgrade_check(
         },
         &mut storage,
     )
+    .instrument(tracing::info_span!("catalog::initialize_state"))
+    .boxed()
     .await?;
     let dur = start.elapsed();
 

@@ -163,234 +163,234 @@ impl Catalog {
     /// Initializes a CatalogState. Separate from [`Catalog::open`] to avoid depending on state
     /// external to a [mz_catalog::durable::DurableCatalogState]
     /// (for example: no [mz_secrets::SecretsReader]).
-    ///
-    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
-    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
-    pub fn initialize_state<'a>(
+    pub async fn initialize_state<'a>(
         config: StateConfig,
         storage: &'a mut Box<dyn mz_catalog::durable::DurableCatalogState>,
-    ) -> BoxFuture<
-        'a,
-        Result<
-            (
-                CatalogState,
-                BuiltinMigrationMetadata,
-                Vec<BuiltinTableUpdate>,
-                String,
-            ),
-            AdapterError,
-        >,
+    ) -> Result<
+        (
+            CatalogState,
+            BuiltinMigrationMetadata,
+            Vec<BuiltinTableUpdate>,
+            String,
+        ),
+        AdapterError,
     > {
-        async move {
-            for builtin_role in BUILTIN_ROLES {
-                assert!(
-                    is_reserved_name(builtin_role.name),
-                    "builtin role {builtin_role:?} must start with one of the following prefixes {}",
-                    BUILTIN_PREFIXES.join(", ")
-                );
-            }
-            for builtin_cluster in BUILTIN_CLUSTERS {
-                assert!(
+        for builtin_role in BUILTIN_ROLES {
+            assert!(
+                is_reserved_name(builtin_role.name),
+                "builtin role {builtin_role:?} must start with one of the following prefixes {}",
+                BUILTIN_PREFIXES.join(", ")
+            );
+        }
+        for builtin_cluster in BUILTIN_CLUSTERS {
+            assert!(
                     is_reserved_name(builtin_cluster.name),
                     "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
                     BUILTIN_PREFIXES.join(", ")
                 );
-            }
+        }
 
-            let mut state = CatalogState {
-                database_by_name: BTreeMap::new(),
-                database_by_id: BTreeMap::new(),
-                entry_by_id: BTreeMap::new(),
-                ambient_schemas_by_name: BTreeMap::new(),
-                ambient_schemas_by_id: BTreeMap::new(),
-                temporary_schemas: BTreeMap::new(),
-                clusters_by_id: BTreeMap::new(),
-                clusters_by_name: BTreeMap::new(),
-                roles_by_name: BTreeMap::new(),
-                roles_by_id: BTreeMap::new(),
-                config: mz_sql::catalog::CatalogConfig {
-                    start_time: to_datetime((config.now)()),
-                    start_instant: Instant::now(),
-                    nonce: rand::random(),
-                    environment_id: config.environment_id,
-                    session_id: Uuid::new_v4(),
-                    build_info: config.build_info,
-                    timestamp_interval: Duration::from_secs(1),
-                    now: config.now.clone(),
-                    connection_context: config.connection_context,
-                },
-                cluster_replica_sizes: config.cluster_replica_sizes,
-                availability_zones: config.availability_zones,
-                system_configuration: {
-                    let mut s = SystemVars::new(config.active_connection_count)
-                        .set_unsafe(config.unsafe_mode);
-                    if config.all_features {
-                        s.enable_all_feature_flags_by_default();
+        let mut state = CatalogState {
+            database_by_name: BTreeMap::new(),
+            database_by_id: BTreeMap::new(),
+            entry_by_id: BTreeMap::new(),
+            ambient_schemas_by_name: BTreeMap::new(),
+            ambient_schemas_by_id: BTreeMap::new(),
+            temporary_schemas: BTreeMap::new(),
+            clusters_by_id: BTreeMap::new(),
+            clusters_by_name: BTreeMap::new(),
+            roles_by_name: BTreeMap::new(),
+            roles_by_id: BTreeMap::new(),
+            config: mz_sql::catalog::CatalogConfig {
+                start_time: to_datetime((config.now)()),
+                start_instant: Instant::now(),
+                nonce: rand::random(),
+                environment_id: config.environment_id,
+                session_id: Uuid::new_v4(),
+                build_info: config.build_info,
+                timestamp_interval: Duration::from_secs(1),
+                now: config.now.clone(),
+                connection_context: config.connection_context,
+            },
+            cluster_replica_sizes: config.cluster_replica_sizes,
+            availability_zones: config.availability_zones,
+            system_configuration: {
+                let mut s =
+                    SystemVars::new(config.active_connection_count).set_unsafe(config.unsafe_mode);
+                if config.all_features {
+                    s.enable_all_feature_flags_by_default();
+                }
+                s
+            },
+            egress_ips: config.egress_ips,
+            aws_principal_context: config.aws_principal_context,
+            aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
+            http_host_name: config.http_host_name,
+            default_privileges: DefaultPrivileges::default(),
+            system_privileges: PrivilegeMap::default(),
+            comments: CommentsMap::default(),
+            storage_metadata: Default::default(),
+        };
+
+        let is_read_only = storage.is_read_only();
+        let mut txn = storage.transaction().await?;
+
+        // Migrate/update durable data before we start loading the in-memory catalog.
+        let migrated_builtins = {
+            migrate::durable_migrate(&mut txn, config.boot_ts)?;
+            // Overwrite and persist selected parameter values in `remote_system_parameters` that
+            // was pulled from a remote frontend (e.g. LaunchDarkly) if present.
+            if let Some(remote_system_parameters) = config.remote_system_parameters {
+                for (name, value) in remote_system_parameters {
+                    txn.upsert_system_config(&name, value)?;
+                }
+                txn.set_system_config_synced_once()?;
+                // This mirrors the `txn_wal_tables` "system var" into the catalog
+                // storage "config" collection so that we can toggle the flag with
+                // Launch Darkly, but use it in boot before Launch Darkly is available.
+                txn.set_txn_wal_tables(state.system_config().txn_wal_tables())?;
+            }
+            // Add any new builtin objects and remove old ones.
+            let migrated_builtins = add_new_remove_old_builtin_items_migration(&mut txn)?;
+            if !is_read_only {
+                let cluster_sizes = BuiltinBootstrapClusterSizes {
+                    system_cluster: config.builtin_system_cluster_replica_size,
+                    catalog_server_cluster: config.builtin_catalog_server_cluster_replica_size,
+                    probe_cluster: config.builtin_probe_cluster_replica_size,
+                    support_cluster: config.builtin_support_cluster_replica_size,
+                };
+                // TODO(jkosh44) These functions should clean up old clusters, replicas, and
+                // roles like they do for builtin items and introspection sources, but they
+                // don't.
+                add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
+                add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
+                add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
+                add_new_builtin_roles_migration(&mut txn)?;
+                remove_invalid_config_param_role_defaults_migration(&mut txn)?;
+            }
+            migrated_builtins
+        };
+
+        // Seed the in-memory catalog with values that don't come from the durable catalog.
+        {
+            // Set defaults from configuration passed in the provided `system_parameter_defaults`
+            // map.
+            for (name, value) in config.system_parameter_defaults {
+                match state.set_system_configuration_default(&name, VarInput::Flat(&value)) {
+                    Ok(_) => (),
+                    Err(Error {
+                        kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
+                    }) => {
+                        warn!(%name, "cannot load unknown system parameter from catalog storage to set default parameter");
                     }
-                    s
-                },
-                egress_ips: config.egress_ips,
-                aws_principal_context: config.aws_principal_context,
-                aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
-                http_host_name: config.http_host_name,
-                default_privileges: DefaultPrivileges::default(),
-                system_privileges: PrivilegeMap::default(),
-                comments: CommentsMap::default(),
-                storage_metadata: Default::default(),
-            };
-
-            let is_read_only = storage.is_read_only();
-            let mut txn = storage.transaction().await?;
-
-            // Migrate/update durable data before we start loading the in-memory catalog.
-            let migrated_builtins = {
-                migrate::durable_migrate(&mut txn, config.boot_ts)?;
-                // Overwrite and persist selected parameter values in `remote_system_parameters` that
-                // was pulled from a remote frontend (e.g. LaunchDarkly) if present.
-                if let Some(remote_system_parameters) = config.remote_system_parameters {
-                    for (name, value) in remote_system_parameters {
-                        txn.upsert_system_config(&name, value)?;
-                    }
-                    txn.set_system_config_synced_once()?;
-                    // This mirrors the `txn_wal_tables` "system var" into the catalog
-                    // storage "config" collection so that we can toggle the flag with
-                    // Launch Darkly, but use it in boot before Launch Darkly is available.
-                    txn.set_txn_wal_tables(state.system_config().txn_wal_tables())?;
-                }
-                // Add any new builtin objects and remove old ones.
-                let migrated_builtins = add_new_remove_old_builtin_items_migration(&mut txn)?;
-                if !is_read_only {
-                    let cluster_sizes = BuiltinBootstrapClusterSizes {
-                        system_cluster: config.builtin_system_cluster_replica_size,
-                        catalog_server_cluster: config.builtin_catalog_server_cluster_replica_size,
-                        probe_cluster: config.builtin_probe_cluster_replica_size,
-                        support_cluster: config.builtin_support_cluster_replica_size,
-                    };
-                    // TODO(jkosh44) These functions should clean up old clusters, replicas, and
-                    // roles like they do for builtin items and introspection sources, but they
-                    // don't.
-                    add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
-                    add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
-                    add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
-                    add_new_builtin_roles_migration(&mut txn)?;
-                    remove_invalid_config_param_role_defaults_migration(&mut txn)?;
-                }
-                migrated_builtins
-            };
-
-            // Seed the in-memory catalog with values that don't come from the durable catalog.
-            {
-                // Set defaults from configuration passed in the provided `system_parameter_defaults`
-                // map.
-                for (name, value) in config.system_parameter_defaults {
-                    match state.set_system_configuration_default(&name, VarInput::Flat(&value)) {
-                        Ok(_) => (),
-                        Err(Error {
-                                kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
-                            }) => {
-                            warn!(%name, "cannot load unknown system parameter from catalog storage to set default parameter");
-                        }
-                        Err(e) => return Err(e.into()),
-                    };
-                }
-                state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
+                    Err(e) => return Err(e.into()),
+                };
             }
+            state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
+        }
 
-            let mut builtin_table_updates = Vec::new();
+        let mut builtin_table_updates = Vec::new();
 
-            let mut pre_item_updates = Vec::new();
-            let mut item_updates = Vec::new();
-            let mut post_item_updates = Vec::new();
-            for update in txn.get_bootstrap_updates() {
-                match update.kind {
-                    StateUpdateKind::Role(_)
-                    | StateUpdateKind::Database(_)
-                    | StateUpdateKind::Schema(_)
-                    | StateUpdateKind::DefaultPrivilege(_)
-                    | StateUpdateKind::SystemPrivilege(_)
-                    | StateUpdateKind::SystemConfiguration(_)
-                    | StateUpdateKind::Cluster(_)
-                    | StateUpdateKind::IntrospectionSourceIndex(_)
-                    | StateUpdateKind::ClusterReplica(_)
-                    | StateUpdateKind::SystemObjectMapping(_) => pre_item_updates.push(update),
-                    StateUpdateKind::Item(_) => item_updates.push(update),
-                    StateUpdateKind::Comment(_)
-                    | StateUpdateKind::AuditLog(_)
-                    | StateUpdateKind::StorageUsage(_)
-                    | StateUpdateKind::StorageCollectionMetadata(_)
-                    | StateUpdateKind::UnfinalizedShard(_) => post_item_updates.push(update),
-                    StateUpdateKind::TemporaryItem(item) => {
-                        unreachable!("temporary items don't exist during startup: {item:?}")
-                    }
+        let mut pre_item_updates = Vec::new();
+        let mut item_updates = Vec::new();
+        let mut post_item_updates = Vec::new();
+        for update in txn.get_bootstrap_updates() {
+            match update.kind {
+                StateUpdateKind::Role(_)
+                | StateUpdateKind::Database(_)
+                | StateUpdateKind::Schema(_)
+                | StateUpdateKind::DefaultPrivilege(_)
+                | StateUpdateKind::SystemPrivilege(_)
+                | StateUpdateKind::SystemConfiguration(_)
+                | StateUpdateKind::Cluster(_)
+                | StateUpdateKind::IntrospectionSourceIndex(_)
+                | StateUpdateKind::ClusterReplica(_)
+                | StateUpdateKind::SystemObjectMapping(_) => pre_item_updates.push(update),
+                StateUpdateKind::Item(_) => item_updates.push(update),
+                StateUpdateKind::Comment(_)
+                | StateUpdateKind::AuditLog(_)
+                | StateUpdateKind::StorageUsage(_)
+                | StateUpdateKind::StorageCollectionMetadata(_)
+                | StateUpdateKind::UnfinalizedShard(_) => post_item_updates.push(update),
+                StateUpdateKind::TemporaryItem(item) => {
+                    unreachable!("temporary items don't exist during startup: {item:?}")
                 }
             }
+        }
 
-            let builtin_table_update = state.apply_updates_for_bootstrap(pre_item_updates).await;
-            builtin_table_updates.extend(builtin_table_update);
+        let builtin_table_update = state.apply_updates_for_bootstrap(pre_item_updates).await;
+        builtin_table_updates.extend(builtin_table_update);
 
-            let last_seen_version = txn
-                .get_catalog_content_version()
-                .unwrap_or_else(|| "new".to_string());
+        let last_seen_version = txn
+            .get_catalog_content_version()
+            .unwrap_or_else(|| "new".to_string());
 
-            // Migrate item ASTs.
-            if !config.skip_migrations {
-                migrate::migrate(&state, &mut txn, config.now, config.boot_ts, &state.config.connection_context)
-                    .await
-                    .map_err(|e| {
-                        Error::new(ErrorKind::FailedMigration {
-                            last_seen_version: last_seen_version.clone(),
-                            this_version: config.build_info.version,
-                            cause: e.to_string(),
-                        })
-                    })?;
-                txn.set_catalog_content_version(config.build_info.version.to_string())?;
-                // Throw the existing item updates away because they may have been re-written in
-                // the migration.
-                let item_updates = txn.get_items().map(|item| StateUpdate{kind: StateUpdateKind::Item(item), ts: config.boot_ts, diff: StateDiff::Addition}).collect();
-                let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
-                builtin_table_updates.extend(builtin_table_update);
-            } else {
-                let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
-                builtin_table_updates.extend(builtin_table_update);
-            }
-
-            let builtin_table_update = state.apply_updates_for_bootstrap(post_item_updates).await;
-            builtin_table_updates.extend(builtin_table_update);
-
-            // Migrate builtin items.
-            let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
-                .map(|builtin| {
-                    let id = state.resolve_builtin_object(builtin);
-                    let fingerprint = builtin.fingerprint();
-                    (id, fingerprint)
-                })
-                .collect();
-            let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
+        // Migrate item ASTs.
+        if !config.skip_migrations {
+            migrate::migrate(
                 &state,
                 &mut txn,
-                migrated_builtins,
-                id_fingerprint_map,
-            )?;
-            let builtin_table_update = Catalog::apply_builtin_migration(
-                &mut state,
-                &mut txn,
-                &mut builtin_migration_metadata,
-            ).await?;
+                config.now,
+                config.boot_ts,
+                &state.config.connection_context,
+            )
+            .await
+            .map_err(|e| {
+                Error::new(ErrorKind::FailedMigration {
+                    last_seen_version: last_seen_version.clone(),
+                    this_version: config.build_info.version,
+                    cause: e.to_string(),
+                })
+            })?;
+            txn.set_catalog_content_version(config.build_info.version.to_string())?;
+            // Throw the existing item updates away because they may have been re-written in
+            // the migration.
+            let item_updates = txn
+                .get_items()
+                .map(|item| StateUpdate {
+                    kind: StateUpdateKind::Item(item),
+                    ts: config.boot_ts,
+                    diff: StateDiff::Addition,
+                })
+                .collect();
+            let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
             builtin_table_updates.extend(builtin_table_update);
-
-            let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
-
-            txn.commit().await?;
-            Ok((
-                state,
-                builtin_migration_metadata,
-                builtin_table_updates,
-                last_seen_version,
-            ))
+        } else {
+            let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
+            builtin_table_updates.extend(builtin_table_update);
         }
-            .instrument(tracing::info_span!("catalog::initialize_state"))
-            .boxed()
+
+        let builtin_table_update = state.apply_updates_for_bootstrap(post_item_updates).await;
+        builtin_table_updates.extend(builtin_table_update);
+
+        // Migrate builtin items.
+        let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
+            .map(|builtin| {
+                let id = state.resolve_builtin_object(builtin);
+                let fingerprint = builtin.fingerprint();
+                (id, fingerprint)
+            })
+            .collect();
+        let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
+            &state,
+            &mut txn,
+            migrated_builtins,
+            id_fingerprint_map,
+        )?;
+        let builtin_table_update =
+            Catalog::apply_builtin_migration(&mut state, &mut txn, &mut builtin_migration_metadata)
+                .await?;
+        builtin_table_updates.extend(builtin_table_update);
+
+        let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
+
+        txn.commit().await?;
+        Ok((
+            state,
+            builtin_migration_metadata,
+            builtin_table_updates,
+            last_seen_version,
+        ))
     }
 
     /// Install builtin views to the catalog. This is its own function so that views can be
@@ -591,7 +591,13 @@ impl Catalog {
         async move {
             let mut storage = config.storage;
             let (state, builtin_migration_metadata, mut builtin_table_updates, last_seen_version) =
-                Self::initialize_state(config.state, &mut storage).await?;
+                // BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
+                // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
+                // Because of that we purposefully move this Future onto the heap (i.e. Box it).
+                Self::initialize_state(config.state, &mut storage)
+                    .instrument(tracing::info_span!("catalog::initialize_state"))
+                    .boxed()
+                    .await?;
 
             let catalog = Catalog {
                 state,
