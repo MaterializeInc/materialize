@@ -5108,6 +5108,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "byteorder",
+ "bytes",
  "chrono",
  "clap",
  "criterion",
@@ -5118,6 +5119,7 @@ dependencies = [
  "mz-build-tools",
  "mz-ccsr",
  "mz-ore",
+ "mz-pgrepr",
  "mz-repr",
  "once_cell",
  "ordered-float 4.2.0",

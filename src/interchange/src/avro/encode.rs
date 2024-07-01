@@ -308,10 +308,6 @@ impl AvroEncoder {
 }
 
 impl Encode for AvroEncoder {
-    fn get_format_name(&self) -> &str {
-        "avro"
-    }
-
     fn encode_key_unchecked(&self, row: Row) -> Vec<u8> {
         self.encode_key_unchecked(self.key_schema_id.unwrap(), row)
     }

@@ -12,8 +12,6 @@ use std::collections::BTreeSet;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row};
 
 pub trait Encode {
-    fn get_format_name(&self) -> &str;
-
     fn encode_key_unchecked(&self, row: Row) -> Vec<u8>;
 
     fn encode_value_unchecked(&self, row: Row) -> Vec<u8>;
