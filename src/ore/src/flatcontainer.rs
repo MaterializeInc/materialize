@@ -483,6 +483,8 @@ mod lgalloc {
         #[inline]
         fn clear(&mut self) {
             self.slices.clear();
+            self.offsets.clear();
+            self.offsets.push(0);
         }
 
         #[inline]
