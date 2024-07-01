@@ -1819,6 +1819,14 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinL
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
+    name: "mz_compute_hydration_times_per_worker",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::LOG_MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER_OID,
+    variant: LogVariant::Compute(ComputeLog::HydrationTime),
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_ACTIVE_PEEKS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_active_peeks_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -7289,6 +7297,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_COMPUTE_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_ERROR_COUNTS_RAW),
+        Builtin::Log(&MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_KAFKA_SOURCES),
