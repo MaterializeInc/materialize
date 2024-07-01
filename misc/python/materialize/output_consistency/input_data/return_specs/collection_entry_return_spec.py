@@ -19,7 +19,7 @@ from materialize.output_consistency.operation.return_type_spec import InputArgTy
 
 
 class CollectionEntryReturnTypeSpec(DynamicReturnTypeSpec):
-    def __init__(self, param_index_to_take_type: int = 0):
+    def __init__(self, param_index_to_take_type: int):
         super().__init__(param_index_to_take_type)
         self.requires_return_type_spec_hints = True
 
