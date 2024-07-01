@@ -98,7 +98,10 @@ pub enum AdapterError {
     /// Transaction cluster was dropped in the middle of a transaction.
     ConcurrentClusterDrop,
     /// Target cluster has no replicas to service query.
-    NoClusterReplicasAvailable(String, bool),
+    NoClusterReplicasAvailable {
+        name: String,
+        is_managed: bool,
+    },
     /// The named operation cannot be run in a transaction.
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
@@ -367,12 +370,12 @@ impl AdapterError {
                 "Try choosing one of the smaller sizes to start. Available sizes: {}",
                 expected.join(", ")
             )),
-            AdapterError::NoClusterReplicasAvailable(_, is_managed) => {
+            AdapterError::NoClusterReplicasAvailable { is_managed, .. } => {
                 Some(if *is_managed {
-                    "You can adjust the replication factor of the cluster with ALTER CLUSTER. \
-                    For example `ALTER CLUSTER <cluster-name> SET (REPLICATION FACTOR 1)`".into()
+                    "Use ALTER CLUSTER to adjust the replication factor of the cluster. \
+                    Example:`ALTER CLUSTER <cluster-name> SET (REPLICATION FACTOR 1)`".into()
                 } else {
-                    "You can create cluster replicas using CREATE CLUSTER REPLICA".into()
+                    "Use CREATE CLUSTER REPLICA to attach cluster replicas to the cluster".into()
                 })
             }
             AdapterError::UntargetedLogRead { .. } => Some(
@@ -462,7 +465,7 @@ impl AdapterError {
             AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
-            AdapterError::NoClusterReplicasAvailable(..) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             AdapterError::ParseError(_) => SqlState::SYNTAX_ERROR,
@@ -604,11 +607,11 @@ impl fmt::Display for AdapterError {
             AdapterError::ConcurrentClusterDrop => {
                 write!(f, "the transaction's active cluster has been dropped")
             }
-            AdapterError::NoClusterReplicasAvailable(cluster, _) => {
+            AdapterError::NoClusterReplicasAvailable { name, .. } => {
                 write!(
                     f,
                     "CLUSTER {} has no replicas available to service request",
-                    cluster.quoted()
+                    name.quoted()
                 )
             }
             AdapterError::OperationProhibitsTransaction(op) => {

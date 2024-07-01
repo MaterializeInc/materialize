@@ -562,7 +562,7 @@ simple
 SELECT generate_series(1, 1)
 ----
 db error: ERROR: CLUSTER "empty" has no replicas available to service request
-HINT: You can create cluster replicas using CREATE CLUSTER REPLICA
+HINT: Use CREATE CLUSTER REPLICA to attach cluster replicas to the cluster
 
 statement ok
 DROP CLUSTER empty
@@ -574,7 +574,7 @@ simple
 SELECT generate_series(1, 1)
 ----
 db error: ERROR: CLUSTER "empty" has no replicas available to service request
-HINT: You can adjust the replication factor of the cluster with ALTER CLUSTER. For example `ALTER CLUSTER <cluster-name> SET (REPLICATION FACTOR 1)`
+HINT: Use ALTER CLUSTER to adjust the replication factor of the cluster. Example:`ALTER CLUSTER <cluster-name> SET (REPLICATION FACTOR 1)`
 
 
 # Phillip's tests
