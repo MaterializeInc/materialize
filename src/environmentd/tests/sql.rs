@@ -2740,9 +2740,12 @@ fn test_mz_sessions() {
         1,
     );
     let foo_session_row = foo_client
-        .query_one("SELECT id::int8, role_id FROM mz_internal.mz_sessions", &[])
+        .query_one(
+            "SELECT connection_id::int8, role_id FROM mz_internal.mz_sessions",
+            &[],
+        )
         .unwrap();
-    let foo_conn_id = foo_session_row.get::<_, i64>("id");
+    let foo_conn_id = foo_session_row.get::<_, i64>("connection_id");
     let foo_role_id = foo_session_row.get::<_, String>("role_id");
     assert_eq!(
         foo_client
@@ -2768,7 +2771,7 @@ fn test_mz_sessions() {
         );
         let bar_session_row = bar_client
             .query_one(
-                &format!("SELECT role_id FROM mz_internal.mz_sessions WHERE id <> {foo_conn_id}"),
+                &format!("SELECT role_id FROM mz_internal.mz_sessions WHERE connection_id <> {foo_conn_id}"),
                 &[],
             )
             .unwrap();
@@ -2794,9 +2797,12 @@ fn test_mz_sessions() {
     );
     assert_eq!(
         foo_client
-            .query_one("SELECT id::int8 FROM mz_internal.mz_sessions", &[])
+            .query_one(
+                "SELECT connection_id::int8 FROM mz_internal.mz_sessions",
+                &[]
+            )
             .unwrap()
-            .get::<_, i64>("id"),
+            .get::<_, i64>("connection_id"),
         foo_conn_id,
     );
 
@@ -2817,11 +2823,11 @@ fn test_mz_sessions() {
         );
         let other_foo_session_row = foo_client
             .query_one(
-                &format!("SELECT id::int8, role_id FROM mz_internal.mz_sessions WHERE id <> {foo_conn_id}"),
+                &format!("SELECT connection_id::int8, role_id FROM mz_internal.mz_sessions WHERE connection_id <> {foo_conn_id}"),
                 &[],
             )
             .unwrap();
-        let other_foo_conn_id = other_foo_session_row.get::<_, i64>("id");
+        let other_foo_conn_id = other_foo_session_row.get::<_, i64>("connection_id");
         let other_foo_role_id = other_foo_session_row.get::<_, String>("role_id");
         assert_ne!(foo_conn_id, other_foo_conn_id);
         assert_eq!(foo_role_id, other_foo_role_id);
@@ -2839,9 +2845,12 @@ fn test_mz_sessions() {
     );
     assert_eq!(
         foo_client
-            .query_one("SELECT id::int8 FROM mz_internal.mz_sessions", &[])
+            .query_one(
+                "SELECT connection_id::int8 FROM mz_internal.mz_sessions",
+                &[]
+            )
             .unwrap()
-            .get::<_, i64>("id"),
+            .get::<_, i64>("connection_id"),
         foo_conn_id,
     );
 }
@@ -3128,7 +3137,7 @@ fn test_pg_cancel_backend() {
             .retry(|_| {
                 let conn_id: String = client2
                     .query_one(
-                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        "SELECT s.connection_id::text FROM mz_internal.mz_subscriptions b JOIN mz_internal.mz_sessions s ON s.id = b.session_id",
                         &[],
                     )?
                     .get(0);
@@ -3289,7 +3298,7 @@ fn test_pg_cancel_dropped_role() {
     let connection_id = dropped_client
         .query_one(
             &format!(
-                "SELECT s.id
+                "SELECT s.connection_id
          FROM mz_internal.mz_sessions s
          JOIN mz_roles r ON s.role_id = r.id
          WHERE r.name = '{dropped_role}'"

@@ -316,10 +316,10 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sessions' ORDER BY position
 ----
-1  id  uint4
-2  role_id  text
-3  connected_at  timestamp␠with␠time␠zone
-4  uuid  uuid
+1  id  uuid
+2  connection_id  uint4
+3  role_id  text
+4  connected_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_privileges' ORDER BY position
@@ -540,7 +540,7 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_subscriptions' ORDER BY position
 ----
 1  id  text
-2  session_id  uint4
+2  session_id  uuid
 3  cluster_id  text
 4  created_at  timestamp␠with␠time␠zone
 5  referenced_object_ids  list
