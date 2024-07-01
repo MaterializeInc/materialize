@@ -2837,7 +2837,6 @@ where
             // Same as our other differential collections, but for these the
             // preparation logic currently doesn't do anything.
             IntrospectionType::ComputeDependencies
-            | IntrospectionType::ComputeHydrationStatus
             | IntrospectionType::ComputeOperatorHydrationStatus
             | IntrospectionType::ComputeMaterializedViewRefreshes
             | IntrospectionType::ComputeErrorCounts
@@ -2996,7 +2995,6 @@ where
 
             // Truncate compute-maintained collections.
             IntrospectionType::ComputeDependencies
-            | IntrospectionType::ComputeHydrationStatus
             | IntrospectionType::ComputeOperatorHydrationStatus
             | IntrospectionType::ComputeMaterializedViewRefreshes
             | IntrospectionType::ComputeErrorCounts
