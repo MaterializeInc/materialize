@@ -2261,7 +2261,7 @@ impl<T> ReplicaCollectionState<T> {
             metrics.initial_output_duration_seconds.set(duration);
         }
 
-        self.hydration_state.collection_hydrated();
+        self.hydration_state.hydrated = true;
     }
 }
 
@@ -2289,37 +2289,13 @@ impl HydrationState {
         collection_id: GlobalId,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
-        let self_ = Self {
+        Self {
             replica_id,
             collection_id,
             hydrated: false,
             operators: Default::default(),
             introspection_tx,
-        };
-
-        let insertion = self_.row_for_collection();
-        self_.send(
-            IntrospectionType::ComputeHydrationStatus,
-            vec![(insertion, 1)],
-        );
-
-        self_
-    }
-
-    /// Update the collection as hydrated.
-    fn collection_hydrated(&mut self) {
-        if self.hydrated {
-            return; // nothing to do
         }
-
-        let retraction = self.row_for_collection();
-        self.hydrated = true;
-        let insertion = self.row_for_collection();
-
-        self.send(
-            IntrospectionType::ComputeHydrationStatus,
-            vec![(retraction, -1), (insertion, 1)],
-        );
     }
 
     /// Update the given (lir_id, worker_id) pair as hydrated.
@@ -2338,15 +2314,6 @@ impl HydrationState {
             .chain(insertion.map(|r| (r, 1)))
             .collect();
         self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates);
-    }
-
-    /// Return a `Row` reflecting the current collection hydration status.
-    fn row_for_collection(&self) -> Row {
-        Row::pack_slice(&[
-            Datum::String(&self.collection_id.to_string()),
-            Datum::String(&self.replica_id.to_string()),
-            Datum::from(self.hydrated),
-        ])
     }
 
     /// Return a `Row` reflecting the current hydration status of the identified operator.
@@ -2381,13 +2348,6 @@ impl HydrationState {
 
 impl Drop for HydrationState {
     fn drop(&mut self) {
-        // Retract collection hydration status.
-        let retraction = self.row_for_collection();
-        self.send(
-            IntrospectionType::ComputeHydrationStatus,
-            vec![(retraction, -1)],
-        );
-
         // Retract operator-level hydration status.
         let operators: Vec<_> = self.operators.keys().collect();
         let updates: Vec<_> = operators

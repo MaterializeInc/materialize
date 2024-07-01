@@ -83,7 +83,6 @@ pub enum IntrospectionType {
 
     // Collections written by the compute controller.
     ComputeDependencies,
-    ComputeHydrationStatus,
     ComputeOperatorHydrationStatus,
     ComputeMaterializedViewRefreshes,
     ComputeErrorCounts,
