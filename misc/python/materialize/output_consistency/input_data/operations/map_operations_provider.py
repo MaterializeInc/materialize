@@ -49,7 +49,7 @@ MAP_OPERATION_TYPES.append(
     DbOperation(
         "$ -> $",
         [MapOperationParam(), MAP_FIELD_NAME_PARAM],
-        CollectionEntryReturnTypeSpec(),
+        CollectionEntryReturnTypeSpec(param_index_to_take_type=0),
     )
 )
 MAP_OPERATION_TYPES.append(
