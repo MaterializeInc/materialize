@@ -284,9 +284,10 @@ impl Coordinator {
             .override_from(&explain_ctx);
 
         if cluster.replicas().next().is_none() && explain_ctx.needs_cluster() {
-            return Err(AdapterError::NoClusterReplicasAvailable(
-                cluster.name.clone(),
-            ));
+            return Err(AdapterError::NoClusterReplicasAvailable {
+                name: cluster.name.clone(),
+                is_managed: cluster.is_managed(),
+            });
         }
 
         let optimizer = match copy_to_ctx {
@@ -320,9 +321,10 @@ impl Coordinator {
                 {
                     Some(count) => u64::cast_from(count),
                     None => {
-                        return Err(AdapterError::NoClusterReplicasAvailable(
-                            cluster.name.clone(),
-                        ))
+                        return Err(AdapterError::NoClusterReplicasAvailable {
+                            name: cluster.name.clone(),
+                            is_managed: cluster.is_managed(),
+                        })
                     }
                 };
                 copy_to_ctx.output_batch_count = Some(max_worker_count);
