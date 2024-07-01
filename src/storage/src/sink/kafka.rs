@@ -83,6 +83,7 @@ use maplit::btreemap;
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator, AvroSchemaOptions};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
+use mz_interchange::text_binary::{TextBinaryEncoder, TextBinaryEncoding};
 use mz_kafka_util::client::{
     GetPartitionsError, MzClientContext, TimeoutConfig, TunnelingClientContext,
 };
@@ -97,7 +98,7 @@ use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkEnvelope, StorageSinkDesc,
+    KafkaSinkConnection, KafkaSinkFormatType, MetadataFilled, SinkEnvelope, StorageSinkDesc,
 };
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
@@ -1142,19 +1143,74 @@ fn encode_collection<G: Scope>(
                 .map(|(desc, _indices)| desc.clone());
             let value_desc = connection.value_desc;
 
-            let encoder: Box<dyn Encode> = match connection.format {
-                KafkaSinkFormat::Avro {
-                    key_schema,
-                    value_schema,
-                    csr_connection,
-                    key_compatibility_level,
-                    value_compatibility_level,
+            let debezium = matches!(envelope, SinkEnvelope::Debezium);
+
+            // If the key_format is Avro we won't create a distinct key encoder, and instead will
+            // use this to pass state to the value_format match statement since the key schema
+            // needs to be published to CSR alongside the value schema.
+            let mut key_avro_state = None;
+            let key_encoder: Option<Box<dyn Encode>> = match connection.format.key_format {
+                Some(KafkaSinkFormatType::Bytes) => Some(Box::new(TextBinaryEncoder::new(
+                    key_desc,
+                    None,
+                    TextBinaryEncoding::Binary,
+                    debezium,
+                ))),
+                Some(KafkaSinkFormatType::Text) => Some(Box::new(TextBinaryEncoder::new(
+                    key_desc,
+                    None,
+                    TextBinaryEncoding::Text,
+                    debezium,
+                ))),
+                Some(KafkaSinkFormatType::Json) => {
+                    Some(Box::new(JsonEncoder::new(key_desc, None, debezium)))
+                }
+                Some(KafkaSinkFormatType::Avro {
+                    schema,
+                    compatibility_level,
+                }) => {
+                    key_avro_state = Some((schema, compatibility_level, key_desc));
+                    None
+                }
+                None => None,
+            };
+
+            let value_encoder: Box<dyn Encode> = match connection.format.value_format {
+                KafkaSinkFormatType::Bytes => Box::new(TextBinaryEncoder::new(
+                    None,
+                    Some(value_desc),
+                    TextBinaryEncoding::Binary,
+                    debezium,
+                )),
+                KafkaSinkFormatType::Text => Box::new(TextBinaryEncoder::new(
+                    None,
+                    Some(value_desc),
+                    TextBinaryEncoding::Text,
+                    debezium,
+                )),
+                KafkaSinkFormatType::Json => {
+                    Box::new(JsonEncoder::new(None, Some(value_desc), debezium))
+                }
+                KafkaSinkFormatType::Avro {
+                    schema: value_schema,
+                    compatibility_level: value_compatibility_level,
                 } => {
+                    // If the key_format is avro it wasn't handled above, so we need to handle it here
+                    let (key_schema, key_compatibility_level, key_desc) = match key_avro_state {
+                        Some((schema, compatibility_level, key_desc)) => {
+                            (Some(schema), compatibility_level, key_desc)
+                        }
+                        None => (None, None, None),
+                    };
+
                     // Ensure that schemas are registered with the schema registry.
                     //
                     // Note that where this lies in the rendering cycle means that we will publish the
                     // schemas each time the sink is rendered.
-                    let ccsr = csr_connection
+                    let ccsr = connection
+                        .format
+                        .csr_connection
+                        .ok_or(anyhow!("missing ccsr"))?
                         .connect(&storage_configuration, InTask::Yes)
                         .await?;
                     let (key_schema_id, value_schema_id) =
@@ -1184,12 +1240,15 @@ fn encode_collection<G: Scope>(
                         value_schema_id,
                     ))
                 }
-                KafkaSinkFormat::Json => Box::new(JsonEncoder::new(
-                    key_desc,
-                    value_desc,
-                    matches!(envelope, SinkEnvelope::Debezium),
-                )),
             };
+            // If the key encoder is None, it means we either don't have a key or the key format
+            // is avro and should share the value encoder. In either case we can use the value
+            // encoder as the key encoder.
+            let key_encoder_ref = match key_encoder {
+                Some(_) => key_encoder.as_ref().map(|e| e.as_ref()),
+                None => Some(value_encoder.as_ref()),
+            }
+            .unwrap();
 
             // !IMPORTANT!
             // Correctness of this operator relies on no fallible operations happening after this
@@ -1205,8 +1264,8 @@ fn encode_collection<G: Scope>(
                             (Some(i), Some(v)) => encode_headers(v.iter().nth(i).unwrap()),
                             _ => vec![],
                         };
-                        let key = key.map(|key| encoder.encode_key_unchecked(key));
-                        let value = value.map(|value| encoder.encode_value_unchecked(value));
+                        let key = key.map(|key| key_encoder_ref.encode_key_unchecked(key));
+                        let value = value.map(|value| value_encoder.encode_value_unchecked(value));
                         let message = KafkaMessage {
                             key,
                             value,
