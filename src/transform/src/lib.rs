@@ -318,6 +318,8 @@ impl Transform for Fixpoint {
         // a bug somewhere that prevents the relation from settling on a
         // stable shape.
         let mut iter_no = 0;
+        let mut seen = BTreeSet::new();
+        seen.insert(relation.clone());
         loop {
             let prev_size = relation.size();
             for i in iter_no..iter_no + self.limit {
@@ -325,6 +327,19 @@ impl Transform for Fixpoint {
                 self.apply_transforms(relation, ctx, format!("{i:04}"))?;
                 if *relation == original {
                     mz_repr::explain::trace_plan(relation);
+                    return Ok(());
+                }
+                if !seen.insert(relation.clone()) {
+                    // We got into an infinite loop (e.g., we are oscillating between two plans).
+                    // This is not catastrophic, because we can just say we are done now,
+                    // but it would be great to eventually find a way to prevent these loops from
+                    // happening in the first place. We have several relevant issues, see
+                    // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
+                    mz_repr::explain::trace_plan(relation);
+                    soft_panic_or_log!(
+                        "Fixpoint {} detected a loop after {i} iterations",
+                        self.name
+                    );
                     return Ok(());
                 }
             }
