@@ -554,14 +554,18 @@ mod vec {
             }
         }
 
+        const MIN_NON_ZERO_CAP: usize = if std::mem::size_of::<T>() == 1 {
+            8
+        } else if std::mem::size_of::<T>() <= 1024 {
+            4
+        } else {
+            1
+        };
+
         /// Grow the array to at least `new_len` elements. Reallocates the underlying storage.
         fn grow(&mut self, new_len: usize) {
             let new_capacity = std::cmp::max(self.capacity() * 2, new_len);
-            println!(
-                "Reallocating {} -> {}, requested {new_len}",
-                self.capacity(),
-                new_capacity
-            );
+            let new_capacity = std::cmp::max(new_capacity, Self::MIN_NON_ZERO_CAP);
             let mut new_vec = LgAllocVec::with_capacity(new_capacity);
 
             let src_ptr = self.elements.as_ptr();
