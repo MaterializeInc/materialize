@@ -50,6 +50,8 @@ pub struct StatementBeganExecutionRecord {
     pub began_at: EpochMillis,
     pub cluster_id: Option<ClusterId>,
     pub cluster_name: Option<String>,
+    pub database_name: String,
+    pub search_path: Vec<String>,
     pub application_name: String,
     pub transaction_isolation: String,
     pub execution_timestamp: Option<EpochMillis>,

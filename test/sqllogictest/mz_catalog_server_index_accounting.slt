@@ -128,6 +128,7 @@ mz_activity_log_thinned  authenticated_user
 mz_activity_log_thinned  began_at
 mz_activity_log_thinned  cluster_id
 mz_activity_log_thinned  cluster_name
+mz_activity_log_thinned  database_name
 mz_activity_log_thinned  error_message
 mz_activity_log_thinned  execution_id
 mz_activity_log_thinned  execution_strategy
@@ -142,6 +143,7 @@ mz_activity_log_thinned  prepared_statement_id
 mz_activity_log_thinned  prepared_statement_name
 mz_activity_log_thinned  rows_returned
 mz_activity_log_thinned  sample_rate
+mz_activity_log_thinned  search_path
 mz_activity_log_thinned  session_id
 mz_activity_log_thinned  sql_hash
 mz_activity_log_thinned  statement_type
@@ -396,6 +398,7 @@ mz_recent_activity_log_thinned  authenticated_user
 mz_recent_activity_log_thinned  began_at
 mz_recent_activity_log_thinned  cluster_id
 mz_recent_activity_log_thinned  cluster_name
+mz_recent_activity_log_thinned  database_name
 mz_recent_activity_log_thinned  error_message
 mz_recent_activity_log_thinned  execution_id
 mz_recent_activity_log_thinned  execution_strategy
@@ -410,6 +413,7 @@ mz_recent_activity_log_thinned  prepared_statement_id
 mz_recent_activity_log_thinned  prepared_statement_name
 mz_recent_activity_log_thinned  rows_returned
 mz_recent_activity_log_thinned  sample_rate
+mz_recent_activity_log_thinned  search_path
 mz_recent_activity_log_thinned  session_id
 mz_recent_activity_log_thinned  sql_hash
 mz_recent_activity_log_thinned  statement_type
@@ -588,6 +592,7 @@ mz_statement_execution_history  application_name
 mz_statement_execution_history  began_at
 mz_statement_execution_history  cluster_id
 mz_statement_execution_history  cluster_name
+mz_statement_execution_history  database_name
 mz_statement_execution_history  error_message
 mz_statement_execution_history  execution_strategy
 mz_statement_execution_history  execution_timestamp
@@ -599,6 +604,7 @@ mz_statement_execution_history  params
 mz_statement_execution_history  prepared_statement_id
 mz_statement_execution_history  rows_returned
 mz_statement_execution_history  sample_rate
+mz_statement_execution_history  search_path
 mz_statement_execution_history  transaction_id
 mz_statement_execution_history  transaction_isolation
 mz_statement_execution_history  transient_index_id
