@@ -4706,7 +4706,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(ListElementAnyCompatible, ListAnyCompatible) => ElementListConcat => ListAnyCompatible, oid::OP_CONCAT_ELEMENY_LIST_OID;
         },
 
-        // JSON, MAP, RANGE, LIST
+        // JSON, MAP, RANGE, LIST, ARRAY
         "->" => Scalar {
             params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false } => Jsonb, 3212;
             params!(Jsonb, String) => JsonbGetString { stringify: false } => Jsonb, 3211;

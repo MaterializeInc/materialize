@@ -2301,6 +2301,9 @@ pub enum BinaryFunc {
         max_layer: usize,
     },
     ArrayContains,
+    ArrayContainsArray {
+        rev: bool,
+    },
     ArrayLength,
     ArrayLower,
     ArrayRemove,
@@ -2311,9 +2314,6 @@ pub enum BinaryFunc {
     ElementListConcat,
     ListRemove,
     ListContainsList {
-        rev: bool,
-    },
-    ArrayContainsArray {
         rev: bool,
     },
     DigestString,
@@ -2973,7 +2973,6 @@ impl BinaryFunc {
             | MapContainsAllKeys
             | MapContainsAnyKeys
             | MapContainsMap
-            | ListContainsList { .. }
             | ConvertFrom
             | Left
             | Position
@@ -2990,6 +2989,7 @@ impl BinaryFunc {
             | ListListConcat
             | ListElementConcat
             | ElementListConcat
+            | ListContainsList { .. }
             | ListRemove
             | DigestString
             | DigestBytes
@@ -3145,7 +3145,6 @@ impl BinaryFunc {
             | MapContainsAllKeys
             | MapContainsAnyKeys
             | MapContainsMap
-            | ListContainsList { .. }
             | TextConcat
             | IsLikeMatch { .. }
             | IsRegexpMatch { .. }
@@ -3158,6 +3157,7 @@ impl BinaryFunc {
             | ListListConcat
             | ListElementConcat
             | ElementListConcat
+            | ListContainsList { .. }
             | RangeContainsElem { .. }
             | RangeContainsRange { .. }
             | RangeOverlaps
@@ -4074,7 +4074,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::MapContainsAllKeys => MapContainsAllKeys(()),
             BinaryFunc::MapContainsAnyKeys => MapContainsAnyKeys(()),
             BinaryFunc::MapContainsMap => MapContainsMap(()),
-            BinaryFunc::ListContainsList { rev } => ListContainsList(*rev),
             BinaryFunc::ConvertFrom => ConvertFrom(()),
             BinaryFunc::Left => Left(()),
             BinaryFunc::Position => Position(()),
@@ -4096,6 +4095,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::ListElementConcat => ListElementConcat(()),
             BinaryFunc::ElementListConcat => ElementListConcat(()),
             BinaryFunc::ListRemove => ListRemove(()),
+            BinaryFunc::ListContainsList { rev } => ListContainsList(*rev),
             BinaryFunc::DigestString => DigestString(()),
             BinaryFunc::DigestBytes => DigestBytes(()),
             BinaryFunc::MzRenderTypmod => MzRenderTypmod(()),
@@ -4291,8 +4291,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 MapContainsAllKeys(()) => Ok(BinaryFunc::MapContainsAllKeys),
                 MapContainsAnyKeys(()) => Ok(BinaryFunc::MapContainsAnyKeys),
                 MapContainsMap(()) => Ok(BinaryFunc::MapContainsMap),
-                ListContainsList(rev) => Ok(BinaryFunc::ListContainsList { rev }),
-                ArrayContainsArray(rev) => Ok(BinaryFunc::ListContainsList { rev }),
                 ConvertFrom(()) => Ok(BinaryFunc::ConvertFrom),
                 Left(()) => Ok(BinaryFunc::Left),
                 Position(()) => Ok(BinaryFunc::Position),
@@ -4306,6 +4304,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                     max_layer: max_layer.into_rust()?,
                 }),
                 ArrayContains(()) => Ok(BinaryFunc::ArrayContains),
+                ArrayContainsArray(rev) => Ok(BinaryFunc::ListContainsList { rev }),
                 ArrayLength(()) => Ok(BinaryFunc::ArrayLength),
                 ArrayLower(()) => Ok(BinaryFunc::ArrayLower),
                 ArrayRemove(()) => Ok(BinaryFunc::ArrayRemove),
@@ -4315,6 +4314,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 ListElementConcat(()) => Ok(BinaryFunc::ListElementConcat),
                 ElementListConcat(()) => Ok(BinaryFunc::ElementListConcat),
                 ListRemove(()) => Ok(BinaryFunc::ListRemove),
+                ListContainsList(rev) => Ok(BinaryFunc::ListContainsList { rev }),
                 DigestString(()) => Ok(BinaryFunc::DigestString),
                 DigestBytes(()) => Ok(BinaryFunc::DigestBytes),
                 MzRenderTypmod(()) => Ok(BinaryFunc::MzRenderTypmod),
@@ -7300,6 +7300,15 @@ fn array_contains<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(array.elements().iter().any(|e| e == a))
 }
 
+fn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let a = a.unwrap_array().elements();
+    let b = b.unwrap_array().elements();
+
+    b.iter()
+        .all(|item_b| a.iter().any(|item_a| item_a == item_b))
+        .into()
+}
+
 fn array_array_concat<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -7402,15 +7411,6 @@ fn array_array_concat<'a>(
     let elems = a_array.elements().iter().chain(b_array.elements().iter());
 
     Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, elems))?)
-}
-
-fn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_array().elements();
-    let b = b.unwrap_array().elements();
-
-    b.iter()
-        .all(|item_b| a.iter().any(|item_a| item_a == item_b))
-        .into()
 }
 
 fn list_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
