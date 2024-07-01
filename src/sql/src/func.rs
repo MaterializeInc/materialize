@@ -4742,9 +4742,12 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsRange { rev: false }))
             }) => Bool, 3890;
+            params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
+                Ok(lhs.call_binary(rhs, BinaryFunc::ArrayContainsArray { rev: false }))
+            }) => Bool, 2751;
             params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListContainsList { rev: false }))
-            }) => Bool, 2751;
+            }) => Bool, oid::OP_CONTAINS_LIST_LIST_OID;
         },
         "<@" => Scalar {
             params!(Jsonb, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
@@ -4773,9 +4776,12 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsRange { rev: true }))
             }) => Bool, 3892;
+            params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
+                Ok(lhs.call_binary(rhs, BinaryFunc::ArrayContainsArray { rev: true }))
+            }) => Bool, 2752;
             params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListContainsList { rev: true }))
-            }) => Bool, 2752;
+            }) => Bool, oid::OP_IS_CONTAINED_LIST_LIST_OID;
         },
         "?" => Scalar {
             params!(Jsonb, String) => JsonbContainsString => Bool, 3247;

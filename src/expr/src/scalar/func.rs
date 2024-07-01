@@ -1627,12 +1627,11 @@ fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn list_contains_list<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let list_a = a.unwrap_list();
-    let list_b = b.unwrap_list();
+    let a = a.unwrap_list();
+    let b = b.unwrap_list();
 
-    list_b
-        .iter()
-        .all(|item_b| list_a.iter().any(|item_a| item_a == item_b))
+    b.iter()
+        .all(|item_b| a.iter().any(|item_a| item_a == item_b))
         .into()
 }
 
@@ -2314,6 +2313,9 @@ pub enum BinaryFunc {
     ListContainsList {
         rev: bool,
     },
+    ArrayContainsArray {
+        rev: bool,
+    },
     DigestString,
     DigestBytes,
     MzRenderTypmod,
@@ -2565,6 +2567,8 @@ impl BinaryFunc {
             BinaryFunc::ListLengthMax { max_layer } => list_length_max(a, b, *max_layer),
             BinaryFunc::ArrayLength => array_length(a, b),
             BinaryFunc::ArrayContains => Ok(array_contains(a, b)),
+            BinaryFunc::ArrayContainsArray { rev: false } => Ok(array_contains_array(a, b)),
+            BinaryFunc::ArrayContainsArray { rev: true } => Ok(array_contains_array(b, a)),
             BinaryFunc::ArrayLower => Ok(array_lower(a, b)),
             BinaryFunc::ArrayRemove => array_remove(a, b, temp_storage),
             BinaryFunc::ArrayUpper => array_upper(a, b),
@@ -2630,6 +2634,7 @@ impl BinaryFunc {
             | Gt
             | Gte
             | ArrayContains
+            | ArrayContainsArray { .. }
             // like and regexp produce errors on invalid like-strings or regexes
             | IsLikeMatch { .. }
             | IsRegexpMatch { .. } => ScalarType::Bool.nullable(in_nullable),
@@ -2980,6 +2985,7 @@ impl BinaryFunc {
             | EncodedBytesCharLength
             | ArrayContains
             | ArrayRemove
+            | ArrayContainsArray { .. }
             | ArrayArrayConcat
             | ListListConcat
             | ListElementConcat
@@ -3144,6 +3150,7 @@ impl BinaryFunc {
             | IsLikeMatch { .. }
             | IsRegexpMatch { .. }
             | ArrayContains
+            | ArrayContainsArray { .. }
             | ArrayLength
             | ArrayLower
             | ArrayUpper
@@ -3449,6 +3456,7 @@ impl BinaryFunc {
             | BinaryFunc::EncodedBytesCharLength
             | BinaryFunc::ListLengthMax { .. }
             | BinaryFunc::ArrayContains
+            | BinaryFunc::ArrayContainsArray { .. }
             | BinaryFunc::ArrayLength
             | BinaryFunc::ArrayLower
             | BinaryFunc::ArrayRemove
@@ -3652,6 +3660,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
             BinaryFunc::ArrayContains => f.write_str("array_contains"),
+            BinaryFunc::ArrayContainsArray { rev, .. } => {
+                f.write_str(if *rev { "<@" } else { "@>" })
+            }
             BinaryFunc::ArrayLength => f.write_str("array_length"),
             BinaryFunc::ArrayLower => f.write_str("array_lower"),
             BinaryFunc::ArrayRemove => f.write_str("array_remove"),
@@ -4075,6 +4086,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::EncodedBytesCharLength => EncodedBytesCharLength(()),
             BinaryFunc::ListLengthMax { max_layer } => ListLengthMax(max_layer.into_proto()),
             BinaryFunc::ArrayContains => ArrayContains(()),
+            BinaryFunc::ArrayContainsArray { rev } => ArrayContainsArray(*rev),
             BinaryFunc::ArrayLength => ArrayLength(()),
             BinaryFunc::ArrayLower => ArrayLower(()),
             BinaryFunc::ArrayRemove => ArrayRemove(()),
@@ -4280,6 +4292,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 MapContainsAnyKeys(()) => Ok(BinaryFunc::MapContainsAnyKeys),
                 MapContainsMap(()) => Ok(BinaryFunc::MapContainsMap),
                 ListContainsList(rev) => Ok(BinaryFunc::ListContainsList { rev }),
+                ArrayContainsArray(rev) => Ok(BinaryFunc::ListContainsList { rev }),
                 ConvertFrom(()) => Ok(BinaryFunc::ConvertFrom),
                 Left(()) => Ok(BinaryFunc::Left),
                 Position(()) => Ok(BinaryFunc::Position),
@@ -7389,6 +7402,15 @@ fn array_array_concat<'a>(
     let elems = a_array.elements().iter().chain(b_array.elements().iter());
 
     Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, elems))?)
+}
+
+fn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let a = a.unwrap_array().elements();
+    let b = b.unwrap_array().elements();
+
+    b.iter()
+        .all(|item_b| a.iter().any(|item_a| item_a == item_b))
+        .into()
 }
 
 fn list_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
