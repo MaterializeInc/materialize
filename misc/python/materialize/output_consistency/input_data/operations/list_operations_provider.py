@@ -23,6 +23,9 @@ from materialize.output_consistency.input_data.params.list_operation_param impor
     ListOfOtherElementOperationParam,
     ListOperationParam,
 )
+from materialize.output_consistency.input_data.return_specs.collection_entry_return_spec import (
+    CollectionEntryReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.return_specs.list_return_spec import (
     ListReturnTypeSpec,
 )
@@ -99,7 +102,7 @@ LIST_OPERATION_TYPES.append(
     DbOperation(
         "$[$]",
         [ListOperationParam(), COLLECTION_INDEX_PARAM],
-        ListReturnTypeSpec(),
+        CollectionEntryReturnTypeSpec(param_index_to_take_type=0),
         comment="access list element",
     )
 )
