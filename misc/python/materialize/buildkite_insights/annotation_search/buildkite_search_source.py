@@ -46,9 +46,7 @@ class BuildkiteDataSource:
         self.only_failed_builds = only_failed_builds
         self.only_failed_build_step_keys = only_failed_build_step_keys
 
-    def fetch_builds(
-        self, pipeline: str, branch: str | None, verbose: bool = False
-    ) -> list[Build]:
+    def fetch_builds(self, pipeline: str, branch: str | None) -> list[Build]:
         if self.only_failed_builds:
             build_states = BUILDKITE_FAILED_BUILD_STATES
         else:
