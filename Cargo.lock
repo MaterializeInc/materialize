@@ -4377,6 +4377,7 @@ version = "0.107.0-dev"
 dependencies = [
  "anyhow",
  "clap",
+ "futures",
  "mz-adapter",
  "mz-build-info",
  "mz-catalog",
