@@ -14,7 +14,10 @@ Associated:
 TLDR:
 - Subsources are confusing and not implemented uniformly across source types
 - It's impossible to do a blue-green workflow in sources for handling
-  schema-changes in upstream systems
+  schema-changes in upstream systems, without creating another top-level source
+  and reingesting all your data / losing your reclocking information
+- Since subsources aren't created using explicit statements its difficult to
+  manage them using dbt
 
 Users currently have to learn about *sources*, *subsources*, *tables*,
 *materialized views*, *indexes*, and *sinks* when onboarding to Materialize.
@@ -24,9 +27,12 @@ and a Kafka topic, they also need to learn the fragmented user interface
 for dealing with data ingested from upstream data sources. Our existing
 model of a *source* does not provide a consistent interface among source types.
 
-Single-output Kafka sources put their data under the source's primary relation,
-whereas multi-output Postgres/MySQL sources do not allow querying the source's primary
-relation and instead contain *subsources*, an entirely separate concept.
+Single-output sources like Kafka and webhook sources put their data under the
+source's primary relation, whereas multi-output sources like PostgreSQL and
+MySQL sources do not allow querying the source's primary relation and instead
+multiplex into *subsources*, an entirely separate concept. In addition to these
+core source types, we also support the concept of *push sources* (e.g. the
+Materialize Fivetran connector), which write data to tables.
 
 Our existing *source* models also make it difficult to deal with upstream schema changes,
 such that users need to drop and recreate a *source* or *subsource* and any dependent objects
@@ -35,9 +41,13 @@ new source needs to reingest the entire upstream history. This can also cause th
 lose their _reclocking_ information which makes it impossible to implement a correct
 end-to-end *source* -> *sink* pipeline.
 
+Since subsources are created automagically as the result of a `CREATE SOURCE ..` statement
+it is difficult to manage them with tools like dbt, which require all objects to be
+created and dropped using explicit statements per object.
+
 This change aims to simplify the user experience and create a more unified
-model for managing data ingested from an upstream source, while providing
-more flexibility in handling upstream schema changes.
+model for managing data ingested from an upstream external system, while providing
+more flexibility in handling upstream schema changes and managing sources in tools like dbt.
 
 
 ## Success Criteria
@@ -53,6 +63,8 @@ more flexibility in handling upstream schema changes.
 - *sources* can maintain their progress collection while the set of collections being
   ingested are modified, allowing an end-to-end *source* -> *sink* schema-change workflow
   that does not emit redundant data (reusable reclocking).
+- The object representing each upstream table/topic in materialize is created and dropped
+  explicitly, such that they can be managed as models directly in dbt.
 
 ## Out of Scope
 
@@ -93,11 +105,11 @@ existing subsources to be tables without needing to figure out how to merge
 The default `CREATE SOURCE ..` statement will just create a top-level source object
 that represents a single ingestion of data from an upstream system. To actually
 ingest data from that upstream system into a persist collection, the user will
-use something akin to
-`CREATE TABLE <table> (<cols>) OF SOURCE <source> WITH (<upstream_ref>)`.
+use a `CREATE TABLE .. ` statement with an option that references the source
+and the external reference.
 
-We will allow more than one table to reference the same `<upstream_ref>`, using a
-potentially different set of columns. This allows a user to handle an upstream
+We will allow more than one table to reference the same external upstream reference,
+using a potentially different set of columns. This allows a user to handle an upstream
 schema change by creating a new table for the same upstream table and then performing
 a blue-green swap operation to switch their downstream dependencies to the new table,
 and then drop the old one.
@@ -109,10 +121,11 @@ explicitly referenced in a `CREATE TABLE` statement. While this may seem controv
 more often than not these options cause upstream data that does not need to be
 brought into Materialize to be ingested, and by using explicit statements for each
 table to be ingested it makes Materialize configuration much more amenable to
-object<->state mappings in tools like DBT and Terraform.
+object<->state mappings in tools like dbt and Terraform.
 
 We can eventually reintroduce syntactic sugar to perform a similar function to
-`FOR ALL TABLES` and `FOR SCHEMAS` if necessary.
+`FOR ALL TABLES` and `FOR SCHEMAS` if necessary, or introduce a new SQL command
+that returns all known upstream tables and columns for a source.
 
 
 ### Implementation Plan
@@ -137,23 +150,17 @@ We can eventually reintroduce syntactic sugar to perform a similar function to
    reference, and each *source_export* to have its own projection of the upstream data
 
 5. Update the storage controller to use both *subsources* and *read-only tables*
-   as *source_exports* for existing multi-output sources (postgres & mysql)
+   as *source_exports* for existing multi-output sources (postgres & mysql).
 
 6. Update the source rendering operators to handle the new structures and allow
    outputting the same upstream table to more than one souce export.
 
-7. Migrate existing sources to the new source model (make all sources 'multi-output' sources):
-   - For existing sources where the primary relation has the data (e.g. Kafka sources):
-     - Create a read-only table for the current primary relation called `<source>`
-     - Rename the source itself `<source>_progress` and drop the existing
-      `<source>_progress` object
-   - For existing multi-output sources (e.g. Postgres & MySQL sources):
-     - Convert subsources to read-only tables with the same name
-     - Rename the source itself `<source>_progress` and drop the existing
-      `<source>_progress` object
+7. Migrate existing sources to the new source model (make all sources 'multi-output' sources)
+   and preserve the original names tied to each collection such that downstream object
+   references don't need to change.
 
 8. Remove subsource purification logic from `purify_create_source`, subsource statement parsing,
-   and related planning code
+   and related planning code.
 
 
 ### Core Implementation Details
@@ -171,10 +178,10 @@ Our existing `CREATE TABLE` statement looks like:
 CREATE TABLE <name> (<cols>) WITH (<options>)
 ```
 
-We would update the `CREATE TABLE` statement to look similar to `CREATE SUBSOURCE` and
-be able to optionally reference an upstream source and reference using `OF SOURCE` and `EXTERNAL REFERENCE`:
+We would update the `CREATE TABLE` statement to be able to optionally reference an upstream
+source and reference using `FROM SOURCE <source> (REFERENCE <upstream reference>)`:
 ```sql
-CREATE TABLE <name> (<cols>) OF SOURCE <source_name> WITH (EXTERNAL REFERENCE = <upstream table name>)
+CREATE TABLE <name> (<cols>) FROM SOURCE <source_name> (REFERENCE = <upstream name>)
 ```
 `<cols>` can be optionally specified by the user to request a subset of the upstream table's
 columns, but will not be permitted to include user-specified column types, since these will
@@ -284,24 +291,58 @@ each source by each `output_index` and pushes each data stream to the appropriat
 `persist_sink`. We would update this method so that it applies the `output_projection`
 for each `SourceExport` on each data stream before being pushed to its `persist_sink`.
 
-#### Migration of source names (progress collections) & kafka source -> table migration
 
-TODO
+#### Migration of source statements and collections
+
+We would generate a catalog migration to generate new `CREATE TABLE` statements where
+necessary and shuffle the collections being pointed at by each statement. The intent
+is to preserve the names associated with each collection even if the statement that
+identifies each collection is updated. The migration would do the following:
+- For existing sources where the primary relation has the data (e.g. Kafka sources):
+   - Generate a new `CREATE TABLE` statement that is tied to the current primary collection
+     and name it `<source>`
+   - Change the `CREATE SOURCE` statement to point to the current progress collection and
+     change the source name to `<source>_progress`
+   - Drop the existing `CREATE SUBSOURCE <source>_progress` statement since this will no
+     longer have a collection to own
+- For existing multi-output sources (e.g. Postgres & MySQL sources):
+   - Convert subsources to `CREATE TABLE` statements with the same name
+   - Change the `CREATE SOURCE` statement to point to the current progress collection and
+     change the source name to `<source>_progress`
+   - Drop the existing `CREATE SUBSOURCE <source>_progress` statement since this will no
+     longer have a collection to own
+   - Drop the existing top-level collection tied to the source, since this is already
+     unused and will no longer be owned by any statement
+
 
 ## Minimal Viable Prototype
 
 
 ## Alternatives
 
-<!--
-What other solutions were considered, and why weren't they chosen?
+These are not 'full' alternatives but are each solutions to one or more of the
+problems outlined above:
 
-This is your chance to demonstrate that you've fully discovered the problem.
-Alternative solutions can come from many places, like: you or your Materialize
-team members, our customers, our prospects, academic research, prior art, or
-competitive research. One of our company values is to "do the reading" and
-to "write things down." This is your opportunity to demonstrate both!
--->
+1. Introduce a new `FOR TABLES ()` on existing multi-output source types to enable
+   workflows with dbt. We could allow creating a postgres or mysql source with
+   zero tables, and then have dbt use the existing `ALTER SOURCE .. ADD SUBSOURCE`
+   and `DROP SOURCE` statements to manage creating/removing subsources. While
+   this would be a simpler implementation, it doesn't work for single-output
+   sources (e.g. Kafka).
+
+2. Implement in-place schema changes on subsources. Support for in-place schema
+   changes is predicated on evolving a collection's underlying persist
+   schema, which isn't currently possible but is being worked on in the effort
+   to use parquet column-level encoding for persist. Additionally, since subsources
+   are not used for single-output sources, this would add to the inconsistent
+   interface among source types (in-place schema modification statements would
+   have to be implemented for both top-level sources and subsources).
+
+3. Implement demuxing of upstream tables using existing subsource model
+   (https://github.com/MaterializeInc/materialize/issues/24843). This would be an
+   easier effort to implement, but rather than doing this work in the short term
+   for it to be later ripped out, it is preferable to implement the interface
+   that solves both this need and the other problems outlined above.
 
 ## Open questions
 
@@ -315,3 +356,6 @@ process, you are responsible for getting answers to these open
 questions. All open questions should be answered by the time a design
 document is merged.
 -->
+
+1. How does this affect the system catalog, and source-specific introspection?
+   (e.g. `mz_source_statistics`)
