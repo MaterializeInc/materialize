@@ -319,6 +319,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 1  id  uint4
 2  role_id  text
 3  connected_at  timestamp␠with␠time␠zone
+4  uuid  uuid
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_privileges' ORDER BY position
