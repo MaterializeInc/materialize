@@ -28,12 +28,11 @@ use smallvec::{smallvec, SmallVec};
 use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
 use crate::ast::{
     AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, CreateConnectionOption,
-    CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceFormat,
-    CreateSourceOption, CreateSourceOptionName, DeferredItemName, Expr, Format, Ident,
-    IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope,
-    SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceOption,
+    CreateSourceOptionName, DeferredItemName, Expr, Format, FormatSpecifier, Ident, IntervalValue,
+    KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope, SourceEnvelope,
+    SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint, TableWithJoins,
+    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -969,7 +968,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub col_names: Vec<Ident>,
     pub connection: CreateSourceConnection<T>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
-    pub format: Option<CreateSourceFormat<T>>,
+    pub format: Option<FormatSpecifier<T>>,
     pub envelope: Option<SourceEnvelope>,
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
@@ -1218,7 +1217,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub from: T::ItemName,
     pub connection: CreateSinkConnection<T>,
-    pub format: Option<Format<T>>,
+    pub format: Option<FormatSpecifier<T>>,
     pub envelope: Option<SinkEnvelope>,
     pub with_options: Vec<CreateSinkOption<T>>,
 }
@@ -1243,7 +1242,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         f.write_str(" INTO ");
         f.write_node(&self.connection);
         if let Some(format) = &self.format {
-            f.write_str(" FORMAT ");
             f.write_node(format);
         }
         if let Some(envelope) = &self.envelope {
