@@ -13,8 +13,7 @@ use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, ResultSpec, Unmaterial
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
 use mz_persist_types::stats::{
-    BytesStats, ColumnStatKinds, ColumnStats, ColumnarStats, JsonStats, PartStats,
-    PartStatsMetrics, PrimitiveStatsVariants,
+    BytesStats, ColumnStatKinds, ColumnStats, ColumnarStats, JsonStats, PartStats, PartStatsMetrics,
 };
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{
@@ -60,11 +59,12 @@ fn downcast_stats<T: Data>(
     // but a ResultSpec will be returned by `col_values2`.
     match (col_typ, &stats.values) {
         (
-            ScalarType::Timestamp { .. } | ScalarType::TimestampTz { .. },
-            ColumnStatKinds::Primitive(PrimitiveStatsVariants::I64(_)),
-        ) => return None,
-        (
-            ScalarType::Numeric { .. } | ScalarType::Time | ScalarType::Interval | ScalarType::Uuid,
+            ScalarType::Numeric { .. }
+            | ScalarType::Time
+            | ScalarType::Interval
+            | ScalarType::Uuid
+            | ScalarType::Timestamp { .. }
+            | ScalarType::TimestampTz { .. },
             ColumnStatKinds::Bytes(BytesStats::FixedSize(_)),
         ) => return None,
         _ => (),

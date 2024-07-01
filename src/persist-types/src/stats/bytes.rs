@@ -107,6 +107,7 @@ impl RustType<ProtoFixedSizeBytesStats> for FixedSizeBytesStats {
 #[serde(rename_all = "kebab-case")]
 pub enum FixedSizeBytesStatsKind {
     PackedTime,
+    PackedDateTime,
     PackedInterval,
     PackedNumeric,
     Uuid,
@@ -117,6 +118,9 @@ impl RustType<proto_fixed_size_bytes_stats::Kind> for FixedSizeBytesStatsKind {
         match self {
             FixedSizeBytesStatsKind::PackedTime => {
                 proto_fixed_size_bytes_stats::Kind::PackedTime(())
+            }
+            FixedSizeBytesStatsKind::PackedDateTime => {
+                proto_fixed_size_bytes_stats::Kind::PackedDateTime(())
             }
             FixedSizeBytesStatsKind::PackedInterval => {
                 proto_fixed_size_bytes_stats::Kind::PackedInterval(())
@@ -132,6 +136,9 @@ impl RustType<proto_fixed_size_bytes_stats::Kind> for FixedSizeBytesStatsKind {
         let kind = match proto {
             proto_fixed_size_bytes_stats::Kind::PackedTime(_) => {
                 FixedSizeBytesStatsKind::PackedTime
+            }
+            proto_fixed_size_bytes_stats::Kind::PackedDateTime(_) => {
+                FixedSizeBytesStatsKind::PackedDateTime
             }
             proto_fixed_size_bytes_stats::Kind::PackedInterval(_) => {
                 FixedSizeBytesStatsKind::PackedInterval

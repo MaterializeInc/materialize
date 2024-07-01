@@ -902,9 +902,9 @@ where
                     key_metrics.measure_decoding(|| key_structured.decode(idx, &mut k_s));
 
                     // Purposefully do not trace to prevent blowing up Sentry.
-                    let is_valid = key_metrics.report_valid(|| Ok(k_s) == k);
+                    let is_valid = key_metrics.report_valid(|| Ok(&k_s) == k.as_ref());
                     if !is_valid {
-                        soft_panic_no_log!("structured key did not match");
+                        soft_panic_no_log!("structured key did not match, {k_s:?} != {k:?}");
                     }
                 }
 
@@ -917,9 +917,9 @@ where
                     val_metrics.measure_decoding(|| val_structured.decode(idx, &mut v_s));
 
                     // Purposefully do not trace to prevent blowing up Sentry.
-                    let is_valid = val_metrics.report_valid(|| Ok(v_s) == v);
+                    let is_valid = val_metrics.report_valid(|| Ok(&v_s) == v.as_ref());
                     if !is_valid {
-                        soft_panic_no_log!("structured val did not match");
+                        soft_panic_no_log!("structured val did not match, {v_s:?} != {v:?}");
                     }
                 }
 

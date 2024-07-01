@@ -26,7 +26,6 @@ use arrow::array::{
 };
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Fields};
-use chrono::DateTime;
 use dec::{Context, OrderedDecimal};
 use itertools::Itertools;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema2};
@@ -46,11 +45,11 @@ use crate::adt::interval::PackedInterval;
 use crate::adt::jsonb::{JsonbPacker, JsonbRef};
 use crate::adt::mz_acl_item::{PackedAclItem, PackedMzAclItem};
 use crate::adt::numeric::PackedNumeric;
-use crate::adt::timestamp::CheckedTimestamp;
+use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::ProtoDatum;
 use crate::stats2::{
-    IntervalStatsBuilder, JsonStatsBuilder, NaiveTimeStatsBuilder, NumericStatsBuilder,
-    UuidStatsBuilder,
+    IntervalStatsBuilder, JsonStatsBuilder, NaiveDateTimeStatsBuilder, NaiveTimeStatsBuilder,
+    NumericStatsBuilder, UuidStatsBuilder,
 };
 use crate::{Datum, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 
@@ -59,6 +58,7 @@ use crate::{Datum, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 // `FixedSizeBinaryArray`s push empty bytes when a value is null which for larger binary types
 // could result in poor performance.
 const TIME_FIXED_BYTES: i32 = PackedNaiveTime::SIZE as i32;
+const TIMESTAMP_FIXED_BYTES: i32 = PackedNaiveDateTime::SIZE as i32;
 const INTERVAL_FIXED_BYTES: i32 = PackedInterval::SIZE as i32;
 const ACL_ITEM_FIXED_BYTES: i32 = PackedAclItem::SIZE as i32;
 const _MZ_ACL_ITEM_FIXED_BYTES: i32 = PackedMzAclItem::SIZE as i32;
@@ -136,8 +136,8 @@ enum DatumColumnEncoder {
     String(StringBuilder),
     Date(Int32Builder),
     Time(FixedSizeBinaryBuilder),
-    Timestamp(Int64Builder),
-    TimestampTz(Int64Builder),
+    Timestamp(FixedSizeBinaryBuilder),
+    TimestampTz(FixedSizeBinaryBuilder),
     MzTimestamp(UInt64Builder),
     Interval(FixedSizeBinaryBuilder),
     Uuid(FixedSizeBinaryBuilder),
@@ -253,12 +253,16 @@ impl DatumColumnEncoder {
                     .expect("known correct size");
             }
             (DatumColumnEncoder::Timestamp(builder), Datum::Timestamp(val)) => {
-                let micros = val.and_utc().timestamp_micros();
-                builder.append_value(micros);
+                let packed = PackedNaiveDateTime::from_value(val.to_naive());
+                builder
+                    .append_value(packed.as_bytes())
+                    .expect("known correct size");
             }
             (DatumColumnEncoder::TimestampTz(builder), Datum::TimestampTz(val)) => {
-                let micros = val.timestamp_micros();
-                builder.append_value(micros);
+                let packed = PackedNaiveDateTime::from_value(val.to_naive());
+                builder
+                    .append_value(packed.as_bytes())
+                    .expect("known correct size");
             }
             (DatumColumnEncoder::MzTimestamp(builder), Datum::MzTimestamp(val)) => {
                 builder.append_value(val.into());
@@ -639,13 +643,17 @@ impl DatumColumnEncoder {
             }
             DatumColumnEncoder::Timestamp(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<i64>::from_column(&array);
-                (Arc::new(array), stats.into())
+                let stats = NaiveDateTimeStatsBuilder::from_column(&array)
+                    .finish()
+                    .into();
+                (Arc::new(array), stats)
             }
             DatumColumnEncoder::TimestampTz(mut builder) => {
                 let array = builder.finish();
-                let stats = PrimitiveStats::<i64>::from_column(&array);
-                (Arc::new(array), stats.into())
+                let stats = NaiveDateTimeStatsBuilder::from_column(&array)
+                    .finish()
+                    .into();
+                (Arc::new(array), stats)
             }
             DatumColumnEncoder::MzTimestamp(mut builder) => {
                 let array = builder.finish();
@@ -820,8 +828,8 @@ enum DatumColumnDecoder {
     String(StringArray),
     Date(Int32Array),
     Time(FixedSizeBinaryArray),
-    Timestamp(Int64Array),
-    TimestampTz(Int64Array),
+    Timestamp(FixedSizeBinaryArray),
+    TimestampTz(FixedSizeBinaryArray),
     MzTimestamp(UInt64Array),
     Interval(FixedSizeBinaryArray),
     Uuid(FixedSizeBinaryArray),
@@ -926,17 +934,20 @@ impl DatumColumnDecoder {
             }
             DatumColumnDecoder::Timestamp(array) => {
                 array.is_valid(idx).then(|| array.value(idx)).map(|x| {
-                    let timestamp = DateTime::from_timestamp_micros(x)
-                        .and_then(|dt| CheckedTimestamp::from_timestamplike(dt.naive_utc()).ok())
+                    let packed = PackedNaiveDateTime::from_bytes(x)
+                        .expect("failed to roundtrip PackedNaiveDateTime");
+                    let timestamp = CheckedTimestamp::from_timestamplike(packed.into_value())
                         .expect("failed to roundtrip timestamp");
                     Datum::Timestamp(timestamp)
                 })
             }
             DatumColumnDecoder::TimestampTz(array) => {
                 array.is_valid(idx).then(|| array.value(idx)).map(|x| {
-                    let timestamp = DateTime::from_timestamp_micros(x)
-                        .and_then(|dt| CheckedTimestamp::from_timestamplike(dt).ok())
-                        .expect("failed to roundtrip timestamptz");
+                    let packed = PackedNaiveDateTime::from_bytes(x)
+                        .expect("failed to roundtrip PackedNaiveDateTime");
+                    let timestamp =
+                        CheckedTimestamp::from_timestamplike(packed.into_value().and_utc())
+                            .expect("failed to roundtrip timestamp");
                     Datum::TimestampTz(timestamp)
                 })
             }
@@ -1398,12 +1409,12 @@ fn array_to_decoder(
             let array = downcast_array::<FixedSizeBinaryArray>(array)?;
             DatumColumnDecoder::Time(array.clone())
         }
-        (DataType::Int64, ScalarType::Timestamp { .. }) => {
-            let array = downcast_array::<Int64Array>(array)?;
+        (DataType::FixedSizeBinary(TIMESTAMP_FIXED_BYTES), ScalarType::Timestamp { .. }) => {
+            let array = downcast_array::<FixedSizeBinaryArray>(array)?;
             DatumColumnDecoder::Timestamp(array.clone())
         }
-        (DataType::Int64, ScalarType::TimestampTz { .. }) => {
-            let array = downcast_array::<Int64Array>(array)?;
+        (DataType::FixedSizeBinary(TIMESTAMP_FIXED_BYTES), ScalarType::TimestampTz { .. }) => {
+            let array = downcast_array::<FixedSizeBinaryArray>(array)?;
             DatumColumnDecoder::TimestampTz(array.clone())
         }
         (DataType::UInt64, ScalarType::MzTimestamp) => {
@@ -1538,8 +1549,12 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
         ScalarType::Bytes => DatumColumnEncoder::Bytes(BinaryBuilder::new()),
         ScalarType::Date => DatumColumnEncoder::Date(Int32Builder::new()),
         ScalarType::Time => DatumColumnEncoder::Time(FixedSizeBinaryBuilder::new(TIME_FIXED_BYTES)),
-        ScalarType::Timestamp { .. } => DatumColumnEncoder::Timestamp(Int64Builder::new()),
-        ScalarType::TimestampTz { .. } => DatumColumnEncoder::TimestampTz(Int64Builder::new()),
+        ScalarType::Timestamp { .. } => {
+            DatumColumnEncoder::Timestamp(FixedSizeBinaryBuilder::new(TIMESTAMP_FIXED_BYTES))
+        }
+        ScalarType::TimestampTz { .. } => {
+            DatumColumnEncoder::TimestampTz(FixedSizeBinaryBuilder::new(TIMESTAMP_FIXED_BYTES))
+        }
         ScalarType::MzTimestamp => DatumColumnEncoder::MzTimestamp(UInt64Builder::new()),
         ScalarType::Interval => {
             DatumColumnEncoder::Interval(FixedSizeBinaryBuilder::new(INTERVAL_FIXED_BYTES))
