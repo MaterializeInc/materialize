@@ -44,6 +44,10 @@ function escapeIdent(s) {
     return `"${s.replace(/"/g, `""`)}"`;
 }
 
+function replaceSpecialChar(s) {
+    return s.replace(/[^a-zA-Z0-9 _]/g, "_")
+}
+
 function isDate(value) {
     var dateParsed = new Date(Date.parse(value));
     if (isNaN(dateParsed.getTime())) {
@@ -153,7 +157,8 @@ function formSql(selectItems, viewName, sourceName, objectType, columnName) {
         type = "MATERIALIZED VIEW";
     }
 
-    let sqlParts = selectItems.map(([name, wrapping_function, cast, parents, isNull, value]) => {
+    // Map all of our field into a column reference and alias.
+    const rawSqlParts = selectItems.map(([name, wrapping_function, cast, parents, isNull, value]) => {
         let path = columnName || "body";
 
         // Iterate over parents to build the path, skipping the columnName/base if it's included
@@ -172,10 +177,27 @@ function formSql(selectItems, viewName, sourceName, objectType, columnName) {
 
         // Construct column alias without redundant name appending
         let columnAliasParts = parents.slice(columnName ? 1 : 0);
-        let columnAlias = columnAliasParts.join("_");
+        let columnAlias = replaceSpecialChar(columnAliasParts.join("_"));
+
+        return [sqlItem, columnAlias];
+    });
+
+    // De-dupe column aliases by optionally appending a suffix.
+    const nextSuffixes = new Map();
+    const sqlParts = rawSqlParts.map(([sqlItem, columnAlias]) => {
+        const suffix = nextSuffixes.get(columnAlias);
+
+        // If we haven't seen this column alias before, no need to add a suffix.
+        if (suffix === undefined) {
+            nextSuffixes.set(columnAlias, 1);
+        } else {
+            nextSuffixes.set(columnAlias, suffix + 1);
+            columnAlias = `${columnAlias}${suffix}`;
+        }
 
         return `${sqlItem} AS ${columnAlias}`;
-    }).join(",\n    ");
+    })
+    .join(",\n    ");
 
     return `CREATE ${type} ${viewName} AS SELECT\n    ${sqlParts}\nFROM ${sourceName};`;
 }
