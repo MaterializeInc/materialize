@@ -131,3 +131,14 @@ pub struct RoleMetadata {
     /// checks.
     pub current_role: RoleId,
 }
+
+impl RoleMetadata {
+    /// Returns a RoleMetadata with all fields set to `id`.
+    pub fn new(id: RoleId) -> RoleMetadata {
+        RoleMetadata {
+            authenticated_role: id,
+            session_role: id,
+            current_role: id,
+        }
+    }
+}

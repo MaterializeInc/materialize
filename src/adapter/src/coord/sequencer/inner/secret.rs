@@ -95,13 +95,13 @@ impl Coordinator {
         plan: plan::CreateSecretPlan,
     ) -> Result<SecretStage, AdapterError> {
         // No dependencies.
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: BTreeSet::new(),
-            cluster_id: None,
-            replica_id: None,
-            role_metadata: session.role_metadata().clone(),
-        };
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            BTreeSet::new(),
+            None,
+            None,
+            session.role_metadata().clone(),
+        );
         Ok(SecretStage::CreateEnsure(CreateSecretEnsure {
             validity,
             plan,
@@ -240,13 +240,13 @@ impl Coordinator {
         // calls `ensure()` and returns a success result to the client. If there's a concurrent
         // delete of the secret, the persisted secret is in an unknown state (but will be cleaned up
         // if needed at next envd boot), but we will still return success.
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: BTreeSet::new(),
-            cluster_id: None,
-            replica_id: None,
-            role_metadata: ctx.session().role_metadata().clone(),
-        };
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            BTreeSet::new(),
+            None,
+            None,
+            ctx.session().role_metadata().clone(),
+        );
         let stage = SecretStage::Alter(AlterSecret { validity, plan });
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
@@ -278,13 +278,13 @@ impl Coordinator {
         // change. The state of the persisted secret is unknown, and if the rotate ensure'd
         // after the delete (i.e., the secret is persisted to the secret store but not the
         // catalog), the secret will be cleaned up during next envd boot.
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: BTreeSet::from_iter(std::iter::once(id)),
-            cluster_id: None,
-            replica_id: None,
-            role_metadata: ctx.session().role_metadata().clone(),
-        };
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            BTreeSet::from_iter(std::iter::once(id)),
+            None,
+            None,
+            ctx.session().role_metadata().clone(),
+        );
         let stage = SecretStage::RotateKeysEnsure(RotateKeysSecretEnsure { validity, id });
         self.sequence_staged(ctx, Span::current(), stage).await;
     }

@@ -131,13 +131,13 @@ macro_rules! guard_write_critical_section {
                 $coord.defer_write(Deferred::Plan(DeferredPlan {
                     ctx: $ctx,
                     plan: $plan_to_defer,
-                    validity: PlanValidity {
-                        transient_revision: $coord.catalog().transient_revision(),
-                        dependency_ids: $dependency_ids,
-                        cluster_id: None,
-                        replica_id: None,
+                    validity: PlanValidity::new(
+                        $coord.catalog().transient_revision(),
+                        $dependency_ids,
+                        None,
+                        None,
                         role_metadata,
-                    },
+                    ),
                 }));
                 return;
             }

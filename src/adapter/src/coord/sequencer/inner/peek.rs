@@ -372,13 +372,13 @@ impl Coordinator {
         )?;
         session.add_notices(notices);
 
-        let validity = PlanValidity {
-            transient_revision: catalog.transient_revision(),
-            dependency_ids: source_ids.clone(),
-            cluster_id: Some(cluster.id()),
-            replica_id: target_replica,
-            role_metadata: session.role_metadata().clone(),
-        };
+        let validity = PlanValidity::new(
+            catalog.transient_revision(),
+            source_ids.clone(),
+            Some(cluster.id()),
+            target_replica,
+            session.role_metadata().clone(),
+        );
 
         Ok(PeekStage::LinearizeTimestamp(PeekStageLinearizeTimestamp {
             validity,
@@ -480,7 +480,7 @@ impl Coordinator {
 
         // Although we have added `sources.depends_on()` to the validity already, also add the
         // sufficient collections for safety.
-        validity.dependency_ids.extend(id_bundle.iter());
+        validity.extend_dependencies(id_bundle.iter());
 
         let determination = self.sequence_peek_timestamp(
             session,
@@ -677,6 +677,7 @@ impl Coordinator {
                                 optimizer,
                                 global_lir_plan,
                                 optimization_finished_at,
+                                source_ids,
                             })
                         }
                         // Internal optimizer errors are handled differently
@@ -929,10 +930,11 @@ impl Coordinator {
         &mut self,
         ctx: &ExecuteContext,
         PeekStageCopyTo {
-            validity,
+            validity: _,
             optimizer,
             global_lir_plan,
             optimization_finished_at,
+            source_ids,
         }: PeekStageCopyTo,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         if let Some(id) = ctx.extra.contents() {
@@ -956,7 +958,7 @@ impl Coordinator {
             conn_id: ctx.session().conn_id().clone(),
             tx,
             cluster_id,
-            depends_on: validity.dependency_ids.clone(),
+            depends_on: source_ids,
         };
         // Add metadata for the new COPY TO. CopyTo returns a `ready` future, so it is safe to drop.
         drop(

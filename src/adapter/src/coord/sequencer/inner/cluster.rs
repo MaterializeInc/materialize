@@ -80,13 +80,13 @@ impl Coordinator {
         session: &Session,
         plan: plan::AlterClusterPlan,
     ) -> Result<ClusterStage, AdapterError> {
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: BTreeSet::new(),
-            cluster_id: Some(plan.id.clone()),
-            replica_id: None,
-            role_metadata: session.role_metadata().clone(),
-        };
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            BTreeSet::new(),
+            Some(plan.id.clone()),
+            None,
+            session.role_metadata().clone(),
+        );
         Ok(ClusterStage::Alter(AlterCluster { validity, plan }))
     }
 

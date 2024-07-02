@@ -686,13 +686,13 @@ impl Coordinator {
                     )
                     .await;
                     let result = result.map_err(|e| e.into());
-                    let plan_validity = PlanValidity {
+                    let plan_validity = PlanValidity::new(
                         transient_revision,
-                        dependency_ids: resolved_ids.0,
+                        resolved_ids.0,
                         cluster_id,
-                        replica_id: None,
-                        role_metadata: ctx.session().role_metadata().clone(),
-                    };
+                        None,
+                        ctx.session().role_metadata().clone(),
+                    );
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
                     let result = internal_cmd_tx.send(Message::PurifiedStatementReady(
                         PurifiedStatementReady {

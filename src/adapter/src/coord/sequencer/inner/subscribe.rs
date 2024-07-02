@@ -138,18 +138,21 @@ impl Coordinator {
             timeline = TimelineContext::TimestampDependent;
         }
 
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: depends_on,
-            cluster_id: Some(cluster_id),
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            depends_on.clone(),
+            Some(cluster_id),
             replica_id,
-            role_metadata: session.role_metadata().clone(),
-        };
+            session.role_metadata().clone(),
+        );
 
         Ok(SubscribeStage::OptimizeMir(SubscribeOptimizeMir {
             validity,
             plan,
             timeline,
+            dependency_ids: depends_on,
+            cluster_id,
+            replica_id,
         }))
     }
 
@@ -161,6 +164,9 @@ impl Coordinator {
             mut validity,
             plan,
             timeline,
+            dependency_ids,
+            cluster_id,
+            replica_id,
         }: SubscribeOptimizeMir,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let plan::SubscribePlan {
@@ -170,7 +176,6 @@ impl Coordinator {
         } = &plan;
 
         // Collect optimizer parameters.
-        let cluster_id = validity.cluster_id.expect("cluster_id");
         let compute_instance = self
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
@@ -207,9 +212,9 @@ impl Coordinator {
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.from.clone())?;
                     // Add introduced indexes as validity dependencies.
-                    validity
-                        .dependency_ids
-                        .extend(global_mir_plan.id_bundle(optimizer.cluster_id()).iter());
+                    validity.extend_dependencies(
+                        global_mir_plan.id_bundle(optimizer.cluster_id()).iter(),
+                    );
 
                     let stage =
                         SubscribeStage::TimestampOptimizeLir(SubscribeTimestampOptimizeLir {
@@ -218,6 +223,8 @@ impl Coordinator {
                             timeline,
                             optimizer,
                             global_mir_plan,
+                            dependency_ids,
+                            replica_id,
                         });
                     Ok(Box::new(stage))
                 })
@@ -235,6 +242,8 @@ impl Coordinator {
             timeline,
             mut optimizer,
             global_mir_plan,
+            dependency_ids,
+            replica_id,
         }: SubscribeTimestampOptimizeLir,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let plan::SubscribePlan { when, .. } = &plan;
@@ -285,6 +294,8 @@ impl Coordinator {
                         cluster_id: optimizer.cluster_id(),
                         plan,
                         global_lir_plan,
+                        dependency_ids,
+                        replica_id,
                     });
                     Ok(Box::new(stage))
                 })
@@ -297,7 +308,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         SubscribeFinish {
-            validity,
+            validity: _,
             cluster_id,
             plan:
                 plan::SubscribePlan {
@@ -307,6 +318,8 @@ impl Coordinator {
                     ..
                 },
             global_lir_plan,
+            dependency_ids,
+            replica_id,
         }: SubscribeFinish,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let sink_id = global_lir_plan.sink_id();
@@ -321,7 +334,7 @@ impl Coordinator {
                 .expect("set to Some in an earlier stage"),
             arity: global_lir_plan.sink_desc().from_desc.arity(),
             cluster_id,
-            depends_on: validity.dependency_ids,
+            depends_on: dependency_ids,
             start_time: self.now(),
             output,
         };
@@ -351,7 +364,7 @@ impl Coordinator {
         // Explicitly drop read holds, just to make it obvious what's happening.
         drop(txn_read_holds);
 
-        if let Some(target) = validity.replica_id {
+        if let Some(target) = replica_id {
             self.controller
                 .compute
                 .set_subscribe_target_replica(cluster_id, sink_id, target)

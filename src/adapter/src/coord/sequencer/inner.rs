@@ -696,14 +696,15 @@ impl Coordinator {
                         ctx,
                         result,
                         connection_gid,
-                        plan_validity: PlanValidity {
+                        plan_validity: PlanValidity::new(
                             transient_revision,
-                            dependency_ids: resolved_ids.0,
-                            cluster_id: None,
-                            replica_id: None,
+                            resolved_ids.0.clone(),
+                            None,
+                            None,
                             role_metadata,
-                        },
+                        ),
                         otel_ctx,
+                        dependency_ids: resolved_ids.0,
                     },
                 ));
                 if let Err(e) = result {
@@ -3066,13 +3067,13 @@ impl Coordinator {
 
         let otel_ctx = OpenTelemetryContext::obtain();
 
-        let plan_validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: BTreeSet::from_iter([plan.sink.from]),
-            cluster_id: Some(plan.in_cluster),
-            replica_id: None,
-            role_metadata: ctx.session().role_metadata().clone(),
-        };
+        let plan_validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            BTreeSet::from_iter([plan.sink.from]),
+            Some(plan.in_cluster),
+            None,
+            ctx.session().role_metadata().clone(),
+        );
 
         // Re-resolve items in the altered statement
         // Parse statement.
@@ -3346,14 +3347,15 @@ impl Coordinator {
                             ctx,
                             result,
                             connection_gid: id,
-                            plan_validity: PlanValidity {
+                            plan_validity: PlanValidity::new(
                                 transient_revision,
-                                dependency_ids,
-                                cluster_id: None,
-                                replica_id: None,
+                                dependency_ids.clone(),
+                                None,
+                                None,
                                 role_metadata,
-                            },
+                            ),
                             otel_ctx,
+                            dependency_ids,
                         },
                     ));
                     if let Err(e) = result {

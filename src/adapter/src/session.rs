@@ -792,11 +792,7 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Initializes the session's role metadata.
     pub fn initialize_role_metadata(&mut self, role_id: RoleId) {
-        self.role_metadata = Some(RoleMetadata {
-            authenticated_role: role_id,
-            session_role: role_id,
-            current_role: role_id,
-        });
+        self.role_metadata = Some(RoleMetadata::new(role_id));
     }
 
     /// Ensures that a timestamp oracle exists for `timeline` and returns a mutable reference to

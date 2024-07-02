@@ -98,13 +98,13 @@ impl Coordinator {
             .catalog()
             .resolve_target_cluster(target_cluster, session)?;
         let cluster_id = cluster.id;
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: plan.raw_plan.depends_on(),
-            cluster_id: Some(cluster_id),
-            replica_id: None,
-            role_metadata: session.role_metadata().clone(),
-        };
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            plan.raw_plan.depends_on(),
+            Some(cluster_id),
+            None,
+            session.role_metadata().clone(),
+        );
         Ok(ExplainTimestampStage::Optimize(ExplainTimestampOptimize {
             validity,
             plan,
