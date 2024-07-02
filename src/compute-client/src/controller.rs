@@ -292,6 +292,25 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         self.arrangement_exert_proportionality = value;
     }
 
+    /// Returns `true` iff all collections on all clusters have been hydrated.
+    pub fn check_clusters_hydrated(&self) -> bool {
+        let mut result = true;
+        for instance_id in self.instances.keys() {
+            let i = self.instance(*instance_id).expect("known to exist");
+            let instance_hydrated = i.check_any_replica_hydrated();
+
+            if !instance_hydrated {
+                result = false;
+
+                // We continue with our loop, so that we log all non-hydrated
+                // instances.
+                tracing::info!("instance {instance_id} is not hydrated");
+            }
+        }
+
+        result
+    }
+
     /// Returns the read and write frontiers for each collection.
     pub fn collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
         let collections = self.instances.values().flat_map(|i| i.collections_iter());
