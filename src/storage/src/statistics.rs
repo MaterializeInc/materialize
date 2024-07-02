@@ -50,6 +50,7 @@ pub(crate) struct SourceStatisticsMetricDefs {
     pub(crate) updates_staged: IntCounterVec,
     pub(crate) updates_committed: IntCounterVec,
     pub(crate) bytes_received: IntCounterVec,
+    pub(crate) bytes_sent: IntCounterVec,
 
     // Gauges
     pub(crate) snapshot_committed: UIntGaugeVec,
@@ -92,6 +93,11 @@ impl SourceStatisticsMetricDefs {
             bytes_received: registry.register(metric!(
                 name: "mz_source_bytes_received",
                 help: "The number of bytes worth of messages the worker has received from upstream. The way the bytes are counted is source-specific.",
+                var_labels: ["source_id", "worker_id", "parent_source_id"],
+            )),
+            bytes_sent: registry.register(metric!(
+                name: "mz_source_bytes_sent",
+                help: "The number of bytes worth of messages the worker has sent to upstream. The way the bytes are counted is source-specific.",
                 var_labels: ["source_id", "worker_id", "parent_source_id"],
             )),
             bytes_indexed: registry.register(metric!(
@@ -146,6 +152,7 @@ pub struct SourceStatisticsMetrics {
     pub(crate) updates_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) updates_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) bytes_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) bytes_sent: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 
     // Gauges
     pub(crate) snapshot_committed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -203,6 +210,11 @@ impl SourceStatisticsMetrics {
                 shard.clone(),
             ]),
             bytes_received: defs.bytes_received.get_delete_on_drop_counter(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+            ]),
+            bytes_sent: defs.bytes_sent.get_delete_on_drop_counter(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
@@ -265,6 +277,7 @@ pub(crate) struct SinkStatisticsMetricDefs {
     pub(crate) messages_committed: IntCounterVec,
     pub(crate) bytes_staged: IntCounterVec,
     pub(crate) bytes_committed: IntCounterVec,
+    pub(crate) bytes_received: IntCounterVec,
 }
 
 impl SinkStatisticsMetricDefs {
@@ -290,6 +303,11 @@ impl SinkStatisticsMetricDefs {
                 help: "The number of bytes committed to the sink.",
                 var_labels: ["sink_id", "worker_id"],
             )),
+            bytes_received: registry.register(metric!(
+                name: "mz_sink_bytes_received",
+                help: "The number of bytes received by the sink.",
+                var_labels: ["sink_id", "worker_id"],
+            )),
         }
     }
 }
@@ -302,6 +320,7 @@ pub struct SinkStatisticsMetrics {
     pub(crate) messages_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) bytes_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) bytes_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) bytes_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl SinkStatisticsMetrics {
@@ -322,6 +341,9 @@ impl SinkStatisticsMetrics {
                 .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
             bytes_committed: defs
                 .bytes_committed
+                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+            bytes_received: defs
+                .bytes_received
                 .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
         }
     }
@@ -390,6 +412,7 @@ pub struct SourceStatisticsRecord {
     // Counters
     messages_received: u64,
     bytes_received: u64,
+    bytes_sent: u64,
     updates_staged: u64,
     updates_committed: u64,
 
@@ -417,6 +440,7 @@ impl SourceStatisticsRecord {
     fn clear(&mut self) {
         self.messages_received = 0;
         self.bytes_received = 0;
+        self.bytes_sent = 0;
         self.updates_staged = 0;
         self.updates_committed = 0;
 
@@ -442,6 +466,7 @@ impl SourceStatisticsRecord {
     fn reset_counters(&mut self) {
         self.messages_received = 0;
         self.bytes_received = 0;
+        self.bytes_sent = 0;
         self.updates_staged = 0;
         self.updates_committed = 0;
     }
@@ -454,6 +479,7 @@ impl SourceStatisticsRecord {
             worker_id: _,
             messages_received,
             bytes_received,
+            bytes_sent,
             updates_staged,
             updates_committed,
             records_indexed,
@@ -471,6 +497,7 @@ impl SourceStatisticsRecord {
             id,
             messages_received: messages_received.into(),
             bytes_received: bytes_received.into(),
+            bytes_sent: bytes_sent.into(),
             updates_staged: updates_staged.into(),
             updates_committed: updates_committed.into(),
             records_indexed: Gauge::gauge(records_indexed.unwrap()),
@@ -495,6 +522,7 @@ pub struct SinkStatisticsRecord {
     messages_committed: u64,
     bytes_staged: u64,
     bytes_committed: u64,
+    bytes_received: u64,
 }
 
 impl SinkStatisticsRecord {
@@ -503,6 +531,7 @@ impl SinkStatisticsRecord {
         self.messages_committed = 0;
         self.bytes_staged = 0;
         self.bytes_committed = 0;
+        self.bytes_received = 0;
     }
 
     /// Reset counters so that we continue to ship diffs to the controller.
@@ -511,6 +540,7 @@ impl SinkStatisticsRecord {
         self.messages_committed = 0;
         self.bytes_staged = 0;
         self.bytes_committed = 0;
+        self.bytes_received = 0;
     }
 
     /// Convert this record into an `SinkStatisticsUpdate` to be merged
@@ -523,6 +553,7 @@ impl SinkStatisticsRecord {
             messages_committed,
             bytes_staged,
             bytes_committed,
+            bytes_received,
         } = self.clone();
 
         SinkStatisticsUpdate {
@@ -531,6 +562,7 @@ impl SinkStatisticsRecord {
             messages_committed: messages_committed.into(),
             bytes_staged: bytes_staged.into(),
             bytes_committed: bytes_committed.into(),
+            bytes_received: bytes_received.into(),
         }
     }
 }
@@ -561,6 +593,7 @@ impl SourceStatistics {
                     updates_staged: 0,
                     updates_committed: 0,
                     bytes_received: 0,
+                    bytes_sent: 0,
                     records_indexed: Some(0),
                     bytes_indexed: Some(0),
                     rehydration_latency_ms: None,
@@ -661,6 +694,13 @@ impl SourceStatistics {
         let mut cur = self.stats.borrow_mut();
         cur.stats.bytes_received = cur.stats.bytes_received + value;
         cur.prom.bytes_received.inc_by(value);
+    }
+
+    /// Increment the `bytes_sent` stat.
+    pub fn inc_bytes_sent_by(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.stats.bytes_sent = cur.stats.bytes_sent + value;
+        cur.prom.bytes_sent.inc_by(value);
     }
 
     /// Update the `bytes_indexed` stat.
@@ -827,6 +867,7 @@ impl SinkStatistics {
                     messages_committed: 0,
                     bytes_staged: 0,
                     bytes_committed: 0,
+                    bytes_received: 0,
                 },
                 prom: SinkStatisticsMetrics::new(metrics, id, worker_id),
             })),
@@ -882,6 +923,13 @@ impl SinkStatistics {
         let mut cur = self.stats.borrow_mut();
         cur.stats.bytes_committed = cur.stats.bytes_committed + value;
         cur.prom.bytes_committed.inc_by(value);
+    }
+
+    /// Increment the `bytes_received` stat.
+    pub fn inc_bytes_received_by(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.stats.bytes_received = cur.stats.bytes_received + value;
+        cur.prom.bytes_received.inc_by(value);
     }
 }
 
