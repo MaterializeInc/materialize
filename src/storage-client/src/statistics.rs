@@ -130,7 +130,7 @@ pub trait StorageMetric {
 }
 
 /// A counter that never resets.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct Counter(u64);
 
 impl StorageMetric for Counter {
@@ -156,7 +156,7 @@ impl From<u64> for Counter {
 }
 
 /// A latency gauge that is reset on every restart.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct ResettingLatency(Option<i64>);
 
 impl From<Option<i64>> for ResettingLatency {
@@ -259,7 +259,7 @@ impl From<u64> for ResettingTotal {
 }
 
 /// A boolean gauge that is never reset.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct Boolean(bool);
 
 impl StorageMetric for Boolean {
@@ -387,7 +387,7 @@ impl StorageMetric for Total {
 }
 
 /// A gauge that has semantics based on the `StorageMetric` implementation of its inner.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct Gauge<T>(T);
 
 impl<T> Gauge<T> {
@@ -462,6 +462,26 @@ pub struct SourceStatisticsUpdate {
     // if a scenario requires more investigation.
     pub offset_known: Gauge<Total>,
     pub offset_committed: Gauge<Total>,
+}
+
+impl From<GlobalId> for SourceStatisticsUpdate {
+    fn from(id: GlobalId) -> SourceStatisticsUpdate {
+        SourceStatisticsUpdate {
+            id,
+            messages_received: Default::default(),
+            bytes_received: Default::default(),
+            updates_staged: Default::default(),
+            updates_committed: Default::default(),
+            records_indexed: Default::default(),
+            bytes_indexed: Default::default(),
+            rehydration_latency_ms: Default::default(),
+            snapshot_records_known: Default::default(),
+            snapshot_records_staged: Default::default(),
+            snapshot_committed: Default::default(),
+            offset_known: Default::default(),
+            offset_committed: Default::default(),
+        }
+    }
 }
 
 impl SourceStatisticsUpdate {
@@ -665,6 +685,18 @@ pub struct SinkStatisticsUpdate {
     pub messages_committed: Counter,
     pub bytes_staged: Counter,
     pub bytes_committed: Counter,
+}
+
+impl From<GlobalId> for SinkStatisticsUpdate {
+    fn from(id: GlobalId) -> SinkStatisticsUpdate {
+        SinkStatisticsUpdate {
+            id,
+            messages_staged: Default::default(),
+            messages_committed: Default::default(),
+            bytes_staged: Default::default(),
+            bytes_committed: Default::default(),
+        }
+    }
 }
 
 impl SinkStatisticsUpdate {

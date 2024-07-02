@@ -122,6 +122,24 @@ bids           true      false   true  true  false   true
 organizations  true      false   true  true  false   true
 users          true      false   true  true  false   true
 
+
+# Assert that the codepath that ensures a 0-value as the first value in `mz_source_statistics` occurs, using a `SUBSCRIBE`.
+# Sinks and subsources use the same codepath.
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (
+    SELECT u.messages_received
+      FROM mz_sources s
+      JOIN mz_internal.mz_source_statistics_with_history u ON s.id = u.id
+      WHERE s.name = 'auction_house'
+    )
+  AS OF AT LEAST 0
+
+> FETCH 1 c;
+<TIMESTAMP> 1 0
+
+> COMMIT
+
 > DROP SOURCE auction_house CASCADE
 
 # Test upsert
