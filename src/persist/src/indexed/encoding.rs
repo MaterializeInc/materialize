@@ -65,7 +65,7 @@ impl BatchColumnarFormat {
         match s {
             "row" => BatchColumnarFormat::Row,
             "both" => BatchColumnarFormat::Both(0),
-            "both_v1" => BatchColumnarFormat::Both(1),
+            "both_v2" => BatchColumnarFormat::Both(2),
             x => {
                 let default = BatchColumnarFormat::default();
                 soft_panic_or_log!("Invalid batch columnar type: {x}, falling back to {default}");
@@ -78,8 +78,8 @@ impl BatchColumnarFormat {
     pub const fn as_str(&self) -> &'static str {
         match self {
             BatchColumnarFormat::Row => "row",
-            BatchColumnarFormat::Both(0) => "both",
-            BatchColumnarFormat::Both(1) => "both_v1",
+            BatchColumnarFormat::Both(0 | 1) => "both",
+            BatchColumnarFormat::Both(2) => "both_v2",
             _ => panic!("unknown batch columnar format"),
         }
     }
@@ -88,6 +88,8 @@ impl BatchColumnarFormat {
     pub const fn is_structured(&self) -> bool {
         match self {
             BatchColumnarFormat::Row => false,
+            // The V0 format has been deprecated and we ignore its structured columns.
+            BatchColumnarFormat::Both(0 | 1) => false,
             BatchColumnarFormat::Both(_) => true,
         }
     }
@@ -464,7 +466,7 @@ pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(batch: &BlobTraceBatchPa
         BlobTraceUpdates::Row(_) => (ProtoBatchFormat::ParquetKvtd, None),
         // For the newer structured format we track some metadata about the version of the format.
         BlobTraceUpdates::Both { .. } => {
-            let metadata = ProtoFormatMetadata::StructuredMigration(1);
+            let metadata = ProtoFormatMetadata::StructuredMigration(2);
             (ProtoBatchFormat::ParquetStructured, Some(metadata))
         }
     };

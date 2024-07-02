@@ -14,7 +14,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 use std::{cmp, fmt};
 
-use ::arrow::array::StructArray;
+use ::arrow::array::Array;
 use ::arrow::datatypes::ArrowNativeType;
 use bytes::Bytes;
 use mz_ore::bytes::MaybeLgBytes;
@@ -558,11 +558,15 @@ pub struct ColumnarRecordsStructuredExt {
     /// The structured `k` column.
     ///
     /// [`arrow`] does not allow empty [`StructArray`]s so we model an empty `key` column as None.
-    pub key: Option<StructArray>,
+    ///
+    /// [`StructArray`]: ::arrow::array::StructArray
+    pub key: Option<Arc<dyn Array>>,
     /// The structured `v` column.
     ///
     /// [`arrow`] does not allow empty [`StructArray`]s so we model an empty `val` column as None.
-    pub val: Option<StructArray>,
+    ///
+    /// [`StructArray`]: ::arrow::array::StructArray
+    pub val: Option<Arc<dyn Array>>,
 }
 
 #[cfg(test)]

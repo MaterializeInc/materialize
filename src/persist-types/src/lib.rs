@@ -22,7 +22,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::columnar::Schema;
+use crate::columnar::{Schema, Schema2};
 
 pub mod codec_impls;
 pub mod columnar;
@@ -43,7 +43,7 @@ pub trait Codec: Sized + PartialEq + 'static {
     /// This is a separate type because Row is not self-describing. For Row, you
     /// need a RelationDesc to determine the types of any columns that are
     /// Datum::Null.
-    type Schema: Schema<Self>;
+    type Schema: Schema<Self> + Schema2<Self>;
 
     /// Name of the codec.
     ///

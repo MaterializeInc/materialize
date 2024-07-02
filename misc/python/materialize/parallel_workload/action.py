@@ -935,7 +935,7 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["persist_batch_columnar_format"] = ["row", "both"]
+        self.flags_with_values["persist_batch_columnar_format"] = ["row", "both_v2"]
         self.flags_with_values["persist_batch_record_part_format"] = BOOLEAN_FLAG_VALUES
 
     def run(self, exe: Executor) -> bool:

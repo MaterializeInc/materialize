@@ -61,10 +61,27 @@ impl ColumnarStats {
     }
 
     /// Returns the inner [`ColumnStatKinds`] if `nulls` is [`None`].
-    pub fn non_null_values(&self) -> Option<&ColumnStatKinds> {
+    pub fn as_non_null_values(&self) -> Option<&ColumnStatKinds> {
         match self.nulls {
             None => Some(&self.values),
             Some(_) => None,
+        }
+    }
+
+    /// Returns the inner [`ColumnStatKinds`] if `nulls` is [`None`].
+    pub fn into_non_null_values(self) -> Option<ColumnStatKinds> {
+        match self.nulls {
+            None => Some(self.values),
+            Some(_) => None,
+        }
+    }
+
+    /// Returns the inner [`StructStats`] if `nulls` is [`None`] and `values`
+    /// is [`ColumnStatKinds::Struct`].
+    pub fn into_struct_stats(self) -> Option<StructStats> {
+        match self.into_non_null_values()? {
+            ColumnStatKinds::Struct(stats) => Some(stats),
+            _ => None,
         }
     }
 }
@@ -412,7 +429,7 @@ impl<T: Data> ColumnStats<T> for NoneStats {
     where
         Self: Sized,
     {
-        match stats.non_null_values()? {
+        match stats.as_non_null_values()? {
             ColumnStatKinds::None => Some(NoneStats),
             _ => None,
         }

@@ -716,9 +716,14 @@ impl Service for TransactorService {
 }
 
 mod codec_impls {
-    use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
-    use mz_persist_types::columnar::{ColumnPush, Schema};
+    use arrow::array::{BinaryArray, BinaryBuilder, UInt64Array, UInt64Builder};
+    use mz_persist_types::codec_impls::{
+        SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder, SimpleDecoder,
+        SimpleEncoder, SimpleSchema,
+    };
+    use mz_persist_types::columnar::{ColumnPush, Schema, Schema2};
     use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
+    use mz_persist_types::stats::NoneStats;
     use mz_persist_types::Codec;
 
     use crate::maelstrom::txn_list_append_single::{MaelstromKey, MaelstromVal};
@@ -746,6 +751,22 @@ mod codec_impls {
         }
     }
 
+    impl SimpleColumnarData for MaelstromKey {
+        type ArrowBuilder = UInt64Builder;
+        type ArrowColumn = UInt64Array;
+
+        fn push(&self, builder: &mut Self::ArrowBuilder) {
+            builder.append_value(self.0);
+        }
+        fn push_null(builder: &mut Self::ArrowBuilder) {
+            builder.append_null();
+        }
+
+        fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
+            *self = MaelstromKey(column.value(idx));
+        }
+    }
+
     #[derive(Debug)]
     pub struct MaelstromKeySchema;
 
@@ -763,6 +784,22 @@ mod codec_impls {
 
         fn encoder(&self, cols: ColumnsMut) -> Result<Self::Encoder, String> {
             SimpleSchema::<MaelstromKey, u64>::encoder(cols, |val| val.0)
+        }
+    }
+
+    impl Schema2<MaelstromKey> for MaelstromKeySchema {
+        type ArrowColumn = UInt64Array;
+        type Statistics = NoneStats;
+
+        type Decoder = SimpleColumnarDecoder<MaelstromKey>;
+        type Encoder = SimpleColumnarEncoder<MaelstromKey>;
+
+        fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+            Ok(SimpleColumnarEncoder::default())
+        }
+
+        fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+            Ok(SimpleColumnarDecoder::new(col))
         }
     }
 
@@ -789,6 +826,24 @@ mod codec_impls {
         }
     }
 
+    impl SimpleColumnarData for MaelstromVal {
+        type ArrowBuilder = BinaryBuilder;
+        type ArrowColumn = BinaryArray;
+
+        fn push(&self, builder: &mut Self::ArrowBuilder) {
+            let mut buf = Vec::new();
+            MaelstromVal::encode(self, &mut buf);
+            builder.append_value(&buf);
+        }
+        fn push_null(builder: &mut Self::ArrowBuilder) {
+            builder.append_null()
+        }
+
+        fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
+            *self = MaelstromVal::decode(column.value(idx)).expect("should be valid MaelstromVal");
+        }
+    }
+
     #[derive(Debug)]
     pub struct MaelstromValSchema;
 
@@ -812,6 +867,22 @@ mod codec_impls {
                 MaelstromVal::encode(val, &mut buf);
                 ColumnPush::<Vec<u8>>::push(col, &buf)
             })
+        }
+    }
+
+    impl Schema2<MaelstromVal> for MaelstromValSchema {
+        type ArrowColumn = BinaryArray;
+        type Statistics = NoneStats;
+
+        type Decoder = SimpleColumnarDecoder<MaelstromVal>;
+        type Encoder = SimpleColumnarEncoder<MaelstromVal>;
+
+        fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+            Ok(SimpleColumnarEncoder::default())
+        }
+
+        fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+            Ok(SimpleColumnarDecoder::new(col))
         }
     }
 }

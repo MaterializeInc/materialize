@@ -349,7 +349,7 @@ class TogglePersistBatchColumnarFormat(SystemVarChange):
                 SystemVarChangeEntry(
                     name="persist_batch_columnar_format",
                     value_for_manipulate_phase_1="row",
-                    value_for_manipulate_phase_2="both",
+                    value_for_manipulate_phase_2="both_v2",
                 )
             ],
         )
