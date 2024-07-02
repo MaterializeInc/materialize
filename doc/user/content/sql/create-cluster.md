@@ -233,6 +233,98 @@ Cluster `c` will have consumed 0.4 credits in total:
   * Replica `c.r2` was provisioned from 3:45:00 to 3:45:45, consuming 0.1
     credits.
 
+### Scheduling
+
+{{< private-preview />}}
+
+To support [scheduled refreshes in materialized views](../create-materialized-view/#refresh-strategies),
+you can configure a cluster to automatically turn on and off using the
+`SCHEDULE...ON REFRESH` syntax.
+
+```sql
+CREATE CLUSTER my_refresh_cluster (
+  SIZE = '3200cc',
+  SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour')
+);
+```
+
+Scheduled clusters should **only** contain materialized views configured with a
+non-default [refresh strategy](../create-materialized-view/#refresh-strategies)
+(and any indexes built on these views). These clusters will automatically turn
+on (i.e., be provisioned with compute resources) based on the configured
+refresh strategies, and **only** consume credits for the duration of the
+refreshes.
+
+It's not possible to manually turn on a cluster with `ON REFRESH` scheduling. If
+you need to turn on a cluster outside its schedule, you can temporarily disable
+scheduling and provision compute resources using [`ALTER CLUSTER`](../alter-cluster/#schedule):
+
+```sql
+ALTER CLUSTER my_refresh_cluster SET (SCHEDULE = MANUAL, REPLICATION FACTOR = 1);
+```
+
+To re-enable scheduling:
+
+```sql
+ALTER CLUSTER my_refresh_cluster
+SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour'));
+```
+
+#### Rehydration time estimate
+
+<p style="font-size:14px"><b>Syntax:</b> <code>REHYDRATION TIME ESTIMATE</code> <i>interval</i></p>
+
+By default, scheduled clusters will turn on at the scheduled refresh time. To
+avoid unavailability of the objects scheduled for refresh during the refresh
+operation, we recommend turning the cluster on ahead of the scheduled time to
+allow rehydration to complete. This can be controlled using the `REHYDRATION
+TIME ESTIMATE` clause.
+
+#### Introspection
+
+To check the scheduling strategy associated with a cluster, you can query the
+[`mz_internal.mz_cluster_schedules`](/sql/system-catalog/mz_internal/#mz_cluster_schedules)
+system catalog table:
+
+```sql
+SELECT c.id AS cluster_id,
+       c.name AS cluster_name,
+       cs.type AS schedule_type,
+       cs.refresh_rehydration_time_estimate
+FROM mz_internal.mz_cluster_schedules cs
+JOIN mz_clusters c ON cs.cluster_id = c.id
+WHERE c.name = 'my_refresh_cluster';
+```
+
+To check if a scheduled cluster is turned on, you can query the
+[`mz_catalog.mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas)
+system catalog table:
+
+```sql
+SELECT cs.cluster_id,
+       -- A cluster with scheduling is "on" when it has compute resources
+       -- (i.e. a replica) attached.
+       CASE WHEN cr.id IS NOT NULL THEN true
+       ELSE false END AS is_on
+FROM mz_internal.mz_cluster_schedules cs
+JOIN mz_clusters c ON cs.cluster_id = c.id AND cs.type = 'on-refresh'
+LEFT JOIN mz_cluster_replicas cr ON c.id = cr.cluster_id;
+```
+
+You can also use the [audit log](../system-catalog/mz_catalog/#mz_audit_events)
+to observe the commands that are automatically run when a scheduled cluster is
+turned on and off for materialized view refreshes:
+
+```sql
+SELECT *
+FROM mz_audit_events
+WHERE object_type = 'cluster-replica'
+ORDER BY occurred_at DESC;
+```
+
+Any commands attributed to scheduled refreshes will be marked with
+`"reason":"schedule"` under the `details` column.
+
 ### Known limitations
 
 Clusters have several known limitations:
