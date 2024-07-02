@@ -36,7 +36,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_repr::{Datum, RelationDesc, RowArena, RowIterator};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{CopyDirection, CopyStatement, CopyTarget, Raw, Statement, StatementKind};
+use mz_sql::ast::{
+    CopyDirection, CopyStatement, CopyTarget, Raw, Statement, StatementKind, SubscribeStatement,
+};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
@@ -971,6 +973,15 @@ async fn execute_request<S: ResultSender>(
         sender: &S,
         stmt: &Statement<Raw>,
     ) -> Result<(), Error> {
+        // Special-case `SUBSCRIBE UP TO` as it is presumed to have an end time in the somewhat near
+        // future.
+        if matches!(
+            stmt,
+            Statement::Subscribe(SubscribeStatement { up_to: Some(_), .. })
+        ) {
+            return Ok(());
+        }
+
         let kind: StatementKind = stmt.into();
         let execute_responses = Plan::generated_from(&kind)
             .into_iter()

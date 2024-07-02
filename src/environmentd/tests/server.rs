@@ -1660,6 +1660,53 @@ fn test_max_statement_batch_size() {
     }
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_http_subscribe_up_to() {
+    use reqwest::Client;
+
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+    client
+        .batch_execute("CREATE TABLE t (i INT)")
+        .await
+        .unwrap();
+    client
+        .batch_execute("GRANT ALL PRIVILEGES ON TABLE t TO PUBLIC")
+        .await
+        .unwrap();
+    client
+        .batch_execute("INSERT INTO t VALUES (2)")
+        .await
+        .unwrap();
+
+    let http_url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.http_local_addr()
+    ))
+    .unwrap();
+    let ts = (SYSTEM_TIME)() + 1;
+    let json = format!("{{\"query\":\"subscribe (select * from t) as of at least 0 up to {ts}\"}}");
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    let res = Client::new()
+        .post(http_url)
+        .json(&json)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        res.status().is_success(),
+        "statement should result in success: {:?}",
+        res.status()
+    );
+    let text = res.text().await.unwrap();
+    assert!(
+        text.contains("TODO"),
+        "TODO, figure out correct assertion: {}",
+        text
+    );
+}
+
 #[mz_ore::test]
 fn test_mz_system_user_admin() {
     let server = test_util::TestHarness::default().start_blocking();
