@@ -235,7 +235,7 @@ mod disabled {
     }
 }
 
-#[cfg(all(feature = "jemalloc"), not(miri))]
+#[cfg(all(feature = "jemalloc", not(miri)))]
 mod enabled {
     use std::io::{BufReader, Read};
     use std::sync::Arc;
