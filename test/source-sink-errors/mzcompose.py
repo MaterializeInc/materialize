@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
@@ -23,6 +24,7 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
 
@@ -39,6 +41,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Toxiproxy(),
 ]
 
 
@@ -541,6 +544,15 @@ disruptions: list[Disruption] = [
 
 
 def workflow_default(c: Composition) -> None:
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_disruptions(c: Composition) -> None:
     """Test the detection and reporting of source/sink errors by
     introducing a Disruption and then checking the mz_internal.mz_*_statuses tables
     """
@@ -595,3 +607,94 @@ def unsupported_pg_table(c: Composition) -> None:
                  """
         )
     )
+
+
+def workflow_failing_sink_does_not_move_collection_forward(c: Composition) -> None:
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(
+            no_reset=True,
+        ),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized", "zookeeper", "kafka", "schema-registry", "toxiproxy")
+
+        c.testdrive(
+            input=dedent(
+                """
+                > CREATE TABLE table_alter1 (x int, y string);
+                > CREATE TABLE table_alter2 (x int, y string);
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+                {
+                  "name": "kafka",
+                  "listen": "0.0.0.0:9093",
+                  "upstream": "kafka:9092"
+                }
+
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER 'toxiproxy:9093', SECURITY PROTOCOL PLAINTEXT);
+                > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}');
+
+                > CREATE SINK table_alter_sink FROM table_alter1
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'alter-table-sink')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM;
+
+                > INSERT INTO table_alter1 VALUES (1, 'a');
+                > INSERT INTO table_alter2 VALUES (1, 'b');
+
+                > ALTER SINK table_alter_sink SET FROM table_alter2;
+
+                > INSERT INTO table_alter1 VALUES (2, 'a');
+                > INSERT INTO table_alter2 VALUES (2, 'b');
+
+                # close connection
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/kafka/toxics content-type=application/json
+                {
+                  "name": "kafka",
+                  "type": "limit_data",
+                  "attributes": { "bytes": 0 }
+                }
+
+                # wait for the stalled status to be detected
+                > SELECT count(*) > 0 FROM mz_internal.mz_sink_status_history WHERE sink_id = (SELECT id FROM mz_kafka_sinks) AND status = 'stalled';
+                true
+
+                > SELECT table_frontiers.read_frontier <= sink_frontiers.write_frontier AS since_frontier_not_after_sink_frontier
+                  FROM mz_internal.mz_frontiers sink_frontiers, mz_internal.mz_frontiers table_frontiers
+                  WHERE sink_frontiers.object_id = (SELECT id FROM mz_kafka_sinks)
+                  AND table_frontiers.object_id = (SELECT id FROM mz_tables WHERE name = 'table_alter2')
+                true
+                """
+            ),
+        )
+
+        write_frontier1 = c.sql_query(
+            "SELECT write_frontier FROM mz_internal.mz_frontiers WHERE object_id = (SELECT id FROM mz_kafka_sinks);"
+        )[0][0]
+
+        c.testdrive(
+            input=dedent(
+                """
+                > INSERT INTO table_alter1 VALUES (3, 'a');
+                > INSERT INTO table_alter2 VALUES (3, 'b');
+
+                > SELECT table_frontiers.read_frontier <= sink_frontiers.write_frontier AS since_frontier_not_after_sink_frontier
+                  FROM mz_internal.mz_frontiers sink_frontiers, mz_internal.mz_frontiers table_frontiers
+                  WHERE sink_frontiers.object_id = (SELECT id FROM mz_kafka_sinks)
+                  AND table_frontiers.object_id = (SELECT id FROM mz_tables WHERE name = 'table_alter2')
+                true
+                """
+            )
+        )
+
+        # let some time pass
+        time.sleep(2)
+        write_frontier2 = c.sql_query(
+            "SELECT write_frontier FROM mz_internal.mz_frontiers WHERE object_id = (SELECT id FROM mz_kafka_sinks);"
+        )[0][0]
+
+        assert (
+            write_frontier1 == write_frontier2
+        ), "write frontier moved forward although sink is stalled"
