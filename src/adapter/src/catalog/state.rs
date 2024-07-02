@@ -13,18 +13,14 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::net::Ipv4Addr;
+use std::sync::Arc;
+use std::time::Instant;
 
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_sql::session::metadata::SessionMetadata;
-use once_cell::sync::Lazy;
-use serde::Serialize;
-use timely::progress::Antichain;
-use tokio::sync::mpsc;
-use tracing::{debug, warn};
-
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
+use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
 };
@@ -42,6 +38,7 @@ use mz_controller::clusters::{
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
+use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
 use mz_pgrepr::oid::INVALID_OID;
@@ -53,11 +50,12 @@ use mz_repr::namespaces::{
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc};
+use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRecordField, CatalogRole, CatalogSchema,
-    CatalogType, CatalogTypeDetails, IdReference, NameReference, SessionCatalog, SystemObjectType,
-    TypeReference,
+    CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
+    CatalogRecordField, CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId,
+    IdReference, NameReference, SessionCatalog, SystemObjectType, TypeReference,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName,
@@ -70,6 +68,7 @@ use mz_sql::plan::{
     Plan, PlanContext,
 };
 use mz_sql::rbac;
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{SystemVars, Var, VarInput, DEFAULT_DATABASE_NAME};
 use mz_sql_parser::ast::QualifiedReplica;
@@ -77,6 +76,12 @@ use mz_storage_client::controller::StorageMetadata;
 use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
+use mz_storage_types::connections::ConnectionContext;
+use once_cell::sync::Lazy;
+use serde::Serialize;
+use timely::progress::Antichain;
+use tokio::sync::mpsc;
+use tracing::{debug, warn};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::ConnCatalog;
@@ -149,6 +154,46 @@ where
 }
 
 impl CatalogState {
+    /// Returns an empty [`CatalogState`] that can be used in tests.
+    pub fn empty_test() -> Self {
+        CatalogState {
+            database_by_name: Default::default(),
+            database_by_id: Default::default(),
+            entry_by_id: Default::default(),
+            ambient_schemas_by_name: Default::default(),
+            ambient_schemas_by_id: Default::default(),
+            temporary_schemas: Default::default(),
+            clusters_by_id: Default::default(),
+            clusters_by_name: Default::default(),
+            roles_by_name: Default::default(),
+            roles_by_id: Default::default(),
+            config: CatalogConfig {
+                start_time: Default::default(),
+                start_instant: Instant::now(),
+                nonce: Default::default(),
+                environment_id: EnvironmentId::for_tests(),
+                session_id: Default::default(),
+                build_info: &DUMMY_BUILD_INFO,
+                timestamp_interval: Default::default(),
+                now: NOW_ZERO.clone(),
+                connection_context: ConnectionContext::for_tests(Arc::new(
+                    InMemorySecretsController::new(),
+                )),
+            },
+            cluster_replica_sizes: Default::default(),
+            availability_zones: Default::default(),
+            system_configuration: Default::default(),
+            egress_ips: Default::default(),
+            aws_principal_context: Default::default(),
+            aws_privatelink_availability_zones: Default::default(),
+            http_host_name: Default::default(),
+            default_privileges: Default::default(),
+            system_privileges: Default::default(),
+            comments: Default::default(),
+            storage_metadata: Default::default(),
+        }
+    }
+
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
         let search_path = self.resolve_search_path(session);
         let database = self

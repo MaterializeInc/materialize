@@ -10,12 +10,12 @@
 // Test determine_timestamp.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-use std::time::Instant;
 
 use async_trait::async_trait;
 use mz_adapter::catalog::CatalogState;
 use mz_adapter::session::Session;
+use mz_adapter::ReadHolds;
+use mz_adapter::ReadHoldsInner;
 use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
@@ -28,14 +28,6 @@ use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
-
-use mz_adapter::ReadHolds;
-use mz_adapter::ReadHoldsInner;
-use mz_build_info::DUMMY_BUILD_INFO;
-use mz_ore::now::NOW_ZERO;
-use mz_secrets::InMemorySecretsController;
-use mz_sql::catalog::{CatalogConfig, EnvironmentId};
-use mz_storage_types::connections::ConnectionContext;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(transparent)]
@@ -226,47 +218,11 @@ fn parse_query_when(s: &str) -> QueryWhen {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_timestamp_selection() {
     datadriven::walk("tests/testdata/timestamp_selection", |tf| {
-        let catalog_state = CatalogState {
-            database_by_name: Default::default(),
-            database_by_id: Default::default(),
-            entry_by_id: Default::default(),
-            ambient_schemas_by_name: Default::default(),
-            ambient_schemas_by_id: Default::default(),
-            temporary_schemas: Default::default(),
-            clusters_by_id: Default::default(),
-            clusters_by_name: Default::default(),
-            roles_by_name: Default::default(),
-            roles_by_id: Default::default(),
-            config: CatalogConfig {
-                start_time: Default::default(),
-                start_instant: Instant::now(),
-                nonce: Default::default(),
-                environment_id: EnvironmentId::for_tests(),
-                session_id: Default::default(),
-                build_info: &DUMMY_BUILD_INFO,
-                timestamp_interval: Default::default(),
-                now: NOW_ZERO.clone(),
-                connection_context: ConnectionContext::for_tests(Arc::new(
-                    InMemorySecretsController::new(),
-                )),
-            },
-            cluster_replica_sizes: Default::default(),
-            availability_zones: Default::default(),
-            system_configuration: Default::default(),
-            egress_ips: Default::default(),
-            aws_principal_context: Default::default(),
-            aws_privatelink_availability_zones: Default::default(),
-            http_host_name: Default::default(),
-            default_privileges: Default::default(),
-            system_privileges: Default::default(),
-            comments: Default::default(),
-            storage_metadata: Default::default(),
-        };
         let mut f = Frontiers {
             compute: BTreeMap::new(),
             storage: BTreeMap::new(),
             oracle: Timestamp::MIN,
-            catalog_state,
+            catalog_state: CatalogState::empty_test(),
         };
         let mut isolation = TransactionIsolationLevel::StrictSerializable;
         tf.run(move |tc| -> String {
