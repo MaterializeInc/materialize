@@ -104,7 +104,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
     "id": {
       "User": 1
     }
-  }
+  },
+  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t]"
 }
 EOF
 
@@ -328,7 +329,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
     "id": {
       "User": 1
     }
-  }
+  },
+  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t] AS t1, [u1 AS materialize.public.t] AS t2"
 }
 EOF
 
@@ -454,7 +456,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
     "id": {
       "User": 1
     }
-  }
+  },
+  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t]"
 }
 EOF
 
@@ -680,7 +683,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
     "id": {
       "User": 1
     }
-  }
+  },
+  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t] AS t1, [u1 AS materialize.public.t] AS t2"
 }
 EOF
 
@@ -793,7 +797,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
     "id": {
       "User": 2
     }
-  }
+  },
+  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t]"
 }
 EOF
 
@@ -1054,7 +1059,8 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
     "id": {
       "User": 2
     }
-  }
+  },
+  "redacted_sql": "SELECT pg_catalog.count(*) FROM [u1 AS materialize.public.t]"
 }
 EOF
 
@@ -1112,6 +1118,153 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR CREATE VIEW V AS SELECT 1
     }
   },
   "insights": null,
-  "cluster": null
+  "cluster": null,
+  "redacted_sql": null
+}
+EOF
+
+
+# Ensure redacted sql.
+query T multiline
+EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT 'abc'
+----
+{
+  "plans": {
+    "raw": {
+      "text": "Map (\"abc\")\n  Constant\n    - ()\n\nTarget cluster: mz_catalog_server\n",
+      "json": {
+        "Map": {
+          "input": {
+            "Constant": {
+              "rows": [
+                {
+                  "data": []
+                }
+              ],
+              "typ": {
+                "column_types": [],
+                "keys": []
+              }
+            }
+          },
+          "scalars": [
+            {
+              "Literal": [
+                {
+                  "data": [
+                    19,
+                    3,
+                    97,
+                    98,
+                    99
+                  ]
+                },
+                {
+                  "scalar_type": "String",
+                  "nullable": false
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "optimized": {
+      "global": {
+        "text": "Explained Query:\n  Constant\n    - (\"abc\")\n\nTarget cluster: mz_catalog_server\n",
+        "json": {
+          "plans": [
+            {
+              "id": "Explained Query",
+              "plan": {
+                "Constant": {
+                  "rows": {
+                    "Ok": [
+                      [
+                        {
+                          "data": [
+                            19,
+                            3,
+                            97,
+                            98,
+                            99
+                          ]
+                        },
+                        1
+                      ]
+                    ]
+                  },
+                  "typ": {
+                    "column_types": [
+                      {
+                        "scalar_type": "String",
+                        "nullable": false
+                      }
+                    ],
+                    "keys": []
+                  }
+                }
+              }
+            }
+          ],
+          "sources": []
+        }
+      },
+      "fast_path": {
+        "text": "Explained Query (fast path):\n  Constant\n    - (\"abc\")\n\nTarget cluster: mz_catalog_server\n",
+        "json": {
+          "plans": [
+            {
+              "id": "Explained Query (fast path)",
+              "plan": {
+                "Constant": [
+                  {
+                    "Ok": [
+                      [
+                        {
+                          "data": [
+                            19,
+                            3,
+                            97,
+                            98,
+                            99
+                          ]
+                        },
+                        1
+                      ]
+                    ]
+                  },
+                  {
+                    "column_types": [
+                      {
+                        "scalar_type": "String",
+                        "nullable": false
+                      }
+                    ],
+                    "keys": [
+                      []
+                    ]
+                  }
+                ]
+              }
+            }
+          ],
+          "sources": []
+        }
+      }
+    }
+  },
+  "insights": {
+    "imports": {},
+    "fast_path_clusters": {},
+    "persist_count": []
+  },
+  "cluster": {
+    "name": "mz_catalog_server",
+    "id": {
+      "System": 2
+    }
+  },
+  "redacted_sql": "SELECT '<REDACTED>'"
 }
 EOF

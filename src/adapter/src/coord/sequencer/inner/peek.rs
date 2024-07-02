@@ -21,7 +21,7 @@ use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{Datum, GlobalId, RowArena, Timestamp};
-use mz_sql::ast::ExplainStage;
+use mz_sql::ast::{ExplainStage, Statement};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
@@ -596,6 +596,7 @@ impl Coordinator {
                             !(matches!(explain_ctx, ExplainContext::PlanInsightsNotice(_))
                                 && optimizer.duration() > opt_limit);
                         let insights_ctx = needs_plan_insights.then(|| PlanInsightsContext {
+                            stmt: plan.select.clone().map(Statement::Select),
                             raw_expr: plan.source.clone(),
                             catalog,
                             compute_instances,
@@ -616,7 +617,7 @@ impl Coordinator {
                                         optimizer,
                                         df_meta,
                                         explain_ctx,
-                                    insights_ctx,
+                                        insights_ctx,
                                     })
                                 }
                                 ExplainContext::PlanInsightsNotice(optimizer_trace) => {
@@ -632,7 +633,7 @@ impl Coordinator {
                                         plan_insights_optimizer_trace: Some(optimizer_trace),
                                         global_lir_plan,
                                         optimization_finished_at,
-                                    insights_ctx,
+                                        insights_ctx,
                                     })
                                 }
                                 ExplainContext::None => PeekStage::Finish(PeekStageFinish {
@@ -647,7 +648,7 @@ impl Coordinator {
                                     plan_insights_optimizer_trace: None,
                                     global_lir_plan,
                                     optimization_finished_at,
-                                insights_ctx,
+                                    insights_ctx,
                                 }),
                                 ExplainContext::Pushdown => {
                                     let (plan, _, _) = global_lir_plan.unapply();
