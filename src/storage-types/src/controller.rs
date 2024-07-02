@@ -203,7 +203,7 @@ pub enum StorageError<T> {
     /// Collection metadata already exists for ID.
     CollectionMetadataAlreadyExists(GlobalId),
     /// Some other collection is already writing to this persist shard.
-    PersistShardAlreadyInUse(String),
+    PersistShardAlreadyInUse(ShardId),
     /// Txn WAL shard already exists.
     TxnWalShardAlreadyExists,
     /// The item that a subsource refers to is unexpectedly missing from the

@@ -12,7 +12,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -383,7 +382,6 @@ where
         let txns_id = txn
             .get_txn_wal_shard()
             .expect("must call prepare initialization before creating StorageCollections");
-        let txns_id = ShardId::from_str(txns_id.as_str()).expect("shard ID must be valid");
 
         let txns_client = persist_clients
             .open(persist_location.clone())
@@ -939,11 +937,7 @@ where
         self.finalized_shards
             .lock()
             .expect("lock poisoned")
-            .retain(|shard| {
-                storage_metadata
-                    .unfinalized_shards
-                    .contains(shard.to_string().as_str())
-            });
+            .retain(|shard| storage_metadata.unfinalized_shards.contains(shard));
     }
 }
 
@@ -967,13 +961,6 @@ where
         drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
         let metadata = txn.get_collection_metadata();
-
-        let processed_metadata: Result<Vec<_>, _> = metadata
-            .into_iter()
-            .map(|(id, shard)| ShardId::from_str(&shard).map(|shard| (id, shard)))
-            .collect();
-
-        let metadata = processed_metadata.map_err(|e| StorageError::Generic(anyhow::anyhow!(e)))?;
         let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
 
         // Determine which collections we do not yet have metadata for.
@@ -999,11 +986,7 @@ where
         // dropped from the catalog, but the dataflow is still running on a
         // worker, assuming the shard is safe to finalize on reboot may cause
         // the cluster to panic.
-        let unfinalized_shards = txn
-            .get_unfinalized_shards()
-            .into_iter()
-            .map(|shard| ShardId::from_str(&shard).expect("deserialization corrupted"))
-            .collect_vec();
+        let unfinalized_shards = txn.get_unfinalized_shards().into_iter().collect_vec();
 
         info!(?unfinalized_shards, "initializing finalizable_shards");
 
@@ -1189,7 +1172,7 @@ where
         txn.insert_collection_metadata(
             ids_to_add
                 .into_iter()
-                .map(|id| (id, ShardId::new().to_string()))
+                .map(|id| (id, ShardId::new()))
                 .collect(),
         )?;
 
@@ -1210,7 +1193,7 @@ where
             .lock()
             .expect("lock poisoned")
             .iter()
-            .map(|v| v.to_string())
+            .copied()
             .collect();
         txn.mark_shards_as_finalized(finalized_shards);
 
