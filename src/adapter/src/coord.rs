@@ -68,6 +68,7 @@
 
 use chrono::{DateTime, Utc};
 use mz_sql::names::ResolvedIds;
+use mz_sql::session::user::User;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -120,8 +121,6 @@ use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
 use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, Params, QueryWhen};
-use mz_sql::rbac::UnauthorizedError;
-use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
@@ -161,6 +160,7 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadHoldsInner;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
+use crate::coord::validity::PlanValidity;
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
@@ -204,6 +204,7 @@ mod privatelink_status;
 pub mod read_policy;
 mod sequencer;
 mod sql;
+mod validity;
 
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
@@ -385,6 +386,7 @@ pub struct ValidationReady<T> {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
     pub result: Result<T, AdapterError>,
+    pub dependency_ids: BTreeSet<GlobalId>,
     pub connection_gid: GlobalId,
     pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
@@ -514,6 +516,7 @@ pub struct PeekStageCopyTo {
     optimizer: optimize::copy_to::Optimizer,
     global_lir_plan: optimize::copy_to::GlobalLirPlan,
     optimization_finished_at: EpochMillis,
+    source_ids: BTreeSet<GlobalId>,
 }
 
 #[derive(Debug)]
@@ -753,6 +756,9 @@ pub struct SubscribeOptimizeMir {
     validity: PlanValidity,
     plan: plan::SubscribePlan,
     timeline: TimelineContext,
+    dependency_ids: BTreeSet<GlobalId>,
+    cluster_id: ComputeInstanceId,
+    replica_id: Option<ReplicaId>,
 }
 
 #[derive(Debug)]
@@ -762,14 +768,18 @@ pub struct SubscribeTimestampOptimizeLir {
     timeline: TimelineContext,
     optimizer: optimize::subscribe::Optimizer,
     global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
+    dependency_ids: BTreeSet<GlobalId>,
+    replica_id: Option<ReplicaId>,
 }
 
 #[derive(Debug)]
 pub struct SubscribeFinish {
     validity: PlanValidity,
     cluster_id: ComputeInstanceId,
+    replica_id: Option<ReplicaId>,
     plan: plan::SubscribePlan,
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
+    dependency_ids: BTreeSet<GlobalId>,
 }
 
 #[derive(Debug)]
@@ -784,6 +794,8 @@ pub struct IntrospectionSubscribeOptimizeMir {
     validity: PlanValidity,
     plan: plan::SubscribePlan,
     subscribe_id: GlobalId,
+    cluster_id: ComputeInstanceId,
+    replica_id: ReplicaId,
 }
 
 #[derive(Debug)]
@@ -791,6 +803,8 @@ pub struct IntrospectionSubscribeTimestampOptimizeLir {
     validity: PlanValidity,
     optimizer: optimize::subscribe::Optimizer,
     global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
+    cluster_id: ComputeInstanceId,
+    replica_id: ReplicaId,
 }
 
 #[derive(Debug)]
@@ -798,6 +812,8 @@ pub struct IntrospectionSubscribeFinish {
     validity: PlanValidity,
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
     read_holds: ReadHolds<Timestamp>,
+    cluster_id: ComputeInstanceId,
+    replica_id: ReplicaId,
 }
 
 #[derive(Debug)]
@@ -852,87 +868,6 @@ pub enum TargetCluster {
     Active,
     /// The cluster selected at the start of a transaction.
     Transaction(ClusterId),
-}
-
-/// A struct to hold information about the validity of plans and if they should be abandoned after
-/// doing work off of the Coordinator thread.
-#[derive(Debug)]
-pub struct PlanValidity {
-    /// The most recent revision at which this plan was verified as valid.
-    transient_revision: u64,
-    /// Objects on which the plan depends.
-    dependency_ids: BTreeSet<GlobalId>,
-    cluster_id: Option<ComputeInstanceId>,
-    replica_id: Option<ReplicaId>,
-    role_metadata: RoleMetadata,
-}
-
-impl PlanValidity {
-    /// Returns an error if the current catalog no longer has all dependencies.
-    fn check(&mut self, catalog: &Catalog) -> Result<(), AdapterError> {
-        if self.transient_revision == catalog.transient_revision() {
-            return Ok(());
-        }
-        // If the transient revision changed, we have to recheck. If successful, bump the revision
-        // so next check uses the above fast path.
-        if let Some(cluster_id) = self.cluster_id {
-            let Some(cluster) = catalog.try_get_cluster(cluster_id) else {
-                return Err(AdapterError::ChangedPlan(format!(
-                    "cluster {} was removed",
-                    cluster_id
-                )));
-            };
-
-            if let Some(replica_id) = self.replica_id {
-                if cluster.replica(replica_id).is_none() {
-                    return Err(AdapterError::ChangedPlan(format!(
-                        "replica {} of cluster {} was removed",
-                        replica_id, cluster_id
-                    )));
-                }
-            }
-        }
-        // It is sufficient to check that all the dependency_ids still exist because we assume:
-        // - Ids do not mutate.
-        // - Ids are not reused.
-        // - If an id was dropped, this will detect it and error.
-        for id in &self.dependency_ids {
-            if catalog.try_get_entry(id).is_none() {
-                return Err(AdapterError::ChangedPlan(format!(
-                    "dependency was removed: {id}",
-                )));
-            }
-        }
-        if catalog
-            .try_get_role(&self.role_metadata.current_role)
-            .is_none()
-        {
-            return Err(AdapterError::Unauthorized(
-                UnauthorizedError::ConcurrentRoleDrop(self.role_metadata.current_role.clone()),
-            ));
-        }
-        if catalog
-            .try_get_role(&self.role_metadata.session_role)
-            .is_none()
-        {
-            return Err(AdapterError::Unauthorized(
-                UnauthorizedError::ConcurrentRoleDrop(self.role_metadata.session_role.clone()),
-            ));
-        }
-
-        if catalog
-            .try_get_role(&self.role_metadata.authenticated_role)
-            .is_none()
-        {
-            return Err(AdapterError::Unauthorized(
-                UnauthorizedError::ConcurrentRoleDrop(
-                    self.role_metadata.authenticated_role.clone(),
-                ),
-            ));
-        }
-        self.transient_revision = catalog.transient_revision();
-        Ok(())
-    }
 }
 
 /// Result types for each stage of a sequence.
