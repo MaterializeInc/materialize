@@ -1043,7 +1043,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 [`uuid`]: /sql/types/uuid
 [`uint4`]: /sql/types/uint4
 [`uint8`]: /sql/types/uint8
-[`uint 8 list`]: /sql/types/uint8
+[`uint8 list`]: /sql/types/list
 [`timestamp with time zone`]: /sql/types/timestamp
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->

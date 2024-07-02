@@ -593,7 +593,7 @@ Field          | Type                 | Meaning
 [`text array`]: /sql/types/array
 [`text list`]: /sql/types/list/
 [`uint8`]: /sql/types/uint8
-[`uint 8 list`]: /sql/types/uint8
+[`uint8 list`]: /sql/types/list
 [`uint4`]: /sql/types/uint4
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_operators -->
