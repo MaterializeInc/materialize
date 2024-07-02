@@ -47,6 +47,7 @@ mz_compute_dependencies_ind  CREATE␠INDEX␠"mz_compute_dependencies_ind"␠IN
 mz_compute_error_counts_raw_s2_primary_idx  CREATE␠INDEX␠"mz_compute_error_counts_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_error_counts_raw"␠("export_id",␠"worker_id")
 mz_compute_exports_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_exports_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_exports_per_worker"␠("export_id",␠"worker_id")
 mz_compute_frontiers_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_frontiers_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_frontiers_per_worker"␠("export_id",␠"worker_id")
+mz_compute_hydration_times_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_hydration_times_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_hydration_times_per_worker"␠("export_id",␠"worker_id")
 mz_compute_import_frontiers_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_import_frontiers_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_import_frontiers_per_worker"␠("export_id",␠"import_id",␠"worker_id")
 mz_compute_operator_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_compute_operator_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_operator_durations_histogram_raw"␠("id",␠"worker_id",␠"duration_ns")
 mz_dataflow_addresses_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_addresses_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_dataflow_addresses_per_worker"␠("id",␠"worker_id")
@@ -245,6 +246,9 @@ mz_compute_exports_per_worker  worker_id
 mz_compute_frontiers_per_worker  export_id
 mz_compute_frontiers_per_worker  time
 mz_compute_frontiers_per_worker  worker_id
+mz_compute_hydration_times_per_worker  export_id
+mz_compute_hydration_times_per_worker  time_ns
+mz_compute_hydration_times_per_worker  worker_id
 mz_compute_import_frontiers_per_worker  export_id
 mz_compute_import_frontiers_per_worker  import_id
 mz_compute_import_frontiers_per_worker  time
