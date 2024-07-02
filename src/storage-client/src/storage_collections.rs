@@ -548,9 +548,21 @@ where
             SinceHandleWrapper::Critical(since_handle)
         };
 
-        let write_handle = self
+        let mut write_handle = self
             .open_write_handle(id, shard, relation_desc, persist_client)
             .await;
+
+        // N.B.
+        // Fetch the most recent upper for the write handle. Otherwise, this may
+        // be behind the since of the since handle. Its vital this happens AFTER
+        // we create the since handle as it needs to be linearized with that
+        // operation. It may be true that creating the write handle after the
+        // since handle already ensures this, but we do this out of an abundance
+        // of caution.
+        //
+        // Note that this returns the upper, but also sets it on the handle to
+        // be fetched later.
+        write_handle.fetch_recent_upper().await;
 
         (write_handle, since_handle)
     }
@@ -568,7 +580,7 @@ where
             handle_purpose: format!("controller data for {}", id),
         };
 
-        let mut write = persist_client
+        let write = persist_client
             .open_writer(
                 shard,
                 Arc::new(relation_desc),
@@ -577,18 +589,6 @@ where
             )
             .await
             .expect("invalid persist usage");
-
-        // N.B.
-        // Fetch the most recent upper for the write handle. Otherwise, this may
-        // be behind the since of the since handle. Its vital this happens AFTER
-        // we create the since handle as it needs to be linearized with that
-        // operation. It may be true that creating the write handle after the
-        // since handle already ensures this, but we do this out of an abundance
-        // of caution.
-        //
-        // Note that this returns the upper, but also sets it on the handle to
-        // be fetched later.
-        write.fetch_recent_upper().await;
 
         write
     }
@@ -2012,7 +2012,7 @@ where
 /// Wraps either a "critical" [SinceHandle] or a leased [ReadHandle].
 ///
 /// When a [StorageCollections] is in read-only mode, we will only ever acquire
-/// [ReadHandle], because acquiring the [SinceHandle] and driving forward it's
+/// [ReadHandle], because acquiring the [SinceHandle] and driving forward its
 /// since is considered a write. Conversely, when in read-write mode, we acquire
 /// [SinceHandle].
 #[derive(Debug)]
@@ -2128,10 +2128,17 @@ where
         }
     }
 
+    /// Politely expires this reader, releasing its lease.
+    ///
+    /// This can only be used when the backing handle is a leased [ReadHandle].
+    ///
+    /// # Panics
+    ///
+    /// Panics when this handle is _not_ a leased handle.
     pub async fn expire(self) {
         match self {
             Self::Critical(_handle) => {
-                unreachable!("not trying to expire critical handles this way");
+                panic!("expire called on critical SinceHandle");
             }
             Self::Leased(handle) => {
                 handle.expire().await;
@@ -2363,7 +2370,7 @@ where
                                 assert!(matches!(previous, SinceHandleWrapper::Leased(_)), "can only upgrade a leased handle to a critical handle");
                                 previous.expire().await;
                             } else {
-                                 panic!("BackgroundCmd::Upgrade only valid for updating extant since handles");
+                                panic!("BackgroundCmd::Upgrade only valid for updating extant since handles");
                             }
                         }
                         BackgroundCmd::DowngradeSince(cmds) => {
