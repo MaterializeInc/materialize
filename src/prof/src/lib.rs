@@ -22,8 +22,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use mz_ore::cast::{CastFrom, TryCastFrom};
-use prost::Message;
 use pprof_util::{StackProfile, WeightedStack};
+use prost::Message;
 
 mod pprof_types;
 pub mod time;

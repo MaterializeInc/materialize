@@ -24,8 +24,8 @@ use jemalloc_pprof::JemallocProfCtl;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
-use tikv_jemalloc_ctl::{epoch, stats};
 use pprof_util::ProfStartTime;
+use tikv_jemalloc_ctl::{epoch, stats};
 
 #[allow(non_upper_case_globals)]
 #[export_name = "malloc_conf"]

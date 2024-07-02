@@ -247,13 +247,13 @@ mod enabled {
     use headers::ContentType;
     use http::header::{HeaderMap, CONTENT_DISPOSITION};
     use http::{HeaderValue, StatusCode};
-    use pprof_util::parse_jeheap;
-    use mappings::MAPPINGS;
     use jemalloc_pprof::{JemallocProfCtl, PROF_CTL};
+    use mappings::MAPPINGS;
     use mz_build_info::BuildInfo;
     use mz_ore::cast::CastFrom;
     use mz_prof::jemalloc::{JemallocProfCtlExt, JemallocStats};
     use mz_prof::{ever_symbolized, StackProfileExt};
+    use pprof_util::parse_jeheap;
     use serde::Deserialize;
     use tokio::sync::Mutex;
 
