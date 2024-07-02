@@ -47,6 +47,7 @@ use uuid::Uuid;
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
 use crate::durable::initialize::{
     DEPLOY_GENERATION, ENABLE_0DT_DEPLOYMENT, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
+    WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use crate::durable::metrics::Metrics;
 use crate::durable::objects::serialization::proto;
@@ -1110,6 +1111,17 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
                 )))
                 .into(),
             ),
+        }
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn get_0dt_deployment_max_wait(&mut self) -> Result<Option<Duration>, CatalogError> {
+        let value = self
+            .get_current_config(WITH_0DT_DEPLOYMENT_MAX_WAIT)
+            .await?;
+        match value {
+            None => Ok(None),
+            Some(millis) => Ok(Some(Duration::from_millis(millis))),
         }
     }
 
