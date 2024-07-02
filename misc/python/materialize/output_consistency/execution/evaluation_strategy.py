@@ -62,10 +62,7 @@ class EvaluationStrategy:
         self.simple_db_object_name = simple_db_object_name
         self.sql_adjuster = sql_adjuster
 
-    def generate_sources(
-        self,
-        types_input: ConsistencyTestTypesInput,
-    ) -> list[str]:
+    def generate_sources(self, types_input: ConsistencyTestTypesInput) -> list[str]:
         statements = []
         statements.extend(
             self.generate_source_for_storage_layout(
@@ -110,6 +107,9 @@ class EvaluationStrategy:
             "horiz" if storage_layout == ValueStorageLayout.HORIZONTAL else "vert"
         )
         return f"{self.object_name_base}_{storage_suffix}"
+
+    def alias(self) -> str:
+        raise NotImplementedError
 
     def __str__(self) -> str:
         return self.name
@@ -232,6 +232,9 @@ class DummyEvaluation(EvaluationStrategy):
     ) -> list[str]:
         return []
 
+    def alias(self) -> str:
+        return "t"
+
 
 class DataFlowRenderingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
@@ -271,6 +274,9 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
 
         return statements
 
+    def alias(self) -> str:
+        return "t"
+
 
 class ConstantFoldingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
@@ -308,3 +314,6 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         )
 
         return [create_view_statement]
+
+    def alias(self) -> str:
+        return "v"
