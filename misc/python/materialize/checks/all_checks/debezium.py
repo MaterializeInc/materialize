@@ -40,7 +40,7 @@ class DebeziumPostgres(Check):
                     "plugin.name": "pgoutput",
                     "publication.autocreate.mode": "filtered",
                     "slot.name" : "tester",
-                    "database.history.kafka.bootstrap.servers": "kafka:9092",
+                    "database.history.kafka.bootstrap.servers": "redpanda:9092",
                     "database.history.kafka.topic": "schema-changes.history",
                     "truncate.handling.mode": "include",
                     "decimal.handling.mode": "precise",

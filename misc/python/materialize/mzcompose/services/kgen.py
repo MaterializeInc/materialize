@@ -22,11 +22,11 @@ class Kgen(Service):
     ) -> None:
         entrypoint = [
             "kgen",
-            "--bootstrap-server=kafka:9092",
+            "--bootstrap-server=redpanda:9092",
         ]
 
         if "schema-registry" in depends_on:
-            entrypoint.append("--schema-registry-url=http://schema-registry:8081")
+            entrypoint.append("--schema-registry-url=http://redpanda:8081")
 
         super().__init__(
             name=name,

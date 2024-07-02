@@ -15,18 +15,14 @@ from textwrap import dedent
 from pg8000 import Cursor
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
+    Redpanda(),
     Materialized(),
     Toxiproxy(),
     Testdrive(no_reset=True, seed=1),
@@ -47,7 +43,7 @@ def workflow_default(c: Composition) -> None:
 #
 def workflow_simple(c: Composition) -> None:
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    c.up("redpanda", "materialized", "toxiproxy")
 
     seed = random.getrandbits(16)
     c.run_testdrive_files(
@@ -63,7 +59,7 @@ def workflow_simple(c: Composition) -> None:
 
 def workflow_resumption(c: Composition) -> None:
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    c.up("redpanda", "materialized", "toxiproxy")
 
     priv_cursor = c.sql_cursor(service="materialized", user="mz_system", port=6877)
     priv_cursor.execute("ALTER SYSTEM SET allow_real_time_recency = true;")
@@ -144,7 +140,7 @@ def workflow_resumption(c: Composition) -> None:
 
 def workflow_multithreaded(c: Composition) -> None:
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "materialized")
+    c.up("redpanda", "materialized")
     c.up("testdrive", persistent=True)
 
     value = [201]
@@ -201,8 +197,8 @@ def workflow_multithreaded(c: Composition) -> None:
         $ kafka-ingest topic=input_2 format=bytes repeat=100
         A,B,0
 
-        > CREATE CONNECTION IF NOT EXISTS kafka_conn_1 TO KAFKA (BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT);
-        > CREATE CONNECTION IF NOT EXISTS kafka_conn_2 TO KAFKA (BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT);
+        > CREATE CONNECTION IF NOT EXISTS kafka_conn_1 TO KAFKA (BROKER 'redpanda:9092', SECURITY PROTOCOL PLAINTEXT);
+        > CREATE CONNECTION IF NOT EXISTS kafka_conn_2 TO KAFKA (BROKER 'redpanda:9092', SECURITY PROTOCOL PLAINTEXT);
 
         > CREATE SOURCE input_1 (city, state, zip)
           FROM KAFKA CONNECTION kafka_conn_1 (TOPIC 'testdrive-input_1-${testdrive.seed}')

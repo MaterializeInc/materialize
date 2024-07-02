@@ -16,19 +16,14 @@ from textwrap import dedent
 from materialize import ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.redpanda import Redpanda
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 materialized_environment_extra = ["MZ_PERSIST_COMPACTION_DISABLED=false"]
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
+    Redpanda(),
     Materialized(
         options=[
             "--orchestrator-process-scratch-directory=/scratch",
@@ -44,9 +39,7 @@ SERVICES = [
     Clusterd(
         name="clusterd1",
     ),
-    Redpanda(),
 ]
-
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
@@ -91,7 +84,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    dependencies = ["materialized", "zookeeper", "kafka", "schema-registry"]
+    dependencies = ["materialized", "redpanda"]
 
     testdrive = Testdrive(
         forward_buildkite_shard=True,
@@ -151,9 +144,7 @@ def workflow_rehydration(c: Composition) -> None:
 
     dependencies = [
         "materialized",
-        "zookeeper",
-        "kafka",
-        "schema-registry",
+        "redpanda",
         "clusterd1",
     ]
 
@@ -284,7 +275,7 @@ def workflow_failpoint(c: Composition) -> None:
 def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> None:
     print(f">>> Running failpoint test for failpoint {failpoint}")
 
-    dependencies = ["zookeeper", "kafka", "materialized"]
+    dependencies = ["redpanda", "materialized"]
     c.kill("clusterd1")
     c.up(*dependencies)
     c.run_testdrive_files("failpoint/00-reset.td")
@@ -321,9 +312,7 @@ def workflow_incident_49(c: Composition) -> None:
 
     dependencies = [
         "materialized",
-        "zookeeper",
-        "kafka",
-        "schema-registry",
+        "redpanda",
     ]
 
     for style, mz in [
@@ -371,9 +360,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
     c.down(destroy_volumes=True)
     dependencies = [
         "materialized",
-        "zookeeper",
-        "kafka",
-        "schema-registry",
+        "redpanda",
     ]
     c.up(*dependencies)
 
@@ -443,10 +430,8 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
 def workflow_autospill(c: Composition) -> None:
     """Testing auto spill to disk"""
     dependencies = [
-        "zookeeper",
-        "kafka",
+        "redpanda",
         "materialized",
-        "schema-registry",
         "clusterd1",
     ]
 

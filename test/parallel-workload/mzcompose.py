@@ -15,14 +15,12 @@ import requests
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.cockroach import Cockroach
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
 from materialize.parallel_workload.settings import Complexity, Scenario
 
@@ -30,17 +28,10 @@ SERVICES = [
     Cockroach(setup_materialize=True),
     Postgres(),
     MySql(),
-    Zookeeper(),
-    Kafka(
+    Redpanda(
         auto_create_topics=False,
-        ports=["30123:30123"],
-        allow_host_ports=True,
-        environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
-        ],
+        ports=[30123],
     ),
-    SchemaRegistry(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     Materialized(),
@@ -62,9 +53,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "cockroach",
         "postgres",
         "mysql",
-        "zookeeper",
-        "kafka",
-        "schema-registry",
+        "redpanda",
         "minio",
         "materialized",
     ]

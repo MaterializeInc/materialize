@@ -39,7 +39,7 @@ const mz::Config& mz::defaultConfig() {
         .viewPattern = "debezium.tpcch.%",
         .materializedUrl = "postgresql://materialize@materialized:6875/materialize?sslmode=disable",
         .kafkaUrl = "kafka:9092",
-        .schemaRegistryUrl = "http://schema-registry:8081",
+        .schemaRegistryUrl = "http://redpanda:8081",
         .consistencySource = "",
         .hQueries = {},
         .dialect = new MySqlDialect(),

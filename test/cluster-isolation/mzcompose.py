@@ -12,17 +12,13 @@ from dataclasses import dataclass
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import UIError
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
+    Redpanda(),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
     Materialized(propagate_crashes=False),
     Testdrive(),
@@ -93,7 +89,7 @@ def workflow_default(c: Composition) -> None:
     and then making sure that cluster2 continues to operate properly
     """
 
-    c.up("zookeeper", "kafka", "schema-registry")
+    c.up("redpanda")
     for id, disruption in enumerate(disruptions):
         run_test(c, disruption, id)
 

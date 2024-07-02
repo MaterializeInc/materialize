@@ -8,12 +8,10 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 versioned_mz = [
     Materialized(
@@ -30,9 +28,7 @@ mz_with_options = [
 
 SERVICES = [
     Minio(setup_materialize=True),
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
+    Redpanda(),
     *versioned_mz,
     *mz_with_options,
     Testdrive(),
@@ -52,7 +48,7 @@ def workflow_default(c: Composition) -> None:
 
 
 def workflow_start_confluents(c: Composition) -> None:
-    c.up("zookeeper", "kafka", "schema-registry")
+    c.up("redpanda")
 
 
 def workflow_versioned_mz(c: Composition) -> None:

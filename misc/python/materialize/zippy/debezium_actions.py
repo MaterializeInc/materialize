@@ -115,7 +115,7 @@ class CreateDebeziumSource(Action):
                         "publication.name": "dbz_publication_{self.debezium_source.name}",
                         "publication.autocreate.mode": "filtered",
                         "slot.name" : "slot_{self.postgres_table.name}",
-                        "database.history.kafka.bootstrap.servers": "kafka:9092",
+                        "database.history.kafka.bootstrap.servers": "redpanda:9092",
                         "database.history.kafka.topic": "schema-changes.history",
                         "truncate.handling.mode": "include",
                         "decimal.handling.mode": "precise",
