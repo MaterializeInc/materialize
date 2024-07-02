@@ -1744,7 +1744,9 @@ impl SourceDataRowColumnarEncoder {
     pub fn append(&mut self, row: &Row) {
         match self {
             SourceDataRowColumnarEncoder::Row(encoder) => encoder.append(row),
-            SourceDataRowColumnarEncoder::EmptyRow => assert_eq!(row.iter().count(), 0),
+            SourceDataRowColumnarEncoder::EmptyRow => {
+                assert_eq!(row.iter().count(), 0, "found non-empty Row, {row:?}")
+            }
         }
     }
 
@@ -1770,6 +1772,7 @@ impl SourceDataColumnarEncoder {
         let row_encoder = match RowColumnarEncoder::new(desc) {
             Some(encoder) => SourceDataRowColumnarEncoder::Row(encoder),
             None => {
+                println!("CREATING EMPTY SOURCE DATA COLUMNAR ENCODER! {desc:?}");
                 assert!(desc.typ().columns().is_empty());
                 SourceDataRowColumnarEncoder::EmptyRow
             }
@@ -1877,6 +1880,8 @@ impl Schema2<SourceData> for RelationDesc {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_persist_types::part::PartBuilder;
     use mz_repr::{arb_datum_for_scalar, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
@@ -2026,6 +2031,42 @@ mod tests {
         proptest!(|((desc, source_datas) in strat)| {
             roundtrip_source_data(desc, source_datas);
         });
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "found non-empty Row")]
+    fn pushing_non_empty_row_into_empty_relation_desc_schema2() {
+        let empty = RelationDesc::empty();
+        let mut encoder = <RelationDesc as Schema2<SourceData>>::encoder(&empty).unwrap();
+
+        let row = Row::pack_slice(&[Datum::Int32(42)]);
+        encoder.append(&SourceData(Ok(row)));
+    }
+
+    #[mz_ore::test]
+    fn pushing_non_empty_row_into_empty_relation_desc_schema1() {
+        let empty = RelationDesc::empty();
+        let mut builder = PartBuilder::new(&empty, &UnitSchema).unwrap();
+
+        let row = Row::pack_slice(&[Datum::Int32(42)]);
+        builder.push(&SourceData(Ok(row.clone())), &(), 1i64, 1u64);
+
+        let part = builder.finish();
+        let (_field, bad_array) = part.to_key_arrow().unwrap();
+
+        // This is data loss!! We have a NullArray for the "ok" and lost the Int32 Datum.
+        insta::assert_debug_snapshot!(bad_array, @r###"
+        StructArray
+        [
+        -- child 0: "ok" (Null)
+        NullArray(1)
+        -- child 1: "err" (Binary)
+        BinaryArray
+        [
+          null,
+        ]
+        ]
+        "###);
     }
 
     #[mz_ore::test]
