@@ -107,8 +107,8 @@ otherwise, you'll want to stick with the [default behavior](#refresh-on-commit).
 {{< /note >}}
 
 Materialized views configured with a refresh strategy are **not incrementally
-maintained**, and must recompute their results from scracth on every refresh.
-Because these views can be hosted in [scheduled clusters](../sql/create-cluster/#scheduling),
+maintained**, and must recompute their results from scratch on every refresh.
+Because these views can be hosted in [scheduled clusters](/sql/create-cluster/#scheduling),
 which automatically turn on and off based on the configured refresh strategies,
 this feature can lead to significant cost savings when handling large volumes of
 historical data that is updated less frequently.
@@ -133,7 +133,7 @@ majority of use cases**.
 <p style="font-size:14px"><b>Syntax:</b> <code>REFRESH AT</code> { <code>CREATION</code> | <i>timestamp</i> }</p>
 
 This strategy allows configuring a materialized view to **refresh at a specific
-time**. The refresh time can be specified as a timestamp, or using the `ON
+time**. The refresh time can be specified as a timestamp, or using the `AT
 CREATION` clause, which triggers a first refresh when the materialized view is
 created.
 
@@ -147,7 +147,7 @@ CREATE MATERIALIZED VIEW mv_refresh_at
 IN CLUSTER my_refresh_cluster
 WITH (
   -- Refresh at creation, so the view is populated ahead of
-  -- the first scheduled refresh
+  -- the first `AT` refresh
   REFRESH AT CREATION,
   -- Refresh at a specific (future) time
   REFRESH AT '2024-06-06 12:00:00',
@@ -158,10 +158,7 @@ AS SELECT ... FROM ...;
 ```
 
 You can specify multiple `REFRESH AT` strategies in the same `CREATE` statement,
-and combine them with the [refresh every strategy](#refresh-every). We
-recommend **always** using the `REFRESH AT CREATION` strategy with `REFRESH
-EVERY`, so the materialized view is available for querying ahead of the first
-scheduled refresh.
+and combine them with the [refresh every strategy](#refresh-every).
 
 #### Refresh every
 
@@ -185,7 +182,7 @@ CREATE MATERIALIZED VIEW mv_refresh_every
 IN CLUSTER my_scheduled_cluster
 WITH (
   -- Refresh at creation, so the view is populated ahead of
-  -- the first scheduled refresh
+  -- the first `EVERY` refresh
   REFRESH AT CREATION,
   -- Refresh every day at 10PM UTC
   REFRESH EVERY '1 day' ALIGNED TO '2024-04-17 22:00:00'
@@ -194,7 +191,10 @@ AS SELECT ...  FROM ...;
 ```
 
 You can specify multiple `REFRESH EVERY` strategies in the same `CREATE`
-statement, and combine them with the [refresh at strategy](#refresh-at).
+statement, and combine them with the [refresh at strategy](#refresh-at). When using the
+`REFRESH EVERY` strategy, we recommend **always** using also the
+`REFRESH AT CREATION` strategy, so the materialized view is available
+for querying ahead of the first scheduled `EVERY` refresh.
 
 #### Introspection
 
@@ -262,7 +262,7 @@ WITH (
   -- Refresh every Thursday at 12PM UTC
   REFRESH EVERY '7 days' ALIGNED TO '2024-06-06 12:00:00',
   -- Refresh on creation, so the view is populated ahead of
-  -- the first scheduled refresh
+  -- the first `EVERY` refresh
   REFRESH AT CREATION
 )
 AS SELECT ... FROM ...;

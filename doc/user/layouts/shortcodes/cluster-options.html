@@ -5,4 +5,4 @@ Field                               | Value      | Description
 `INTROSPECTION INTERVAL`            | `interval` | The interval at which to collect introspection data. See [Troubleshooting](/ops/troubleshooting) for details about introspection data. The special value `0` entirely disables the gathering of introspection data.<br>Default: `1s`
 `INTROSPECTION DEBUGGING`           | `bool`     | Indicates whether to introspect the gathering of the introspection data.<br>Default: `FALSE`
 `MANAGED`                           | `bool`     | Whether to automatically manage the cluster's replicas based on the configured size and replication factor. If `FALSE`, enables the use of the deprecated [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica) command.<br>Default: `TRUE`
-`SCHEDULE`                          | [`manual`,`on-refresh`]     | The [scheduling type](/sql/create-cluster/#scheduling) for the cluster. <br>Default: `manual`
+`SCHEDULE`                          | [`MANUAL`,`ON REFRESH`]     | The [scheduling type](/sql/create-cluster/#scheduling) for the cluster. <br>Default: `MANUAL`
