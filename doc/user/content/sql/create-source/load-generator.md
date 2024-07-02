@@ -122,7 +122,8 @@ is placed in the currently ongoing auction.
 
 {{< warn-if-unreleased "v0.107" >}}
 
-The clock load generator produces a single row with a single column, `time`.
+The clock load generator produces a single row
+with a single `timestamp with time zone` column, `time`.
 Like [the `now` function (and unlike `mz_now`)](../../functions/now_and_mz_now/)
 it tracks the system clock of the source cluster,
 but can be used in contexts where the `now` function is not available.
