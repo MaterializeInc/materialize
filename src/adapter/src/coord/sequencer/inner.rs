@@ -702,6 +702,7 @@ impl Coordinator {
                             cluster_id: None,
                             replica_id: None,
                             role_metadata,
+                            ddl: true,
                         },
                         otel_ctx,
                     },
@@ -3072,6 +3073,7 @@ impl Coordinator {
             cluster_id: Some(plan.in_cluster),
             replica_id: None,
             role_metadata: ctx.session().role_metadata().clone(),
+            ddl: true,
         };
 
         // Re-resolve items in the altered statement
@@ -3352,6 +3354,7 @@ impl Coordinator {
                                 cluster_id: None,
                                 replica_id: None,
                                 role_metadata,
+                                ddl: true,
                             },
                             otel_ctx,
                         },

@@ -101,6 +101,7 @@ impl Coordinator {
             cluster_id: None,
             replica_id: None,
             role_metadata: session.role_metadata().clone(),
+            ddl: true,
         };
         Ok(SecretStage::CreateEnsure(CreateSecretEnsure {
             validity,
@@ -246,6 +247,7 @@ impl Coordinator {
             cluster_id: None,
             replica_id: None,
             role_metadata: ctx.session().role_metadata().clone(),
+            ddl: true,
         };
         let stage = SecretStage::Alter(AlterSecret { validity, plan });
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -284,6 +286,7 @@ impl Coordinator {
             cluster_id: None,
             replica_id: None,
             role_metadata: ctx.session().role_metadata().clone(),
+            ddl: false,
         };
         let stage = SecretStage::RotateKeysEnsure(RotateKeysSecretEnsure { validity, id });
         self.sequence_staged(ctx, Span::current(), stage).await;

@@ -692,6 +692,7 @@ impl Coordinator {
                         cluster_id,
                         replica_id: None,
                         role_metadata: ctx.session().role_metadata().clone(),
+                        ddl: true,
                     };
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
                     let result = internal_cmd_tx.send(Message::PurifiedStatementReady(

@@ -269,6 +269,7 @@ impl Coordinator {
             cluster_id: None,
             replica_id: None,
             role_metadata: session.role_metadata().clone(),
+            ddl: true,
         };
 
         Ok(CreateViewStage::Optimize(CreateViewOptimize {
