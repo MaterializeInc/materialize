@@ -101,6 +101,18 @@ users                   subsource      ${arg.default-replica-size}  ${arg.single
 > SHOW CREATE SOURCE accounts
 materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) OF SOURCE \"materialize\".\"public\".\"auction_house\" WITH (EXTERNAL REFERENCE = \"mz_load_generators\".\"auction\".\"accounts\")"
 
+# CLOCK load generator source
+
+> CREATE SOURCE clock
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR CLOCK (TICK INTERVAL '1s')
+
+> SELECT count(*) FROM clock;
+1
+
+> SELECT time < now() + INTERVAL '1s', time > now() - INTERVAL '1s' FROM clock
+true true
+
 # Check that non-append-only `COUNTER` sources reach the proper size
 
 > CREATE SOURCE counter

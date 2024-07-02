@@ -38,10 +38,11 @@ use mz_sql_parser::ast::{
     CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName, CsrConfigOption,
     CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema,
     DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function, FunctionArgs, Ident,
-    KafkaSourceConfigOption, KafkaSourceConfigOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, Statement, UnresolvedItemName,
+    KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption,
+    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, RawItemName,
+    ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue,
+    RefreshOptionValue, SourceEnvelope, Statement, UnresolvedItemName,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -1091,6 +1092,19 @@ async fn purify_create_source(
                     }],
                 };
                 create_subsource_stmts.push(subsource);
+            }
+
+            if let LoadGenerator::Clock = generator {
+                if !options
+                    .iter()
+                    .any(|p| p.name == LoadGeneratorOptionName::AsOf)
+                {
+                    let now = catalog.now();
+                    options.push(LoadGeneratorOption {
+                        name: LoadGeneratorOptionName::AsOf,
+                        value: Some(WithOptionValue::Value(Value::Number(now.to_string()))),
+                    });
+                }
             }
 
             // Now that we know which subsources to create alongside this
