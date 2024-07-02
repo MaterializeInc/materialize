@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use maplit::{btreemap, btreeset};
 
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, MaterializedView, Source, View};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, View};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 
@@ -220,8 +220,7 @@ impl<'a> DataflowBuilder<'a> {
                         self.import_view_into_dataflow(id, &expr, dataflow)?;
                     }
                     CatalogItem::MaterializedView(mview) => {
-                        let monotonic = self.monotonic_view(*id);
-                        dataflow.import_source(*id, mview.desc.typ().clone(), monotonic);
+                        dataflow.import_source(*id, mview.desc.typ().clone(), false);
                     }
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), false);
@@ -305,9 +304,13 @@ impl<'a> DataflowBuilder<'a> {
 
     /// Determine the given view's monotonicity.
     ///
-    /// This recursively traverses the expressions of all (materialized) views involved in the
+    /// This recursively traverses the expressions of all (non-materialized) views involved in the
     /// given view's query expression. If this becomes a performance problem, we could add the
     /// monotonicity information of views into the catalog instead.
+    ///
+    /// Note that materialized views are never monotonic, no matter their definition, because the
+    /// self-correcting persist_sink may insert retractions to correct the contents of its output
+    /// collection.
     fn monotonic_view(&self, id: GlobalId) -> bool {
         self.monotonic_view_inner(id, &mut BTreeMap::new())
             .unwrap_or_else(|e| {
@@ -324,12 +327,11 @@ impl<'a> DataflowBuilder<'a> {
         self.checked_recur(|_| {
             match self.catalog.get_entry(&id).item() {
                 CatalogItem::Source(source) => Ok(self.monotonic_source(source)),
-                CatalogItem::View(View { optimized_expr, .. })
-                | CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
+                CatalogItem::View(View { optimized_expr, .. }) => {
                     let mut view_expr = optimized_expr.clone().into_inner();
 
                     // Inspect global ids that occur in the Gets in view_expr, and collect the ids
-                    // of monotonic (materialized) views and sources (but not indexes).
+                    // of monotonic views and sources (but not indexes or materialized views).
                     let mut monotonic_ids = BTreeSet::new();
                     let recursion_result: Result<(), RecursionLimitError> = view_expr
                         .try_visit_post(&mut |e| {
@@ -376,6 +378,7 @@ impl<'a> DataflowBuilder<'a> {
                 | CatalogItem::Table(_)
                 | CatalogItem::Log(_)
                 | CatalogItem::Index(_)
+                | CatalogItem::MaterializedView(_)
                 | CatalogItem::Sink(_)
                 | CatalogItem::Func(_) => Ok(false),
             }
