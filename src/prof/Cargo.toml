@@ -14,6 +14,8 @@ workspace = true
 anyhow = "1.0.66"
 backtrace = "0.3.66"
 flate2 = "1.0.24"
+jemalloc_pprof = { version = "0.4", optional = true }
+pprof_util = "0.4"
 libc = "0.2.138"
 once_cell = "1.16.0"
 mz-ore = { path = "../ore", default-features = false }
@@ -34,7 +36,7 @@ prost-build = "0.11.2"
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]
 # Whether to enable profiling features that depend on jemalloc.
-jemalloc = ["tikv-jemalloc-ctl"]
+jemalloc = ["tikv-jemalloc-ctl", "jemalloc_pprof"]
 
 [package.metadata.cargo-udeps.ignore]
 # "bytesize" not used on linux
