@@ -151,7 +151,9 @@ use crate::catalog::{BuiltinTableUpdate, Catalog};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
-use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
+use crate::coord::appends::{
+    BuiltinTableAppendNotify, Deferred, GroupCommitPermit, PendingWriteTxn,
+};
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
@@ -321,7 +323,7 @@ impl Message {
                 Command::RetireExecute { .. } => "command-retire_execute",
                 Command::CheckConsistency { .. } => "command-check_consistency",
                 Command::Dump { .. } => "command-dump",
-                Command::ControllerAllowWrites { .. } => "command-controller-allow-writes",
+                Command::AllowWrites { .. } => "command-allow-writes",
             },
             Message::ControllerReady => "controller_ready",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
@@ -1740,6 +1742,15 @@ pub struct Coordinator {
     /// meant for use during development of read-only clusters and 0dt upgrades
     /// and should go away once we have proper orchestration during upgrades.
     read_only_controllers: bool,
+
+    /// Updates to builtin tables that are being buffered while we are in
+    /// read-only mode. We apply these all at once when coming out of read-only
+    /// mode.
+    ///
+    /// This is a `Some` while in read-only mode and will be replaced by a
+    /// `None` when we transition out of read-only mode and write out any
+    /// buffered updates.
+    buffered_builtin_table_updates: Option<Vec<BuiltinTableUpdate>>,
 }
 
 impl Coordinator {
@@ -2127,6 +2138,71 @@ impl Coordinator {
             ),
         );
 
+        let builtin_updates_fut = if self.controller.read_only() {
+            info!("coordinator init: stashing builtin table updates while in read-only mode");
+
+            self.buffered_builtin_table_updates
+                .as_mut()
+                .expect("in read-only mode")
+                .append(&mut builtin_table_updates);
+
+            futures::future::ready(()).boxed()
+        } else {
+            self.bootstrap_tables(&entries, builtin_table_updates).await
+        };
+
+        // Destructure Self so we can do some concurrent work.
+        let Self {
+            secrets_controller,
+            catalog,
+            ..
+        } = self;
+
+        // Cleanup orphaned secrets. Errors during list() or delete() do not
+        // need to prevent bootstrap from succeeding; we will retry next
+        // startup.
+        let secrets_cleanup_fut = async move {
+            match secrets_controller.list().await {
+                Ok(controller_secrets) => {
+                    // Fetch all IDs from the catalog to future-proof against other
+                    // things using secrets. Today, SECRET and CONNECTION objects use
+                    // secrets_controller.ensure, but more things could in the future
+                    // that would be easy to miss adding here.
+                    let catalog_ids: BTreeSet<GlobalId> =
+                        catalog.entries().map(|entry| entry.id()).collect();
+                    let controller_secrets: BTreeSet<GlobalId> =
+                        controller_secrets.into_iter().collect();
+                    let orphaned = controller_secrets.difference(&catalog_ids);
+                    for id in orphaned {
+                        info!("coordinator init: deleting orphaned secret {id}");
+                        fail_point!("orphan_secrets");
+                        if let Err(e) = secrets_controller.delete(*id).await {
+                            warn!("Dropping orphaned secret has encountered an error: {}", e);
+                        }
+                    }
+                }
+                Err(e) => warn!("Failed to list secrets during orphan cleanup: {:?}", e),
+            }
+        };
+
+        // Run all of our final steps concurrently.
+        futures::future::join_all([builtin_updates_fut, Box::pin(secrets_cleanup_fut)])
+            .instrument(info_span!("coord::bootstrap::final"))
+            .await;
+
+        info!("coordinator init: bootstrap complete");
+        Ok(())
+    }
+
+    /// Prepares tables for writing by resetting them to a known state and
+    /// appending the given builtin table updates.
+    #[allow(clippy::async_yields_async)]
+    #[instrument]
+    async fn bootstrap_tables(
+        &mut self,
+        entries: &[CatalogEntry],
+        mut builtin_table_updates: Vec<BuiltinTableUpdate>,
+    ) -> BuiltinTableAppendNotify {
         // Advance all tables to the current timestamp
         debug!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
@@ -2181,48 +2257,7 @@ impl Coordinator {
             .builtin_table_update()
             .execute(builtin_table_updates)
             .await;
-
-        // Destructure Self so we can do some concurrent work.
-        let Self {
-            secrets_controller,
-            catalog,
-            ..
-        } = self;
-
-        // Cleanup orphaned secrets. Errors during list() or delete() do not
-        // need to prevent bootstrap from succeeding; we will retry next
-        // startup.
-        let secrets_cleanup_fut = async move {
-            match secrets_controller.list().await {
-                Ok(controller_secrets) => {
-                    // Fetch all IDs from the catalog to future-proof against other
-                    // things using secrets. Today, SECRET and CONNECTION objects use
-                    // secrets_controller.ensure, but more things could in the future
-                    // that would be easy to miss adding here.
-                    let catalog_ids: BTreeSet<GlobalId> =
-                        catalog.entries().map(|entry| entry.id()).collect();
-                    let controller_secrets: BTreeSet<GlobalId> =
-                        controller_secrets.into_iter().collect();
-                    let orphaned = controller_secrets.difference(&catalog_ids);
-                    for id in orphaned {
-                        info!("coordinator init: deleting orphaned secret {id}");
-                        fail_point!("orphan_secrets");
-                        if let Err(e) = secrets_controller.delete(*id).await {
-                            warn!("Dropping orphaned secret has encountered an error: {}", e);
-                        }
-                    }
-                }
-                Err(e) => warn!("Failed to list secrets during orphan cleanup: {:?}", e),
-            }
-        };
-
-        // Run all of our final steps concurrently.
-        futures::future::join_all([builtin_updates_fut, Box::pin(secrets_cleanup_fut)])
-            .instrument(info_span!("coord::bootstrap::final"))
-            .await;
-
-        info!("coordinator init: bootstrap complete");
-        Ok(())
+        builtin_updates_fut
     }
 
     /// Initializes all storage collections required by catalog objects in the storage controller.
@@ -2888,6 +2923,10 @@ impl Coordinator {
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     _ = self.advance_timelines_interval.tick() => {
+                        if self.controller.read_only() {
+                            tracing::info!("not advancing timelines in read-only mode");
+                            continue;
+                        }
                         let span = info_span!(parent: None, "coord::advance_timelines_interval");
                         span.follows_from(Span::current());
                         Message::GroupCommitInitiate(span, None)
@@ -3498,6 +3537,7 @@ pub fn serve(
                     connection_watch_sets: BTreeMap::new(),
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
                     read_only_controllers,
+                    buffered_builtin_table_updates: Some(Vec::new()),
                 };
                 let bootstrap = handle.block_on(async {
                     coord
