@@ -22,7 +22,7 @@ kubeadmConfigPatches:
         "service-node-port-range": "32000-32063"
 nodes:
   - role: control-plane
-    image: kindest/node:v1.26.6
+    image: kindest/node:v1.28.9
     extraPortMappings:
       - containerPort: 32000
         hostPort: 32000
