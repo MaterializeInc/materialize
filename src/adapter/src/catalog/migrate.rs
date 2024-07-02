@@ -863,6 +863,6 @@ fn catalog_add_new_unstable_schemas_v_0_106_0(tx: &mut Transaction) -> Result<()
 /// This migration removes the txn wal feature flag.
 fn catalog_remove_txn_wal_toggle_v_0_107_0(tx: &mut Transaction) -> Result<(), anyhow::Error> {
     tx.set_config("persist_txn_tables".to_string(), None)?;
-    tx.remove_system_config("persist_txn_tables")?;
+    tx.remove_system_config("persist_txn_tables");
     Ok(())
 }
