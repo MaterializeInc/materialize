@@ -42,6 +42,8 @@
 /src/adapter/src/optimize           @MaterializeInc/cluster
 # to track changes to feature flags
 /src/adapter/src/coord/ddl.rs       @MaterializeInc/testing
+# to track changes to introspection subscribes
+/src/adapter/src/coord/introspection.rs @MaterializeInc/cluster
 # to track changes to feature flags
 /src/adapter/src/flags.rs           @MaterializeInc/testing
 /src/alloc                          @benesch
