@@ -10,41 +10,56 @@
 //! Logic related to applying updates from a [`mz_catalog::durable::DurableCatalogState`] to a
 //! [`CatalogState`].
 
-use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::iter;
+use std::str::FromStr;
+use std::sync::Arc;
 
-use mz_catalog::builtin::{Builtin, BuiltinTable, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP};
+use futures::future;
+use itertools::Itertools;
+use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::builtin::{
+    Builtin, BuiltinLog, BuiltinTable, BuiltinView, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP,
+};
 use mz_catalog::durable::objects::{
     ClusterKey, DatabaseKey, DurableType, ItemKey, RoleKey, SchemaKey,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Log, Role,
-    Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table, TemporaryItem, Type,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
+    Role, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table, TemporaryItem, Type,
     UpdateFrom,
 };
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
+use mz_controller_types::ClusterId;
+use mz_expr::MirScalarExpr;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, Timestamp};
+use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::{
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType, NameReference,
 };
 use mz_sql::names::{
-    ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier,
+    FullItemName, ItemQualifiers, QualifiedItemName, RawDatabaseSpecifier,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier,
 };
-use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{VarError, VarInput};
+use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
-use tracing::warn;
+use tracing::{info_span, warn, Instrument};
 
-use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
+use crate::catalog::{BuiltinTableUpdate, CatalogState};
+use crate::util::index_sql;
+use crate::AdapterError;
 
 /// Maintains the state of retractions while applying catalog state updates for a single timestamp.
 /// [`CatalogState`] maintains denormalized state for certain catalog objects. Updating an object
@@ -991,6 +1006,411 @@ impl CatalogState {
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
     }
+
+    fn get_entry_mut(&mut self, id: &GlobalId) -> &mut CatalogEntry {
+        self.entry_by_id
+            .get_mut(id)
+            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
+    }
+
+    fn get_schema_mut(
+        &mut self,
+        database_spec: &ResolvedDatabaseSpecifier,
+        schema_spec: &SchemaSpecifier,
+        conn_id: &ConnectionId,
+    ) -> &mut Schema {
+        // Keep in sync with `get_schemas`
+        match (database_spec, schema_spec) {
+            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => self
+                .temporary_schemas
+                .get_mut(conn_id)
+                .expect("catalog out of sync"),
+            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)) => self
+                .ambient_schemas_by_id
+                .get_mut(id)
+                .expect("catalog out of sync"),
+            (ResolvedDatabaseSpecifier::Id(database_id), SchemaSpecifier::Id(schema_id)) => self
+                .database_by_id
+                .get_mut(database_id)
+                .expect("catalog out of sync")
+                .schemas_by_id
+                .get_mut(schema_id)
+                .expect("catalog out of sync"),
+            (ResolvedDatabaseSpecifier::Id(_), SchemaSpecifier::Temporary) => {
+                unreachable!("temporary schemas are in the ambient database")
+            }
+        }
+    }
+
+    /// Install builtin views to the catalog. This is its own function so that views can be
+    /// optimized in parallel.
+    ///
+    /// The implementation is similar to `apply_updates_for_bootstrap` and determines dependency
+    /// problems by sniffing out specific errors and then retrying once those dependencies are
+    /// complete. This doesn't work for everything (casts, function implementations) so we also need
+    /// to have a bucket for everything at the end. Additionally, because this executes in parellel,
+    /// we must maintain a completed set otherwise races could result in orphaned views languishing
+    /// in awaiting with nothing retriggering the attempt.
+    #[instrument(name = "catalog::parse_views")]
+    async fn parse_builtin_views(
+        state: &mut CatalogState,
+        builtin_views: Vec<(&Builtin<NameReference>, GlobalId)>,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let mut handles = Vec::new();
+        let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<GlobalId>> = BTreeMap::new();
+        let mut awaiting_name_dependencies: BTreeMap<String, Vec<GlobalId>> = BTreeMap::new();
+        // Some errors are due to the implementation of casts or SQL functions that depend on some
+        // view. Instead of figuring out the exact view dependency, delay these until the end.
+        let mut awaiting_all = Vec::new();
+        // Completed views, needed to avoid race conditions.
+        let mut completed_ids: BTreeSet<GlobalId> = BTreeSet::new();
+        let mut completed_names: BTreeSet<String> = BTreeSet::new();
+        // Avoid some reference lifetime issues by not passing `builtin` into the spawned task.
+        let mut views: BTreeMap<GlobalId, &BuiltinView> =
+            BTreeMap::from_iter(builtin_views.into_iter().map(|(builtin, id)| {
+                let Builtin::View(view) = builtin else {
+                    unreachable!("handled elsewhere");
+                };
+                (id, *view)
+            }));
+        let ids: Vec<_> = views.keys().copied().collect();
+        let mut ready: VecDeque<GlobalId> = views.keys().cloned().collect();
+        while !handles.is_empty() || !ready.is_empty() || !awaiting_all.is_empty() {
+            if handles.is_empty() && ready.is_empty() {
+                // Enqueue the views that were waiting for all the others.
+                ready.extend(awaiting_all.drain(..));
+            }
+
+            // Spawn tasks for all ready views.
+            if !ready.is_empty() {
+                let spawn_state = Arc::new(state.clone());
+                while let Some(id) = ready.pop_front() {
+                    let view = views.get(&id).expect("must exist");
+                    let create_sql = view.create_sql();
+                    let mut span = info_span!(parent: None, "parse builtin view", name = view.name);
+                    OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
+                    let task_state = Arc::clone(&spawn_state);
+                    let handle = mz_ore::task::spawn(
+                        || "parse view",
+                        async move {
+                            let res = task_state.parse_item(&create_sql, None, false, None);
+                            (id, res)
+                        }
+                        .instrument(span),
+                    );
+                    handles.push(handle);
+                }
+            }
+            // Wait for a view to be ready.
+            let (handle, _idx, remaining) = future::select_all(handles).await;
+            handles = remaining;
+            let (id, res) = handle.expect("must join");
+            match res {
+                Ok(item) => {
+                    // Add item to catalog.
+                    let view = views.remove(&id).expect("must exist");
+                    let schema_id = state.ambient_schemas_by_name[view.schema];
+                    let qname = QualifiedItemName {
+                        qualifiers: ItemQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Id(schema_id),
+                        },
+                        item: view.name.into(),
+                    };
+                    let mut acl_items = vec![rbac::owner_privilege(
+                        mz_sql::catalog::ObjectType::View,
+                        MZ_SYSTEM_ROLE_ID,
+                    )];
+                    acl_items.extend_from_slice(&view.access);
+
+                    state.insert_item(
+                        id,
+                        view.oid,
+                        qname,
+                        item,
+                        MZ_SYSTEM_ROLE_ID,
+                        PrivilegeMap::from_mz_acl_items(acl_items),
+                    );
+
+                    // Enqueue any items waiting on this dependency.
+                    let mut resolved_dependent_items = Vec::new();
+                    if let Some(dependent_items) = awaiting_id_dependencies.remove(&id) {
+                        resolved_dependent_items.extend(dependent_items);
+                    }
+                    let entry = state.get_entry(&id);
+                    let full_name = state.resolve_full_name(entry.name(), None).to_string();
+                    if let Some(dependent_items) = awaiting_name_dependencies.remove(&full_name) {
+                        resolved_dependent_items.extend(dependent_items);
+                    }
+                    ready.extend(resolved_dependent_items);
+
+                    completed_ids.insert(id);
+                    completed_names.insert(full_name);
+                }
+                // If we were missing a dependency, wait for it to be added.
+                Err(AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))) => {
+                    if completed_ids.contains(&missing_dep) {
+                        ready.push_back(id);
+                    } else {
+                        awaiting_id_dependencies
+                            .entry(missing_dep)
+                            .or_default()
+                            .push(id);
+                    }
+                }
+                // If we were missing a dependency, wait for it to be added.
+                Err(AdapterError::PlanError(plan::PlanError::Catalog(
+                                                SqlCatalogError::UnknownItem(missing_dep),
+                                            ))) => match GlobalId::from_str(&missing_dep) {
+                    Ok(missing_dep) => {
+                        if completed_ids.contains(&missing_dep) {
+                            ready.push_back(id);
+                        } else {
+                            awaiting_id_dependencies
+                                .entry(missing_dep)
+                                .or_default()
+                                .push(id);
+                        }
+                    }
+                    Err(_) => {
+                        if completed_names.contains(&missing_dep) {
+                            ready.push_back(id);
+                        } else {
+                            awaiting_name_dependencies
+                                .entry(missing_dep)
+                                .or_default()
+                                .push(id);
+                        }
+                    }
+                },
+                Err(AdapterError::PlanError(plan::PlanError::InvalidCast { .. })) => {
+                    awaiting_all.push(id);
+                }
+                Err(e) => panic!(
+                    "internal error: failed to load bootstrap view:\n\
+                        {name}\n\
+                        error:\n\
+                        {e:?}\n\n\
+                        Make sure that the schema name is specified in the builtin view's create sql statement.
+                        ",
+                    name = views.get(&id).expect("must exist").name,
+                ),
+            }
+        }
+
+        assert!(awaiting_id_dependencies.is_empty());
+        assert!(
+            awaiting_name_dependencies.is_empty(),
+            "awaiting_name_dependencies: {awaiting_name_dependencies:?}"
+        );
+        assert!(awaiting_all.is_empty());
+        assert!(views.is_empty());
+
+        ids.into_iter()
+            .flat_map(|id| state.pack_item_update(id, 1))
+            .collect()
+    }
+
+    /// Associates a name, `GlobalId`, and entry.
+    fn insert_entry(&mut self, entry: CatalogEntry) {
+        if !entry.id.is_system() {
+            if let Some(cluster_id) = entry.item.cluster_id() {
+                self.clusters_by_id
+                    .get_mut(&cluster_id)
+                    .expect("catalog out of sync")
+                    .bound_objects
+                    .insert(entry.id);
+            };
+        }
+
+        for u in &entry.references().0 {
+            match self.entry_by_id.get_mut(u) {
+                Some(metadata) => metadata.referenced_by.push(entry.id()),
+                None => panic!(
+                    "Catalog: missing dependent catalog item {} while installing {}",
+                    &u,
+                    self.resolve_full_name(entry.name(), entry.conn_id())
+                ),
+            }
+        }
+        for u in entry.uses() {
+            match self.entry_by_id.get_mut(&u) {
+                Some(metadata) => metadata.used_by.push(entry.id()),
+                None => panic!(
+                    "Catalog: missing dependent catalog item {} while installing {}",
+                    &u,
+                    self.resolve_full_name(entry.name(), entry.conn_id())
+                ),
+            }
+        }
+        let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
+        let schema = self.get_schema_mut(
+            &entry.name().qualifiers.database_spec,
+            &entry.name().qualifiers.schema_spec,
+            conn_id,
+        );
+
+        let prev_id = match entry.item() {
+            CatalogItem::Func(_) => schema
+                .functions
+                .insert(entry.name().item.clone(), entry.id()),
+            CatalogItem::Type(_) => schema.types.insert(entry.name().item.clone(), entry.id()),
+            _ => schema.items.insert(entry.name().item.clone(), entry.id()),
+        };
+
+        assert!(
+            prev_id.is_none(),
+            "builtin name collision on {:?}",
+            entry.name().item.clone()
+        );
+
+        self.entry_by_id.insert(entry.id(), entry.clone());
+    }
+
+    /// Associates a name, `GlobalId`, and entry.
+    fn insert_item(
+        &mut self,
+        id: GlobalId,
+        oid: u32,
+        name: QualifiedItemName,
+        item: CatalogItem,
+        owner_id: RoleId,
+        privileges: PrivilegeMap,
+    ) {
+        let entry = CatalogEntry {
+            item,
+            name,
+            id,
+            oid,
+            used_by: Vec::new(),
+            referenced_by: Vec::new(),
+            owner_id,
+            privileges,
+        };
+
+        self.insert_entry(entry);
+    }
+
+    #[mz_ore::instrument(level = "trace")]
+    fn drop_item(&mut self, id: GlobalId) -> CatalogEntry {
+        let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
+        for u in &metadata.references().0 {
+            if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
+                dep_metadata.referenced_by.retain(|u| *u != metadata.id())
+            }
+        }
+        for u in metadata.uses() {
+            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
+                dep_metadata.used_by.retain(|u| *u != metadata.id())
+            }
+        }
+
+        let conn_id = metadata.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
+        let schema = self.get_schema_mut(
+            &metadata.name().qualifiers.database_spec,
+            &metadata.name().qualifiers.schema_spec,
+            conn_id,
+        );
+        if metadata.item_type() == CatalogItemType::Type {
+            schema
+                .types
+                .remove(&metadata.name().item)
+                .expect("catalog out of sync");
+        } else {
+            // Functions would need special handling, but we don't yet support
+            // dropping functions.
+            assert_ne!(metadata.item_type(), CatalogItemType::Func);
+
+            schema
+                .items
+                .remove(&metadata.name().item)
+                .expect("catalog out of sync");
+        };
+
+        if !id.is_system() {
+            if let Some(cluster_id) = metadata.item().cluster_id() {
+                assert!(
+                    self.clusters_by_id
+                        .get_mut(&cluster_id)
+                        .expect("catalog out of sync")
+                        .bound_objects
+                        .remove(&id),
+                    "catalog out of sync"
+                );
+            }
+        }
+
+        metadata
+    }
+
+    fn insert_introspection_source_index(
+        &mut self,
+        cluster_id: ClusterId,
+        log: &'static BuiltinLog,
+        index_id: GlobalId,
+        oid: u32,
+    ) {
+        let source_name = FullItemName {
+            database: RawDatabaseSpecifier::Ambient,
+            schema: log.schema.into(),
+            item: log.name.into(),
+        };
+        let index_name = format!("{}_{}_primary_idx", log.name, cluster_id);
+        let mut index_name = QualifiedItemName {
+            qualifiers: ItemQualifiers {
+                database_spec: ResolvedDatabaseSpecifier::Ambient,
+                schema_spec: SchemaSpecifier::Id(self.get_mz_introspection_schema_id()),
+            },
+            item: index_name.clone(),
+        };
+        index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
+        let index_item_name = index_name.item.clone();
+        let log_id = self.resolve_builtin_log(log);
+        self.insert_item(
+            index_id,
+            oid,
+            index_name,
+            CatalogItem::Index(Index {
+                on: log_id,
+                keys: log
+                    .variant
+                    .index_by()
+                    .into_iter()
+                    .map(MirScalarExpr::Column)
+                    .collect(),
+                create_sql: index_sql(
+                    index_item_name,
+                    cluster_id,
+                    source_name,
+                    &log.variant.desc(),
+                    &log.variant.index_by(),
+                ),
+                conn_id: None,
+                resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id])),
+                cluster_id,
+                is_retained_metrics_object: false,
+                custom_logical_compaction_window: None,
+            }),
+            MZ_SYSTEM_ROLE_ID,
+            PrivilegeMap::default(),
+        );
+    }
+
+    /// Insert system configuration `name` with `value`.
+    ///
+    /// Return a `bool` value indicating whether the configuration was modified
+    /// by the call.
+    fn insert_system_configuration(&mut self, name: &str, value: VarInput) -> Result<bool, Error> {
+        Ok(self.system_configuration.set(name, value)?)
+    }
+
+    /// Reset system configuration `name`.
+    ///
+    /// Return a `bool` value indicating whether the configuration was modified
+    /// by the call.
+    fn remove_system_configuration(&mut self, name: &str) -> Result<bool, Error> {
+        Ok(self.system_configuration.reset(name)?)
+    }
 }
 
 /// Sort [`StateUpdate`]s in timestamp then dependency order
@@ -1290,7 +1710,7 @@ impl BootstrapApplyState {
                 let restore = state.system_configuration.clone();
                 state.system_configuration.enable_for_item_parsing();
                 let builtin_table_updates =
-                    Catalog::parse_builtin_views(state, builtin_view_additions).await;
+                    CatalogState::parse_builtin_views(state, builtin_view_additions).await;
                 state.system_configuration = restore;
                 builtin_table_updates
             }
