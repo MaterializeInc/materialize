@@ -389,9 +389,14 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
     async fn ensure_service(
         &self,
         id: &str,
-        mut service_config: ServiceConfig<'_>,
+        mut service_config: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
-        let args_fn = |listen_addrs: &BTreeMap<String, String>| {
+        // Clone the relevant args so we can move them off-thread.
+        let tracing_args = self.tracing_args.clone();
+        let namespace = self.namespace.clone();
+        let id_ = id.to_string();
+
+        let args_fn = move |listen_addrs: &BTreeMap<String, String>| {
             #[cfg(feature = "tokio-console")]
             let tokio_console_listen_addr = listen_addrs.get("tokio-console");
             let mut args = (service_config.args)(listen_addrs);
@@ -419,11 +424,11 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 sentry_tag,
                 #[cfg(feature = "capture")]
                     capture: _,
-            } = &self.tracing_args;
+            } = &tracing_args;
             args.push(format!("--startup-log-filter={startup_log_filter}"));
             args.push(format!("--log-format={log_format}"));
             if log_prefix.is_some() {
-                args.push(format!("--log-prefix={}-{}", self.namespace, id));
+                args.push(format!("--log-prefix={}-{}", namespace, id_));
             }
             if let Some(endpoint) = opentelemetry_endpoint {
                 args.push(format!("--opentelemetry-endpoint={endpoint}"));
@@ -487,7 +492,8 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
 
             args
         };
-        service_config.args = &args_fn;
+        service_config.args = Arc::new(args_fn);
+
         #[cfg(feature = "tokio-console")]
         if self.tracing_args.tokio_console_listen_addr.is_some() {
             service_config.ports.push(ServicePort {
