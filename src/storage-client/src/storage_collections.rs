@@ -1162,6 +1162,13 @@ where
     }
 
     async fn allow_writes(&self) {
+        // Because of the limitations that we explain below, around how we can
+        // turn a leased ReadHandle into a SinceHandle.
+        //
+        // This will at least make sure that someone can notice this on Sentry
+        // if we ever forget that we're not meant to use this code path.
+        tracing::error!("coming out of read-only mode gracefully, in-process, is not meant to be used in production");
+
         // This is a carefully choreographed dance!
 
         // First acquire a lock on collections, so no-one can create any while
