@@ -2696,7 +2696,7 @@ fn test_cancel_ws() {
             .retry(|_| {
                 let conn_id: String = client
                     .query_one(
-                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        "SELECT s.connection_id::text FROM mz_internal.mz_subscriptions b JOIN mz_internal.mz_sessions s ON s.id = b.session_id",
                         &[],
                     )?
                     .get(0);
@@ -2978,7 +2978,7 @@ fn test_github_20262() {
             .retry(|_| {
                 let conn_id: String = client
                     .query_one(
-                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        "SELECT s.connection_id::text FROM mz_internal.mz_subscriptions b JOIN mz_internal.mz_sessions s ON s.id = b.session_id",
                         &[],
                     )?
                     .get(0);
