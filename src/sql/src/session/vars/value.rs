@@ -21,7 +21,6 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv;
 use mz_rocksdb_types::config::{CompactionStyle, CompressionType};
 use mz_sql_parser::ast::{Ident, TransactionIsolationLevel};
-use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use serde::Serialize;
 use uncased::UncasedStr;
@@ -1075,36 +1074,6 @@ impl Value for IntervalStyle {
 
     fn format(&self) -> String {
         self.as_str().to_string()
-    }
-}
-
-impl Value for TxnWalTablesImpl {
-    fn type_name() -> Cow<'static, str>
-    where
-        Self: Sized,
-    {
-        "string".into()
-    }
-
-    fn parse(input: VarInput<'_>) -> Result<Self, VarParseError>
-    where
-        Self: Sized,
-    {
-        let s = extract_single_value(input)?;
-        let s = UncasedStr::new(s);
-
-        TxnWalTablesImpl::from_str(s.as_str()).map_err(|_| VarParseError::ConstrainedParameter {
-            invalid_values: input.to_vec(),
-            valid_values: Some(vec!["off", "eager", "lazy"]),
-        })
-    }
-
-    fn box_clone(&self) -> Box<dyn Value> {
-        Box::new(self.clone())
-    }
-
-    fn format(&self) -> String {
-        self.to_string()
     }
 }
 

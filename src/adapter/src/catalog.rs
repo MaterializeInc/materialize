@@ -66,7 +66,6 @@ use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
@@ -202,9 +201,6 @@ impl Catalog {
         read_only: bool,
         transient_id_gen: Arc<TransientIdGen>,
         builtin_migration_metadata: BuiltinMigrationMetadata,
-        // Whether to use the new txn-wal tables implementation or the
-        // legacy one.
-        txn_wal_tables: TxnWalTablesImpl,
     ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
     {
         let mut controller = {
@@ -221,7 +217,6 @@ impl Catalog {
                 envd_epoch,
                 read_only,
                 transient_id_gen,
-                txn_wal_tables,
                 &read_only_tx,
             )
             .await

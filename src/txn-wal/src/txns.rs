@@ -26,7 +26,7 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use timely::order::TotalOrder;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Timestamp;
 use tracing::debug;
 
 use crate::metrics::Metrics;
@@ -614,57 +614,6 @@ where
 
             debug!("apply_le {:?} success", ts);
             Tidy { retractions }
-        })
-        .await
-    }
-
-    /// [Self::apply_le] but also advances the physical upper of every data
-    /// shard registered at the timestamp past the timestamp.
-    #[instrument(level = "debug", fields(ts = ?ts))]
-    pub async fn apply_eager_le(&mut self, ts: &T) -> Tidy {
-        let op = &Arc::clone(&self.metrics).apply_eager_le;
-        op.run(async {
-            // TODO: Ideally the upper advancements would be done concurrently with
-            // this apply_le.
-            let tidy = self.apply_le(ts).await;
-
-            let data_writes = FuturesUnordered::new();
-            // We only care about data shards whose last registration contains
-            // the provided timestamp. Data shards not included in this fall
-            // into one of the following categories:
-            //
-            //   - The timestamp is after the last registration, in which case
-            //     it would be invalid to write to the shard.
-            //   - The timestamp is before the last registration, in which case
-            //     applying the registration will have already advanced the
-            //     physical upper past the timestamp.
-            for data_id in self
-                .txns_cache
-                .datas
-                .iter()
-                .filter(|(_, data_times)| data_times.last_reg().contains(ts))
-                .map(|(data_id, _)| *data_id)
-            {
-                let mut data_write = self.datas.take_write(&data_id).await;
-                let current = data_write.shared_upper();
-                let advance_to = ts.step_forward();
-                data_writes.push(async move {
-                    let empty: &[((K, V), T, D)] = &[];
-                    if current.less_than(&advance_to) {
-                        let () = data_write
-                            .append(empty, current, Antichain::from_elem(advance_to))
-                            .await
-                            .expect("usage was valid")
-                            .expect("nothing before minimum timestamp");
-                    }
-                    data_write
-                });
-            }
-            for data_write in data_writes.collect::<Vec<_>>().await {
-                self.datas.put_write(data_write);
-            }
-
-            tidy
         })
         .await
     }
@@ -1488,19 +1437,7 @@ mod tests {
         assert_eq!(d0_write.fetch_recent_upper().await.elements(), &[4]);
         assert_eq!(d1_write.fetch_recent_upper().await.elements(), &[5]);
 
-        // But we if use the "eager upper" version of apply, it advances the
-        // physical upper of every registered data shard.
-        txns.apply_eager_le(&4).await;
-        assert_eq!(d0_write.fetch_recent_upper().await.elements(), &[5]);
-        assert_eq!(d1_write.fetch_recent_upper().await.elements(), &[5]);
-
-        // This also works even if the txn is empty.
-        let apply = txns.begin().commit_at(&mut txns, 5).await.unwrap();
-        apply.apply_eager(&mut txns).await;
-        assert_eq!(d0_write.fetch_recent_upper().await.elements(), &[6]);
-        assert_eq!(d1_write.fetch_recent_upper().await.elements(), &[6]);
-
-        log.assert_snapshot(d0, 5).await;
-        log.assert_snapshot(d1, 5).await;
+        log.assert_snapshot(d0, 4).await;
+        log.assert_snapshot(d1, 4).await;
     }
 }

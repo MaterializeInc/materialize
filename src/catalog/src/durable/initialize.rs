@@ -50,15 +50,6 @@ pub const USER_VERSION_KEY: &str = "user_version";
 pub(crate) const SYSTEM_CONFIG_SYNCED_KEY: &str = "system_config_synced";
 
 /// The key used within the "config" collection where we store a mirror of the
-/// `txn_wal_tables` "system var" value. This is mirrored so that we
-/// can toggle the flag with Launch Darkly, but use it in boot before Launch
-/// Darkly is available.
-///
-/// The actual key name is called `persist_txn_tables` and not `txn_wal_tables`
-/// for historical reasons.
-pub(crate) const TXN_WAL_TABLES: &str = "persist_txn_tables";
-
-/// The key used within the "config" collection where we store a mirror of the
 /// `enable_0dt_deployment` "system var" value. This is mirrored so that we can
 /// toggle the flag with LaunchDarkly, but use it in boot before LaunchDarkly is
 /// available.

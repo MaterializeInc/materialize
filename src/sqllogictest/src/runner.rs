@@ -78,7 +78,6 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::parser;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
@@ -1093,7 +1092,6 @@ impl<'a> RunnerInner<'a> {
             bootstrap_role: Some("materialize".into()),
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
-            txn_wal_tables_cli: Some(TxnWalTablesImpl::Lazy),
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
         };
         // We need to run the server on its own Tokio runtime, which in turn

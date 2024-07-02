@@ -683,7 +683,7 @@ where
                     let mut subscribe = self.cache.data_subscribe(data_id, as_of.clone());
                     if let Some(snapshot) = subscribe.snapshot.take() {
                         mz_ore::task::spawn(
-                            || "persist-txn::unblock_subscribe",
+                            || "txn-wal::unblock_subscribe",
                             unblock.unblock_read(snapshot),
                         );
                     }

@@ -26,7 +26,7 @@ use mz_persist_client::ShardId;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
 use mz_storage_client::client::{TimestamplessUpdate, Update};
-use mz_storage_types::controller::{InvalidUpper, TxnWalTablesImpl, TxnsCodecRow};
+use mz_storage_types::controller::{InvalidUpper, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
 use mz_txn_wal::txns::{Tidy, TxnsHandle};
 use timely::order::TotalOrder;
@@ -131,13 +131,11 @@ async fn append_work<T2: Timestamp + Lattice + Codec64>(
 impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWriteWorker<T> {
     pub(crate) fn new_txns(
         txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
-        txn_wal_tables: TxnWalTablesImpl,
     ) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
         mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
             let mut worker = TxnsTableWorker {
-                txn_wal_tables,
                 txns,
                 write_handles: BTreeMap::new(),
                 tidy: Tidy::default(),
@@ -212,7 +210,6 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 }
 
 struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
-    txn_wal_tables: TxnWalTablesImpl,
     txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
@@ -283,22 +280,6 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         match res {
             Ok(tidy) => {
                 self.tidy.merge(tidy);
-                // If we using eager uppers, make sure to advance the physical
-                // upper of the all data shards past the
-                // register_ts. This protects against something like:
-                //
-                // - Upper of some shard s is at 5.
-                // - Apply txns at 10.
-                // - Crash.
-                // - Reboot.
-                // - Try and read s at 10.
-                match self.txn_wal_tables {
-                    TxnWalTablesImpl::Eager => {
-                        self.tidy
-                            .merge(self.txns.apply_eager_le(&register_ts).await);
-                    }
-                    TxnWalTablesImpl::Lazy => {}
-                };
             }
             Err(current) => {
                 panic!(
@@ -391,10 +372,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 // TODO: Do the applying in a background task. This will be a
                 // significant INSERT latency performance win.
                 debug!("applying {:?}", apply);
-                let tidy = match self.txn_wal_tables {
-                    TxnWalTablesImpl::Lazy => apply.apply(&mut self.txns).await,
-                    TxnWalTablesImpl::Eager => apply.apply_eager(&mut self.txns).await,
-                };
+                let tidy = apply.apply(&mut self.txns).await;
                 self.tidy.merge(tidy);
 
                 // We don't serve any reads out of this TxnsHandle, so go ahead

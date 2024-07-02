@@ -129,7 +129,6 @@ use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourc
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_storage_types::sinks::S3SinkFormat;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
@@ -994,7 +993,6 @@ impl StagedContext for () {
 pub struct Config {
     pub controller_config: ControllerConfig,
     pub controller_envd_epoch: NonZeroI64,
-    pub controller_txn_wal_tables: TxnWalTablesImpl,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
     pub timestamp_oracle_url: Option<String>,
     pub unsafe_mode: bool,
@@ -3306,7 +3304,6 @@ pub fn serve(
     Config {
         controller_config,
         controller_envd_epoch,
-        controller_txn_wal_tables,
         storage,
         timestamp_oracle_url,
         unsafe_mode,
@@ -3486,7 +3483,6 @@ pub fn serve(
                             read_only_controllers,
                             Arc::clone(&transient_id_gen),
                             builtin_migration_metadata,
-                            controller_txn_wal_tables,
                         )
                     })
                     .expect("failed to initialize storage_controller");
