@@ -182,15 +182,32 @@ impl EquivalencePropagation {
                     get_equivalences,
                 );
             }
-            MirRelationExpr::Project { input, outputs } => {
-                // Transform `outer_equivalences` to one relevant for `input`.
-                outer_equivalences.permute(outputs);
-                self.apply(
-                    input,
-                    derived.last_child(),
-                    outer_equivalences,
-                    get_equivalences,
-                );
+            MirRelationExpr::Project { outputs, .. } => {
+                // Rewrite `outputs` to reference the first of equivalent columns.
+                // Potentially confusing, but highlights dead columns more clearly.
+                let input_equivalences = &derived
+                    .last_child()
+                    .value::<Equivalences>()
+                    .expect("Equivalences required");
+                for column in outputs.iter_mut() {
+                    for class in input_equivalences.classes.iter() {
+                        if let Some(pos) = class
+                            .iter()
+                            .position(|e| e == &MirScalarExpr::Column(*column))
+                        {
+                            if let Some(c) = class[0..pos]
+                                .iter()
+                                .flat_map(|e| match e {
+                                    MirScalarExpr::Column(c) => Some(*c),
+                                    _ => None,
+                                })
+                                .next()
+                            {
+                                *column = c;
+                            }
+                        }
+                    }
+                }
             }
             MirRelationExpr::Map { input, scalars } => {
                 // Optimize `scalars` with respect to input equivalences.
