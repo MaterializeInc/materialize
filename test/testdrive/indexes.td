@@ -290,6 +290,7 @@ mz_compute_dependencies_ind                                 mz_compute_dependenc
 mz_compute_error_counts_raw_s2_primary_idx                  mz_compute_error_counts_raw                  mz_catalog_server    {export_id,worker_id}
 mz_compute_exports_per_worker_s2_primary_idx                mz_compute_exports_per_worker                mz_catalog_server    {export_id,worker_id}
 mz_compute_frontiers_per_worker_s2_primary_idx              mz_compute_frontiers_per_worker              mz_catalog_server    {export_id,worker_id}
+mz_compute_hydration_times_per_worker_s2_primary_idx        mz_compute_hydration_times_per_worker        mz_catalog_server    {export_id,worker_id}
 mz_compute_import_frontiers_per_worker_s2_primary_idx       mz_compute_import_frontiers_per_worker       mz_catalog_server    {export_id,import_id,worker_id}
 mz_compute_operator_durations_histogram_raw_s2_primary_idx  mz_compute_operator_durations_histogram_raw  mz_catalog_server    {id,worker_id,duration_ns}
 mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresses_per_worker             mz_catalog_server    {id,worker_id}
