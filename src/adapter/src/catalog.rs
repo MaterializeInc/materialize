@@ -182,7 +182,7 @@ impl Catalog {
             .await
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
-        let updates = txn.get_op_updates().collect();
+        let updates = txn.get_and_commit_op_updates();
         let builtin_updates = state.apply_updates(updates);
         assert_eq!(builtin_updates, Vec::new());
         txn.commit().await?;
@@ -212,6 +212,11 @@ impl Catalog {
             let mut tx = storage.transaction().await?;
             mz_controller::prepare_initialization(&mut tx)
                 .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+            let updates = tx.get_and_commit_op_updates();
+            assert!(
+                updates.is_empty(),
+                "initializing controller should not produce updates: {updates:?}"
+            );
             tx.commit().await?;
 
             let read_only_tx = storage.transaction().await?;

@@ -11,7 +11,7 @@
 mod tests;
 
 use std::cmp::max;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::future::Future;
 use std::str::FromStr;
@@ -64,6 +64,7 @@ use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
     OpenableDurableCatalogState, ReadOnlyDurableCatalogState, Transaction,
 };
+use crate::memory;
 
 /// New-type used to represent timestamps in persist.
 pub(crate) type Timestamp = mz_repr::Timestamp;
@@ -932,7 +933,7 @@ impl UnopenedPersistCatalogState {
             let updates = StateUpdate::from_txn_batch_ts(txn_batch, catalog.upper);
             catalog.apply_updates(updates)?;
         } else {
-            txn.commit().await?;
+            txn.commit_internal().await?;
         }
 
         // Now that we've fully opened the catalog at the current version, we can increment the
@@ -1154,18 +1155,18 @@ impl<T: Ord> LargeCollectionStartupCache<T> {
 struct CatalogStateInner {
     /// The [`Mode`] that this catalog was opened in.
     mode: Mode,
-    /// A cache of audit logs that is only populated during startup.
-    audit_logs: LargeCollectionStartupCache<proto::AuditLogKey>,
     /// A cache of storage usage events that is only populated during startup.
     storage_usage_events: LargeCollectionStartupCache<proto::StorageUsageKey>,
+    /// A trace of all catalog updates that can be consumed by some higher layer.
+    updates: VecDeque<memory::objects::StateUpdate>,
 }
 
 impl CatalogStateInner {
     fn new(mode: Mode) -> CatalogStateInner {
         CatalogStateInner {
             mode,
-            audit_logs: LargeCollectionStartupCache::new_open(),
             storage_usage_events: LargeCollectionStartupCache::new_open(),
+            updates: VecDeque::new(),
         }
     }
 }
@@ -1184,11 +1185,15 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 .add(update.diff);
         }
 
-        match (update.kind, update.diff) {
-            (StateUpdateKind::AuditLog(key, ()), _) => {
-                self.audit_logs.push((key, update.diff));
-                Ok(None)
+        {
+            let update: Option<memory::objects::StateUpdate> = (&update).try_into()?;
+            if let Some(update) = update {
+                self.updates.push_back(update);
             }
+        }
+
+        match (update.kind, update.diff) {
+            (StateUpdateKind::AuditLog(_, ()), _) => Ok(None),
             (StateUpdateKind::StorageUsage(key, ()), _) => {
                 self.storage_usage_events.push((key, update.diff));
                 Ok(None)
@@ -1222,28 +1227,22 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         self.expire().await
     }
 
-    #[mz_ore::instrument(level = "debug")]
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         self.sync_to_current_upper().await?;
-        let audit_logs = match self.update_applier.audit_logs.take() {
-            Some(audit_logs) => audit_logs,
-            None => {
-                error!("audit logs were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
-                self.persist_snapshot()
-                    .await
-                    .filter_map(
-                        |StateUpdate {
-                             kind,
-                             ts: _,
-                             diff: _,
-                         }| match kind {
-                            StateUpdateKind::AuditLog(key, ()) => Some(key),
-                            _ => None,
-                        },
-                    )
-                    .collect()
-            }
-        };
+        let audit_logs: Vec<_> = self
+            .persist_snapshot()
+            .await
+            .filter_map(
+                |StateUpdate {
+                     kind,
+                     ts: _,
+                     diff: _,
+                 }| match kind {
+                    StateUpdateKind::AuditLog(key, ()) => Some(key),
+                    _ => None,
+                },
+            )
+            .collect();
         let mut audit_logs: Vec<_> = audit_logs
             .into_iter()
             .map(RustType::from_proto)
@@ -1251,6 +1250,31 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             .collect::<Result<_, _>>()?;
         audit_logs.sort_by(|a, b| a.sortable_id().cmp(&b.sortable_id()));
         Ok(audit_logs)
+    }
+
+    async fn get_storage_usage(&mut self) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
+        self.sync_to_current_upper().await?;
+        let storage_usage: Vec<_> = self
+            .persist_snapshot()
+            .await
+            .filter_map(
+                |StateUpdate {
+                     kind,
+                     ts: _,
+                     diff: _,
+                 }| match kind {
+                    StateUpdateKind::StorageUsage(key, ()) => Some(key),
+                    _ => None,
+                },
+            )
+            .collect();
+        let mut storage_usage: Vec<_> = storage_usage
+            .into_iter()
+            .map(RustType::from_proto)
+            .map_ok(|key: StorageUsageKey| key.metric)
+            .collect::<Result<_, _>>()?;
+        storage_usage.sort_by(|a, b| a.sortable_id().cmp(&b.sortable_id()));
+        Ok(storage_usage)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1299,6 +1323,36 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     #[mz_ore::instrument(level = "debug")]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         self.with_snapshot(Ok).await
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn sync_to_current_updates(
+        &mut self,
+    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
+        let upper = self.current_upper().await;
+        self.sync_updates(upper.into()).await
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn sync_updates(
+        &mut self,
+        ts: mz_repr::Timestamp,
+    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
+        self.sync(ts.into()).await?;
+        let mut updates = Vec::new();
+        while let Some(update) = self.update_applier.updates.front() {
+            if update.ts > ts {
+                break;
+            }
+
+            let update = self
+                .update_applier
+                .updates
+                .pop_front()
+                .expect("peeked above");
+            updates.push(update);
+        }
+        Ok(updates)
     }
 }
 
@@ -1383,12 +1437,12 @@ impl DurableCatalogState for PersistCatalogState {
     // to utilize `CoW`s in `Transaction`s to avoid cloning unnecessary state.
 
     #[mz_ore::instrument]
-    async fn get_and_prune_storage_usage(
+    async fn prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
         _wait_for_consolidation: bool,
-    ) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
+    ) -> Result<(), CatalogError> {
         self.sync_to_current_upper().await?;
         // If no usage retention period is set, set the cutoff to MIN so nothing
         // is removed.
@@ -1433,17 +1487,15 @@ impl DurableCatalogState for PersistCatalogState {
             }
         }
 
-        events.sort_by(|event1, event2| event1.sortable_id().cmp(&event2.sortable_id()));
-
         if !self.is_read_only() {
             let mut txn = self.transaction().await?;
             txn.remove_storage_usage_events(expired);
-            txn.commit().await?;
+            txn.commit_internal().await?;
         } else {
             self.confirm_leadership().await?;
         }
 
-        Ok(events)
+        Ok(())
     }
 }
 

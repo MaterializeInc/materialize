@@ -493,22 +493,22 @@ impl Catalog {
             // separately for updating state and builtin tables.
             // TODO(jkosh44) Some more thought needs to be given as to how temporary tables work
             // in a multi-subscriber catalog world.
+            let op_id = tx.op_id().into();
             let temporary_item_updates =
                 temporary_item_updates
                     .into_iter()
                     .map(|(item, diff)| StateUpdate {
                         kind: StateUpdateKind::TemporaryItem(item),
-                        ts: tx.op_id().into(),
+                        ts: op_id,
                         diff,
                     });
 
-            let mut updates: Vec<_> = tx.get_op_updates().collect();
+            let mut updates: Vec<_> = tx.get_and_commit_op_updates();
             updates.extend(temporary_item_updates);
             let op_builtin_table_updates = state.apply_updates(updates);
             let op_builtin_table_updates =
                 state.resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
-            tx.commit_op();
         }
 
         if dry_run_ops.is_empty() {
@@ -522,12 +522,11 @@ impl Catalog {
                 .await?;
             }
 
-            let updates = tx.get_op_updates().collect();
+            let updates = tx.get_and_commit_op_updates();
             let op_builtin_table_updates = state.apply_updates(updates);
             let op_builtin_table_updates =
                 state.resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
-            tx.commit_op();
 
             Ok(())
         } else {

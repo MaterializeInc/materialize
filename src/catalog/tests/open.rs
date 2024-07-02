@@ -256,6 +256,11 @@ async fn test_open_savepoint(
             )
             .await
             .unwrap();
+        // Drain initial updates.
+        let _ = state
+            .sync_to_current_updates()
+            .await
+            .expect("unable to sync");
         // Savepoint catalogs do not increment the epoch.
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
 
@@ -289,6 +294,8 @@ async fn test_open_savepoint(
                 },
             ));
         }
+        // Drain txn updates.
+        let _ = txn.get_and_commit_op_updates();
         txn.commit().await.unwrap();
 
         // Read back writes.
@@ -314,6 +321,8 @@ async fn test_open_savepoint(
             txn.update_schema(schema.id.clone(), schema.clone())
                 .unwrap();
         }
+        // Drain txn updates.
+        let _ = txn.get_and_commit_op_updates();
         txn.commit().await.unwrap();
 
         // Read back updates.
@@ -400,6 +409,11 @@ async fn test_open_read_only(
         )
         .await
         .unwrap();
+    // Drain initial updates.
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
     assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
 
     let mut read_only_state = openable_state3
@@ -427,6 +441,8 @@ async fn test_open_read_only(
             RoleVars::default(),
         )
         .unwrap();
+    // Drain txn updates.
+    let _ = txn.get_and_commit_op_updates();
     txn.commit().await.unwrap();
 
     let snapshot = read_only_state.snapshot().await.unwrap();
