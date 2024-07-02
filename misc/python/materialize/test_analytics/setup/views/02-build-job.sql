@@ -36,6 +36,8 @@ WHERE bj.success = TRUE
 
 CREATE OR REPLACE VIEW v_build_step_success AS
 SELECT
+    EXTRACT(YEAR FROM b.date) AS year,
+    EXTRACT(MONTH FROM b.date) AS month,
     b.branch,
     b.pipeline,
     bj.build_step_key,
@@ -48,10 +50,46 @@ INNER JOIN build_job bj
   ON b.build_id = bj.build_id
 WHERE bj.is_latest_retry = TRUE
 GROUP BY
+    EXTRACT(YEAR FROM b.date),
+    EXTRACT(MONTH FROM b.date),
     b.branch,
     b.pipeline,
     bj.build_step_key,
     bj.shard_index
+;
+
+CREATE OR REPLACE VIEW v_build_step_success_unsharded AS
+WITH build_job_unsharded AS (
+    SELECT
+        bj.build_id,
+        bj.build_step_key,
+        -- success when no shard failed
+        sum(CASE WHEN bj.success THEN 0 ELSE 1 END) = 0 AS success,
+        count(*) as count_shards
+    FROM build_job bj
+    WHERE bj.is_latest_retry = TRUE
+    GROUP BY
+        bj.build_id,
+        bj.build_step_key
+)
+SELECT
+    EXTRACT(YEAR FROM b.date) AS year,
+    EXTRACT(MONTH FROM b.date) AS month,
+    b.branch,
+    b.pipeline,
+    bju.build_step_key,
+    count(*) AS count_all,
+    sum(CASE WHEN bju.success THEN 1 ELSE 0 END) AS count_successful,
+    max(bju.count_shards) AS count_shards
+FROM build_job_unsharded bju
+INNER JOIN build b
+  ON b.build_id = bju.build_id
+GROUP BY
+    EXTRACT(YEAR FROM b.date),
+    EXTRACT(MONTH FROM b.date),
+    b.branch,
+    b.pipeline,
+    bju.build_step_key
 ;
 
 -- history of build job success
