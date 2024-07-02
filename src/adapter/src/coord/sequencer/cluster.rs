@@ -15,8 +15,8 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    CreateReplicaConfig, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig,
-    ReplicaLocation, ReplicaLogging,
+    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
+    ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::CastFrom;
@@ -375,11 +375,10 @@ impl Coordinator {
             )
             .expect("creating cluster must not fail");
 
-        let replicas: Vec<_> = cluster
-            .replicas()
-            .map(|r| (cluster_id, r.replica_id))
-            .collect();
-        self.create_cluster_replicas(&replicas).await;
+        let replica_ids: Vec<_> = cluster.replicas().map(|r| r.replica_id).collect();
+        for replica_id in replica_ids {
+            self.create_cluster_replica(cluster_id, replica_id).await;
+        }
 
         if !introspection_source_ids.is_empty() {
             self.initialize_compute_read_policies(
@@ -506,42 +505,39 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), vec![op]).await?;
 
-        self.create_cluster_replicas(&[(cluster_id, id)]).await;
+        self.create_cluster_replica(cluster_id, id).await;
 
         Ok(ExecuteResponse::CreatedClusterReplica)
     }
 
-    pub(super) async fn create_cluster_replicas(&mut self, replicas: &[(ClusterId, ReplicaId)]) {
-        let mut replicas_to_start = Vec::new();
-
-        for (cluster_id, replica_id) in replicas.iter().copied() {
-            let cluster = self.catalog().get_cluster(cluster_id);
-            let role = cluster.role();
-            let replica_config = cluster
-                .replica(replica_id)
-                .expect("known to exist")
-                .config
-                .clone();
-
-            replicas_to_start.push(CreateReplicaConfig {
-                cluster_id,
-                replica_id,
-                role,
-                config: replica_config,
-            });
-        }
+    pub(super) async fn create_cluster_replica(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) {
+        let cluster = self.catalog().get_cluster(cluster_id);
+        let role = cluster.role();
+        let replica_config = cluster
+            .replica(replica_id)
+            .expect("known to exist")
+            .config
+            .clone();
 
         let enable_worker_core_affinity =
             self.catalog().system_config().enable_worker_core_affinity();
+
         self.controller
-            .create_replicas(replicas_to_start, enable_worker_core_affinity)
-            .await
+            .create_replica(
+                cluster_id,
+                replica_id,
+                role,
+                replica_config,
+                enable_worker_core_affinity,
+            )
             .expect("creating replicas must not fail");
 
-        for (cluster_id, replica_id) in replicas {
-            self.install_introspection_subscribes(*cluster_id, *replica_id)
-                .await;
-        }
+        self.install_introspection_subscribes(cluster_id, replica_id)
+            .await;
     }
 
     /// When this is called by the automated cluster scheduling, `scheduling_decision_reason` should
@@ -695,7 +691,9 @@ impl Coordinator {
         });
 
         self.catalog_transact(session, ops).await?;
-        self.create_cluster_replicas(&create_cluster_replicas).await;
+        for (cluster_id, replica_id) in create_cluster_replicas {
+            self.create_cluster_replica(cluster_id, replica_id).await;
+        }
         Ok(())
     }
 
