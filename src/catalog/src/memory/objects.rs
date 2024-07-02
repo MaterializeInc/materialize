@@ -50,7 +50,7 @@ use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnection};
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, Timeline,
 };
@@ -822,12 +822,9 @@ impl Sink {
     }
 
     /// Output format of the sink.
-    pub fn format(&self) -> &str {
+    pub fn format<'a>(&'a self) -> Cow<'a, str> {
         let StorageSinkConnection::Kafka(connection) = &self.connection;
-        match &connection.format {
-            KafkaSinkFormat::Avro { .. } => "avro",
-            KafkaSinkFormat::Json => "json",
-        }
+        connection.format.get_format_name()
     }
 
     pub fn connection_id(&self) -> Option<GlobalId> {

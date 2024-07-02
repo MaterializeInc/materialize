@@ -2722,9 +2722,9 @@ impl<'a> Parser<'a> {
                 let key = self.parse_format()?;
                 self.expect_keywords(&[VALUE, FORMAT])?;
                 let value = self.parse_format()?;
-                Some(CreateSourceFormat::KeyValue { key, value })
+                Some(FormatSpecifier::KeyValue { key, value })
             }
-            Some(FORMAT) => Some(CreateSourceFormat::Bare(self.parse_format()?)),
+            Some(FORMAT) => Some(FormatSpecifier::Bare(self.parse_format()?)),
             Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
             None => None,
         };
@@ -3045,10 +3045,18 @@ impl<'a> Parser<'a> {
         let from = self.parse_raw_name()?;
         self.expect_keyword(INTO)?;
         let connection = self.parse_create_sink_connection()?;
-        let format = if self.parse_keyword(FORMAT) {
-            Some(self.parse_format()?)
-        } else {
-            None
+
+        let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
+            Some(KEY) => {
+                self.expect_keyword(FORMAT)?;
+                let key = self.parse_format()?;
+                self.expect_keywords(&[VALUE, FORMAT])?;
+                let value = self.parse_format()?;
+                Some(FormatSpecifier::KeyValue { key, value })
+            }
+            Some(FORMAT) => Some(FormatSpecifier::Bare(self.parse_format()?)),
+            Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
+            None => None,
         };
         let envelope = if self.parse_keyword(ENVELOPE) {
             Some(self.parse_sink_envelope()?)

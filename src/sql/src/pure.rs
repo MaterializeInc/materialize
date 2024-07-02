@@ -59,9 +59,9 @@ use rdkafka::admin::AdminClient;
 use uuid::Uuid;
 
 use crate::ast::{
-    AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro, CsrConnectionProtobuf,
-    Format, ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
+    AvroSchema, CreateSourceConnection, CreateSourceStatement, CreateSourceSubsource,
+    CreateSubsourceStatement, CsrConnectionAvro, CsrConnectionProtobuf, Format, FormatSpecifier,
+    ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
@@ -281,17 +281,37 @@ pub(crate) fn add_materialize_comments(
     let object_ids = from.references().0.clone().into_iter().chain_one(from.id());
 
     // add comments to the avro doc comments
-    if let Some(Format::Avro(AvroSchema::Csr {
-        csr_connection:
-            CsrConnectionAvro {
-                connection:
-                    CsrConnection {
-                        connection: _,
-                        options,
-                    },
-                ..
-            },
-    })) = &mut stmt.format
+    if let Some(
+        FormatSpecifier::Bare(Format::Avro(AvroSchema::Csr {
+            csr_connection:
+                CsrConnectionAvro {
+                    connection: CsrConnection { options, .. },
+                    ..
+                },
+        }))
+        | FormatSpecifier::KeyValue {
+            key: _,
+            value:
+                Format::Avro(AvroSchema::Csr {
+                    csr_connection:
+                        CsrConnectionAvro {
+                            connection: CsrConnection { options, .. },
+                            ..
+                        },
+                }),
+        }
+        | FormatSpecifier::KeyValue {
+            key:
+                Format::Avro(AvroSchema::Csr {
+                    csr_connection:
+                        CsrConnectionAvro {
+                            connection: CsrConnection { options, .. },
+                            ..
+                        },
+                }),
+            value: _,
+        },
+    ) = &mut stmt.format
     {
         let user_provided_comments = &options
             .iter()
@@ -466,12 +486,28 @@ async fn purify_create_sink(
 
     if let Some(format) = format {
         match format {
-            Format::Avro(AvroSchema::Csr {
-                csr_connection: CsrConnectionAvro { connection, .. },
-            })
-            | Format::Protobuf(ProtobufSchema::Csr {
-                csr_connection: CsrConnectionProtobuf { connection, .. },
-            }) => {
+            FormatSpecifier::Bare(
+                Format::Avro(AvroSchema::Csr {
+                    csr_connection: CsrConnectionAvro { connection, .. },
+                })
+                | Format::Protobuf(ProtobufSchema::Csr {
+                    csr_connection: CsrConnectionProtobuf { connection, .. },
+                }),
+            )
+            | FormatSpecifier::KeyValue {
+                key: _,
+                value:
+                    Format::Avro(AvroSchema::Csr {
+                        csr_connection: CsrConnectionAvro { connection, .. },
+                    }),
+            }
+            | FormatSpecifier::KeyValue {
+                key:
+                    Format::Avro(AvroSchema::Csr {
+                        csr_connection: CsrConnectionAvro { connection, .. },
+                    }),
+                value: _,
+            } => {
                 let connection = {
                     let scx = StatementContext::new(None, &catalog);
                     let item = scx.get_item_by_resolved_name(&connection.connection)?;
@@ -496,13 +532,16 @@ async fn purify_create_sink(
                     .await
                     .map_err(|e| CsrPurificationError::ListSubjectsError(Arc::new(e)))?;
             }
-            Format::Avro(AvroSchema::InlineSchema { .. })
-            | Format::Bytes
-            | Format::Csv { .. }
-            | Format::Json { .. }
-            | Format::Protobuf(ProtobufSchema::InlineSchema { .. })
-            | Format::Regex(..)
-            | Format::Text => {}
+            FormatSpecifier::Bare(
+                Format::Avro(AvroSchema::InlineSchema { .. })
+                | Format::Bytes
+                | Format::Csv { .. }
+                | Format::Json { .. }
+                | Format::Protobuf(ProtobufSchema::InlineSchema { .. })
+                | Format::Regex(..)
+                | Format::Text,
+            )
+            | FormatSpecifier::KeyValue { .. } => {}
         }
     }
 
@@ -1493,12 +1532,12 @@ async fn purify_alter_source(
 
 async fn purify_source_format(
     catalog: &dyn SessionCatalog,
-    format: &mut Option<CreateSourceFormat<Aug>>,
+    format: &mut Option<FormatSpecifier<Aug>>,
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
-    if matches!(format, Some(CreateSourceFormat::KeyValue { .. }))
+    if matches!(format, Some(FormatSpecifier::KeyValue { .. }))
         && !matches!(connection, CreateSourceConnection::Kafka { .. })
     {
         sql_bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
@@ -1506,7 +1545,7 @@ async fn purify_source_format(
 
     match format.as_mut() {
         None => {}
-        Some(CreateSourceFormat::Bare(format)) => {
+        Some(FormatSpecifier::Bare(format)) => {
             purify_source_format_single(
                 catalog,
                 format,
@@ -1517,7 +1556,7 @@ async fn purify_source_format(
             .await?;
         }
 
-        Some(CreateSourceFormat::KeyValue { key, value: val }) => {
+        Some(FormatSpecifier::KeyValue { key, value: val }) => {
             purify_source_format_single(catalog, key, connection, envelope, storage_configuration)
                 .await?;
             purify_source_format_single(catalog, val, connection, envelope, storage_configuration)
