@@ -211,6 +211,13 @@ impl ReplicaLocation {
         };
         workers_per_process * self.num_processes()
     }
+
+    pub fn pending(&self) -> bool {
+        match self {
+            ReplicaLocation::Managed(ManagedReplicaLocation { pending, .. }) => *pending,
+            _ => false,
+        }
+    }
 }
 
 /// The "role" of a cluster, which is currently used to determine the
