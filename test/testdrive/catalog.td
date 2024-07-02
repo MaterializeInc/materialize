@@ -565,6 +565,7 @@ name                                           type   size  cluster
 mz_aws_privatelink_connection_status_history source <null>  <null>
 mz_cluster_replica_frontiers                 source <null>  <null>
 mz_compute_dependencies                      source <null>  <null>
+mz_compute_error_counts_raw_unified          source <null>   <null>
 mz_compute_hydration_statuses                source <null>  <null>
 mz_compute_operator_hydration_statuses_per_worker source <null> <null>
 mz_frontiers                                 source <null>  <null>
