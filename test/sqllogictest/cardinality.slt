@@ -202,21 +202,21 @@ Explained Query:
           ArrangeBy keys=[[#0]]
             Union
               Negate
-                Project (#0, #1)
-                  Join on=(#2 = least(#0, #1) AND #3 = greatest(#0, #1)) type=differential
-                    ArrangeBy keys=[[greatest(#0, #1), least(#0, #1)]]
-                      Get l0
-                    ArrangeBy keys=[[#1, #0]]
-                      Distinct project=[least(#0, #1), greatest(#0, #1)]
-                        Get l1
-              Get l0
+                CrossJoin type=differential
+                  ArrangeBy keys=[[]]
+                    Get l1
+                  ArrangeBy keys=[[]]
+                    Distinct project=[]
+                      Project ()
+                        Get l0
+              Project (#1, #2)
+                ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
               Get l1
     cte l1 =
       Project (#1, #2)
-        Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
-          ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+        Get l0
     cte l0 =
-      Project (#1, #2)
+      Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
         ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
 
 Used Indexes:
@@ -318,21 +318,21 @@ Explained Query:
           ArrangeBy keys=[[#0]]
             Union
               Negate
-                Project (#0, #1)
-                  Join on=(#2 = least(#0, #1) AND #3 = greatest(#0, #1)) type=differential
-                    ArrangeBy keys=[[greatest(#0, #1), least(#0, #1)]]
-                      Get l0
-                    ArrangeBy keys=[[#1, #0]]
-                      Distinct project=[least(#0, #1), greatest(#0, #1)]
-                        Get l1
-              Get l0
+                CrossJoin type=differential
+                  ArrangeBy keys=[[]]
+                    Get l1
+                  ArrangeBy keys=[[]]
+                    Distinct project=[]
+                      Project ()
+                        Get l0
+              Project (#1, #2)
+                ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
               Get l1
     cte l1 =
       Project (#1, #2)
-        Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
-          ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+        Get l0
     cte l0 =
-      Project (#1, #2)
+      Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
         ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
 
 Used Indexes:

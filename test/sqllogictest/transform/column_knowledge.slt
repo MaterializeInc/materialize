@@ -679,8 +679,7 @@ Explained Query:
               Filter (#0 = 3) AND (#1 = 5) // { arity: 2, types: "(integer, integer)" }
                 ReadStorage materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
             Project () // { arity: 0, types: "()" }
-              Filter (#0 = 3) AND (#1 = 5) // { arity: 2, types: "(integer, integer)" }
-                Get l0 // { arity: 2, types: "(integer, integer)" }
+              Get l0 // { arity: 2, types: "(integer, integer)" }
 
 Source materialize.public.t1
   filter=((#0 = 3) AND (#1 = 5))
