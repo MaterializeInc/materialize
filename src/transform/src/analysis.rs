@@ -10,6 +10,7 @@
 //! Traits and types for reusable expression analysis
 
 pub mod equivalences;
+pub mod provenance;
 
 use mz_expr::MirRelationExpr;
 
