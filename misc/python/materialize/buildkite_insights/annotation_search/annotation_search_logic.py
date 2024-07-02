@@ -16,6 +16,7 @@ from materialize.buildkite_insights.annotation_search.annotation_search_presenta
     print_summary,
 )
 from materialize.buildkite_insights.annotation_search.buildkite_search_source import (
+    ANY_BRANCH_VALUE,
     BuildkiteDataSource,
 )
 from materialize.buildkite_insights.buildkite_api.generic_api import RateLimitExceeded
@@ -84,7 +85,7 @@ def search_annotations(
 
 def start_search(
     pipeline_slug: str,
-    branch: str,
+    branch: str | None,
     search_source: BuildkiteDataSource,
     max_results: int,
     only_one_result_per_build: bool,
@@ -95,6 +96,9 @@ def start_search(
     verbose: bool,
 ) -> None:
     assert len(pattern) > 0, "pattern must not be empty"
+
+    if branch == ANY_BRANCH_VALUE:
+        branch = None
 
     builds = search_source.fetch_builds(pipeline=pipeline_slug, branch=branch)
 
