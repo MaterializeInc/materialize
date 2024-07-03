@@ -331,7 +331,7 @@ class CargoBuild(CargoPreImage):
             cargo_build.append("--release")
         if rd.sanitizer != Sanitizer.none:
             # ASan doesn't work with jemalloc
-            cargo_build.append("--no-default-features")
+            cargo_build.extend(["--no-default-features", "--workspace"])
             # Uses more memory, so reduce the number of jobs
             cargo_build.extend(
                 ["--jobs", str(round(multiprocessing.cpu_count() * 2 / 3))]

@@ -407,7 +407,7 @@ def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
     if args.timings:
         command += ["--timings"]
     if args.no_default_features:
-        command += ["--no-default-features"]
+        command += ["--no-default-features", "--workspace"]
     if args.sanitizer != "none":
         command += ["-Zbuild-std", "--target", SANITIZER_TARGET]
     return command
