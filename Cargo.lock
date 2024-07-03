@@ -3276,9 +3276,9 @@ checksum = "453ad9f582a441959e5f0d088b02ce04cfe8d51a8eaf077f12ac6d3e94164ca6"
 
 [[package]]
 name = "jemalloc_pprof"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c01b68f3592d2b8af65cf1dae12e05cd831a17af00e05cd08f25dbb85404306c"
+checksum = "27e92eac9f0249a801a215bc5a9edb16486e7615f6b2a334b93bb3b1423a04c8"
 dependencies = [
  "anyhow",
  "libc",
@@ -3812,9 +3812,9 @@ checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 
 [[package]]
 name = "mappings"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64f8c7459a4940d750ad5ab1cb40bd80de8a5244749263a9b4ffc2021680266e"
+checksum = "2c012489c8d9854763e1bca83817084d7aefcc14ba00f48fa13a855c7a6a4560"
 dependencies = [
  "anyhow",
  "libc",
