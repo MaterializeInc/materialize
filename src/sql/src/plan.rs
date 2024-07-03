@@ -433,6 +433,10 @@ impl Plan {
     /// falling into the `true` category.
     pub fn allowed_in_read_only(&self) -> bool {
         match self {
+            // These two set non-durable session variables, so are okay in
+            // read-only mode.
+            Plan::SetVariable(_) => true,
+            Plan::ResetVariable(_) => true,
             Plan::SetTransaction(_) => true,
             Plan::StartTransaction(_) => true,
             Plan::CommitTransaction(_) => true,
