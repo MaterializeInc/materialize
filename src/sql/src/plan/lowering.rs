@@ -2051,7 +2051,10 @@ fn attempt_outer_equijoin(
                         // a semi-join between `left` and `both_keys`.
                         let left_present = MirRelationExpr::join_scalars(
                             vec![
-                                get_left.clone().filter(on_predicates.lhs()), // Push local predicates.
+                                get_left
+                                    .clone()
+                                    .filter(on_predicates.lhs()) // Push local predicates.
+                                    .filter(on_predicates.eq_lhs().map(|e| e.call_is_null().not())),
                                 get_both.clone(),
                             ],
                             itertools::zip_eq(

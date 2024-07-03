@@ -5581,24 +5581,47 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                   "Join": {
                                                     "inputs": [
                                                       {
-                                                        "Get": {
-                                                          "id": {
-                                                            "Local": 1
-                                                          },
-                                                          "typ": {
-                                                            "column_types": [
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": true
+                                                        "Filter": {
+                                                          "input": {
+                                                            "Get": {
+                                                              "id": {
+                                                                "Local": 1
                                                               },
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": true
-                                                              }
-                                                            ],
-                                                            "keys": []
+                                                              "typ": {
+                                                                "column_types": [
+                                                                  {
+                                                                    "scalar_type": "Int32",
+                                                                    "nullable": true
+                                                                  },
+                                                                  {
+                                                                    "scalar_type": "Int32",
+                                                                    "nullable": true
+                                                                  }
+                                                                ],
+                                                                "keys": []
+                                                              },
+                                                              "access_strategy": "UnknownOrLocal"
+                                                            }
                                                           },
-                                                          "access_strategy": "UnknownOrLocal"
+                                                          "predicates": [
+                                                            {
+                                                              "CallUnary": {
+                                                                "func": {
+                                                                  "Not": null
+                                                                },
+                                                                "expr": {
+                                                                  "CallUnary": {
+                                                                    "func": {
+                                                                      "IsNull": null
+                                                                    },
+                                                                    "expr": {
+                                                                      "Column": 1
+                                                                    }
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          ]
                                                         }
                                                       },
                                                       {

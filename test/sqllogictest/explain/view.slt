@@ -123,16 +123,15 @@ Return
           Project (#0, #1)
             Negate
               Join on=(#2 = integer_to_bigint(#0))
-                Get l1
+                Filter (#1 = 100) AND (#0) IS NOT NULL
+                  Get materialize.public.accounts
                 Distinct project=[#2]
                   Get l0
-          Get l1
+          Filter (#1 = 100)
+            Get materialize.public.accounts
       Filter (#1 = 100)
         Get l0
 With
-  cte l1 =
-    Filter (#1 = 100)
-      Get materialize.public.accounts
   cte l0 =
     Join on=(#2 = integer_to_bigint(#0))
       Filter (#0) IS NOT NULL
@@ -172,16 +171,15 @@ Return
           Project (#0, #1)
             Negate
               Join on=(#2 = integer_to_bigint(#0))
-                Get l1
+                Filter (#1 = 100) AND (#0) IS NOT NULL
+                  Get materialize.public.accounts
                 Distinct project=[#2]
                   Get l0
-          Get l1
+          Filter (#1 = 100)
+            Get materialize.public.accounts
       Filter (#1 = 100)
         Get l0
 With
-  cte l1 =
-    Filter (#1 = 100)
-      Get materialize.public.accounts
   cte l0 =
     Join on=(#2 = integer_to_bigint(#0))
       Filter (#0) IS NOT NULL
