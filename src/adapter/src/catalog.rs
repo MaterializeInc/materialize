@@ -210,13 +210,7 @@ impl Catalog {
 
             let read_only_tx = storage.transaction().await?;
 
-            mz_controller::Controller::new(
-                config,
-                envd_epoch,
-                read_only,
-                &read_only_tx,
-            )
-            .await
+            mz_controller::Controller::new(config, envd_epoch, read_only, &read_only_tx).await
         };
 
         self.initialize_storage_controller_state(
