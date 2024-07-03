@@ -26,57 +26,23 @@ const MICROS_PER_MILLIS: u32 = 1_000;
 
 // Manages encoding of JSON-encoded bytes
 pub struct JsonEncoder {
-    key_columns: Option<Vec<(ColumnName, ColumnType)>>,
-    value_columns: Option<Vec<(ColumnName, ColumnType)>>,
+    columns: Vec<(ColumnName, ColumnType)>,
 }
 
 impl JsonEncoder {
-    pub fn new(
-        key_desc: Option<RelationDesc>,
-        value_desc: Option<RelationDesc>,
-        debezium: bool,
-    ) -> Self {
-        let value_columns = match value_desc {
-            Some(desc) => {
-                let mut value_columns = column_names_and_types(desc);
-                if debezium {
-                    value_columns = envelopes::dbz_envelope(value_columns);
-                }
-                Some(value_columns)
-            }
-            None => None,
+    pub fn new(desc: RelationDesc, debezium: bool) -> Self {
+        let mut columns = column_names_and_types(desc);
+        if debezium {
+            columns = envelopes::dbz_envelope(columns);
         };
-        JsonEncoder {
-            key_columns: if let Some(desc) = key_desc {
-                Some(column_names_and_types(desc))
-            } else {
-                None
-            },
-            value_columns,
-        }
-    }
-
-    fn encode_row(&self, row: mz_repr::Row, names_types: &[(ColumnName, ColumnType)]) -> Vec<u8> {
-        let value = encode_datums_as_json(row.iter(), names_types);
-        value.to_string().into_bytes()
+        JsonEncoder { columns }
     }
 }
 
 impl Encode for JsonEncoder {
-    fn encode_key_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
-        self.encode_row(
-            row,
-            self.key_columns.as_ref().expect("key schema must exist"),
-        )
-    }
-
-    fn encode_value_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
-        self.encode_row(
-            row,
-            self.value_columns
-                .as_ref()
-                .expect("value schema must exist"),
-        )
+    fn encode_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
+        let value = encode_datums_as_json(row.iter(), self.columns.as_ref());
+        value.to_string().into_bytes()
     }
 }
 
@@ -87,15 +53,13 @@ impl fmt::Debug for JsonEncoder {
                 "schema",
                 &format!(
                     "{:?}",
-                    self.value_columns
-                        .as_ref()
-                        .map(|cols| build_row_schema_json(
-                            cols,
-                            "schema",
-                            &BTreeMap::new(),
-                            None,
-                            &Default::default(),
-                        ))
+                    build_row_schema_json(
+                        &self.columns,
+                        "schema",
+                        &BTreeMap::new(),
+                        None,
+                        &Default::default(),
+                    )
                 ),
             )
             .finish()

@@ -71,6 +71,8 @@ message ProtoKafkaSinkFormatType {
         }
 
         CompatibilityLevel compatibility_level = 2;
+
+        mz_storage_types.connections.ProtoCsrConnection csr_connection = 3;
     }
 
     oneof type {
@@ -84,7 +86,6 @@ message ProtoKafkaSinkFormatType {
 message ProtoKafkaSinkFormat {
     optional ProtoKafkaSinkFormatType key_format = 1;
     ProtoKafkaSinkFormatType value_format = 2;
-    mz_storage_types.connections.ProtoCsrConnection csr_connection = 10;
 }
 
 message ProtoKafkaSinkConnectionV2 {

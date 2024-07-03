@@ -684,24 +684,23 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
-    pub key_format: Option<KafkaSinkFormatType>,
-    pub value_format: KafkaSinkFormatType,
-    // Must be specified if either key_format or value_format are KafkaSinkFormatType::Avro
-    pub csr_connection: Option<C::Csr>,
+    pub key_format: Option<KafkaSinkFormatType<C>>,
+    pub value_format: KafkaSinkFormatType<C>,
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum KafkaSinkFormatType {
+pub enum KafkaSinkFormatType<C: ConnectionAccess = InlinedConnection> {
     Avro {
         schema: String,
         compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
+        csr_connection: C::Csr,
     },
     Json,
     Text,
     Bytes,
 }
 
-impl KafkaSinkFormatType {
+impl<C: ConnectionAccess> KafkaSinkFormatType<C> {
     pub fn get_format_name(&self) -> &str {
         match self {
             Self::Avro { .. } => "avro",
@@ -739,46 +738,32 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
             return Ok(());
         }
 
-        match (&self.csr_connection, &other.csr_connection) {
-            (Some(csr), Some(other_csr)) => {
-                if csr.alter_compatible(id, other_csr).is_err() {
-                    tracing::warn!(
-                        "KafkaSinkFormat csr_connection incompatible\nself:\n{:#?}\n\nother:{:#?}",
-                        self,
-                        other
-                    );
-                    return Err(AlterError { id });
-                }
-            }
-            (None, None) => {}
-            _ => {
-                tracing::warn!(
-                    "KafkaSinkFormat csr_connection incompatible\nself:\n{:#?}\n\nother:{:#?}",
-                    self,
-                    other
-                );
-                return Err(AlterError { id });
-            }
-        }
-
         match (&self.value_format, &other.value_format) {
             (
                 KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level: _,
+                    csr_connection,
                 },
                 KafkaSinkFormatType::Avro {
                     schema: other_schema,
                     compatibility_level: _,
+                    csr_connection: other_csr_connection,
                 },
-            ) if schema != other_schema => {
-                tracing::warn!(
+            ) => {
+                if schema != other_schema
+                    || csr_connection
+                        .alter_compatible(id, other_csr_connection)
+                        .is_err()
+                {
+                    tracing::warn!(
                         "KafkaSinkFormat::Avro incompatible at value_format:\nself:\n{:#?}\n\nother\n{:#?}",
                         self,
                         other
                     );
 
-                return Err(AlterError { id });
+                    return Err(AlterError { id });
+                }
             }
             (s, o) => {
                 if s != o {
@@ -797,19 +782,27 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                 Some(KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level: _,
+                    csr_connection,
                 }),
                 Some(KafkaSinkFormatType::Avro {
                     schema: other_schema,
                     compatibility_level: _,
+                    csr_connection: other_csr_connection,
                 }),
-            ) if schema != other_schema => {
-                tracing::warn!(
+            ) => {
+                if schema != other_schema
+                    || csr_connection
+                        .alter_compatible(id, other_csr_connection)
+                        .is_err()
+                {
+                    tracing::warn!(
                         "KafkaSinkFormat::Avro incompatible at key_format:\nself:\n{:#?}\n\nother\n{:#?}",
                         self,
                         other
                     );
 
-                return Err(AlterError { id });
+                    return Err(AlterError { id });
+                }
             }
             (s, o) => {
                 if s != o {
@@ -832,11 +825,29 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormat, R>
 {
     fn into_inline_connection(self, r: R) -> KafkaSinkFormat {
         KafkaSinkFormat {
-            key_format: self.key_format,
-            value_format: self.value_format,
-            csr_connection: self
-                .csr_connection
-                .map(|c| r.resolve_connection(c).unwrap_csr()),
+            key_format: self.key_format.map(|f| f.into_inline_connection(&r)),
+            value_format: self.value_format.into_inline_connection(&r),
+        }
+    }
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormatType, R>
+    for KafkaSinkFormatType<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> KafkaSinkFormatType {
+        match self {
+            KafkaSinkFormatType::Avro {
+                schema,
+                compatibility_level,
+                csr_connection,
+            } => KafkaSinkFormatType::Avro {
+                schema,
+                compatibility_level,
+                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
+            },
+            KafkaSinkFormatType::Json => KafkaSinkFormatType::Json,
+            KafkaSinkFormatType::Text => KafkaSinkFormatType::Text,
+            KafkaSinkFormatType::Bytes => KafkaSinkFormatType::Bytes,
         }
     }
 }
@@ -849,9 +860,11 @@ impl RustType<ProtoKafkaSinkFormatType> for KafkaSinkFormatType {
                 Self::Avro {
                     schema,
                     compatibility_level,
+                    csr_connection,
                 } => Type::Avro(proto_kafka_sink_format_type::ProtoKafkaSinkAvroFormat {
                     schema: schema.clone(),
                     compatibility_level: csr_compat_level_to_proto(compatibility_level),
+                    csr_connection: Some(csr_connection.into_proto()),
                 }),
                 Self::Json => Type::Json(()),
                 Self::Text => Type::Text(()),
@@ -870,6 +883,9 @@ impl RustType<ProtoKafkaSinkFormatType> for KafkaSinkFormatType {
             Type::Avro(proto) => Self::Avro {
                 schema: proto.schema,
                 compatibility_level: csr_compat_level_from_proto(proto.compatibility_level),
+                csr_connection: proto
+                    .csr_connection
+                    .into_rust_if_some("ProtoKafkaSinkFormatType::csr_connection")?,
             },
             Type::Json(()) => Self::Json,
             Type::Text(()) => Self::Text,
@@ -883,7 +899,6 @@ impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
         ProtoKafkaSinkFormat {
             key_format: self.key_format.as_ref().map(|f| f.into_proto()),
             value_format: Some(self.value_format.into_proto()),
-            csr_connection: self.csr_connection.as_ref().map(|c| c.into_proto()),
         }
     }
 
@@ -893,7 +908,6 @@ impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
             value_format: proto
                 .value_format
                 .into_rust_if_some("ProtoKafkaSinkFormat::value_format")?,
-            csr_connection: proto.csr_connection.into_rust()?,
         })
     }
 }

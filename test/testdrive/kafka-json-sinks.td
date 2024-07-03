@@ -60,7 +60,7 @@ $ kafka-verify-data format=json sink=materialize.public.simple_view_upsert key=t
   KEY FORMAT TEXT
   VALUE FORMAT JSON
   ENVELOPE UPSERT
-contains:BYTE/TEXT format with multiple columns or non-scalar types not yet supported
+contains:BYTES or TEXT format with multiple columns not yet supported
 
 > CREATE SINK mixed_types
   IN CLUSTER mixed_types_cluster

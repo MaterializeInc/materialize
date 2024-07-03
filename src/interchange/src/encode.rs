@@ -12,9 +12,7 @@ use std::collections::BTreeSet;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row};
 
 pub trait Encode {
-    fn encode_key_unchecked(&self, row: Row) -> Vec<u8>;
-
-    fn encode_value_unchecked(&self, row: Row) -> Vec<u8>;
+    fn encode_unchecked(&self, row: Row) -> Vec<u8>;
 }
 
 /// Bundled information sufficient to encode Datums.

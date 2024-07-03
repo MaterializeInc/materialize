@@ -93,12 +93,6 @@ fn encode_avro_header(buf: &mut Vec<u8>, schema_id: i32) {
         .expect("writing to vec cannot fail");
 }
 
-#[derive(Debug)]
-struct KeyInfo {
-    columns: Vec<(ColumnName, ColumnType)>,
-    schema: Schema,
-}
-
 fn encode_message_unchecked(
     schema_id: i32,
     row: Row,
@@ -150,30 +144,87 @@ impl DocTarget {
     }
 }
 
-/// Generates key and value Avro schemas
-pub struct AvroSchemaGenerator {
-    value_columns: Vec<(ColumnName, ColumnType)>,
-    key_info: Option<KeyInfo>,
-    writer_schema: Schema,
+/// Generates an Avro schema for a key type
+pub struct AvroKeySchemaGenerator {
+    columns: Vec<(ColumnName, ColumnType)>,
+    schema: Schema,
 }
 
-impl AvroSchemaGenerator {
+impl fmt::Debug for AvroKeySchemaGenerator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("SchemaGenerator")
+            .field("writer_schema", &self.schema())
+            .finish()
+    }
+}
+
+impl AvroKeySchemaGenerator {
     pub fn new(
-        key_desc: Option<RelationDesc>,
-        value_desc: RelationDesc,
+        desc: RelationDesc,
         AvroSchemaOptions {
-            is_debezium,
-            avro_value_fullname,
             avro_key_fullname,
             set_null_defaults,
             sink_from,
-            mut value_doc_options,
             key_doc_options,
+            ..
         }: AvroSchemaOptions,
     ) -> Result<Self, anyhow::Error> {
-        let mut value_columns = column_names_and_types(value_desc);
+        let columns = column_names_and_types(desc);
+        let row_schema = build_row_schema_json(
+            &columns,
+            avro_key_fullname.as_deref().unwrap_or("row"),
+            &BTreeMap::new(),
+            sink_from,
+            &SchemaOptions {
+                set_null_defaults,
+                doc_comments: key_doc_options,
+            },
+        )?;
+        Ok(Self {
+            schema: Schema::parse(&row_schema).expect("valid schema constructed"),
+            columns,
+        })
+    }
+
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
+
+    pub fn columns(&self) -> &[(ColumnName, ColumnType)] {
+        &self.columns
+    }
+}
+
+/// Generates an Avro schema for a value type
+pub struct AvroValueSchemaGenerator {
+    columns: Vec<(ColumnName, ColumnType)>,
+    schema: Schema,
+}
+
+impl fmt::Debug for AvroValueSchemaGenerator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("SchemaGenerator")
+            .field("writer_schema", &self.schema())
+            .finish()
+    }
+}
+
+impl AvroValueSchemaGenerator {
+    pub fn new(
+        desc: RelationDesc,
+        AvroSchemaOptions {
+            is_debezium,
+            avro_value_fullname,
+            avro_key_fullname: _,
+            set_null_defaults,
+            sink_from,
+            mut value_doc_options,
+            key_doc_options: _,
+        }: AvroSchemaOptions,
+    ) -> Result<Self, anyhow::Error> {
+        let mut columns = column_names_and_types(desc);
         if is_debezium {
-            value_columns = envelopes::dbz_envelope(value_columns);
+            columns = envelopes::dbz_envelope(columns);
             // With DEBEZIUM envelope the message is wrapped into "before" and "after"
             // with `DBZ_ROW_TYPE_ID` instead of `sink_from`.
             // Replacing comments for the columns and type in `sink_from` to `DBZ_ROW_TYPE_ID`.
@@ -202,7 +253,7 @@ impl AvroSchemaGenerator {
             }
         }
         let row_schema = build_row_schema_json(
-            &value_columns,
+            &columns,
             avro_value_fullname.as_deref().unwrap_or("envelope"),
             &ENVELOPE_CUSTOM_NAMES,
             sink_from,
@@ -211,109 +262,52 @@ impl AvroSchemaGenerator {
                 doc_comments: value_doc_options,
             },
         )?;
-        let writer_schema = Schema::parse(&row_schema).expect("valid schema constructed");
-        let key_info = match key_desc {
-            None => None,
-            Some(key_desc) => {
-                let columns = column_names_and_types(key_desc);
-                let row_schema = build_row_schema_json(
-                    &columns,
-                    avro_key_fullname.as_deref().unwrap_or("row"),
-                    &BTreeMap::new(),
-                    sink_from,
-                    &SchemaOptions {
-                        set_null_defaults,
-                        doc_comments: key_doc_options,
-                    },
-                )?;
-                Some(KeyInfo {
-                    schema: Schema::parse(&row_schema).expect("valid schema constructed"),
-                    columns,
-                })
-            }
-        };
-        Ok(AvroSchemaGenerator {
-            value_columns,
-            key_info,
-            writer_schema,
-        })
+        let schema = Schema::parse(&row_schema).expect("valid schema constructed");
+        Ok(AvroValueSchemaGenerator { columns, schema })
     }
 
-    pub fn value_writer_schema(&self) -> &Schema {
-        &self.writer_schema
+    pub fn schema(&self) -> &Schema {
+        &self.schema
     }
 
-    pub fn value_columns(&self) -> &[(ColumnName, ColumnType)] {
-        &self.value_columns
-    }
-
-    pub fn key_writer_schema(&self) -> Option<&Schema> {
-        self.key_info.as_ref().map(|KeyInfo { schema, .. }| schema)
-    }
-
-    pub fn key_columns(&self) -> Option<&[(ColumnName, ColumnType)]> {
-        self.key_info
-            .as_ref()
-            .map(|KeyInfo { columns, .. }| columns.as_slice())
-    }
-}
-
-impl fmt::Debug for AvroSchemaGenerator {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("SchemaGenerator")
-            .field("writer_schema", &self.writer_schema)
-            .finish()
+    pub fn columns(&self) -> &[(ColumnName, ColumnType)] {
+        &self.columns
     }
 }
 
 /// Manages encoding of Avro-encoded bytes.
 pub struct AvroEncoder {
-    schema_generator: AvroSchemaGenerator,
-    key_schema_id: Option<i32>,
-    value_schema_id: i32,
+    columns: Vec<(ColumnName, ColumnType)>,
+    schema: Schema,
+    schema_id: i32,
 }
 
 impl fmt::Debug for AvroEncoder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("AvroEncoder")
-            .field("writer_schema", &self.schema_generator.writer_schema)
+            .field("writer_schema", &self.schema)
             .finish()
     }
 }
 
 impl AvroEncoder {
-    pub fn new(
-        schema_generator: AvroSchemaGenerator,
-        key_schema_id: Option<i32>,
-        value_schema_id: i32,
-    ) -> Self {
+    pub fn new(desc: RelationDesc, debezium: bool, schema: &str, schema_id: i32) -> Self {
+        let mut columns = column_names_and_types(desc);
+        if debezium {
+            columns = envelopes::dbz_envelope(columns);
+        };
         AvroEncoder {
-            schema_generator,
-            key_schema_id,
-            value_schema_id,
+            columns,
+            schema: Schema::parse(&serde_json::from_str(schema).expect("valid schema json"))
+                .expect("valid schema"),
+            schema_id,
         }
-    }
-
-    pub fn encode_key_unchecked(&self, schema_id: i32, row: Row) -> Vec<u8> {
-        let schema = self.schema_generator.key_writer_schema().unwrap();
-        let columns = self.schema_generator.key_columns().unwrap();
-        encode_message_unchecked(schema_id, row, schema, columns)
-    }
-
-    pub fn encode_value_unchecked(&self, schema_id: i32, row: Row) -> Vec<u8> {
-        let schema = self.schema_generator.value_writer_schema();
-        let columns = self.schema_generator.value_columns();
-        encode_message_unchecked(schema_id, row, schema, columns)
     }
 }
 
 impl Encode for AvroEncoder {
-    fn encode_key_unchecked(&self, row: Row) -> Vec<u8> {
-        self.encode_key_unchecked(self.key_schema_id.unwrap(), row)
-    }
-
-    fn encode_value_unchecked(&self, row: Row) -> Vec<u8> {
-        self.encode_value_unchecked(self.value_schema_id, row)
+    fn encode_unchecked(&self, row: Row) -> Vec<u8> {
+        encode_message_unchecked(self.schema_id, row, &self.schema, &self.columns)
     }
 }
 

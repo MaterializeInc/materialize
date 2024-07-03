@@ -282,37 +282,18 @@ pub(crate) fn add_materialize_comments(
 
     // add comments to the avro doc comments
     if let Some(
-        FormatSpecifier::Bare(Format::Avro(AvroSchema::Csr {
-            csr_connection:
-                CsrConnectionAvro {
-                    connection: CsrConnection { options, .. },
-                    ..
-                },
-        }))
+        FormatSpecifier::Bare(Format::Avro(AvroSchema::Csr { csr_connection }))
         | FormatSpecifier::KeyValue {
             key: _,
-            value:
-                Format::Avro(AvroSchema::Csr {
-                    csr_connection:
-                        CsrConnectionAvro {
-                            connection: CsrConnection { options, .. },
-                            ..
-                        },
-                }),
+            value: Format::Avro(AvroSchema::Csr { csr_connection }),
         }
         | FormatSpecifier::KeyValue {
-            key:
-                Format::Avro(AvroSchema::Csr {
-                    csr_connection:
-                        CsrConnectionAvro {
-                            connection: CsrConnection { options, .. },
-                            ..
-                        },
-                }),
+            key: Format::Avro(AvroSchema::Csr { csr_connection }),
             value: _,
         },
     ) = &mut stmt.format
     {
+        let options = &mut csr_connection.connection.options;
         let user_provided_comments = &options
             .iter()
             .filter_map(|CsrConfigOption { name, .. }| match name {

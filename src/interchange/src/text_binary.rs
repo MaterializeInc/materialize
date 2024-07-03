@@ -14,78 +14,59 @@ use crate::encode::{column_names_and_types, Encode};
 use crate::envelopes;
 
 #[derive(Debug)]
-pub enum TextBinaryEncoding {
-    Text,
-    Binary,
+pub struct TextEncoder {
+    columns: Vec<(ColumnName, ColumnType)>,
 }
 
-#[derive(Debug)]
-pub struct TextBinaryEncoder {
-    key_columns: Option<Vec<(ColumnName, ColumnType)>>,
-    value_columns: Option<Vec<(ColumnName, ColumnType)>>,
-    encoding: TextBinaryEncoding,
-}
-
-impl TextBinaryEncoder {
-    pub fn new(
-        key_desc: Option<RelationDesc>,
-        value_desc: Option<RelationDesc>,
-        encoding: TextBinaryEncoding,
-        debezium: bool,
-    ) -> Self {
-        let value_columns = match value_desc {
-            Some(desc) => {
-                let mut value_columns = column_names_and_types(desc);
-                if debezium {
-                    value_columns = envelopes::dbz_envelope(value_columns);
-                }
-                Some(value_columns)
-            }
-            None => None,
+impl TextEncoder {
+    pub fn new(desc: RelationDesc, debezium: bool) -> Self {
+        let mut columns = column_names_and_types(desc);
+        if debezium {
+            columns = envelopes::dbz_envelope(columns);
         };
-        let key_columns = match key_desc {
-            Some(desc) => {
-                let key_columns = column_names_and_types(desc);
-                Some(key_columns)
-            }
-            None => None,
-        };
-        Self {
-            key_columns,
-            value_columns,
-            encoding,
-        }
+        Self { columns }
     }
+}
 
-    fn encode_row(&self, row: mz_repr::Row, columns: &Vec<(ColumnName, ColumnType)>) -> Vec<u8> {
+impl Encode for TextEncoder {
+    fn encode_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
         let mut buf = BytesMut::new();
-        for ((_, typ), val) in columns.iter().zip(row.iter()) {
-            match mz_pgrepr::Value::from_datum(val, &typ.scalar_type) {
-                Some(pgrepr_val) => match self.encoding {
-                    TextBinaryEncoding::Text => _ = pgrepr_val.encode_text(&mut buf),
-                    TextBinaryEncoding::Binary => pgrepr_val
-                        .encode_binary(&mz_pgrepr::Type::from(&typ.scalar_type), &mut buf)
-                        .expect("encoding failed"),
-                },
-                None => {} // this is a NULL value
-            };
+        for ((_, typ), val) in self.columns.iter().zip(row.iter()) {
+            if let Some(pgrepr_value) = mz_pgrepr::Value::from_datum(val, &typ.scalar_type) {
+                pgrepr_value.encode_text(&mut buf);
+            }
         }
 
         buf.to_vec()
     }
 }
 
-impl Encode for TextBinaryEncoder {
-    fn encode_key_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
-        let columns = self.key_columns.as_ref().expect("key encoding must exist");
-        self.encode_row(row, columns)
-    }
+#[derive(Debug)]
+pub struct BinaryEncoder {
+    columns: Vec<(ColumnName, ColumnType)>,
+}
 
-    fn encode_value_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
-        let columns = self
-            .value_columns
-            .as_ref()
-            .expect("value encoding must exist");
-        self.encode_row(row, columns)
+impl BinaryEncoder {
+    pub fn new(desc: RelationDesc, debezium: bool) -> Self {
+        let mut columns = column_names_and_types(desc);
+        if debezium {
+            columns = envelopes::dbz_envelope(columns);
+        };
+        Self { columns }
+    }
+}
+
+impl Encode for BinaryEncoder {
+    fn encode_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
+        let mut buf = BytesMut::new();
+        for ((_, typ), val) in self.columns.iter().zip(row.iter()) {
+            if let Some(pgrepr_value) = mz_pgrepr::Value::from_datum(val, &typ.scalar_type) {
+                pgrepr_value
+                    .encode_binary(&mz_pgrepr::Type::from(&typ.scalar_type), &mut buf)
+                    .expect("encoding failed");
+            }
+        }
+
+        buf.to_vec()
     }
 }
