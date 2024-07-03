@@ -31,5 +31,6 @@ class DataTypeCategory(Enum):
     ARRAY = 300
     LIST = 301
     MAP = 302
+    RANGE = 303
 
     OTHER_UNSUPPORTED = 400

@@ -1787,7 +1787,7 @@ impl CatalogState {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer.push(Datum::String(&id.to_string()));
-        packer.push(Datum::UInt32(subscribe.conn_id.unhandled()));
+        packer.push(Datum::Uuid(subscribe.session_uuid));
         packer.push(Datum::String(&subscribe.cluster_id.to_string()));
 
         let start_dt = mz_ore::now::to_datetime(subscribe.start_time);
@@ -1816,6 +1816,7 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: &*MZ_SESSIONS,
             row: Row::pack_slice(&[
+                Datum::Uuid(conn.uuid()),
                 Datum::UInt32(conn.conn_id().unhandled()),
                 Datum::String(&conn.authenticated_role_id().to_string()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),

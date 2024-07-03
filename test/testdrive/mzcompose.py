@@ -72,6 +72,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--rewrite-results",
+        action="store_true",
+        help="Rewrite results, disables junit reports",
+    )
+
+    parser.add_argument(
         "files",
         nargs="*",
         default=["*.td"],
@@ -180,7 +186,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             # without mzcompose
             for file in args.files:
                 c.run_testdrive_files(
-                    f"--junit-report={junit_report}",
+                    (
+                        "--rewrite-results"
+                        if args.rewrite_results
+                        else f"--junit-report={junit_report}"
+                    ),
                     *non_default_testdrive_vars,
                     *passthrough_args,
                     file,

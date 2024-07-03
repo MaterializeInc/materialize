@@ -902,7 +902,7 @@ impl CatalogState {
                 let newly_inserted = self
                     .storage_metadata
                     .unfinalized_shards
-                    .insert(unfinalized_shard.shard.clone());
+                    .insert(unfinalized_shard.shard);
                 assert!(
                     newly_inserted,
                     "values must be explicitly retracted before inserting a new value: {unfinalized_shard:?}",

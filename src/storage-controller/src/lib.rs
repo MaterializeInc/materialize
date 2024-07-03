@@ -2305,7 +2305,7 @@ where
 pub fn prepare_initialization<T>(txn: &mut dyn StorageTxn<T>) -> Result<(), StorageError<T>> {
     if txn.get_txn_wal_shard().is_none() {
         let txns_id = ShardId::new();
-        txn.write_txn_wal_shard(txns_id.to_string())?;
+        txn.write_txn_wal_shard(txns_id)?;
     }
 
     Ok(())
@@ -2348,7 +2348,6 @@ where
         let txns_id = txn
             .get_txn_wal_shard()
             .expect("must call prepare initialization before creating storage controller");
-        let txns_id = ShardId::from_str(txns_id.as_str()).expect("shard ID must be valid");
 
         let txns_client = persist_clients
             .open(persist_location.clone())

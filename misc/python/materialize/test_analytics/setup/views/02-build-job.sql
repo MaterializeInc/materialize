@@ -86,6 +86,8 @@ WITH MUTUALLY RECURSIVE data (build_id TEXT, pipeline TEXT, build_number INT, bu
         d.build_step_key,
         d.predecessor_index,
         d.success
+    -- this applies to max(b2.build_number)
+    OPTIONS (AGGREGATE INPUT GROUP SIZE = 10)
 )
 SELECT
     d.build_id,
