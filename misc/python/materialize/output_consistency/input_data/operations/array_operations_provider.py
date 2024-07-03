@@ -47,7 +47,8 @@ ARRAY_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 ARRAY_OPERATION_TYPES.append(
     DbOperation(
-        "$[$]",
+        # parentheses are needed only for Postgres when accessing an array element on the result of a function
+        "($)[$]",
         [ArrayOperationParam(), NumericOperationParam(no_floating_point_type=True)],
         CollectionEntryReturnTypeSpec(param_index_to_take_type=0),
         comment="access by index",
@@ -56,7 +57,8 @@ ARRAY_OPERATION_TYPES.append(
 
 ARRAY_OPERATION_TYPES.append(
     DbOperation(
-        "$[$:$]",
+        # parentheses are needed only for Postgres when accessing an array element on the result of a function
+        "$([$:$])",
         [
             ArrayOperationParam(),
             NumericOperationParam(no_floating_point_type=True),
@@ -69,7 +71,8 @@ ARRAY_OPERATION_TYPES.append(
 
 ARRAY_OPERATION_TYPES.append(
     DbOperation(
-        "$[:$]",
+        # parentheses are needed only for Postgres when accessing an array element on the result of a function
+        "$([:$])",
         [ArrayOperationParam(), NumericOperationParam(no_floating_point_type=True)],
         ArrayReturnTypeSpec(),
         comment="slice left open",
@@ -78,7 +81,8 @@ ARRAY_OPERATION_TYPES.append(
 
 ARRAY_OPERATION_TYPES.append(
     DbOperation(
-        "$[$:]",
+        # parentheses are needed only for Postgres when accessing an array element on the result of a function
+        "$([$:])",
         [ArrayOperationParam(), NumericOperationParam(no_floating_point_type=True)],
         ArrayReturnTypeSpec(),
         comment="slice right open",
