@@ -14,6 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use async_trait::async_trait;
 use mz_adapter::catalog::CatalogState;
 use mz_adapter::session::Session;
+use mz_adapter::ReadHolds;
+use mz_adapter::ReadHoldsInner;
 use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
@@ -26,9 +28,6 @@ use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
-
-use mz_adapter::ReadHolds;
-use mz_adapter::ReadHoldsInner;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(transparent)]
@@ -223,7 +222,7 @@ fn test_timestamp_selection() {
             compute: BTreeMap::new(),
             storage: BTreeMap::new(),
             oracle: Timestamp::MIN,
-            catalog_state: CatalogState::empty(),
+            catalog_state: CatalogState::empty_test(),
         };
         let mut isolation = TransactionIsolationLevel::StrictSerializable;
         tf.run(move |tc| -> String {
