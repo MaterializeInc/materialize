@@ -42,7 +42,6 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::instrument;
 use mz_ore::now::to_datetime;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
-use mz_repr::global_id::TransientIdGen;
 use mz_repr::namespaces::is_unstable_schema;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
@@ -588,7 +587,6 @@ impl Catalog {
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
-        transient_id_gen: Arc<TransientIdGen>,
         builtin_migration_metadata: BuiltinMigrationMetadata,
         // Whether to use the new txn-wal tables implementation or the
         // legacy one.
@@ -608,7 +606,6 @@ impl Catalog {
                 config,
                 envd_epoch,
                 read_only,
-                transient_id_gen,
                 txn_wal_tables,
                 &read_only_tx,
             )
