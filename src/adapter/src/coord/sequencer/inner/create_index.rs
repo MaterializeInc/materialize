@@ -230,7 +230,7 @@ impl Coordinator {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
         // ??? is this the right way to do this?
-        let source_ids = self.catalog().get_entry(&id).references();
+        let source_ids = self.catalog().get_entry(&id).uses();
 
         let cardinality_stats = match stats_ts {
             Ok((ts, _read_holds)) => {
