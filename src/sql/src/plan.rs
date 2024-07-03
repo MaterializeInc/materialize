@@ -45,7 +45,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ConnectionOptionName, QualifiedReplica,
+    AlterSourceAddSubsourceOption, ConnectionOptionName, QualifiedReplica, SelectStatement,
     TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
@@ -433,6 +433,10 @@ impl Plan {
     /// falling into the `true` category.
     pub fn allowed_in_read_only(&self) -> bool {
         match self {
+            // These two set non-durable session variables, so are okay in
+            // read-only mode.
+            Plan::SetVariable(_) => true,
+            Plan::ResetVariable(_) => true,
             Plan::SetTransaction(_) => true,
             Plan::StartTransaction(_) => true,
             Plan::CommitTransaction(_) => true,
@@ -750,6 +754,7 @@ pub struct SetTransactionPlan {
 
 #[derive(Clone, Debug)]
 pub struct SelectPlan {
+    pub select: Option<SelectStatement<Aug>>,
     pub source: HirRelationExpr,
     pub when: QueryWhen,
     pub finishing: RowSetFinishing,

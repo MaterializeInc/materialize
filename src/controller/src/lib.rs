@@ -48,7 +48,6 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
-use mz_repr::global_id::TransientIdGen;
 use mz_repr::{GlobalId, TimestampManipulation};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage_client::client::{
@@ -645,7 +644,6 @@ where
         config: ControllerConfig,
         envd_epoch: NonZeroI64,
         read_only: bool,
-        transient_id_gen: Arc<TransientIdGen>,
         storage_txn: &dyn StorageTxn<T>,
     ) -> Self {
         if read_only {
@@ -659,6 +657,7 @@ where
             config.now.clone(),
             Arc::clone(&txns_metrics),
             envd_epoch,
+            read_only,
             config.connection_context.clone(),
             storage_txn,
         )
@@ -688,7 +687,6 @@ where
             storage_collections,
             envd_epoch,
             read_only,
-            transient_id_gen,
             config.metrics_registry.clone(),
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();

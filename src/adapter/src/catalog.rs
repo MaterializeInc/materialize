@@ -41,7 +41,6 @@ use mz_ore::soft_panic_or_log;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::global_id::TransientIdGen;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, ScalarType};
@@ -199,7 +198,6 @@ impl Catalog {
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
-        transient_id_gen: Arc<TransientIdGen>,
         builtin_migration_metadata: BuiltinMigrationMetadata,
     ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
     {
@@ -216,7 +214,6 @@ impl Catalog {
                 config,
                 envd_epoch,
                 read_only,
-                transient_id_gen,
                 &read_only_tx,
             )
             .await

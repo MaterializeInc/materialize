@@ -52,6 +52,7 @@ use mz_storage_types::sources::{
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::{DataSnapshot, TxnsRead};
 use mz_txn_wal::txns::TxnsHandle;
+use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
@@ -306,6 +307,13 @@ pub struct StorageCollectionsImpl<
     /// all of the controllers and Coordinator.
     envd_epoch: NonZeroI64,
 
+    /// Whether or not this [StorageCollections] is in read-only mode.
+    ///
+    /// When in read-only mode, we are not allowed to affect changes to external
+    /// systems, including, for example, acquiring and downgrading critical
+    /// [SinceHandles](SinceHandle)
+    read_only: bool,
+
     /// The set of [ShardIds](ShardId) that we have to finalize. These will have
     /// been persisted by the caller of [StorageCollections::prepare_state].
     finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
@@ -373,6 +381,7 @@ where
         _now: NowFn,
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
+        read_only: bool,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
     ) -> Self {
@@ -464,6 +473,7 @@ where
             collections,
             txns_read,
             envd_epoch,
+            read_only,
             config,
             persist_location,
             persist: persist_clients,
@@ -474,7 +484,7 @@ where
         }
     }
 
-    /// Opens a write and critical since handles for the given `shard`.
+    /// Opens a [WriteHandle] and a [SinceHandleWrapper], for holding back the since.
     ///
     /// `since` is an optional since that the read handle will be forwarded to
     /// if it is less than its current since.
@@ -488,10 +498,86 @@ where
         since: Option<&Antichain<T>>,
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
-    ) -> (
-        WriteHandle<SourceData, (), T, Diff>,
-        SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
-    ) {
+    ) -> (WriteHandle<SourceData, (), T, Diff>, SinceHandleWrapper<T>) {
+        let since_handle = if self.read_only {
+            let read_handle = self
+                .open_leased_handle(id, shard, relation_desc.clone(), since, persist_client)
+                .await;
+            SinceHandleWrapper::Leased(read_handle)
+        } else {
+            let since_handle = self
+                .open_critical_handle(id, shard, since, persist_client)
+                .await;
+
+            SinceHandleWrapper::Critical(since_handle)
+        };
+
+        let mut write_handle = self
+            .open_write_handle(id, shard, relation_desc, persist_client)
+            .await;
+
+        // N.B.
+        // Fetch the most recent upper for the write handle. Otherwise, this may
+        // be behind the since of the since handle. Its vital this happens AFTER
+        // we create the since handle as it needs to be linearized with that
+        // operation. It may be true that creating the write handle after the
+        // since handle already ensures this, but we do this out of an abundance
+        // of caution.
+        //
+        // Note that this returns the upper, but also sets it on the handle to
+        // be fetched later.
+        write_handle.fetch_recent_upper().await;
+
+        (write_handle, since_handle)
+    }
+
+    /// Opens a write handle for the given `shard`.
+    async fn open_write_handle(
+        &self,
+        id: &GlobalId,
+        shard: ShardId,
+        relation_desc: RelationDesc,
+        persist_client: &PersistClient,
+    ) -> WriteHandle<SourceData, (), T, Diff> {
+        let diagnostics = Diagnostics {
+            shard_name: id.to_string(),
+            handle_purpose: format!("controller data for {}", id),
+        };
+
+        let write = persist_client
+            .open_writer(
+                shard,
+                Arc::new(relation_desc),
+                Arc::new(UnitSchema),
+                diagnostics.clone(),
+            )
+            .await
+            .expect("invalid persist usage");
+
+        write
+    }
+
+    /// Opens a critical since handle for the given `shard`.
+    ///
+    /// `since` is an optional since that the read handle will be forwarded to
+    /// if it is less than its current since.
+    ///
+    /// This will `halt!` the process if we cannot successfully acquire a
+    /// critical handle with our current epoch.
+    async fn open_critical_handle(
+        &self,
+        id: &GlobalId,
+        shard: ShardId,
+        since: Option<&Antichain<T>>,
+        persist_client: &PersistClient,
+    ) -> SinceHandle<SourceData, (), T, Diff, PersistEpoch> {
+        tracing::debug!(%id, ?since, "opening critical handle");
+
+        assert!(
+            !self.read_only,
+            "attempting to open critical SinceHandle in read-only mode"
+        );
+
         let diagnostics = Diagnostics {
             shard_name: id.to_string(),
             handle_purpose: format!("controller data for {}", id),
@@ -545,36 +631,58 @@ where
             }
         };
 
-        let mut write = persist_client
-            .open_writer(
+        since_handle
+    }
+
+    /// Opens a leased [ReadHandle], for the purpose of holding back a since,
+    /// for the given `shard`.
+    ///
+    /// `since` is an optional since that the read handle will be forwarded to
+    /// if it is less than its current since.
+    async fn open_leased_handle(
+        &self,
+        id: &GlobalId,
+        shard: ShardId,
+        relation_desc: RelationDesc,
+        since: Option<&Antichain<T>>,
+        persist_client: &PersistClient,
+    ) -> ReadHandle<SourceData, (), T, Diff> {
+        tracing::debug!(%id, ?since, "opening leased handle");
+
+        let diagnostics = Diagnostics {
+            shard_name: id.to_string(),
+            handle_purpose: format!("controller data for {}", id),
+        };
+
+        let use_critical_since = false;
+        let mut handle: ReadHandle<_, _, _, _> = persist_client
+            .open_leased_reader(
                 shard,
                 Arc::new(relation_desc),
                 Arc::new(UnitSchema),
                 diagnostics.clone(),
+                use_critical_since,
             )
             .await
             .expect("invalid persist usage");
 
-        // N.B.
-        // Fetch the most recent upper for the write handle. Otherwise, this may
-        // be behind the since of the since handle. Its vital this happens AFTER
-        // we create the since handle as it needs to be linearized with that
-        // operation. It may be true that creating the write handle after the
-        // since handle already ensures this, but we do this out of an abundance
-        // of caution.
-        //
-        // Note that this returns the upper, but also sets it on the handle to
-        // be fetched later.
-        write.fetch_recent_upper().await;
+        // Take the join of the handle's since and the provided `since`;
+        // this lets materialized views express the since at which their
+        // read handles "start."
+        let since = handle
+            .since()
+            .join(since.unwrap_or(&Antichain::from_elem(T::minimum())));
 
-        (write, since_handle)
+        handle.downgrade_since(&since).await;
+
+        handle
     }
 
     fn register_handles(
         &self,
         id: GlobalId,
         is_in_txns: bool,
-        since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
+        since_handle: SinceHandleWrapper<T>,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
     ) {
         self.send(BackgroundCmd::Register {
@@ -1350,7 +1458,7 @@ where
                         let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
                         if since_handle.since().elements() == &[T::minimum()] {
                             debug!("advancing {} to initial since of {:?}", id, register_ts);
-                            let token = since_handle.opaque().clone();
+                            let token = since_handle.opaque();
                             let _ = since_handle.compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(register_ts.clone()))).await;
                         }
                     }
@@ -1769,6 +1877,126 @@ where
     }
 }
 
+/// Wraps either a "critical" [SinceHandle] or a leased [ReadHandle].
+///
+/// When a [StorageCollections] is in read-only mode, we will only ever acquire
+/// [ReadHandle], because acquiring the [SinceHandle] and driving forward its
+/// since is considered a write. Conversely, when in read-write mode, we acquire
+/// [SinceHandle].
+#[derive(Debug)]
+enum SinceHandleWrapper<T>
+where
+    T: TimelyTimestamp + Lattice + Codec64,
+{
+    Critical(SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
+    Leased(ReadHandle<SourceData, (), T, Diff>),
+}
+
+impl<T> SinceHandleWrapper<T>
+where
+    T: TimelyTimestamp + Lattice + Codec64 + TotalOrder,
+{
+    pub fn since(&self) -> &Antichain<T> {
+        match self {
+            Self::Critical(handle) => handle.since(),
+            Self::Leased(handle) => handle.since(),
+        }
+    }
+
+    pub fn opaque(&self) -> PersistEpoch {
+        match self {
+            Self::Critical(handle) => handle.opaque().clone(),
+            Self::Leased(_handle) => {
+                // The opaque is expected to be used with
+                // `compare_and_downgrade_since`, and the leased handle doesn't
+                // have a notion of an opaque. We pretend here and in
+                // `compare_and_downgrade_since`.
+                PersistEpoch(None)
+            }
+        }
+    }
+
+    pub async fn compare_and_downgrade_since(
+        &mut self,
+        expected: &PersistEpoch,
+        new: (&PersistEpoch, &Antichain<T>),
+    ) -> Result<Antichain<T>, PersistEpoch> {
+        match self {
+            Self::Critical(handle) => handle.compare_and_downgrade_since(expected, new).await,
+            Self::Leased(handle) => {
+                let (opaque, since) = new;
+                assert!(opaque.0.is_none());
+
+                handle.downgrade_since(since).await;
+
+                Ok(since.clone())
+            }
+        }
+    }
+
+    pub async fn maybe_compare_and_downgrade_since(
+        &mut self,
+        expected: &PersistEpoch,
+        new: (&PersistEpoch, &Antichain<T>),
+    ) -> Option<Result<Antichain<T>, PersistEpoch>> {
+        match self {
+            Self::Critical(handle) => {
+                handle
+                    .maybe_compare_and_downgrade_since(expected, new)
+                    .await
+            }
+            Self::Leased(handle) => {
+                let (opaque, since) = new;
+                assert!(opaque.0.is_none());
+
+                handle.maybe_downgrade_since(since).await;
+
+                Some(Ok(since.clone()))
+            }
+        }
+    }
+
+    pub fn snapshot_stats(
+        &self,
+        id: GlobalId,
+        as_of: Option<Antichain<T>>,
+    ) -> BoxFuture<'static, Result<SnapshotStats, StorageError<T>>> {
+        match self {
+            Self::Critical(handle) => {
+                let res = handle
+                    .snapshot_stats(as_of)
+                    .map(move |x| x.map_err(|_| StorageError::ReadBeforeSince(id)));
+                Box::pin(res)
+            }
+            Self::Leased(handle) => {
+                let res = handle
+                    .snapshot_stats(as_of)
+                    .map(move |x| x.map_err(|_| StorageError::ReadBeforeSince(id)));
+                Box::pin(res)
+            }
+        }
+    }
+
+    pub fn snapshot_stats_from_txn(
+        &self,
+        id: GlobalId,
+        data_snapshot: DataSnapshot<T>,
+    ) -> BoxFuture<'static, Result<SnapshotStats, StorageError<T>>> {
+        match self {
+            Self::Critical(handle) => Box::pin(
+                data_snapshot
+                    .snapshot_stats_from_critical(handle)
+                    .map(move |x| x.map_err(|_| StorageError::ReadBeforeSince(id))),
+            ),
+            Self::Leased(handle) => Box::pin(
+                data_snapshot
+                    .snapshot_stats_from_leased(handle)
+                    .map(move |x| x.map_err(|_| StorageError::ReadBeforeSince(id))),
+            ),
+        }
+    }
+}
+
 /// State maintained about individual collections.
 #[derive(Debug)]
 struct CollectionState<T> {
@@ -1846,7 +2074,7 @@ struct BackgroundTask<T: TimelyTimestamp + Lattice + Codec64> {
     // So we know what shard ID corresponds to what global ID, which we need
     // when re-enqueing futures for determining the next upper update.
     shard_by_id: BTreeMap<GlobalId, ShardId>,
-    since_handles: BTreeMap<GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>>,
+    since_handles: BTreeMap<GlobalId, SinceHandleWrapper<T>>,
     txns_handle: Option<WriteHandle<SourceData, (), T, Diff>>,
     txns_shards: BTreeSet<GlobalId>,
 }
@@ -1857,16 +2085,7 @@ enum BackgroundCmd<T: TimelyTimestamp + Lattice + Codec64> {
         id: GlobalId,
         is_in_txns: bool,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
-        since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
-    },
-    // This was also dead code in the StorageController. I think we keep around
-    // these code paths for when we need to do migrations in the future.
-    #[allow(dead_code)]
-    Update {
-        id: GlobalId,
-        is_in_txns: bool,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
-        since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
+        since_handle: SinceHandleWrapper<T>,
     },
     DowngradeSince(Vec<(GlobalId, Antichain<T>)>),
     SnapshotStats(
@@ -1991,23 +2210,6 @@ where
                         BackgroundCmd::DowngradeSince(cmds) => {
                             self.downgrade_sinces(cmds).await;
                         }
-                        BackgroundCmd::Update { id, is_in_txns, write_handle, since_handle } => {
-                            self.shard_by_id.insert(id, write_handle.shard_id()).expect(
-                                "BackgroundCmd::Update only valid for updating extant write handles",
-                            );
-
-                            self.since_handles.insert(id, since_handle).expect(
-                                "BackgroundCmd::Update only valid for updating extant since handles",
-                            );
-
-                            if is_in_txns {
-                                self.txns_shards.insert(id);
-                            } else {
-                                let fut = gen_upper_future(id, write_handle);
-                                upper_futures.push(fut.boxed());
-                            }
-
-                        }
                         BackgroundCmd::SnapshotStats(id, as_of, tx) => {
                             // NB: The requested as_of could be arbitrarily far
                             // in the future. So, in order to avoid blocking
@@ -2021,15 +2223,11 @@ where
                                         Result<SnapshotStats, StorageError<T>>,
                                     > = match as_of {
                                         SnapshotStatsAsOf::Direct(as_of) => {
-                                            Box::pin(x.snapshot_stats(Some(as_of)).map(move |x| {
-                                                x.map_err(|_| StorageError::ReadBeforeSince(id))
-                                            }))
+                                            x.snapshot_stats(id, Some(as_of))
                                         }
-                                        SnapshotStatsAsOf::Txns(data_snapshot) => Box::pin(
-                                            data_snapshot.snapshot_stats(x).map(move |x| {
-                                                x.map_err(|_| StorageError::ReadBeforeSince(id))
-                                            }),
-                                        ),
+                                        SnapshotStatsAsOf::Txns(data_snapshot) => {
+                                            x.snapshot_stats_from_txn(id, data_snapshot)
+                                        }
                                     };
                                     SnapshotStatsRes(fut)
                                 }
@@ -2478,7 +2676,7 @@ mod tests {
             .send(BackgroundCmd::Register {
                 id: GlobalId::User(1),
                 is_in_txns: false,
-                since_handle,
+                since_handle: SinceHandleWrapper::Critical(since_handle),
                 write_handle,
             })
             .unwrap();

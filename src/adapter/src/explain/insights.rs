@@ -20,6 +20,8 @@ use mz_expr::{
 };
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, Timestamp};
+use mz_sql::ast::Statement;
+use mz_sql::names::Aug;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::EmptyStatisticsOracle;
@@ -36,6 +38,7 @@ use crate::TimestampContext;
 /// Information needed to compute PlanInsights.
 #[derive(Debug)]
 pub struct PlanInsightsContext {
+    pub stmt: Option<Statement<Aug>>,
     pub raw_expr: HirRelationExpr,
     pub catalog: Arc<Catalog>,
     // Snapshots of all user compute instances.

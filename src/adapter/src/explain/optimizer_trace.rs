@@ -24,6 +24,7 @@ use mz_repr::explain::{
 };
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{Datum, Row};
+use mz_sql::ast::display::AstDisplay;
 use mz_sql::plan::{self, HirRelationExpr, HirScalarExpr};
 use mz_sql_parser::ast::{ExplainStage, NamedPlan};
 use mz_transform::dataflow::DataflowMetainfo;
@@ -205,13 +206,18 @@ impl OptimizerTrace {
                 let is_fast_path = fast_path_plan.is_some();
                 let mut plan_insights =
                     insights::plan_insights(humanizer, global_plan, fast_path_plan);
-                if let (Some(plan_insights), Some(insights_ctx), false) =
-                    (plan_insights.as_mut(), insights_ctx, is_fast_path)
-                {
-                    if insights_ctx.enable_re_optimize {
-                        plan_insights
-                            .compute_fast_path_clusters(humanizer, insights_ctx)
-                            .await;
+                let mut redacted_sql = None;
+                if let Some(insights_ctx) = insights_ctx {
+                    redacted_sql = insights_ctx
+                        .stmt
+                        .as_ref()
+                        .map(|s| Some(s.to_ast_string_redacted()));
+                    if let (Some(plan_insights), false) = (plan_insights.as_mut(), is_fast_path) {
+                        if insights_ctx.enable_re_optimize {
+                            plan_insights
+                                .compute_fast_path_clusters(humanizer, insights_ctx)
+                                .await;
+                        }
                     }
                 }
                 let cluster = target_cluster.map(|c| {
@@ -231,6 +237,7 @@ impl OptimizerTrace {
                     },
                     "insights": plan_insights,
                     "cluster": cluster,
+                    "redacted_sql": redacted_sql,
                 });
                 let output = serde_json::to_string_pretty(&output).expect("JSON string");
                 vec![Row::pack_slice(&[Datum::from(output.as_str())])]
