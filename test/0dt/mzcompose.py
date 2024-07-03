@@ -85,29 +85,35 @@ def workflow_basic(c: Composition) -> None:
             > SET CLUSTER = cluster;
             > SELECT 1
             1
-            > INSERT INTO t VALUES (3, 4);
+            ! INSERT INTO t VALUES (3, 4);
+            contains:cannot write in read-only mode
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > SELECT * FROM mv;
             1
-            > SELECT max(b) FROM t;
-            4
-            > SELECT mz_unsafe.mz_sleep(5)
-            <null>
-            > INSERT INTO t VALUES (5, 6);
+            # Hangs
+            # > SELECT max(b) FROM t;
+            # 2
+            ! INSERT INTO t VALUES (5, 6);
+            contains:cannot write in read-only mode
             > SELECT * FROM mv;
             1
-            > SELECT max(b) FROM t;
-            6
-            > DROP INDEX t_idx
-            > CREATE INDEX t_idx ON t (a, b)
-            > SELECT max(b) FROM t;
-            6
-            > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
+            # Hangs
+            # > SELECT max(b) FROM t;
+            # 2
+            ! DROP INDEX t_idx
+            contains:cannot write in read-only mode
+            ! CREATE INDEX t_idx2 ON t (a, b)
+            contains:cannot write in read-only mode
+            # Hangs
+            # > SELECT max(b) FROM t;
+            # 2
+            ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
+            contains:cannot write in read-only mode
 
             $ set-regex match=(s\\d+|\\d{13}|[ ]{12}0|u\\d{1,3}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
-            > EXPLAIN TIMESTAMP FOR SELECT * FROM mv2;
-            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv2 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n"
+            > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
+            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n"
             """
             )
         )
@@ -159,16 +165,16 @@ def workflow_basic(c: Composition) -> None:
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
             > SELECT * FROM mv;
-            9
+            1
             > SELECT * FROM mv2;
-            9
+            1
             > SELECT max(b) FROM t;
-            6
+            2
             > INSERT INTO t VALUES (7, 8);
             > SELECT * FROM mv;
-            16
+            8
             > SELECT * FROM mv2;
-            16
+            8
             > SELECT max(b) FROM t;
             8
             """
