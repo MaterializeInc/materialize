@@ -2583,6 +2583,7 @@ impl Coordinator {
         self.sequence_peek(
             peek_ctx,
             plan::SelectPlan {
+                select: None,
                 source: selection,
                 when: QueryWhen::FreshestTableWrite,
                 finishing,
