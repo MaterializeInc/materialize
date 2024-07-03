@@ -131,13 +131,13 @@ macro_rules! guard_write_critical_section {
                 $coord.defer_write(Deferred::Plan(DeferredPlan {
                     ctx: $ctx,
                     plan: $plan_to_defer,
-                    validity: PlanValidity {
-                        transient_revision: $coord.catalog().transient_revision(),
-                        dependency_ids: $dependency_ids,
-                        cluster_id: None,
-                        replica_id: None,
+                    validity: PlanValidity::new(
+                        $coord.catalog().transient_revision(),
+                        $dependency_ids,
+                        None,
+                        None,
                         role_metadata,
-                    },
+                    ),
                 }));
                 return;
             }
@@ -456,6 +456,12 @@ impl Coordinator {
 
     /// Submit a write to be executed during the next group commit and trigger a group commit.
     pub(crate) fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
+        if self.controller.read_only() {
+            panic!(
+                "attempting table write in read-only mode: {:?}",
+                pending_write_txn
+            );
+        }
         self.pending_writes.push(pending_write_txn);
         self.trigger_group_commit();
     }
@@ -532,6 +538,13 @@ impl<'a> BuiltinTableAppend<'a> {
     /// Returns a `Future` that resolves when the write has completed, does not block the
     /// Coordinator.
     pub fn defer(self, updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
+        if self.coord.controller.read_only() {
+            panic!(
+                "attempting deferred table write in read-only mode: {:?}",
+                updates
+            );
+        }
+
         let (tx, rx) = oneshot::channel();
         self.coord.pending_writes.push(PendingWriteTxn::System {
             updates,
@@ -547,6 +560,13 @@ impl<'a> BuiltinTableAppend<'a> {
     /// This method will block the Coordinator on acquiring a write timestamp from the timestamp
     /// oracle, and then returns a `Future` that will complete once the write has been applied.
     pub async fn execute(self, updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
+        if self.coord.controller.read_only() {
+            panic!(
+                "trying to append to builtin tables in read-only mode: {:?}",
+                updates
+            );
+        }
+
         let (tx, rx) = oneshot::channel();
 
         // Most DDL queries cause writes to system tables. Unlike writes to user tables, system

@@ -927,7 +927,10 @@ where
 
         // NB: we don't claim unclaimed compactions when the recording flag is off, even if we'd
         // otherwise be allowed to, to avoid triggering the same compactions in every writer.
-        if record_compactions && claim_unclaimed_compactions && merge_reqs.is_empty() {
+        let all_empty_reqs = merge_reqs
+            .iter()
+            .all(|req| req.inputs.iter().all(|b| b.batch.is_empty()));
+        if record_compactions && claim_unclaimed_compactions && all_empty_reqs {
             let threshold_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
             merge_reqs.extend(self.trace.fueled_merge_reqs_before_ms(threshold_ms).take(1))
         }

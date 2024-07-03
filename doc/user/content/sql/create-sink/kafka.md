@@ -66,10 +66,9 @@ Field                               | Value  | Description
 `COMPRESSION TYPE`                  | `text`              | The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: `none`.
 `TRANSACTIONAL ID PREFIX`           | `text`              | The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
 `PROGRESS GROUP ID PREFIX`          | `text`              | The prefix of the consumer group ID to use when reading from the progress topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
-`TOPIC REPLICATION FACTOR`          | `int`               | {{< warn-if-unreleased-inline "v0.104" >}} The replication factor to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
-`TOPIC PARTITION COUNT`             | `int`               | {{< warn-if-unreleased-inline "v0.104" >}} The partition count to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
-`PROGRESS TOPIC REPLICATION FACTOR` | `int`               | {{< warn-if-unreleased-inline "v0.104" >}} The partition count to use when creating the Kafka [progress topic](#exactly-once-processing) (if the Kafka topic does not already exist).<br>Default: Broker's default.
-`TOPIC CONFIG`                      | `map[text => text]` | {{< warn-if-unreleased-inline "v0.104" >}} Any topic-level configs to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>See the [Kafka documentation](https://kafka.apache.org/documentation/#topicconfigs) for available configs.<br>Default: empty.
+`TOPIC REPLICATION FACTOR`          | `int`               | The replication factor to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+`TOPIC PARTITION COUNT`             | `int`               | The partition count to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+`TOPIC CONFIG`                      | `map[text => text]` | Any topic-level configs to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>See the [Kafka documentation](https://kafka.apache.org/documentation/#topicconfigs) for available configs.<br>Default: empty.
 
 
 ### CSR `CONNECTION` options
@@ -371,7 +370,8 @@ If the connection's [progress topic](#exactly-once-processing) does not exist,
 Materialize will attempt to create it with a single partition, the broker's
 default replication factor, compaction enabled, and both size- and time-based
 retention disabled. The replication factor can be overridden using the
-`PROGRESS TOPIC REPLICATION FACTOR` option in the [connection options](#connection-options).
+`PROGRESS TOPIC REPLICATION FACTOR` option when creating a connection
+[`CREATE CONNECTION`](/sql/create-connection).
 
 To customize topic-level configuration, including compaction settings and other
 values, use the `TOPIC CONFIG` option in the [connection options](#connection-options)
@@ -666,7 +666,6 @@ CREATE SINK custom_topic_sink
     TOPIC 'test_avro_topic',
     TOPIC PARTITION COUNT 4,
     TOPIC REPLICATION FACTOR 2,
-    PROGRESS TOPIC REPLICATION FACTOR 2,
     TOPIC CONFIG MAP['cleanup.policy' => 'compact']
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection

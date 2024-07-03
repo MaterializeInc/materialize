@@ -61,6 +61,12 @@ message ProtoFlatPlanNode {
         ProtoGetPlan plan = 3;
     }
 
+    message ProtoLet {
+        mz_expr.id.ProtoLocalId id = 1;
+        uint64 value = 2;
+        uint64 body  = 3;
+    }
+
     message ProtoLetRec {
         repeated mz_expr.id.ProtoLocalId ids = 1;
         repeated uint64 values = 2;
@@ -144,5 +150,6 @@ message ProtoFlatPlanNode {
         ProtoThreshold threshold = 10;
         ProtoUnion union = 11;
         ProtoArrangeBy arrange_by = 12;
+        ProtoLet let = 13;
     }
 }

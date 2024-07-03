@@ -6,8 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
-
+from materialize.buildkite_insights.annotation_search.buildkite_search_source import (
+    ANY_BRANCH_VALUE,
+)
 from materialize.buildkite_insights.data.build_annotation import BuildAnnotation
 from materialize.buildkite_insights.data.build_info import Build
 from materialize.buildkite_insights.util.search_utility import (
@@ -69,7 +70,7 @@ def print_annotation_match(
 
 def print_summary(
     pipeline_slug: str,
-    branch: str,
+    branch: str | None,
     builds: list[Build],
     count_matches: int,
     max_results: int,
@@ -84,6 +85,7 @@ def print_summary(
             if count_matches > max_results
             else ""
         )
+        branch = branch or ANY_BRANCH_VALUE
         print(
             f"{count_matches} match(es) in {len(builds)} searched builds of pipeline '{pipeline_slug}' and branch '{branch}'. "
             f"{suppressed_results_info}"

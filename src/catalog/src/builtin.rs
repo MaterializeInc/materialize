@@ -2685,7 +2685,8 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
     access: vec![MONITOR_SELECT],
 });
 
-pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::new(|| {
+    BuiltinView {
     name: "mz_statement_execution_history_redacted",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_STATEMENT_EXECUTION_HISTORY_REDACTED_OID,
@@ -2693,11 +2694,12 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::ne
     // everything but `params` and `error_message`
     sql: "
 SELECT id, prepared_statement_id, sample_rate, cluster_id, application_name,
-cluster_name, transaction_isolation, execution_timestamp, transaction_id,
+cluster_name, database_name, search_path, transaction_isolation, execution_timestamp, transaction_id,
 transient_index_id, mz_version, began_at, finished_at, finished_status,
 rows_returned, execution_strategy
 FROM mz_internal.mz_statement_execution_history",
     access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
+}
 });
 
 pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2778,17 +2780,17 @@ pub static MZ_ACTIVITY_LOG_THINNED: Lazy<BuiltinView> = Lazy::new(|| {
         oid: oid::VIEW_MZ_ACTIVITY_LOG_THINNED_OID,
         column_defs: None,
         sql: "
-SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, cluster_name,
+SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, cluster_name, database_name, search_path,
 transaction_isolation, execution_timestamp, transient_index_id, params, mz_version, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql_hash, mpsh.name AS prepared_statement_name,
-session_id, prepared_at, statement_type, throttled_count,
+mpsh.session_id, prepared_at, statement_type, throttled_count,
 initial_application_name, authenticated_user
 FROM mz_internal.mz_statement_execution_history mseh,
      mz_internal.mz_prepared_statement_history mpsh,
      mz_internal.mz_session_history msh
 WHERE mseh.prepared_statement_id = mpsh.id
-AND mpsh.session_id = msh.id",
+AND mpsh.session_id = msh.session_id",
         access: vec![MONITOR_SELECT],
     }
 });
@@ -2818,14 +2820,15 @@ WHERE mralt.sql_hash = mrst.sql_hash",
     access: vec![MONITOR_SELECT],
 });
 
-pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: Lazy<BuiltinView> = Lazy::new(|| {
+    BuiltinView {
     name: "mz_recent_activity_log_redacted",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_RECENT_ACTIVITY_LOG_REDACTED_OID,
     column_defs: None,
     // Includes all the columns in mz_recent_activity_log_thinned except 'error_message'.
     sql: "SELECT mralt.execution_id, mralt.sample_rate, mralt.cluster_id, mralt.application_name,
-    mralt.cluster_name, mralt.transaction_isolation, mralt.execution_timestamp,
+    mralt.cluster_name, mralt.database_name, mralt.search_path, mralt.transaction_isolation, mralt.execution_timestamp,
     mralt.transient_index_id, mralt.params, mralt.mz_version, mralt.began_at, mralt.finished_at,
     mralt.finished_status, mralt.rows_returned, mralt.execution_strategy, mralt.transaction_id,
     mralt.prepared_statement_id, mralt.sql_hash, mralt.prepared_statement_name, mralt.session_id,
@@ -2836,6 +2839,7 @@ FROM mz_internal.mz_recent_activity_log_thinned mralt,
      mz_internal.mz_recent_sql_text mrst
 WHERE mralt.sql_hash = mrst.sql_hash",
     access: vec![MONITOR_SELECT, MONITOR_REDACTED_SELECT, SUPPORT_SELECT],
+}
 });
 
 pub static MZ_STATEMENT_LIFECYCLE_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -3111,7 +3115,7 @@ pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_SUBSCRIPTIONS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("session_id", ScalarType::UInt32.nullable(false))
+        .with_column("session_id", ScalarType::Uuid.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column(
             "created_at",
@@ -3134,7 +3138,8 @@ pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_SESSIONS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt32.nullable(false))
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("connection_id", ScalarType::UInt32.nullable(false))
         .with_column("role_id", ScalarType::String.nullable(false))
         .with_column(
             "connected_at",
@@ -4676,6 +4681,25 @@ SELECT
 FROM mz_introspection.mz_compute_error_counts_per_worker
 GROUP BY export_id
 HAVING pg_catalog.sum(count) != 0",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    // TODO(#27831): Rename this source to `mz_compute_error_counts_raw`. Currently this causes a
+    // naming conflict because the resolver stumbles over the source with the same name in
+    // `mz_introspection` due to the automatic schema translation.
+    name: "mz_compute_error_counts_raw_unified",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED_OID,
+    desc: RelationDesc::empty()
+        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column(
+            "count",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        ),
+    data_source: IntrospectionType::ComputeErrorCounts,
+    is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
 
@@ -7493,6 +7517,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
+        Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
         Builtin::View(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),

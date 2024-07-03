@@ -14,6 +14,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::sync::Arc;
 
 use futures::future::LocalBoxFuture;
@@ -55,6 +56,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug_span, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::catalog::BuiltinTableUpdate;
 use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
@@ -229,14 +231,37 @@ impl Coordinator {
                     let _ = tx.send(self.dump());
                 }
 
-                Command::ControllerAllowWrites { tx } => {
-                    self.controller.allow_writes().await;
-                    let _ = tx.send(Ok(true));
+                Command::AllowWrites { tx } => {
+                    self.handle_allow_writes(tx).await;
                 }
             }
         }
         .instrument(debug_span!("handle_command"))
         .boxed_local()
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn handle_allow_writes(&mut self, tx: oneshot::Sender<Result<bool, anyhow::Error>>) {
+        if !self.controller.read_only() {
+            let _ = tx.send(Ok(false));
+            return;
+        }
+
+        let init_ts = self.get_local_write_ts().await.timestamp;
+        self.controller.allow_writes(Some(init_ts)).await;
+
+        let builtin_table_updates = self
+            .buffered_builtin_table_updates
+            .take()
+            .expect("in read-only mode");
+
+        let entries: Vec<_> = self.catalog().entries().cloned().collect();
+
+        self.bootstrap_tables(&entries, builtin_table_updates)
+            .await
+            .await;
+
+        let _ = tx.send(Ok(true));
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -301,9 +326,10 @@ impl Coordinator {
                 self.begin_session_for_statement_logging(&conn);
                 self.active_conns.insert(conn_id.clone(), conn);
 
-                // Note: Do NOT await the notify here, we pass this back to whatever requested the
-                // startup to prevent blocking the Coordinator on a builtin table update.
-                let notify = self.builtin_table_update().defer(vec![update]);
+                // Note: Do NOT await the notify here, we pass this back to
+                // whatever requested the startup to prevent blocking the
+                // Coordinator on a builtin table update.
+                let notify = self.buffer_or_write_table_update(update);
 
                 let resp = Ok(StartupResponse {
                     role_id,
@@ -686,13 +712,13 @@ impl Coordinator {
                     )
                     .await;
                     let result = result.map_err(|e| e.into());
-                    let plan_validity = PlanValidity {
+                    let plan_validity = PlanValidity::new(
                         transient_revision,
-                        dependency_ids: resolved_ids.0,
+                        resolved_ids.0,
                         cluster_id,
-                        replica_id: None,
-                        role_metadata: ctx.session().role_metadata().clone(),
-                    };
+                        None,
+                        ctx.session().role_metadata().clone(),
+                    );
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
                     let result = internal_cmd_tx.send(Message::PurifiedStatementReady(
                         PurifiedStatementReady {
@@ -1059,7 +1085,33 @@ impl Coordinator {
         // closed at once, which occurs regularly in some workflows.
         let update = self.catalog().state().pack_session_update(&conn, -1);
         let update = self.catalog().state().resolve_builtin_table_update(update);
-        let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
+
+        let _builtin_update_notify = self.buffer_or_write_table_update(update);
+    }
+
+    /// Buffers the given update when in read-only mode or puts in a deferred
+    /// write when in read-write mode.
+    ///
+    /// Returns a `Future` that can be await'ed to be notified when the write is
+    /// complete.
+    fn buffer_or_write_table_update(
+        &mut self,
+        update: BuiltinTableUpdate,
+    ) -> impl Future<Output = ()> + Send {
+        let notify = if self.controller.read_only() {
+            self.buffered_builtin_table_updates
+                .as_mut()
+                .expect("in read-only mode")
+                .push(update);
+
+            futures::future::ready(()).boxed()
+        } else {
+            let notify = self.builtin_table_update().defer(vec![update]);
+
+            notify
+        };
+
+        notify
     }
 
     /// Returns the necessary metadata for appending to a webhook source, and a channel to send

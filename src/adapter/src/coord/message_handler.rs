@@ -583,6 +583,7 @@ impl Coordinator {
             connection_gid,
             mut plan_validity,
             otel_ctx,
+            dependency_ids,
         }: CreateConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
@@ -610,7 +611,7 @@ impl Coordinator {
                 ctx.session_mut(),
                 connection_gid,
                 plan,
-                ResolvedIds(plan_validity.dependency_ids),
+                ResolvedIds(dependency_ids),
             )
             .await;
         ctx.retire(result);
@@ -625,6 +626,7 @@ impl Coordinator {
             connection_gid,
             mut plan_validity,
             otel_ctx,
+            dependency_ids: _,
         }: AlterConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
@@ -766,13 +768,20 @@ impl Coordinator {
                 new_process_status,
             );
 
-            let builtin_table_updates = vec![builtin_table_retraction, builtin_table_addition];
+            let mut builtin_table_updates = vec![builtin_table_retraction, builtin_table_addition];
 
-            self.builtin_table_update()
-                .execute(builtin_table_updates)
-                .await
-                .instrument(info_span!("coord::message_cluster_event::table_updates"))
-                .await;
+            if self.controller.read_only() {
+                self.buffered_builtin_table_updates
+                    .as_mut()
+                    .expect("in read-only mode")
+                    .append(&mut builtin_table_updates);
+            } else {
+                self.builtin_table_update()
+                    .execute(builtin_table_updates)
+                    .await
+                    .instrument(info_span!("coord::message_cluster_event::table_updates"))
+                    .await;
+            }
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");

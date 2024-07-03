@@ -755,6 +755,7 @@ fn generate_rbac_requirements(
         }
         Plan::Select(plan::SelectPlan {
             source,
+            select: _,
             when: _,
             finishing: _,
             copy_to: _,

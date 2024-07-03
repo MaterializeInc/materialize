@@ -139,7 +139,15 @@ fn rewrite_result(
     writeln!(buf, "{}", columns.join(" "))?;
     writeln!(buf, "----")?;
     for row in content {
-        writeln!(buf, "{}", row.join(" "))?;
+        let mut formatted_row = Vec::<String>::new();
+        for value in row {
+            if value.is_empty() || value.contains(|x: char| char::is_ascii_whitespace(&x)) {
+                formatted_row.push("\"".to_owned() + &value + "\"");
+            } else {
+                formatted_row.push(value);
+            }
+        }
+        writeln!(buf, "{}", formatted_row.join(" "))?;
     }
     state.rewrites.push(Rewrite {
         content: buf,

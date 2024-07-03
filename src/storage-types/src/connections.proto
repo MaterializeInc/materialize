@@ -47,12 +47,19 @@ message ProtoKafkaBroker {
     ProtoTunnel tunnel = 12;
 }
 
+message ProtoKafkaTopicOptions {
+    optional int32 replication_factor = 1;
+    optional int32 partition_count = 2;
+    map<string, string> topic_config = 3;
+}
+
 message ProtoKafkaConnection {
     reserved 1, 2, 4;
     reserved "broker";
     repeated ProtoKafkaBroker brokers = 3;
     ProtoTunnel default_tunnel = 7;
     optional string progress_topic = 5;
+    ProtoKafkaTopicOptions progress_topic_options = 10;
     map<string, mz_storage_types.connections.ProtoStringOrSecret> options = 6;
     ProtoKafkaConnectionTlsConfig tls = 8;
     ProtoKafkaConnectionSaslConfig sasl = 9;

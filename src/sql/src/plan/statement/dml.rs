@@ -207,13 +207,13 @@ fn plan_select_inner(
     params: &Params,
     copy_to: Option<CopyFormat>,
 ) -> Result<(SelectPlan, RelationDesc), PlanError> {
-    let when = query::plan_as_of(scx, select.as_of)?;
+    let when = query::plan_as_of(scx, select.as_of.clone())?;
     let query::PlannedRootQuery {
         mut expr,
         desc,
         finishing,
         scope: _,
-    } = query::plan_root_query(scx, select.query, QueryLifetime::OneShot)?;
+    } = query::plan_root_query(scx, select.query.clone(), QueryLifetime::OneShot)?;
     expr.bind_parameters(params)?;
 
     // A top-level limit cannot be data dependent so eagerly evaluate it.
@@ -245,6 +245,7 @@ fn plan_select_inner(
             order_by: finishing.order_by,
         },
         copy_to,
+        select: Some(select),
     };
 
     Ok((plan, desc))

@@ -1,7 +1,7 @@
 [package]
 name = "mz-catalog-debug"
 description = "Durable metadata storage debug tool."
-version = "0.106.0-dev"
+version = "0.107.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.66"
 clap = { version = "3.2.24", features = ["derive", "env"] }
+futures = "0.3.25"
 mz-adapter = { path = "../adapter" }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
@@ -26,7 +27,7 @@ mz-sql = { path = "../sql" }
 once_cell = "1.16.0"
 serde = "1.0.152"
 serde_json = "1.0.89"
-tokio = "1.32.0"
+tokio = "1.38.0"
 tokio-postgres = { version = "0.7.8", features = ["with-serde_json-1"] }
 tracing = "0.1.37"
 url = "2.3.1"

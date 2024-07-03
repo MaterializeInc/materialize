@@ -196,7 +196,7 @@ fn assign_new_user_global_ids(
 
     // !WARNING!
     //
-    // double-check that using this fn doesn't interfer with any other
+    // double-check that using this fn doesn't interfere with any other
     // migrations
 
     // Convert the IDs we need into a set with constant-time lookup.

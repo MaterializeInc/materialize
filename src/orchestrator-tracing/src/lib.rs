@@ -386,12 +386,14 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
         self.inner.fetch_service_metrics(id).await
     }
 
-    async fn ensure_service(
+    fn ensure_service(
         &self,
         id: &str,
-        mut service_config: ServiceConfig<'_>,
+        mut service_config: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
-        let args_fn = |listen_addrs: &BTreeMap<String, String>| {
+        let tracing_args = self.tracing_args.clone();
+        let log_prefix_arg = format!("{}-{}", self.namespace, id);
+        let args_fn = move |listen_addrs: &BTreeMap<String, String>| {
             #[cfg(feature = "tokio-console")]
             let tokio_console_listen_addr = listen_addrs.get("tokio-console");
             let mut args = (service_config.args)(listen_addrs);
@@ -419,11 +421,11 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 sentry_tag,
                 #[cfg(feature = "capture")]
                     capture: _,
-            } = &self.tracing_args;
+            } = &tracing_args;
             args.push(format!("--startup-log-filter={startup_log_filter}"));
             args.push(format!("--log-format={log_format}"));
             if log_prefix.is_some() {
-                args.push(format!("--log-prefix={}-{}", self.namespace, id));
+                args.push(format!("--log-prefix={log_prefix_arg}"));
             }
             if let Some(endpoint) = opentelemetry_endpoint {
                 args.push(format!("--opentelemetry-endpoint={endpoint}"));
@@ -487,7 +489,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
 
             args
         };
-        service_config.args = &args_fn;
+        service_config.args = Box::new(args_fn);
         #[cfg(feature = "tokio-console")]
         if self.tracing_args.tokio_console_listen_addr.is_some() {
             service_config.ports.push(ServicePort {
@@ -495,11 +497,11 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 port_hint: 6669,
             });
         }
-        self.inner.ensure_service(id, service_config).await
+        self.inner.ensure_service(id, service_config)
     }
 
-    async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
-        self.inner.drop_service(id).await
+    fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
+        self.inner.drop_service(id)
     }
 
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {

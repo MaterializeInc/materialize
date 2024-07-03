@@ -42,7 +42,7 @@ use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{Params, Plan, SubscribePlan};
 use mz_sql::session::user::{RoleMetadata, MZ_SYSTEM_ROLE_ID};
-use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::controller::{IntrospectionType, StorageWriteOp};
 use tracing::{info, Span};
 
 use crate::coord::{
@@ -137,23 +137,21 @@ impl Coordinator {
         let catalog = self.catalog().for_system_session();
         let plan = spec.to_plan(&catalog).expect("valid spec");
 
-        let role_metadata = RoleMetadata {
-            authenticated_role: MZ_SYSTEM_ROLE_ID,
-            session_role: MZ_SYSTEM_ROLE_ID,
-            current_role: MZ_SYSTEM_ROLE_ID,
-        };
-        let validity = PlanValidity {
-            transient_revision: self.catalog.transient_revision(),
-            dependency_ids: plan.from.depends_on(),
-            cluster_id: Some(cluster_id),
-            replica_id: Some(replica_id),
+        let role_metadata = RoleMetadata::new(MZ_SYSTEM_ROLE_ID);
+        let validity = PlanValidity::new(
+            self.catalog.transient_revision(),
+            plan.from.depends_on(),
+            Some(cluster_id),
+            Some(replica_id),
             role_metadata,
-        };
+        );
 
         let stage = IntrospectionSubscribeStage::OptimizeMir(IntrospectionSubscribeOptimizeMir {
             validity,
             plan,
             subscribe_id,
+            cluster_id,
+            replica_id,
         });
         self.sequence_staged((), Span::current(), stage).await;
     }
@@ -166,9 +164,10 @@ impl Coordinator {
             mut validity,
             plan,
             subscribe_id,
+            cluster_id,
+            replica_id,
         } = stage;
 
-        let cluster_id = validity.cluster_id.expect("always set");
         let compute_instance = self.instance_snapshot(cluster_id).expect("must exist");
         let view_id = self.allocate_transient_id();
 
@@ -198,13 +197,15 @@ impl Coordinator {
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.from)?;
                     // Add introduced indexes as validity dependencies.
                     let id_bundle = global_mir_plan.id_bundle(cluster_id);
-                    validity.dependency_ids.extend(id_bundle.iter());
+                    validity.extend_dependencies(id_bundle.iter());
 
                     let stage = IntrospectionSubscribeStage::TimestampOptimizeLir(
                         IntrospectionSubscribeTimestampOptimizeLir {
                             validity,
                             optimizer,
                             global_mir_plan,
+                            cluster_id,
+                            replica_id,
                         },
                     );
                     Ok(Box::new(stage))
@@ -221,9 +222,9 @@ impl Coordinator {
             validity,
             mut optimizer,
             global_mir_plan,
+            cluster_id,
+            replica_id,
         } = stage;
-
-        let cluster_id = validity.cluster_id.expect("always set");
 
         // Timestamp selection.
         let id_bundle = global_mir_plan.id_bundle(cluster_id);
@@ -245,6 +246,8 @@ impl Coordinator {
                         validity,
                         global_lir_plan,
                         read_holds,
+                        cluster_id,
+                        replica_id,
                     });
                     Ok(Box::new(stage))
                 })
@@ -257,13 +260,13 @@ impl Coordinator {
         stage: IntrospectionSubscribeFinish,
     ) -> Result<StageResult<Box<IntrospectionSubscribeStage>>, AdapterError> {
         let IntrospectionSubscribeFinish {
-            validity,
+            validity: _,
             global_lir_plan,
             read_holds,
+            cluster_id,
+            replica_id,
         } = stage;
 
-        let cluster_id = validity.cluster_id.expect("always set");
-        let replica_id = validity.replica_id.expect("always set");
         let subscribe_id = global_lir_plan.sink_id();
 
         // The subscribe may already have been dropped, in which case we must not install a
@@ -298,7 +301,7 @@ impl Coordinator {
     ///  * dropping its compute collection
     ///  * retracting any rows previously omitted by it from its corresponding storage-managed
     ///    collection
-    pub(super) fn drop_introspection_subscribes(&mut self, replica_id: ReplicaId) {
+    pub(super) async fn drop_introspection_subscribes(&mut self, replica_id: ReplicaId) {
         let to_drop: Vec<_> = self
             .introspection_subscribes
             .iter()
@@ -307,11 +310,11 @@ impl Coordinator {
             .collect();
 
         for id in to_drop {
-            self.drop_introspection_subscribe(id);
+            self.drop_introspection_subscribe(id).await;
         }
     }
 
-    fn drop_introspection_subscribe(&mut self, id: GlobalId) {
+    async fn drop_introspection_subscribe(&mut self, id: GlobalId) {
         let Some(subscribe) = self.introspection_subscribes.remove(&id) else {
             soft_panic_or_log!("attempt to remove unknown introspection subscribe (id={id})");
             return;
@@ -333,18 +336,17 @@ impl Coordinator {
             .drop_collections(subscribe.cluster_id, vec![id]);
 
         let target_replica = subscribe.replica_id.to_string();
-        let _filter = Box::new(move |row: &Row| {
+        let filter = Box::new(move |row: &Row| {
             let replica_id = row.unpack_first();
             replica_id == Datum::String(&target_replica)
         });
-        // TODO(#26730) send introspection updates
-        //self.controller
-        //    .storage
-        //    .update_introspection_collection(
-        //        subscribe.spec.introspection_type,
-        //        StorageWriteOp::Delete { filter },
-        //    )
-        //    .await;
+        self.controller
+            .storage
+            .update_introspection_collection(
+                subscribe.spec.introspection_type,
+                StorageWriteOp::Delete { filter },
+            )
+            .await;
     }
 
     async fn reinstall_introspection_subscribe(&mut self, id: GlobalId) {
@@ -355,7 +357,7 @@ impl Coordinator {
 
         let subscribe = subscribe.clone();
 
-        self.drop_introspection_subscribe(id);
+        self.drop_introspection_subscribe(id).await;
         self.install_introspection_subscribe(
             subscribe.cluster_id,
             subscribe.replica_id,
@@ -406,16 +408,15 @@ impl Coordinator {
             new_updates.push((new_row.clone(), diff));
         }
 
-        // TODO(#26730) send introspection updates
-        //self.controller
-        //    .storage
-        //    .update_introspection_collection(
-        //        subscribe.spec.introspection_type,
-        //        StorageWriteOp::Append {
-        //            updates: new_updates
-        //        },
-        //    )
-        //    .await;
+        self.controller
+            .storage
+            .update_introspection_collection(
+                subscribe.spec.introspection_type,
+                StorageWriteOp::Append {
+                    updates: new_updates,
+                },
+            )
+            .await;
     }
 }
 
@@ -458,7 +459,6 @@ impl Staged for IntrospectionSubscribeStage {
 pub(super) struct SubscribeSpec {
     /// An [`IntrospectionType`] identifying the storage-managed collection to which updates
     /// received from subscribes instantiated from this spec are written.
-    #[allow(dead_code)] // TODO(#26730)
     introspection_type: IntrospectionType,
     /// The SQL definition of the subscribe.
     sql: &'static str,

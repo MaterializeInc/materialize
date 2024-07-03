@@ -916,10 +916,13 @@ class FlipFlagsAction(Action):
         BOOLEAN_FLAG_VALUES = ["TRUE", "FALSE"]
 
         self.flags_with_values: dict[str, list[str]] = dict()
-        for flag in ["catalog", "snapshot", "txn"]:
+        for flag in ["catalog", "source", "snapshot", "txn"]:
             self.flags_with_values[f"persist_use_critical_since_{flag}"] = (
                 BOOLEAN_FLAG_VALUES
             )
+        self.flags_with_values["persist_claim_unclaimed_compactions"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["persist_roundtrip_spine"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_optimize_ignored_data_fetch"] = (
             BOOLEAN_FLAG_VALUES

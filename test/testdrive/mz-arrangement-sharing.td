@@ -744,8 +744,8 @@ ArrangeBy[[Column(13)]]                       1
 "ArrangeBy[[Column(5)]]"                      4
 "ArrangeBy[[Column(6)]]"                      1
 "ArrangeBy[[Column(9)]]"                      1
-"ArrangeBy[[Column(18)]]"                     1
-"ArrangeBy[[Column(18)]]-errors"              1
+"ArrangeBy[[Column(20)]]"                     1
+"ArrangeBy[[Column(20)]]-errors"              1
 "ArrangeBy[[If { cond: CallUnary { func: IsNull(IsNull), expr: Column(2) }, then: Literal(Ok(Row{[Null]}), ColumnType { scalar_type: String, nullable: true }), els: Column(1) }]]" 1
 "ArrangeBy[[]]"                               10
 "Arranged DistinctBy"                         21

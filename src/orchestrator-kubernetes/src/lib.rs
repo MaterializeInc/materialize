@@ -9,7 +9,9 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
@@ -17,6 +19,7 @@ use chrono::Utc;
 use clap::ArgEnum;
 use cloud_resource_controller::KubernetesResourceReader;
 use futures::stream::{BoxStream, StreamExt};
+use futures::TryFutureExt;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
@@ -31,7 +34,7 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
 use kube::api::{Api, DeleteParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
-use kube::error::Error;
+use kube::error::Error as K8sError;
 use kube::runtime::{watcher, WatchStreamExt};
 use kube::ResourceExt;
 use maplit::btreemap;
@@ -42,8 +45,11 @@ use mz_orchestrator::{
     NamespacedOrchestrator, NotReadyReason, Orchestrator, Service, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics, ServiceStatus,
 };
+use mz_ore::retry::Retry;
+use mz_ore::task::AbortOnDropHandle;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
 pub mod cloud_resource_controller;
@@ -52,6 +58,8 @@ pub mod util;
 
 const FIELD_MANAGER: &str = "environmentd";
 const NODE_FAILURE_THRESHOLD_SECONDS: i64 = 30;
+
+const POD_TEMPLATE_HASH_ANNOTATION: &str = "environmentd.materialize.cloud/pod-template-hash";
 
 /// Configures a [`KubernetesOrchestrator`].
 #[derive(Debug, Clone)]
@@ -146,11 +154,18 @@ impl Orchestrator for KubernetesOrchestrator {
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         let mut namespaces = self.namespaces.lock().expect("lock poisoned");
         Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {
-            Arc::new(NamespacedKubernetesOrchestrator {
+            let (command_tx, command_rx) = mpsc::unbounded_channel();
+            let worker = OrchestratorWorker {
                 metrics_api: Api::default_namespaced(self.client.clone()),
                 custom_metrics_api: Api::default_namespaced(self.client.clone()),
                 service_api: Api::default_namespaced(self.client.clone()),
                 stateful_set_api: Api::default_namespaced(self.client.clone()),
+                pod_api: Api::default_namespaced(self.client.clone()),
+                command_rx,
+            }
+            .spawn(format!("kubernetes-orchestrator-worker:{namespace}"));
+
+            Arc::new(NamespacedKubernetesOrchestrator {
                 pod_api: Api::default_namespaced(self.client.clone()),
                 kubernetes_namespace: self.kubernetes_namespace.clone(),
                 namespace: namespace.into(),
@@ -158,6 +173,8 @@ impl Orchestrator for KubernetesOrchestrator {
                 // TODO(guswynn): make this configurable.
                 scheduling_config: Default::default(),
                 service_infos: std::sync::Mutex::new(BTreeMap::new()),
+                command_tx,
+                _worker: worker,
             })
         }))
     }
@@ -171,16 +188,14 @@ struct ServiceInfo {
 }
 
 struct NamespacedKubernetesOrchestrator {
-    metrics_api: Api<PodMetrics>,
-    custom_metrics_api: Api<MetricValueList>,
-    service_api: Api<K8sService>,
-    stateful_set_api: Api<StatefulSet>,
     pod_api: Api<Pod>,
     kubernetes_namespace: String,
     namespace: String,
     config: KubernetesOrchestratorConfig,
     scheduling_config: std::sync::RwLock<ServiceSchedulingConfig>,
     service_infos: std::sync::Mutex<BTreeMap<String, ServiceInfo>>,
+    command_tx: mpsc::UnboundedSender<WorkerCommand>,
+    _worker: AbortOnDropHandle<()>,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
@@ -191,6 +206,58 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
             .field("config", &self.config)
             .finish()
     }
+}
+
+/// Commands sent from a [`NamespacedKubernetesOrchestrator`] to its
+/// [`OrchestratorWorker`].
+///
+/// Commands for which the caller expects a result include a `result_tx` on which the
+/// [`OrchestratorWorker`] will deliver the result.
+enum WorkerCommand {
+    EnsureService {
+        desc: ServiceDescription,
+    },
+    DropService {
+        name: String,
+    },
+    ListServices {
+        namespace: String,
+        result_tx: oneshot::Sender<Vec<String>>,
+    },
+    FetchServiceMetrics {
+        name: String,
+        info: ServiceInfo,
+        result_tx: oneshot::Sender<Vec<ServiceProcessMetrics>>,
+    },
+}
+
+/// A description of a service to be created by an [`OrchestratorWorker`].
+struct ServiceDescription {
+    name: String,
+    scale: u16,
+    service: K8sService,
+    stateful_set: StatefulSet,
+    pod_template_hash: String,
+}
+
+/// A task executing blocking work for a [`NamespacedKubernetesOrchestrator`] in the background.
+///
+/// This type exists to enable making [`NamespacedKubernetesOrchestrator::ensure_service`] and
+/// [`NamespacedKubernetesOrchestrator::drop_service`] non-blocking, allowing invocation of these
+/// methods in latency-sensitive contexts.
+///
+/// Note that, apart from `ensure_service` and `drop_service`, this worker also handles blocking
+/// orchestrator calls that query service state (such as `list_services`). These need to be
+/// sequenced through the worker loop to ensure they linearize as expected. For example, we want to
+/// ensure that a `list_services` result contains exactly those services that were previously
+/// created with `ensure_service` and not yet dropped with `drop_service`.
+struct OrchestratorWorker {
+    metrics_api: Api<PodMetrics>,
+    custom_metrics_api: Api<MetricValueList>,
+    service_api: Api<K8sService>,
+    stateful_set_api: Api<StatefulSet>,
+    pod_api: Api<Pod>,
+    command_rx: mpsc::UnboundedReceiver<WorkerCommand>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -290,7 +357,11 @@ impl k8s_openapi::Metadata for MetricValueList {
 }
 
 impl NamespacedKubernetesOrchestrator {
-    /// Return a `wather::Config` instance that limits results to the namespace
+    fn service_name(&self, id: &str) -> String {
+        format!("{}-{id}", self.namespace)
+    }
+
+    /// Return a `watcher::Config` instance that limits results to the namespace
     /// assigned to this orchestrator.
     fn watch_pod_params(&self) -> watcher::Config {
         let ns_selector = format!(
@@ -299,11 +370,13 @@ impl NamespacedKubernetesOrchestrator {
         );
         watcher::Config::default().labels(&ns_selector)
     }
+
     /// Convert a higher-level label key to the actual one we
     /// will give to Kubernetes
     fn make_label_key(&self, key: &str) -> String {
         format!("{}.environmentd.materialize.cloud/{}", self.namespace, key)
     }
+
     fn label_selector_to_k8s(
         &self,
         MzLabelSelector { label_name, logic }: MzLabelSelector,
@@ -338,6 +411,10 @@ impl NamespacedKubernetesOrchestrator {
             values: Some(values),
         };
         Ok(lsr)
+    }
+
+    fn send_command(&self, cmd: WorkerCommand) {
+        self.command_tx.send(cmd).expect("worker task not dropped");
     }
 }
 
@@ -448,243 +525,19 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             tracing::error!("Failed to get info for {id}");
             anyhow::bail!("Failed to get info for {id}");
         };
-        /// Get metrics for a particular service and process, converting them into a sane (i.e., numeric) format.
-        ///
-        /// Note that we want to keep going even if a lookup fails for whatever reason,
-        /// so this function is infallible. If we fail to get cpu or memory for a particular pod,
-        /// we just log a warning and install `None` in the returned struct.
-        async fn get_metrics(
-            self_: &NamespacedKubernetesOrchestrator,
-            id: &str,
-            i: usize,
-            disk: bool,
-            disk_limit: Option<DiskLimit>,
-        ) -> ServiceProcessMetrics {
-            let name = format!("{}-{id}-{i}", self_.namespace);
 
-            let disk_usage_fut = async {
-                if disk {
-                    Some(
-                        self_
-                            .custom_metrics_api
-                            .get_subresource(
-                                "kubelet_volume_stats_used_bytes",
-                                // The CSI provider we use sets up persistentvolumeclaim's
-                                // with `{pod name}-scratch` as the name. It also provides
-                                // the metrics, and does so under the `persistentvolumeclaims`
-                                // resource type, instead of `pods`.
-                                &format!("{name}-scratch"),
-                            )
-                            .await,
-                    )
-                } else {
-                    None
-                }
-            };
-            let disk_capacity_fut = async {
-                if disk {
-                    Some(
-                        self_
-                            .custom_metrics_api
-                            .get_subresource(
-                                "kubelet_volume_stats_capacity_bytes",
-                                &format!("{name}-scratch"),
-                            )
-                            .await,
-                    )
-                } else {
-                    None
-                }
-            };
-            let (metrics, disk_usage, disk_capacity) = match futures::future::join3(
-                self_.metrics_api.get(&name),
-                disk_usage_fut,
-                disk_capacity_fut,
-            )
-            .await
-            {
-                (Ok(metrics), disk_usage, disk_capacity) => {
-                    // TODO(guswynn): don't tolerate errors here, when we are more
-                    // comfortable with `prometheus-adapter` in production
-                    // (And we run it in ci).
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::FetchServiceMetrics {
+            name: self.service_name(id),
+            info,
+            result_tx,
+        });
 
-                    let disk_usage = match disk_usage {
-                        Some(Ok(disk_usage)) => Some(disk_usage),
-                        Some(Err(e)) if !matches!(&e, Error::Api(e) if e.code == 404) => {
-                            warn!(
-                                "Failed to fetch `kubelet_volume_stats_used_bytes` for {name}: {e}"
-                            );
-                            None
-                        }
-                        _ => None,
-                    };
-
-                    let disk_capacity = match disk_capacity {
-                        Some(Ok(disk_capacity)) => Some(disk_capacity),
-                        Some(Err(e)) if !matches!(&e, Error::Api(e) if e.code == 404) => {
-                            warn!("Failed to fetch `kubelet_volume_stats_capacity_bytes` for {name}: {e}");
-                            None
-                        }
-                        _ => None,
-                    };
-
-                    (metrics, disk_usage, disk_capacity)
-                }
-                (Err(e), _, _) => {
-                    warn!("Failed to get metrics for {name}: {e}");
-                    return ServiceProcessMetrics::default();
-                }
-            };
-            let Some(PodMetricsContainer {
-                usage:
-                    PodMetricsContainerUsage {
-                        cpu: Quantity(cpu_str),
-                        memory: Quantity(mem_str),
-                    },
-                ..
-            }) = metrics.containers.get(0)
-            else {
-                warn!("metrics result contained no containers for {name}");
-                return ServiceProcessMetrics::default();
-            };
-
-            let cpu = match parse_k8s_quantity(cpu_str) {
-                Ok(q) => match q.try_to_integer(-9, true) {
-                    Some(i) => Some(i),
-                    None => {
-                        tracing::error!("CPU value {q:? }out of range");
-                        None
-                    }
-                },
-                Err(e) => {
-                    tracing::error!("Failed to parse CPU value {cpu_str}: {e}");
-                    None
-                }
-            };
-            let memory = match parse_k8s_quantity(mem_str) {
-                Ok(q) => match q.try_to_integer(0, false) {
-                    Some(i) => Some(i),
-                    None => {
-                        tracing::error!("Memory value {q:?} out of range");
-                        None
-                    }
-                },
-                Err(e) => {
-                    tracing::error!("Failed to parse memory value {mem_str}: {e}");
-                    None
-                }
-            };
-
-            let disk_usage = match (disk_usage, disk_capacity) {
-                (Some(disk_usage_metrics), Some(disk_capacity_metrics)) => {
-                    if !disk_usage_metrics.items.is_empty()
-                        && !disk_capacity_metrics.items.is_empty()
-                    {
-                        let disk_usage_str = &*disk_usage_metrics.items[0].value.0;
-                        let disk_usage = match parse_k8s_quantity(disk_usage_str) {
-                            Ok(q) => match q.try_to_integer(0, true) {
-                                Some(i) => Some(i),
-                                None => {
-                                    tracing::error!("Disk usage value {q:?} out of range");
-                                    None
-                                }
-                            },
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to parse disk usage value {disk_usage_str}: {e}"
-                                );
-                                None
-                            }
-                        };
-                        let disk_capacity_str = &*disk_capacity_metrics.items[0].value.0;
-                        let disk_capacity = match parse_k8s_quantity(disk_capacity_str) {
-                            Ok(q) => match q.try_to_integer(0, true) {
-                                Some(i) => Some(i),
-                                None => {
-                                    tracing::error!("Disk capacity value {q:?} out of range");
-                                    None
-                                }
-                            },
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to parse disk capacity value {disk_capacity_str}: {e}"
-                                );
-                                None
-                            }
-                        };
-
-                        // We only populate a `disk_usage` if we have all 5 of of:
-                        // - a disk limit (so it must be an actual managed cluster with a real limit)
-                        // - a reported disk capacity
-                        // - a reported disk usage
-                        //
-                        // There are 3 weird cases we have to handle here:
-                        // - Some instance types report a large disk capacity than the requested
-                        // limit. We clamp those capacities to the limit, which means we can
-                        // report 100% usage even if we have a bit of space left.
-                        // - Other instances report a smaller disk capacity than the limit, due to
-                        // overheads. In this case, we correct the usage by adding the overhead, so
-                        // we report a more accurate usage number.
-                        // - The disk limit can be more up-to-date (from `service_infos`) than the
-                        // reported metric. In that case, we report the minimum of the usage
-                        // and the limit, which means we can report 100% usage temporarily
-                        // if a replica is sized down.
-                        match (disk_usage, disk_capacity, disk_limit) {
-                            (
-                                Some(disk_usage),
-                                Some(disk_capacity),
-                                Some(DiskLimit(disk_limit)),
-                            ) => {
-                                let disk_capacity = if disk_limit.0 < disk_capacity {
-                                    // We issue a debug message instead
-                                    // of a warning or error because all the
-                                    // above cases are relatively common.
-                                    tracing::debug!(
-                                        "disk capacity {} is larger than the disk limit {}; \
-                                        disk usage will indicate 100% full before the disk is truly full; \
-                                        as long as the delta is small this is not a cause for concern",
-                                        disk_capacity,
-                                        disk_limit.0
-                                    );
-                                    // Clamp to the limit.
-                                    disk_limit.0
-                                } else {
-                                    disk_capacity
-                                };
-
-                                // If we overflow, just clamp to the disk limit
-                                let disk_usage = (disk_limit.0 - disk_capacity)
-                                    .checked_add(disk_usage)
-                                    .unwrap_or(disk_limit.0);
-
-                                // Clamp to the limit. Note that this can be clamped during
-                                // replica resizes of if the disk usage is ABOVE the
-                                // configured limit, as may occur on some instances.
-                                Some(std::cmp::min(disk_usage, disk_limit.0))
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-
-            ServiceProcessMetrics {
-                cpu_nano_cores: cpu,
-                memory_bytes: memory,
-                disk_usage_bytes: disk_usage,
-            }
-        }
-        let ret = futures::future::join_all(
-            (0..info.scale).map(|i| get_metrics(self, id, i.into(), info.disk, info.disk_limit)),
-        );
-
-        Ok(ret.await)
+        let metrics = result_rx.await.expect("worker task not dropped");
+        Ok(metrics)
     }
 
-    async fn ensure_service(
+    fn ensure_service(
         &self,
         id: &str,
         ServiceConfig {
@@ -702,14 +555,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             disk,
             disk_limit,
             node_selector,
-        }: ServiceConfig<'_>,
+        }: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         // This is extremely cheap to clone, so just look into the lock once.
         let scheduling_config: ServiceSchedulingConfig =
             self.scheduling_config.read().expect("poisoned").clone();
         let disk = scheduling_config.always_use_disk || disk;
 
-        let name = format!("{}-{id}", self.namespace);
+        let name = self.service_name(id);
         // The match labels should be the minimal set of labels that uniquely
         // identify the pods in the stateful set. Changing these after the
         // `StatefulSet` is created is not permitted by Kubernetes, and we're
@@ -1257,7 +1110,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let mut hasher = Sha256::new();
         hasher.update(pod_template_json);
         let pod_template_hash = format!("{:x}", hasher.finalize());
-        let pod_template_hash_annotation = "environmentd.materialize.cloud/pod-template-hash";
         pod_template_spec
             .metadata
             .as_mut()
@@ -1266,7 +1118,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .as_mut()
             .unwrap()
             .insert(
-                pod_template_hash_annotation.to_owned(),
+                POD_TEMPLATE_HASH_ANNOTATION.to_owned(),
                 pod_template_hash.clone(),
             );
 
@@ -1290,45 +1142,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             status: None,
         };
 
-        self.service_api
-            .patch(
-                &name,
-                &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(service),
-            )
-            .await?;
-        self.stateful_set_api
-            .patch(
-                &name,
-                &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(stateful_set),
-            )
-            .await?;
-        // Explicitly delete any pods in the stateful set that don't match the
-        // template. In theory, Kubernetes would do this automatically, but
-        // in practice we have observed that it does not.
-        // See: https://github.com/kubernetes/kubernetes/issues/67250
-        for pod_id in 0..scale {
-            let pod_name = format!("{}-{}", &name, pod_id);
-            let pod = match self.pod_api.get(&pod_name).await {
-                Ok(pod) => pod,
-                // Pod already doesn't exist.
-                Err(kube::Error::Api(e)) if e.code == 404 => continue,
-                Err(e) => return Err(e.into()),
-            };
-            if pod.annotations().get(pod_template_hash_annotation) != Some(&pod_template_hash) {
-                match self
-                    .pod_api
-                    .delete(&pod_name, &DeleteParams::default())
-                    .await
-                {
-                    Ok(_) => (),
-                    // Pod got deleted while we were looking at it.
-                    Err(kube::Error::Api(e)) if e.code == 404 => (),
-                    Err(e) => return Err(e.into()),
-                }
-            }
-        }
+        self.send_command(WorkerCommand::EnsureService {
+            desc: ServiceDescription {
+                name,
+                scale,
+                service,
+                stateful_set,
+                pod_template_hash,
+            },
+        });
+
         self.service_infos.lock().expect("poisoned lock").insert(
             id.to_string(),
             ServiceInfo {
@@ -1337,49 +1160,32 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 disk_limit,
             },
         );
+
         Ok(Box::new(KubernetesService { hosts, ports }))
     }
 
     /// Drops the identified service, if it exists.
-    async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
+    fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
         fail::fail_point!("kubernetes_drop_service", |_| Err(anyhow!("failpoint")));
         self.service_infos.lock().expect("poisoned lock").remove(id);
-        let name = format!("{}-{id}", self.namespace);
-        let res = self
-            .stateful_set_api
-            .delete(&name, &DeleteParams::default())
-            .await;
-        match res {
-            Ok(_) => (),
-            Err(Error::Api(e)) if e.code == 404 => (),
-            Err(e) => return Err(e.into()),
-        }
 
-        let res = self
-            .service_api
-            .delete(&name, &DeleteParams::default())
-            .await;
-        match res {
-            Ok(_) => Ok(()),
-            Err(Error::Api(e)) if e.code == 404 => Ok(()),
-            Err(e) => Err(e.into()),
-        }
+        self.send_command(WorkerCommand::DropService {
+            name: self.service_name(id),
+        });
+
+        Ok(())
     }
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
-        let stateful_sets = self.stateful_set_api.list(&Default::default()).await?;
-        let name_prefix = format!("{}-", self.namespace);
-        Ok(stateful_sets
-            .into_iter()
-            .filter_map(|ss| {
-                ss.metadata
-                    .name
-                    .unwrap()
-                    .strip_prefix(&name_prefix)
-                    .map(Into::into)
-            })
-            .collect())
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::ListServices {
+            namespace: self.namespace.clone(),
+            result_tx,
+        });
+
+        let list = result_rx.await.expect("worker task not dropped");
+        Ok(list)
     }
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
@@ -1459,6 +1265,386 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     fn update_scheduling_config(&self, config: ServiceSchedulingConfig) {
         *self.scheduling_config.write().expect("poisoned") = config;
+    }
+}
+
+impl OrchestratorWorker {
+    fn spawn(self, name: String) -> AbortOnDropHandle<()> {
+        mz_ore::task::spawn(|| name, self.run()).abort_on_drop()
+    }
+
+    async fn run(mut self) {
+        while let Some(cmd) = self.command_rx.recv().await {
+            self.handle_command(cmd).await;
+        }
+    }
+
+    /// Handle a worker command.
+    ///
+    /// If handling the command fails, it is automatically retried. All command handlers return
+    /// [`K8sError`], so we can reasonably assume that a failure is caused by issues communicating
+    /// with the K8S server and that retrying resolves them eventually.
+    async fn handle_command(&mut self, cmd: WorkerCommand) {
+        async fn retry<F, U, R>(f: F, cmd_type: &str) -> R
+        where
+            F: Fn() -> U,
+            U: Future<Output = Result<R, K8sError>>,
+        {
+            Retry::default()
+                .clamp_backoff(Duration::from_secs(10))
+                .retry_async(|_| {
+                    f().map_err(
+                        |error| tracing::error!(%cmd_type, "orchestrator call failed: {error}"),
+                    )
+                })
+                .await
+                .expect("always retries on error")
+        }
+
+        use WorkerCommand::*;
+        match cmd {
+            EnsureService { desc } => retry(|| self.ensure_service(&desc), "EnsureService").await,
+            DropService { name } => retry(|| self.drop_service(&name), "DropService").await,
+            ListServices {
+                namespace,
+                result_tx,
+            } => {
+                let result = retry(|| self.list_services(&namespace), "ListServices").await;
+                let _ = result_tx.send(result);
+            }
+            FetchServiceMetrics {
+                name,
+                info,
+                result_tx,
+            } => {
+                let result = self.fetch_service_metrics(&name, &info).await;
+                let _ = result_tx.send(result);
+            }
+        }
+    }
+
+    async fn fetch_service_metrics(
+        &self,
+        name: &str,
+        info: &ServiceInfo,
+    ) -> Vec<ServiceProcessMetrics> {
+        /// Get metrics for a particular service and process, converting them into a sane (i.e., numeric) format.
+        ///
+        /// Note that we want to keep going even if a lookup fails for whatever reason,
+        /// so this function is infallible. If we fail to get cpu or memory for a particular pod,
+        /// we just log a warning and install `None` in the returned struct.
+        async fn get_metrics(
+            self_: &OrchestratorWorker,
+            service_name: &str,
+            i: usize,
+            disk: bool,
+            disk_limit: Option<DiskLimit>,
+        ) -> ServiceProcessMetrics {
+            let name = format!("{service_name}-{i}");
+
+            let disk_usage_fut = async {
+                if disk {
+                    Some(
+                        self_
+                            .custom_metrics_api
+                            .get_subresource(
+                                "kubelet_volume_stats_used_bytes",
+                                // The CSI provider we use sets up persistentvolumeclaim's
+                                // with `{pod name}-scratch` as the name. It also provides
+                                // the metrics, and does so under the `persistentvolumeclaims`
+                                // resource type, instead of `pods`.
+                                &format!("{name}-scratch"),
+                            )
+                            .await,
+                    )
+                } else {
+                    None
+                }
+            };
+            let disk_capacity_fut = async {
+                if disk {
+                    Some(
+                        self_
+                            .custom_metrics_api
+                            .get_subresource(
+                                "kubelet_volume_stats_capacity_bytes",
+                                &format!("{name}-scratch"),
+                            )
+                            .await,
+                    )
+                } else {
+                    None
+                }
+            };
+            let (metrics, disk_usage, disk_capacity) = match futures::future::join3(
+                self_.metrics_api.get(&name),
+                disk_usage_fut,
+                disk_capacity_fut,
+            )
+            .await
+            {
+                (Ok(metrics), disk_usage, disk_capacity) => {
+                    // TODO(guswynn): don't tolerate errors here, when we are more
+                    // comfortable with `prometheus-adapter` in production
+                    // (And we run it in ci).
+
+                    let disk_usage = match disk_usage {
+                        Some(Ok(disk_usage)) => Some(disk_usage),
+                        Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
+                            warn!(
+                                "Failed to fetch `kubelet_volume_stats_used_bytes` for {name}: {e}"
+                            );
+                            None
+                        }
+                        _ => None,
+                    };
+
+                    let disk_capacity = match disk_capacity {
+                        Some(Ok(disk_capacity)) => Some(disk_capacity),
+                        Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
+                            warn!("Failed to fetch `kubelet_volume_stats_capacity_bytes` for {name}: {e}");
+                            None
+                        }
+                        _ => None,
+                    };
+
+                    (metrics, disk_usage, disk_capacity)
+                }
+                (Err(e), _, _) => {
+                    warn!("Failed to get metrics for {name}: {e}");
+                    return ServiceProcessMetrics::default();
+                }
+            };
+            let Some(PodMetricsContainer {
+                usage:
+                    PodMetricsContainerUsage {
+                        cpu: Quantity(cpu_str),
+                        memory: Quantity(mem_str),
+                    },
+                ..
+            }) = metrics.containers.get(0)
+            else {
+                warn!("metrics result contained no containers for {name}");
+                return ServiceProcessMetrics::default();
+            };
+
+            let cpu = match parse_k8s_quantity(cpu_str) {
+                Ok(q) => match q.try_to_integer(-9, true) {
+                    Some(i) => Some(i),
+                    None => {
+                        tracing::error!("CPU value {q:? }out of range");
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::error!("Failed to parse CPU value {cpu_str}: {e}");
+                    None
+                }
+            };
+            let memory = match parse_k8s_quantity(mem_str) {
+                Ok(q) => match q.try_to_integer(0, false) {
+                    Some(i) => Some(i),
+                    None => {
+                        tracing::error!("Memory value {q:?} out of range");
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::error!("Failed to parse memory value {mem_str}: {e}");
+                    None
+                }
+            };
+
+            let disk_usage = match (disk_usage, disk_capacity) {
+                (Some(disk_usage_metrics), Some(disk_capacity_metrics)) => {
+                    if !disk_usage_metrics.items.is_empty()
+                        && !disk_capacity_metrics.items.is_empty()
+                    {
+                        let disk_usage_str = &*disk_usage_metrics.items[0].value.0;
+                        let disk_usage = match parse_k8s_quantity(disk_usage_str) {
+                            Ok(q) => match q.try_to_integer(0, true) {
+                                Some(i) => Some(i),
+                                None => {
+                                    tracing::error!("Disk usage value {q:?} out of range");
+                                    None
+                                }
+                            },
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to parse disk usage value {disk_usage_str}: {e}"
+                                );
+                                None
+                            }
+                        };
+                        let disk_capacity_str = &*disk_capacity_metrics.items[0].value.0;
+                        let disk_capacity = match parse_k8s_quantity(disk_capacity_str) {
+                            Ok(q) => match q.try_to_integer(0, true) {
+                                Some(i) => Some(i),
+                                None => {
+                                    tracing::error!("Disk capacity value {q:?} out of range");
+                                    None
+                                }
+                            },
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to parse disk capacity value {disk_capacity_str}: {e}"
+                                );
+                                None
+                            }
+                        };
+
+                        // We only populate a `disk_usage` if we have all 5 of of:
+                        // - a disk limit (so it must be an actual managed cluster with a real limit)
+                        // - a reported disk capacity
+                        // - a reported disk usage
+                        //
+                        // There are 3 weird cases we have to handle here:
+                        // - Some instance types report a large disk capacity than the requested
+                        // limit. We clamp those capacities to the limit, which means we can
+                        // report 100% usage even if we have a bit of space left.
+                        // - Other instances report a smaller disk capacity than the limit, due to
+                        // overheads. In this case, we correct the usage by adding the overhead, so
+                        // we report a more accurate usage number.
+                        // - The disk limit can be more up-to-date (from `service_infos`) than the
+                        // reported metric. In that case, we report the minimum of the usage
+                        // and the limit, which means we can report 100% usage temporarily
+                        // if a replica is sized down.
+                        match (disk_usage, disk_capacity, disk_limit) {
+                            (
+                                Some(disk_usage),
+                                Some(disk_capacity),
+                                Some(DiskLimit(disk_limit)),
+                            ) => {
+                                let disk_capacity = if disk_limit.0 < disk_capacity {
+                                    // We issue a debug message instead
+                                    // of a warning or error because all the
+                                    // above cases are relatively common.
+                                    tracing::debug!(
+                                        "disk capacity {} is larger than the disk limit {}; \
+                                        disk usage will indicate 100% full before the disk is truly full; \
+                                        as long as the delta is small this is not a cause for concern",
+                                        disk_capacity,
+                                        disk_limit.0
+                                    );
+                                    // Clamp to the limit.
+                                    disk_limit.0
+                                } else {
+                                    disk_capacity
+                                };
+
+                                // If we overflow, just clamp to the disk limit
+                                let disk_usage = (disk_limit.0 - disk_capacity)
+                                    .checked_add(disk_usage)
+                                    .unwrap_or(disk_limit.0);
+
+                                // Clamp to the limit. Note that this can be clamped during
+                                // replica resizes of if the disk usage is ABOVE the
+                                // configured limit, as may occur on some instances.
+                                Some(std::cmp::min(disk_usage, disk_limit.0))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            ServiceProcessMetrics {
+                cpu_nano_cores: cpu,
+                memory_bytes: memory,
+                disk_usage_bytes: disk_usage,
+            }
+        }
+        let ret = futures::future::join_all(
+            (0..info.scale).map(|i| get_metrics(self, name, i.into(), info.disk, info.disk_limit)),
+        );
+
+        ret.await
+    }
+
+    async fn ensure_service(&self, desc: &ServiceDescription) -> Result<(), K8sError> {
+        self.service_api
+            .patch(
+                &desc.name,
+                &PatchParams::apply(FIELD_MANAGER).force(),
+                &Patch::Apply(desc.service.clone()),
+            )
+            .await?;
+        self.stateful_set_api
+            .patch(
+                &desc.name,
+                &PatchParams::apply(FIELD_MANAGER).force(),
+                &Patch::Apply(desc.stateful_set.clone()),
+            )
+            .await?;
+
+        // Explicitly delete any pods in the stateful set that don't match the
+        // template. In theory, Kubernetes would do this automatically, but
+        // in practice we have observed that it does not.
+        // See: https://github.com/kubernetes/kubernetes/issues/67250
+        for pod_id in 0..desc.scale {
+            let pod_name = format!("{}-{pod_id}", desc.name);
+            let pod = match self.pod_api.get(&pod_name).await {
+                Ok(pod) => pod,
+                // Pod already doesn't exist.
+                Err(kube::Error::Api(e)) if e.code == 404 => continue,
+                Err(e) => return Err(e.into()),
+            };
+            if pod.annotations().get(POD_TEMPLATE_HASH_ANNOTATION) != Some(&desc.pod_template_hash)
+            {
+                match self
+                    .pod_api
+                    .delete(&pod_name, &DeleteParams::default())
+                    .await
+                {
+                    Ok(_) => (),
+                    // Pod got deleted while we were looking at it.
+                    Err(kube::Error::Api(e)) if e.code == 404 => (),
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn drop_service(&self, name: &str) -> Result<(), K8sError> {
+        let res = self
+            .stateful_set_api
+            .delete(name, &DeleteParams::default())
+            .await;
+        match res {
+            Ok(_) => (),
+            Err(K8sError::Api(e)) if e.code == 404 => (),
+            Err(e) => return Err(e.into()),
+        }
+
+        let res = self
+            .service_api
+            .delete(name, &DeleteParams::default())
+            .await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(K8sError::Api(e)) if e.code == 404 => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn list_services(&self, namespace: &str) -> Result<Vec<String>, K8sError> {
+        let stateful_sets = self.stateful_set_api.list(&Default::default()).await?;
+        let name_prefix = format!("{namespace}-");
+        Ok(stateful_sets
+            .into_iter()
+            .filter_map(|ss| {
+                ss.metadata
+                    .name
+                    .unwrap()
+                    .strip_prefix(&name_prefix)
+                    .map(Into::into)
+            })
+            .collect())
     }
 }
 

@@ -12,6 +12,8 @@
 use fancy_regex::Regex;
 use std::collections::{btree_map, BTreeMap};
 use std::error::Error;
+use std::io;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -25,7 +27,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig, SshTunnelStatus};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
-use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
+use rdkafka::client::{Client, NativeClient, OAuthToken};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{ConsumerContext, Rebalance};
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
@@ -272,6 +274,15 @@ impl ProducerContext for MzClientContext {
     }
 }
 
+/// The address of a Kafka broker.
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub struct BrokerAddr {
+    /// The broker's hostname.
+    pub host: String,
+    /// The broker's port.
+    pub port: u16,
+}
+
 /// Rewrites a broker address.
 ///
 /// For use with [`TunnelingClientContext`].
@@ -365,7 +376,7 @@ impl<C> TunnelingClientContext<C> {
             .connect(
                 tunnel,
                 &broker.host,
-                broker.port.parse().context("parsing broker port")?,
+                broker.port,
                 self.ssh_timeout_config,
                 self.in_task,
             )
@@ -429,8 +440,8 @@ where
 {
     const ENABLE_REFRESH_OAUTH_TOKEN: bool = C::ENABLE_REFRESH_OAUTH_TOKEN;
 
-    fn rewrite_broker_addr(&self, addr: BrokerAddr) -> BrokerAddr {
-        let return_rewrite = |rewrite: &BrokerRewriteHandle| -> BrokerAddr {
+    fn resolve_broker_addr(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, io::Error> {
+        let return_rewrite = |rewrite: &BrokerRewriteHandle| -> Result<Vec<SocketAddr>, io::Error> {
             let rewrite = match rewrite {
                 BrokerRewriteHandle::Simple(rewrite) => rewrite.clone(),
                 BrokerRewriteHandle::SshTunnel(ssh_tunnel) => {
@@ -446,21 +457,22 @@ where
                     unreachable!()
                 }
             };
+            let rewrite_port = rewrite.port.unwrap_or(port);
 
-            let new_addr = BrokerAddr {
-                host: rewrite.host,
-                port: match rewrite.port {
-                    None => addr.port.clone(),
-                    Some(port) => port.to_string(),
-                },
-            };
             info!(
                 "rewriting broker {}:{} to {}:{}",
-                addr.host, addr.port, new_addr.host, new_addr.port
+                host, port, rewrite.host, rewrite_port
             );
-            new_addr
+
+            (rewrite.host, rewrite_port)
+                .to_socket_addrs()
+                .map(|addrs| addrs.collect())
         };
 
+        let addr = BrokerAddr {
+            host: host.into(),
+            port,
+        };
         let rewrite = self.rewrites.lock().expect("poisoned").get(&addr).cloned();
 
         match rewrite {
@@ -474,8 +486,8 @@ where
                             self.ssh_tunnel_manager
                                 .connect(
                                     default_tunnel.clone(),
-                                    &addr.host,
-                                    addr.port.parse().unwrap(),
+                                    host,
+                                    port,
                                     self.ssh_timeout_config,
                                     self.in_task,
                                 )
@@ -519,20 +531,19 @@ where
                                     )
                                 });
 
-                                // We have to give rdkafka an address, as this callback can't fail,
-                                // we just give it a random one that will never resolve.
-                                BrokerAddr {
-                                    host: "failed-ssh-tunnel.dev.materialize.com".to_string(),
-                                    port: 1337.to_string(),
-                                }
+                                Err(io::Error::new(
+                                    io::ErrorKind::Other,
+                                    "creating SSH tunnel failed",
+                                ))
                             }
                         }
                     }
-                    TunnelConfig::StaticHost(host) => BrokerAddr {
-                        host: host.to_owned(),
-                        port: addr.port,
-                    },
-                    TunnelConfig::None => addr,
+                    TunnelConfig::StaticHost(host) => (host.as_str(), port)
+                        .to_socket_addrs()
+                        .map(|addrs| addrs.collect()),
+                    TunnelConfig::None => {
+                        (host, port).to_socket_addrs().map(|addrs| addrs.collect())
+                    }
                 }
             }
             Some(rewrite) => return_rewrite(&rewrite),

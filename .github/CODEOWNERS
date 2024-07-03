@@ -42,6 +42,8 @@
 /src/adapter/src/optimize           @MaterializeInc/cluster
 # to track changes to feature flags
 /src/adapter/src/coord/ddl.rs       @MaterializeInc/testing
+# to track changes to introspection subscribes
+/src/adapter/src/coord/introspection.rs @MaterializeInc/cluster
 # to track changes to feature flags
 /src/adapter/src/flags.rs           @MaterializeInc/testing
 /src/alloc                          @benesch
@@ -94,7 +96,6 @@
 /src/pgwire                         @MaterializeInc/adapter
 /src/postgres-util                  @MaterializeInc/cluster
 /src/prof                           @teskje
-/src/proto                          @aalexandrov
 /src/repr                           @MaterializeInc/cluster
 # The `explain` and `optimize` modules are owned solely by the cluster team.
 /src/repr/src/explain               @MaterializeInc/cluster

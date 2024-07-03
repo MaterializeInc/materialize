@@ -74,6 +74,11 @@ impl Coordinator {
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
+            if self.controller.read_only() && !plan.allowed_in_read_only() {
+                ctx.retire(Err(AdapterError::ReadOnly));
+                return;
+            }
+
             // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
             let target_cluster = match ctx.session().transaction().cluster() {
                 // Use the current transaction's cluster.

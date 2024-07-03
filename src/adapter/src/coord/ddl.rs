@@ -185,6 +185,10 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<BuiltinTableAppendNotify, AdapterError> {
+        if self.controller.read_only() {
+            return Err(AdapterError::ReadOnly);
+        }
+
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut sources_to_drop = vec![];
@@ -795,11 +799,10 @@ impl Coordinator {
             self.builtin_table_update().background(updates);
         }
 
-        self.drop_introspection_subscribes(replica_id);
+        self.drop_introspection_subscribes(replica_id).await;
 
         self.controller
             .drop_replica(cluster_id, replica_id)
-            .await
             .expect("dropping replica must not fail");
     }
 

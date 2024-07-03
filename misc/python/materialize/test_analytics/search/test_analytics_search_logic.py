@@ -18,6 +18,7 @@ from materialize.buildkite_insights.annotation_search.annotation_search_presenta
 from materialize.buildkite_insights.data.build_annotation import BuildAnnotation
 from materialize.buildkite_insights.data.build_info import Build
 from materialize.test_analytics.search.test_analytics_search_source import (
+    ANY_BRANCH_VALUE,
     ANY_PIPELINE_VALUE,
     TestAnalyticsDataSource,
 )
@@ -36,6 +37,9 @@ def start_search(
     one_line_match_presentation: bool,
 ) -> None:
     assert len(like_pattern) > 0, "pattern must not be empty"
+
+    if branch == ANY_BRANCH_VALUE:
+        branch = None
 
     if not like_pattern.startswith("%"):
         like_pattern = f"%{like_pattern}"

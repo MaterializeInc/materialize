@@ -57,8 +57,7 @@ generate_extracted_config!(
     (Topic, String),
     (TopicConfig, BTreeMap<String, String>),
     (TopicPartitionCount, i32),
-    (TopicReplicationFactor, i32),
-    (ProgressTopicReplicationFactor, i32)
+    (TopicReplicationFactor, i32)
 );
 
 impl TryFromValue<Value> for KafkaSinkCompressionType {
