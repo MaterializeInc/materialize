@@ -52,7 +52,7 @@ CREATE OR REPLACE VIEW v_scalability_framework_result_per_week AS
         res.framework_version,
         res.workload_version,
         res.concurrency,
-        date_trunc('week', b.date) AS day,
+        date_trunc('week', b.date) AS week,
         min(res.count) AS min_count,
         avg(res.count) AS avg_count,
         max(res.count) AS max_count,
