@@ -2490,3 +2490,104 @@ impl From<CatalogEntry> for TemporaryItem {
         }
     }
 }
+
+/// The same as [`StateUpdateKind`], but without `TemporaryItem` so we can derive [`Ord`].
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
+pub enum BootstrapStateUpdateKind {
+    Role(durable::objects::Role),
+    Database(durable::objects::Database),
+    Schema(durable::objects::Schema),
+    DefaultPrivilege(durable::objects::DefaultPrivilege),
+    SystemPrivilege(MzAclItem),
+    SystemConfiguration(durable::objects::SystemConfiguration),
+    Cluster(durable::objects::Cluster),
+    IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
+    ClusterReplica(durable::objects::ClusterReplica),
+    SystemObjectMapping(durable::objects::SystemObjectMapping),
+    Item(durable::objects::Item),
+    Comment(durable::objects::Comment),
+    AuditLog(durable::objects::AuditLog),
+    StorageUsage(durable::objects::StorageUsage),
+    // Storage updates.
+    StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
+    UnfinalizedShard(durable::objects::UnfinalizedShard),
+}
+
+impl From<BootstrapStateUpdateKind> for StateUpdateKind {
+    fn from(value: BootstrapStateUpdateKind) -> Self {
+        match value {
+            BootstrapStateUpdateKind::Role(kind) => StateUpdateKind::Role(kind),
+            BootstrapStateUpdateKind::Database(kind) => StateUpdateKind::Database(kind),
+            BootstrapStateUpdateKind::Schema(kind) => StateUpdateKind::Schema(kind),
+            BootstrapStateUpdateKind::DefaultPrivilege(kind) => {
+                StateUpdateKind::DefaultPrivilege(kind)
+            }
+            BootstrapStateUpdateKind::SystemPrivilege(kind) => {
+                StateUpdateKind::SystemPrivilege(kind)
+            }
+            BootstrapStateUpdateKind::SystemConfiguration(kind) => {
+                StateUpdateKind::SystemConfiguration(kind)
+            }
+            BootstrapStateUpdateKind::Cluster(kind) => StateUpdateKind::Cluster(kind),
+            BootstrapStateUpdateKind::IntrospectionSourceIndex(kind) => {
+                StateUpdateKind::IntrospectionSourceIndex(kind)
+            }
+            BootstrapStateUpdateKind::ClusterReplica(kind) => StateUpdateKind::ClusterReplica(kind),
+            BootstrapStateUpdateKind::SystemObjectMapping(kind) => {
+                StateUpdateKind::SystemObjectMapping(kind)
+            }
+            BootstrapStateUpdateKind::Item(kind) => StateUpdateKind::Item(kind),
+            BootstrapStateUpdateKind::Comment(kind) => StateUpdateKind::Comment(kind),
+            BootstrapStateUpdateKind::AuditLog(kind) => StateUpdateKind::AuditLog(kind),
+            BootstrapStateUpdateKind::StorageUsage(kind) => StateUpdateKind::StorageUsage(kind),
+            BootstrapStateUpdateKind::StorageCollectionMetadata(kind) => {
+                StateUpdateKind::StorageCollectionMetadata(kind)
+            }
+            BootstrapStateUpdateKind::UnfinalizedShard(kind) => {
+                StateUpdateKind::UnfinalizedShard(kind)
+            }
+        }
+    }
+}
+
+impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
+    type Error = TemporaryItem;
+
+    fn try_from(value: StateUpdateKind) -> Result<Self, Self::Error> {
+        match value {
+            StateUpdateKind::Role(kind) => Ok(BootstrapStateUpdateKind::Role(kind)),
+            StateUpdateKind::Database(kind) => Ok(BootstrapStateUpdateKind::Database(kind)),
+            StateUpdateKind::Schema(kind) => Ok(BootstrapStateUpdateKind::Schema(kind)),
+            StateUpdateKind::DefaultPrivilege(kind) => {
+                Ok(BootstrapStateUpdateKind::DefaultPrivilege(kind))
+            }
+            StateUpdateKind::SystemPrivilege(kind) => {
+                Ok(BootstrapStateUpdateKind::SystemPrivilege(kind))
+            }
+            StateUpdateKind::SystemConfiguration(kind) => {
+                Ok(BootstrapStateUpdateKind::SystemConfiguration(kind))
+            }
+            StateUpdateKind::Cluster(kind) => Ok(BootstrapStateUpdateKind::Cluster(kind)),
+            StateUpdateKind::IntrospectionSourceIndex(kind) => {
+                Ok(BootstrapStateUpdateKind::IntrospectionSourceIndex(kind))
+            }
+            StateUpdateKind::ClusterReplica(kind) => {
+                Ok(BootstrapStateUpdateKind::ClusterReplica(kind))
+            }
+            StateUpdateKind::SystemObjectMapping(kind) => {
+                Ok(BootstrapStateUpdateKind::SystemObjectMapping(kind))
+            }
+            StateUpdateKind::TemporaryItem(kind) => Err(kind),
+            StateUpdateKind::Item(kind) => Ok(BootstrapStateUpdateKind::Item(kind)),
+            StateUpdateKind::Comment(kind) => Ok(BootstrapStateUpdateKind::Comment(kind)),
+            StateUpdateKind::AuditLog(kind) => Ok(BootstrapStateUpdateKind::AuditLog(kind)),
+            StateUpdateKind::StorageUsage(kind) => Ok(BootstrapStateUpdateKind::StorageUsage(kind)),
+            StateUpdateKind::StorageCollectionMetadata(kind) => {
+                Ok(BootstrapStateUpdateKind::StorageCollectionMetadata(kind))
+            }
+            StateUpdateKind::UnfinalizedShard(kind) => {
+                Ok(BootstrapStateUpdateKind::UnfinalizedShard(kind))
+            }
+        }
+    }
+}

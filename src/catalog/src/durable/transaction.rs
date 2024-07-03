@@ -1751,102 +1751,19 @@ impl<'a> Transaction<'a> {
             .map(|value| value.value)
     }
 
-    // TODO(jkosh44) This is a temporary placeholder so the in-memory catalog can pretend to be
-    // collecting updates from the durable catalog.
-    /// Returns the current value of all objects in the form of a positive [`StateUpdate`].
-    pub fn get_bootstrap_updates(&self) -> impl Iterator<Item = StateUpdate> + '_ {
-        fn get_collection_updates<T>(
-            table_txn: &TableTransaction<T::Key, T::Value>,
-            kind_fn: impl FnMut(T) -> StateUpdateKind,
-        ) -> impl Iterator<Item = StateUpdateKind>
-        where
-            T::Key: Ord + Eq + Clone + Debug,
-            T::Value: Ord + Clone + Debug,
-            T: DurableType,
-        {
-            table_txn
-                .items()
-                .into_iter()
-                .map(|(k, v)| DurableType::from_key_value(k, v))
-                .map(kind_fn)
-        }
-
-        let Transaction {
-            durable_catalog: _,
-            databases,
-            schemas,
-            items,
-            comments,
-            roles,
-            clusters,
-            cluster_replicas,
-            introspection_sources,
-            system_gid_mapping,
-            system_configurations,
-            default_privileges,
-            system_privileges,
-            // Handled separately during bootstrap.
-            audit_log_updates: _,
-            storage_usage_updates: _,
-            storage_collection_metadata,
-            unfinalized_shards,
-            // Not representable as a `StateUpdate`.
-            id_allocator: _,
-            configs: _,
-            settings: _,
-            txn_wal_shard: _,
-            op_id: _,
-            commit_ts,
-        } = &self;
-
-        std::iter::empty()
-            .chain(get_collection_updates(roles, StateUpdateKind::Role))
-            .chain(get_collection_updates(databases, StateUpdateKind::Database))
-            .chain(get_collection_updates(schemas, StateUpdateKind::Schema))
-            .chain(get_collection_updates(
-                default_privileges,
-                StateUpdateKind::DefaultPrivilege,
-            ))
-            .chain(get_collection_updates(
-                system_privileges,
-                StateUpdateKind::SystemPrivilege,
-            ))
-            .chain(get_collection_updates(
-                system_configurations,
-                StateUpdateKind::SystemConfiguration,
-            ))
-            .chain(get_collection_updates(clusters, StateUpdateKind::Cluster))
-            .chain(get_collection_updates(
-                introspection_sources,
-                StateUpdateKind::IntrospectionSourceIndex,
-            ))
-            .chain(get_collection_updates(
-                cluster_replicas,
-                StateUpdateKind::ClusterReplica,
-            ))
-            .chain(get_collection_updates(
-                system_gid_mapping,
-                StateUpdateKind::SystemObjectMapping,
-            ))
-            .chain(get_collection_updates(items, StateUpdateKind::Item))
-            .chain(get_collection_updates(comments, StateUpdateKind::Comment))
-            .chain(get_collection_updates(
-                storage_collection_metadata,
-                StateUpdateKind::StorageCollectionMetadata,
-            ))
-            .chain(get_collection_updates(
-                unfinalized_shards,
-                StateUpdateKind::UnfinalizedShard,
-            ))
-            .map(|kind| StateUpdate {
-                kind,
-                ts: commit_ts.clone(),
-                diff: StateDiff::Addition,
-            })
+    /// Commit the current operation within the transaction. This does not cause anything to be
+    /// written durably, but signals to the current transaction that we are moving on to the next
+    /// operation.
+    ///
+    /// Returns the updates of the committed operation.
+    #[must_use]
+    pub fn get_and_commit_op_updates(&mut self) -> Vec<StateUpdate> {
+        let updates = self.get_op_updates();
+        self.commit_op();
+        updates
     }
 
-    /// Returns the updates of the current op.
-    pub fn get_op_updates(&self) -> impl Iterator<Item = StateUpdate> + '_ {
+    fn get_op_updates(&self) -> Vec<StateUpdate> {
         fn get_collection_op_updates<'a, T>(
             table_txn: &'a TableTransaction<T::Key, T::Value>,
             kind_fn: impl Fn(T) -> StateUpdateKind + 'a,
@@ -1924,7 +1841,7 @@ impl<'a> Transaction<'a> {
             op_id: _,
         } = &self;
 
-        std::iter::empty()
+        let updates = std::iter::empty()
             .chain(get_collection_op_updates(
                 roles,
                 StateUpdateKind::Role,
@@ -2010,10 +1927,21 @@ impl<'a> Transaction<'a> {
                 ts: commit_ts.clone(),
                 diff,
             })
+            .collect();
+
+        updates
+    }
+
+    fn commit_op(&mut self) {
+        self.op_id += 1;
     }
 
     pub fn op_id(&self) -> Timestamp {
         self.op_id
+    }
+
+    pub fn commit_ts(&self) -> mz_repr::Timestamp {
+        self.commit_ts
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
@@ -2054,20 +1982,16 @@ impl<'a> Transaction<'a> {
         (txn_batch, self.durable_catalog)
     }
 
-    /// Commit the current operation within the transaction. This does not cause anything to be
-    /// written durably, but signals to the current transaction that we are moving on to the next
-    /// operation.
+    /// Commits the storage transaction to durable storage. Any error returned outside read-only
+    /// mode indicates the catalog may be in an indeterminate state and needs to be fully re-read
+    /// before proceeding. In general, this must be fatal to the calling process. We do not
+    /// panic/halt inside this function itself so that errors can bubble up during initialization.
+    ///
+    /// In read-only mode, this will return an error indicating that the catalog is not writeable.
     #[mz_ore::instrument(level = "debug")]
-    pub fn commit_op(&mut self) {
-        self.op_id += 1;
-    }
-
-    /// Commits the storage transaction to durable storage. Any error returned indicates the catalog may be
-    /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
-    /// must be fatal to the calling process. We do not panic/halt inside this function itself so
-    /// that errors can bubble up during initialization.
-    #[mz_ore::instrument(level = "debug")]
-    pub async fn commit(self) -> Result<(), CatalogError> {
+    pub(crate) async fn commit_internal(
+        self,
+    ) -> Result<&'a mut dyn DurableCatalogState, CatalogError> {
         let (mut txn_batch, durable_catalog) = self.into_parts();
         let TransactionBatch {
             databases,
@@ -2114,7 +2038,42 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
         differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
-        durable_catalog.commit_transaction(txn_batch).await
+
+        durable_catalog.commit_transaction(txn_batch).await?;
+        Ok(durable_catalog)
+    }
+
+    /// Commits the storage transaction to durable storage. Any error returned outside read-only
+    /// mode indicates the catalog may be in an indeterminate state and needs to be fully re-read
+    /// before proceeding. In general, this must be fatal to the calling process. We do not
+    /// panic/halt inside this function itself so that errors can bubble up during initialization.
+    ///
+    /// In read-only mode, this will return an error indicating that the catalog is not writeable.
+    ///
+    /// IMPORTANT: It is assumed that the committer of this transaction has already applied all
+    /// updates from this transaction. Therefore, updates from this transaction will not be returned
+    /// when calling [`crate::durable::ReadOnlyDurableCatalogState::sync_to_current_updates`] or
+    /// [`crate::durable::ReadOnlyDurableCatalogState::sync_updates`].
+    ///
+    /// An alternative implementation would be for the caller to explicitly consume their updates
+    /// after committing and only then apply the updates in-memory. While this removes assumptions
+    /// about the caller in this method, in practice it results in duplicate work on every commit.
+    #[mz_ore::instrument(level = "debug")]
+    pub async fn commit(self) -> Result<(), CatalogError> {
+        let op_updates = self.get_op_updates();
+        assert!(
+            op_updates.is_empty(),
+            "unconsumed transaction updates: {op_updates:?}"
+        );
+
+        let commit_ts = self.commit_ts();
+        let durable_storage = self.commit_internal().await?;
+        // Drain all the updates from the commit since it is assumed that they were already applied.
+        let updates = durable_storage.sync_updates(commit_ts).await?;
+        // This is bad because it means that we performed the transaction with an out of date state.
+        soft_assert_no_log!(updates.iter().all(|update| update.ts == commit_ts),
+            "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, updates:{updates:?}");
+        Ok(())
     }
 }
 
