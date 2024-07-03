@@ -1365,3 +1365,30 @@ SELECT '{{{{{{{7}}}}}}}'::int[];
 # We check max depth only after successfully parsing
 query error invalid input syntax for type array: Unexpected end of input\.: "\{\{\{\{\{\{\{7\}\}\}\}\}\}"
 SELECT '{{{{{{{7}}}}}}'::int[];
+
+
+query T
+SELECT ARRAY[1,4,3] @> ARRAY[3,1] AS contains
+----
+true
+
+query T
+SELECT ARRAY[1,4,3] <@ ARRAY[3,1] AS contains
+----
+false
+
+# array containment in Postgres does NOT account for duplicates
+query T
+SELECT ARRAY[1,4,3] @> ARRAY[3,1,1,1,1,1,1,1,1,1,1,1,3,3,1,3,3,3,3,3,1,1,3,3,3] AS contains
+----
+true
+
+query T
+SELECT ARRAY[2,7] <@ ARRAY[1,7,4,2,6] AS is_contained_by
+----
+true
+
+query T
+SELECT ARRAY[2,7] @> ARRAY[1,7,4,2,6] AS is_contained_by
+----
+false
