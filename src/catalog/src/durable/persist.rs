@@ -1474,14 +1474,11 @@ impl DurableCatalogState for PersistCatalogState {
             .into_iter()
             .map(RustType::from_proto)
             .map_ok(|key: StorageUsageKey| key.metric);
-        let mut events = Vec::new();
         let mut expired = Vec::new();
 
         for event in storage_usage {
             let event = event?;
-            if u128::from(event.timestamp()) >= cutoff_ts {
-                events.push(event);
-            } else if retention_period.is_some() {
+            if u128::from(event.timestamp()) < cutoff_ts {
                 debug!("pruning storage event {event:?}");
                 expired.push(event);
             }
