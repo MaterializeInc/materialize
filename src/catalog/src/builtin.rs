@@ -2784,13 +2784,13 @@ SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, clust
 transaction_isolation, execution_timestamp, transient_index_id, params, mz_version, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql_hash, mpsh.name AS prepared_statement_name,
-session_id, prepared_at, statement_type, throttled_count,
+mpsh.session_id, prepared_at, statement_type, throttled_count,
 initial_application_name, authenticated_user
 FROM mz_internal.mz_statement_execution_history mseh,
      mz_internal.mz_prepared_statement_history mpsh,
      mz_internal.mz_session_history msh
 WHERE mseh.prepared_statement_id = mpsh.id
-AND mpsh.session_id = msh.id",
+AND mpsh.session_id = msh.session_id",
         access: vec![MONITOR_SELECT],
     }
 });
@@ -3115,7 +3115,7 @@ pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_SUBSCRIPTIONS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("session_id", ScalarType::UInt32.nullable(false))
+        .with_column("session_id", ScalarType::Uuid.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column(
             "created_at",
@@ -3138,7 +3138,8 @@ pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_SESSIONS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt32.nullable(false))
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("connection_id", ScalarType::UInt32.nullable(false))
         .with_column("role_id", ScalarType::String.nullable(false))
         .with_column(
             "connected_at",

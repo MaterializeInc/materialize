@@ -327,6 +327,7 @@ impl Coordinator {
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
             conn_id: ctx.session().conn_id().clone(),
+            session_uuid: ctx.session().uuid(),
             channel: tx,
             emit_progress,
             as_of: global_lir_plan
