@@ -664,6 +664,7 @@ where
             config.now.clone(),
             Arc::clone(&txns_metrics),
             envd_epoch,
+            read_only,
             txn_wal_tables,
             config.connection_context.clone(),
             storage_txn,
