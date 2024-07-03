@@ -56,7 +56,6 @@ use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::StorageController;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use timely::Container;
 use tracing::{info, warn, Instrument};
 use uuid::Uuid;
@@ -584,9 +583,6 @@ impl Catalog {
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
         builtin_migration_metadata: BuiltinMigrationMetadata,
-        // Whether to use the new txn-wal tables implementation or the
-        // legacy one.
-        txn_wal_tables: TxnWalTablesImpl,
     ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
     {
         let mut controller = {
@@ -598,14 +594,7 @@ impl Catalog {
 
             let read_only_tx = storage.transaction().await?;
 
-            mz_controller::Controller::new(
-                config,
-                envd_epoch,
-                read_only,
-                txn_wal_tables,
-                &read_only_tx,
-            )
-            .await
+            mz_controller::Controller::new(config, envd_epoch, read_only, &read_only_tx).await
         };
 
         self.initialize_storage_controller_state(
