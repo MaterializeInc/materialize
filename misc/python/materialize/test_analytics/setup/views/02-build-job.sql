@@ -124,6 +124,20 @@ CREATE OR REPLACE VIEW v_build_job_success AS
 SELECT * FROM mv_build_job_success_on_main;
 
 CREATE OR REPLACE VIEW v_most_recent_build_job AS
+WITH most_recent_build_with_completed_build_step AS (
+    SELECT
+        b.branch,
+        b.pipeline,
+        bj.build_step_key,
+        max(b.build_number) AS highest_build_number
+    FROM build b
+    INNER JOIN build_job bj
+    ON b.build_id = bj.build_id
+    GROUP BY
+        b.branch,
+        b.pipeline,
+        bj.build_step_key
+)
 SELECT
     b.pipeline,
     b.branch,
@@ -136,8 +150,9 @@ SELECT
 FROM build_job bj
 INNER JOIN build b
     ON bj.build_id = b.build_id
-INNER JOIN v_most_recent_build mrb
+INNER JOIN most_recent_build_with_completed_build_step mrb
     ON b.pipeline = mrb.pipeline
     AND b.build_number = mrb.highest_build_number
+    AND bj.build_step_key = mrb.build_step_key
 WHERE bj.is_latest_retry = TRUE
 ;
