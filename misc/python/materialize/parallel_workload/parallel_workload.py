@@ -343,7 +343,7 @@ def run(
         stopping_time = datetime.datetime.now() + datetime.timedelta(seconds=30)
         while datetime.datetime.now() < stopping_time:
             cur.execute(
-                "SELECT * FROM mz_internal.mz_sessions WHERE id <> pg_backend_pid()"
+                "SELECT * FROM mz_internal.mz_sessions WHERE connection_id <> pg_backend_pid()"
             )
             sessions = cur.fetchall()
             if len(sessions) == 0:

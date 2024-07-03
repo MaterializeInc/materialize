@@ -97,15 +97,20 @@ class DbOperationOrFunction:
 
     def to_description(self) -> str:
         desc = f"{self.operation_type_name()}"
-        desc = f"{desc} '{self.to_pattern(self.min_param_count)}'"
+        desc = f"{desc} '{self._to_pattern_with_named_params(self.min_param_count)}'"
 
         if self.min_param_count != self.max_param_count:
-            desc = f"{desc}-'{self.to_pattern(self.max_param_count)}'"
-
-        if self.comment is not None:
-            desc = f"{desc} (comment: {self.comment})"
+            desc = f"{desc} ... '{self._to_pattern_with_named_params(self.max_param_count)}'"
 
         return desc
+
+    def _to_pattern_with_named_params(self, param_count: int) -> str:
+        pattern = self.to_pattern(param_count)
+
+        for i in range(param_count):
+            pattern = pattern.replace("$", self.params[i].__class__.__name__, 1)
+
+        return pattern
 
     def is_tagged(self, tag: str) -> bool:
         if self.tags is None:

@@ -19,13 +19,6 @@ use std::time::Instant;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_sql::session::metadata::SessionMetadata;
-use once_cell::sync::Lazy;
-use serde::Serialize;
-use timely::progress::Antichain;
-use tokio::sync::mpsc;
-use tracing::{debug, warn};
-
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
@@ -44,7 +37,6 @@ use mz_controller::clusters::{
     UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -66,9 +58,9 @@ use mz_sql::catalog::{
     IdReference, NameReference, SessionCatalog, SystemObjectType, TypeReference,
 };
 use mz_sql::names::{
-    CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
-    PartialItemName, QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier,
-    ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
+    CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName,
+    QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
+    ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
@@ -76,6 +68,7 @@ use mz_sql::plan::{
     Plan, PlanContext,
 };
 use mz_sql::rbac;
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{SystemVars, Var, VarInput, DEFAULT_DATABASE_NAME};
 use mz_sql_parser::ast::QualifiedReplica;
@@ -84,13 +77,17 @@ use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
 use mz_storage_types::connections::ConnectionContext;
+use once_cell::sync::Lazy;
+use serde::Serialize;
+use timely::progress::Antichain;
+use tokio::sync::mpsc;
+use tracing::{debug, warn};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::ConnCatalog;
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::util::index_sql;
 use crate::AdapterError;
 
 /// The in-memory representation of the Catalog. This struct is not directly used to persist
@@ -101,6 +98,11 @@ use crate::AdapterError;
 /// storing the contents of this struct on disk.
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogState {
+    // State derived from the durable catalog. These fields should only be mutated in `open.rs` or
+    // `apply.rs`. Some of these fields are not 100% derived from the durable catalog. Those
+    // include:
+    //  - Temporary items.
+    //  - Certain objects are partially derived from read-only state.
     pub(super) database_by_name: BTreeMap<String, DatabaseId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) database_by_id: BTreeMap<DatabaseId, Database>,
@@ -109,29 +111,33 @@ pub struct CatalogState {
     pub(super) ambient_schemas_by_name: BTreeMap<String, SchemaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
-    #[serde(skip)]
-    pub(super) temporary_schemas: BTreeMap<ConnectionId, Schema>,
+    pub(super) clusters_by_name: BTreeMap<String, ClusterId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) clusters_by_id: BTreeMap<ClusterId, Cluster>,
-    pub(super) clusters_by_name: BTreeMap<String, ClusterId>,
     pub(super) roles_by_name: BTreeMap<String, RoleId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) roles_by_id: BTreeMap<RoleId, Role>,
+    #[serde(skip)]
+    pub(super) system_configuration: SystemVars,
+    pub(super) default_privileges: DefaultPrivileges,
+    pub(super) system_privileges: PrivilegeMap,
+    pub(super) comments: CommentsMap,
+    pub(super) storage_metadata: StorageMetadata,
+
+    // Mutable state not derived from the durable catalog.
+    #[serde(skip)]
+    pub(super) temporary_schemas: BTreeMap<ConnectionId, Schema>,
+
+    // Read-only state not derived from the durable catalog.
     #[serde(skip)]
     pub(super) config: mz_sql::catalog::CatalogConfig,
     pub(super) cluster_replica_sizes: ClusterReplicaSizeMap,
     #[serde(skip)]
     pub(crate) availability_zones: Vec<String>,
-    #[serde(skip)]
-    pub(super) system_configuration: SystemVars,
     pub(super) egress_ips: Vec<Ipv4Addr>,
     pub(super) aws_principal_context: Option<AwsPrincipalContext>,
     pub(super) aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     pub(super) http_host_name: Option<String>,
-    pub(super) default_privileges: DefaultPrivileges,
-    pub(super) system_privileges: PrivilegeMap,
-    pub(super) comments: CommentsMap,
-    pub(super) storage_metadata: StorageMetadata,
 }
 
 fn skip_temp_items<S>(
@@ -148,7 +154,8 @@ where
 }
 
 impl CatalogState {
-    pub fn empty() -> Self {
+    /// Returns an empty [`CatalogState`] that can be used in tests.
+    pub fn empty_test() -> Self {
         CatalogState {
             database_by_name: Default::default(),
             database_by_id: Default::default(),
@@ -587,12 +594,6 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
     }
 
-    pub fn get_entry_mut(&mut self, id: &GlobalId) -> &mut CatalogEntry {
-        self.entry_by_id
-            .get_mut(id)
-            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
-    }
-
     pub fn get_temp_items(&self, conn: &ConnectionId) -> impl Iterator<Item = ObjectId> + '_ {
         let schema = self
             .temporary_schemas
@@ -746,6 +747,9 @@ impl CatalogState {
     ///
     /// This function will temporarily enable all "enable_for_item_parsing" feature flags. See
     /// [`CatalogState::with_enable_for_item_parsing`] for more details.
+    ///
+    /// NOTE: While this method takes a `&mut self`, all mutations are temporary and restored to
+    /// their original state before the method returns.
     pub(crate) fn deserialize_plan_with_enable_for_item_parsing(
         // DO NOT add any additional mutations to this method. It would be fairly surprising to the
         // caller if this method changed the state of the catalog.
@@ -1022,193 +1026,8 @@ impl CatalogState {
             .flatten()
     }
 
-    /// Associates a name, `GlobalId`, and entry.
-    pub(super) fn insert_item(
-        &mut self,
-        id: GlobalId,
-        oid: u32,
-        name: QualifiedItemName,
-        item: CatalogItem,
-        owner_id: RoleId,
-        privileges: PrivilegeMap,
-    ) {
-        let entry = CatalogEntry {
-            item,
-            name,
-            id,
-            oid,
-            used_by: Vec::new(),
-            referenced_by: Vec::new(),
-            owner_id,
-            privileges,
-        };
-
-        self.insert_entry(entry);
-    }
-
-    /// Associates a name, `GlobalId`, and entry.
-    pub(super) fn insert_entry(&mut self, entry: CatalogEntry) {
-        if !entry.id.is_system() {
-            if let Some(cluster_id) = entry.item.cluster_id() {
-                self.clusters_by_id
-                    .get_mut(&cluster_id)
-                    .expect("catalog out of sync")
-                    .bound_objects
-                    .insert(entry.id);
-            };
-        }
-
-        for u in &entry.references().0 {
-            match self.entry_by_id.get_mut(u) {
-                Some(metadata) => metadata.referenced_by.push(entry.id()),
-                None => panic!(
-                    "Catalog: missing dependent catalog item {} while installing {}",
-                    &u,
-                    self.resolve_full_name(entry.name(), entry.conn_id())
-                ),
-            }
-        }
-        for u in entry.uses() {
-            match self.entry_by_id.get_mut(&u) {
-                Some(metadata) => metadata.used_by.push(entry.id()),
-                None => panic!(
-                    "Catalog: missing dependent catalog item {} while installing {}",
-                    &u,
-                    self.resolve_full_name(entry.name(), entry.conn_id())
-                ),
-            }
-        }
-        let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-        let schema = self.get_schema_mut(
-            &entry.name().qualifiers.database_spec,
-            &entry.name().qualifiers.schema_spec,
-            conn_id,
-        );
-
-        let prev_id = match entry.item() {
-            CatalogItem::Func(_) => schema
-                .functions
-                .insert(entry.name().item.clone(), entry.id()),
-            CatalogItem::Type(_) => schema.types.insert(entry.name().item.clone(), entry.id()),
-            _ => schema.items.insert(entry.name().item.clone(), entry.id()),
-        };
-
-        assert!(
-            prev_id.is_none(),
-            "builtin name collision on {:?}",
-            entry.name().item.clone()
-        );
-
-        self.entry_by_id.insert(entry.id(), entry.clone());
-    }
-
-    #[mz_ore::instrument(level = "trace")]
-    pub(super) fn drop_item(&mut self, id: GlobalId) -> CatalogEntry {
-        let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
-        for u in &metadata.references().0 {
-            if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
-                dep_metadata.referenced_by.retain(|u| *u != metadata.id())
-            }
-        }
-        for u in metadata.uses() {
-            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
-                dep_metadata.used_by.retain(|u| *u != metadata.id())
-            }
-        }
-
-        let conn_id = metadata.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-        let schema = self.get_schema_mut(
-            &metadata.name().qualifiers.database_spec,
-            &metadata.name().qualifiers.schema_spec,
-            conn_id,
-        );
-        if metadata.item_type() == CatalogItemType::Type {
-            schema
-                .types
-                .remove(&metadata.name().item)
-                .expect("catalog out of sync");
-        } else {
-            // Functions would need special handling, but we don't yet support
-            // dropping functions.
-            assert_ne!(metadata.item_type(), CatalogItemType::Func);
-
-            schema
-                .items
-                .remove(&metadata.name().item)
-                .expect("catalog out of sync");
-        };
-
-        if !id.is_system() {
-            if let Some(cluster_id) = metadata.item().cluster_id() {
-                assert!(
-                    self.clusters_by_id
-                        .get_mut(&cluster_id)
-                        .expect("catalog out of sync")
-                        .bound_objects
-                        .remove(&id),
-                    "catalog out of sync"
-                );
-            }
-        }
-
-        metadata
-    }
-
     pub(super) fn get_database(&self, database_id: &DatabaseId) -> &Database {
         &self.database_by_id[database_id]
-    }
-
-    pub(super) fn insert_introspection_source_index(
-        &mut self,
-        cluster_id: ClusterId,
-        log: &'static BuiltinLog,
-        index_id: GlobalId,
-        oid: u32,
-    ) {
-        let source_name = FullItemName {
-            database: RawDatabaseSpecifier::Ambient,
-            schema: log.schema.into(),
-            item: log.name.into(),
-        };
-        let index_name = format!("{}_{}_primary_idx", log.name, cluster_id);
-        let mut index_name = QualifiedItemName {
-            qualifiers: ItemQualifiers {
-                database_spec: ResolvedDatabaseSpecifier::Ambient,
-                schema_spec: SchemaSpecifier::Id(self.get_mz_introspection_schema_id()),
-            },
-            item: index_name.clone(),
-        };
-        index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
-        let index_item_name = index_name.item.clone();
-        let log_id = self.resolve_builtin_log(log);
-        self.insert_item(
-            index_id,
-            oid,
-            index_name,
-            CatalogItem::Index(Index {
-                on: log_id,
-                keys: log
-                    .variant
-                    .index_by()
-                    .into_iter()
-                    .map(MirScalarExpr::Column)
-                    .collect(),
-                create_sql: index_sql(
-                    index_item_name,
-                    cluster_id,
-                    source_name,
-                    &log.variant.desc(),
-                    &log.variant.index_by(),
-                ),
-                conn_id: None,
-                resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id])),
-                cluster_id,
-                is_retained_metrics_object: false,
-                custom_logical_compaction_window: None,
-            }),
-            MZ_SYSTEM_ROLE_ID,
-            PrivilegeMap::default(),
-        );
     }
 
     /// Gets a reference to the specified replica of the specified cluster.
@@ -1241,27 +1060,6 @@ impl CatalogState {
         Ok(self.system_configuration.get(name)?)
     }
 
-    /// Set the default value for `name`, which is the value it will be reset to.
-    pub(super) fn set_system_configuration_default(
-        &mut self,
-        name: &str,
-        value: VarInput,
-    ) -> Result<(), Error> {
-        Ok(self.system_configuration.set_default(name, value)?)
-    }
-
-    /// Insert system configuration `name` with `value`.
-    ///
-    /// Return a `bool` value indicating whether the configuration was modified
-    /// by the call.
-    pub(super) fn insert_system_configuration(
-        &mut self,
-        name: &str,
-        value: VarInput,
-    ) -> Result<bool, Error> {
-        Ok(self.system_configuration.set(name, value)?)
-    }
-
     /// Parse system configuration `name` with `value` int.
     ///
     /// Returns the parsed value as a string.
@@ -1272,14 +1070,6 @@ impl CatalogState {
     ) -> Result<String, Error> {
         let value = self.system_configuration.parse(name, value)?;
         Ok(value.format())
-    }
-
-    /// Reset system configuration `name`.
-    ///
-    /// Return a `bool` value indicating whether the configuration was modified
-    /// by the call.
-    pub(super) fn remove_system_configuration(&mut self, name: &str) -> Result<bool, Error> {
-        Ok(self.system_configuration.reset(name)?)
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -1324,35 +1114,6 @@ impl CatalogState {
             (ResolvedDatabaseSpecifier::Id(database_id), SchemaSpecifier::Id(schema_id)) => {
                 &self.database_by_id[database_id].schemas_by_id[schema_id]
             }
-            (ResolvedDatabaseSpecifier::Id(_), SchemaSpecifier::Temporary) => {
-                unreachable!("temporary schemas are in the ambient database")
-            }
-        }
-    }
-
-    pub(super) fn get_schema_mut(
-        &mut self,
-        database_spec: &ResolvedDatabaseSpecifier,
-        schema_spec: &SchemaSpecifier,
-        conn_id: &ConnectionId,
-    ) -> &mut Schema {
-        // Keep in sync with `get_schemas`
-        match (database_spec, schema_spec) {
-            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => self
-                .temporary_schemas
-                .get_mut(conn_id)
-                .expect("catalog out of sync"),
-            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)) => self
-                .ambient_schemas_by_id
-                .get_mut(id)
-                .expect("catalog out of sync"),
-            (ResolvedDatabaseSpecifier::Id(database_id), SchemaSpecifier::Id(schema_id)) => self
-                .database_by_id
-                .get_mut(database_id)
-                .expect("catalog out of sync")
-                .schemas_by_id
-                .get_mut(schema_id)
-                .expect("catalog out of sync"),
             (ResolvedDatabaseSpecifier::Id(_), SchemaSpecifier::Temporary) => {
                 unreachable!("temporary schemas are in the ambient database")
             }

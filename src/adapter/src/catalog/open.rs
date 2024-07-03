@@ -9,16 +9,15 @@
 
 //! Logic related to opening a [`Catalog`].
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::str::FromStr;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::future::{self, BoxFuture, FutureExt};
+use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::builtin::{
-    Builtin, BuiltinTable, BuiltinView, Fingerprint, BUILTINS, BUILTIN_CLUSTERS,
-    BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
+    BuiltinTable, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
+    BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -42,26 +41,24 @@ use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::instrument;
 use mz_ore::now::to_datetime;
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::is_unstable_schema;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, NameReference,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
     RoleMembership, RoleVars,
 };
 use mz_sql::func::OP_IMPLS;
-use mz_sql::names::{
-    ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
-};
+use mz_sql::names::SchemaId;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
-use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_ssh_util::keys::SshKeyPairSet;
+use mz_storage_client::controller::StorageController;
+use mz_storage_types::controller::TxnWalTablesImpl;
 use timely::Container;
-use tracing::{info, info_span, warn, Instrument};
+use tracing::{info, warn, Instrument};
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -196,11 +193,23 @@ impl Catalog {
             entry_by_id: BTreeMap::new(),
             ambient_schemas_by_name: BTreeMap::new(),
             ambient_schemas_by_id: BTreeMap::new(),
-            temporary_schemas: BTreeMap::new(),
-            clusters_by_id: BTreeMap::new(),
             clusters_by_name: BTreeMap::new(),
+            clusters_by_id: BTreeMap::new(),
             roles_by_name: BTreeMap::new(),
             roles_by_id: BTreeMap::new(),
+            system_configuration: {
+                let mut s =
+                    SystemVars::new(config.active_connection_count).set_unsafe(config.unsafe_mode);
+                if config.all_features {
+                    s.enable_all_feature_flags_by_default();
+                }
+                s
+            },
+            default_privileges: DefaultPrivileges::default(),
+            system_privileges: PrivilegeMap::default(),
+            comments: CommentsMap::default(),
+            storage_metadata: Default::default(),
+            temporary_schemas: BTreeMap::new(),
             config: mz_sql::catalog::CatalogConfig {
                 start_time: to_datetime((config.now)()),
                 start_instant: Instant::now(),
@@ -214,22 +223,10 @@ impl Catalog {
             },
             cluster_replica_sizes: config.cluster_replica_sizes,
             availability_zones: config.availability_zones,
-            system_configuration: {
-                let mut s =
-                    SystemVars::new(config.active_connection_count).set_unsafe(config.unsafe_mode);
-                if config.all_features {
-                    s.enable_all_feature_flags_by_default();
-                }
-                s
-            },
             egress_ips: config.egress_ips,
             aws_principal_context: config.aws_principal_context,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             http_host_name: config.http_host_name,
-            default_privileges: DefaultPrivileges::default(),
-            system_privileges: PrivilegeMap::default(),
-            comments: CommentsMap::default(),
-            storage_metadata: Default::default(),
         };
 
         let is_read_only = storage.is_read_only();
@@ -389,175 +386,6 @@ impl Catalog {
         ))
     }
 
-    /// Install builtin views to the catalog. This is its own function so that views can be
-    /// optimized in parallel.
-    ///
-    /// The implementation is similar to `apply_updates_for_bootstrap` and determines dependency
-    /// problems by sniffing out specific errors and then retrying once those dependencies are
-    /// complete. This doesn't work for everything (casts, function implementations) so we also need
-    /// to have a bucket for everything at the end. Additionally, because this executes in parellel,
-    /// we must maintain a completed set otherwise races could result in orphaned views languishing
-    /// in awaiting with nothing retriggering the attempt.
-    #[instrument(name = "catalog::parse_views")]
-    pub(crate) async fn parse_builtin_views(
-        state: &mut CatalogState,
-        builtin_views: Vec<(&Builtin<NameReference>, GlobalId)>,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let mut handles = Vec::new();
-        let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<GlobalId>> = BTreeMap::new();
-        let mut awaiting_name_dependencies: BTreeMap<String, Vec<GlobalId>> = BTreeMap::new();
-        // Some errors are due to the implementation of casts or SQL functions that depend on some
-        // view. Instead of figuring out the exact view dependency, delay these until the end.
-        let mut awaiting_all = Vec::new();
-        // Completed views, needed to avoid race conditions.
-        let mut completed_ids: BTreeSet<GlobalId> = BTreeSet::new();
-        let mut completed_names: BTreeSet<String> = BTreeSet::new();
-        // Avoid some reference lifetime issues by not passing `builtin` into the spawned task.
-        let mut views: BTreeMap<GlobalId, &BuiltinView> =
-            BTreeMap::from_iter(builtin_views.into_iter().map(|(builtin, id)| {
-                let Builtin::View(view) = builtin else {
-                    unreachable!("handled elsewhere");
-                };
-                (id, *view)
-            }));
-        let ids: Vec<_> = views.keys().copied().collect();
-        let mut ready: VecDeque<GlobalId> = views.keys().cloned().collect();
-        while !handles.is_empty() || !ready.is_empty() || !awaiting_all.is_empty() {
-            if handles.is_empty() && ready.is_empty() {
-                // Enqueue the views that were waiting for all the others.
-                ready.extend(awaiting_all.drain(..));
-            }
-
-            // Spawn tasks for all ready views.
-            if !ready.is_empty() {
-                let spawn_state = Arc::new(state.clone());
-                while let Some(id) = ready.pop_front() {
-                    let view = views.get(&id).expect("must exist");
-                    let create_sql = view.create_sql();
-                    let mut span = info_span!(parent: None, "parse builtin view", name = view.name);
-                    OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
-                    let task_state = Arc::clone(&spawn_state);
-                    let handle = mz_ore::task::spawn(
-                        || "parse view",
-                        async move {
-                            let res = task_state.parse_item(&create_sql, None, false, None);
-                            (id, res)
-                        }
-                        .instrument(span),
-                    );
-                    handles.push(handle);
-                }
-            }
-            // Wait for a view to be ready.
-            let (handle, _idx, remaining) = future::select_all(handles).await;
-            handles = remaining;
-            let (id, res) = handle.expect("must join");
-            match res {
-                Ok(item) => {
-                    // Add item to catalog.
-                    let view = views.remove(&id).expect("must exist");
-                    let schema_id = state.ambient_schemas_by_name[view.schema];
-                    let qname = QualifiedItemName {
-                        qualifiers: ItemQualifiers {
-                            database_spec: ResolvedDatabaseSpecifier::Ambient,
-                            schema_spec: SchemaSpecifier::Id(schema_id),
-                        },
-                        item: view.name.into(),
-                    };
-                    let mut acl_items = vec![rbac::owner_privilege(
-                        mz_sql::catalog::ObjectType::View,
-                        MZ_SYSTEM_ROLE_ID,
-                    )];
-                    acl_items.extend_from_slice(&view.access);
-
-                    state.insert_item(
-                        id,
-                        view.oid,
-                        qname,
-                        item,
-                        MZ_SYSTEM_ROLE_ID,
-                        PrivilegeMap::from_mz_acl_items(acl_items),
-                    );
-
-                    // Enqueue any items waiting on this dependency.
-                    let mut resolved_dependent_items = Vec::new();
-                    if let Some(dependent_items) = awaiting_id_dependencies.remove(&id) {
-                        resolved_dependent_items.extend(dependent_items);
-                    }
-                    let entry = state.get_entry(&id);
-                    let full_name = state.resolve_full_name(entry.name(), None).to_string();
-                    if let Some(dependent_items) = awaiting_name_dependencies.remove(&full_name) {
-                        resolved_dependent_items.extend(dependent_items);
-                    }
-                    ready.extend(resolved_dependent_items);
-
-                    completed_ids.insert(id);
-                    completed_names.insert(full_name);
-                }
-                // If we were missing a dependency, wait for it to be added.
-                Err(AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))) => {
-                    if completed_ids.contains(&missing_dep) {
-                        ready.push_back(id);
-                    } else {
-                        awaiting_id_dependencies
-                            .entry(missing_dep)
-                            .or_default()
-                            .push(id);
-                    }
-                }
-                // If we were missing a dependency, wait for it to be added.
-                Err(AdapterError::PlanError(plan::PlanError::Catalog(
-                    SqlCatalogError::UnknownItem(missing_dep),
-                ))) => match GlobalId::from_str(&missing_dep) {
-                    Ok(missing_dep) => {
-                        if completed_ids.contains(&missing_dep) {
-                            ready.push_back(id);
-                        } else {
-                            awaiting_id_dependencies
-                                .entry(missing_dep)
-                                .or_default()
-                                .push(id);
-                        }
-                    }
-                    Err(_) => {
-                        if completed_names.contains(&missing_dep) {
-                            ready.push_back(id);
-                        } else {
-                            awaiting_name_dependencies
-                                .entry(missing_dep)
-                                .or_default()
-                                .push(id);
-                        }
-                    }
-                },
-                Err(AdapterError::PlanError(plan::PlanError::InvalidCast { .. })) => {
-                    awaiting_all.push(id);
-                }
-                Err(e) => panic!(
-                    "internal error: failed to load bootstrap view:\n\
-                        {name}\n\
-                        error:\n\
-                        {e:?}\n\n\
-                        Make sure that the schema name is specified in the builtin view's create sql statement.
-                        ",
-                    name = views.get(&id).expect("must exist").name,
-                ),
-            }
-        }
-
-        assert!(awaiting_id_dependencies.is_empty());
-        assert!(
-            awaiting_name_dependencies.is_empty(),
-            "awaiting_name_dependencies: {awaiting_name_dependencies:?}"
-        );
-        assert!(awaiting_all.is_empty());
-        assert!(views.is_empty());
-
-        ids.into_iter()
-            .flat_map(|id| state.pack_item_update(id, 1))
-            .collect()
-    }
-
     /// Opens or creates a catalog that stores data at `path`.
     ///
     /// Returns the catalog, metadata about builtin objects that have changed
@@ -702,6 +530,91 @@ impl Catalog {
         }
         .instrument(tracing::info_span!("catalog::open"))
         .boxed()
+    }
+
+    /// Initializes the `storage_controller` to understand all shards that
+    /// `self` expects to exist.
+    ///
+    /// Note that this must be done before creating/rendering collections
+    /// because the storage controller might not be aware of new system
+    /// collections created between versions.
+    async fn initialize_storage_controller_state(
+        &mut self,
+        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
+        builtin_migration_metadata: BuiltinMigrationMetadata,
+    ) -> Result<(), mz_catalog::durable::CatalogError> {
+        let collections = self
+            .entries()
+            .filter(|entry| entry.item().is_storage_collection())
+            .map(|entry| entry.id())
+            .collect();
+
+        // Clone the state so that any errors that occur do not leak any
+        // transformations on error.
+        let mut state = self.state.clone();
+
+        let mut storage = self.storage().await;
+        let mut txn = storage.transaction().await?;
+
+        storage_controller
+            .initialize_state(
+                &mut txn,
+                collections,
+                builtin_migration_metadata.previous_storage_collection_ids,
+            )
+            .await
+            .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+
+        let updates = txn.get_op_updates().collect();
+        let builtin_updates = state.apply_updates(updates);
+        assert_eq!(builtin_updates, Vec::new());
+        txn.commit().await?;
+        drop(storage);
+
+        // Save updated state.
+        self.state = state;
+        Ok(())
+    }
+
+    /// [`mz_controller::Controller`] depends on durable catalog state to boot,
+    /// so make it available and initialize the controller.
+    pub async fn initialize_controller(
+        &mut self,
+        config: mz_controller::ControllerConfig,
+        envd_epoch: core::num::NonZeroI64,
+        read_only: bool,
+        builtin_migration_metadata: BuiltinMigrationMetadata,
+        // Whether to use the new txn-wal tables implementation or the
+        // legacy one.
+        txn_wal_tables: TxnWalTablesImpl,
+    ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
+    {
+        let mut controller = {
+            let mut storage = self.storage().await;
+            let mut tx = storage.transaction().await?;
+            mz_controller::prepare_initialization(&mut tx)
+                .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+            tx.commit().await?;
+
+            let read_only_tx = storage.transaction().await?;
+
+            mz_controller::Controller::new(
+                config,
+                envd_epoch,
+                read_only,
+                txn_wal_tables,
+                &read_only_tx,
+            )
+            .await
+        };
+
+        self.initialize_storage_controller_state(
+            &mut *controller.storage,
+            builtin_migration_metadata,
+        )
+        .await?;
+
+        Ok(controller)
     }
 
     /// The objects in the catalog form one or more DAGs (directed acyclic graph) via object
@@ -945,6 +858,17 @@ impl Catalog {
             let storage = storage.into_inner();
             storage.expire().await;
         }
+    }
+}
+
+impl CatalogState {
+    /// Set the default value for `name`, which is the value it will be reset to.
+    fn set_system_configuration_default(
+        &mut self,
+        name: &str,
+        value: VarInput,
+    ) -> Result<(), Error> {
+        Ok(self.system_configuration.set_default(name, value)?)
     }
 }
 
