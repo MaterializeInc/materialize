@@ -67,6 +67,12 @@ class CreateCluster(Check):
                 > SELECT * FROM create_cluster2_view;
                 234
 
+                ![version>10600] SHOW CREATE CLUSTER create_cluster1;
+                contains: SHOW CREATE for unmanaged clusters not yet supported
+
+                ![version>10600] SHOW CREATE CLUSTER create_cluster2;
+                contains: SHOW CREATE for unmanaged clusters not yet supported
+
                 > DROP TABLE create_cluster1_table CASCADE;
                 > DROP TABLE create_cluster2_table CASCADE;
            """
