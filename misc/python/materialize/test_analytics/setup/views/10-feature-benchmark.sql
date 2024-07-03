@@ -55,7 +55,7 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_week AS
         res.framework_version,
         res.scenario_version,
         res.scale,
-        date_trunc('week', b.date) AS day,
+        date_trunc('week', b.date) AS week,
         min(res.wallclock) AS min_wallclock,
         avg(res.wallclock) AS avg_wallclock,
         max(res.wallclock) AS max_wallclock,
