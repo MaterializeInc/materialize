@@ -92,7 +92,7 @@ contains:Invalid username or password
     SASL USERNAME 'materialize',
     SASL PASSWORD SECRET password
   )
-contains:Invalid CA certificate
+contains:certificate verify failed
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9096',
@@ -101,7 +101,7 @@ contains:Invalid CA certificate
     SASL PASSWORD SECRET password,
     SSL CERTIFICATE AUTHORITY = '${ca-selective-crt}'
   )
-contains:Invalid CA certificate
+contains:certificate verify failed
 
 # ==> Test without an SSH tunnel. <==
 

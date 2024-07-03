@@ -32,13 +32,13 @@ contains:Disconnected during handshake; broker might require SSL encryption
     BROKER 'kafka:9093'
     -- SECURITY PROTOCOL defaults to SSL when no SASL options are specified.
   )
-contains:Invalid CA certificate
+contains:certificate verify failed
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9093',
     SSL CERTIFICATE AUTHORITY = '${ca-selective-crt}'
   )
-contains:Invalid CA certificate
+contains:certificate verify failed
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9093',
@@ -100,10 +100,10 @@ contains:Client creation error
 > ALTER CONNECTION kafka RESET (SSL CERTIFICATE) WITH (VALIDATE = true);
 
 ! ALTER CONNECTION kafka RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = true);
-contains:Invalid CA certificate
+contains:certificate verify failed
 
 ! ALTER CONNECTION kafka RESET (SSL KEY), RESET (SSL CERTIFICATE), RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = true);
-contains:Invalid CA certificate
+contains:certificate verify failed
 
 > ALTER CONNECTION kafka RESET (SSL KEY), RESET (SSL CERTIFICATE), RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = false);
 
