@@ -153,19 +153,18 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#0, #5) // { arity: 2 }
-    Filter (#0) IS NOT NULL // { arity: 6 }
-      Join on=(#0 = #2 AND #3 = #4) type=delta // { arity: 6 }
-        implementation
-          %0:foo » %1:bar[#0]KA » %2:baz[#0]UK
-          %1:bar » %2:baz[#0]UK » %0:foo[#0]KA
-          %2:baz » %1:bar[#1]K » %0:foo[#0]KA
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          ReadIndex on=foo foo_idx=[delta join 1st input (full scan)] // { arity: 2 }
-        ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
-          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
-            ReadIndex on=bar bar_idx=[*** full scan ***] // { arity: 2 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          ReadStorage materialize.public.baz // { arity: 2 }
+    Join on=(#0 = #2 AND #3 = #4) type=delta // { arity: 6 }
+      implementation
+        %0:foo » %1:bar[#0]KA » %2:baz[#0]UK
+        %1:bar » %2:baz[#0]UK » %0:foo[#0]KA
+        %2:baz » %1:bar[#1]K » %0:foo[#0]KA
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        ReadIndex on=foo foo_idx=[delta join 1st input (full scan)] // { arity: 2 }
+      ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
+        Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
+          ReadIndex on=bar bar_idx=[*** full scan ***] // { arity: 2 }
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        ReadStorage materialize.public.baz // { arity: 2 }
 
 Source materialize.public.baz
 
@@ -208,19 +207,18 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#0, #5) // { arity: 2 }
-    Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 6 }
-      Join on=(#0 = #2 AND #3 = #4) type=delta // { arity: 6 }
-        implementation
-          %0:foo » %1:bar[#0]KA » %2:baz[#0]KA
-          %1:bar » %0:foo[#0]KA » %2:baz[#0]KA
-          %2:baz » %1:bar[#1]K » %0:foo[#0]KA
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          ReadIndex on=foo foo_idx=[delta join 1st input (full scan)] // { arity: 2 }
-        ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
-          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
-            ReadIndex on=bar bar_idx=[*** full scan ***] // { arity: 2 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          ReadIndex on=baz baz_idx=[delta join lookup] // { arity: 2 }
+    Join on=(#0 = #2 AND #3 = #4) type=delta // { arity: 6 }
+      implementation
+        %0:foo » %1:bar[#0]KA » %2:baz[#0]KA
+        %1:bar » %0:foo[#0]KA » %2:baz[#0]KA
+        %2:baz » %1:bar[#1]K » %0:foo[#0]KA
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        ReadIndex on=foo foo_idx=[delta join 1st input (full scan)] // { arity: 2 }
+      ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
+        Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
+          ReadIndex on=bar bar_idx=[*** full scan ***] // { arity: 2 }
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        ReadIndex on=baz baz_idx=[delta join lookup] // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx (delta join 1st input (full scan))
@@ -301,7 +299,7 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#3, #1, #5) // { arity: 3 }
-    Filter (#0) IS NOT NULL AND (#4) IS NOT NULL // { arity: 6 }
+    Filter (#4) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #2 AND #4 = (#0 + 4)) type=delta // { arity: 6 }
         implementation
           %0:bar » %1:foo[#0]KA » %2:baz[#0]KA

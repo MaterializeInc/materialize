@@ -513,7 +513,7 @@ Target cluster: quickstart
 
 EOF
 
-# Test InnerJoin (ON syntax).
+# Test LEFT JOIN and RIGHT JOIN.
 query T multiline
 EXPLAIN DECORRELATED PLAN AS TEXT FOR
 SELECT t1.a, t2.a
@@ -530,7 +530,8 @@ Return
             Negate
               Project (#0, #1)
                 Join on=(#1 = #2)
-                  Get l2
+                  Filter (#1) IS NOT NULL
+                    Get l2
                   Distinct project=[#0]
                     Project (#3)
                       Get l3
@@ -547,7 +548,8 @@ With
                 Negate
                   Project (#0, #1)
                     Join on=(#1 = #2)
-                      Get l0
+                      Filter (#1) IS NOT NULL
+                        Get l0
                       Distinct project=[#0]
                         Project (#1)
                           Get l1

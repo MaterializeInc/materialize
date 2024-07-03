@@ -315,12 +315,11 @@ Explained Query:
     cte l4 =
       TopK group_by=[#0{b}] limit=█
         Project (#0{b}, #1{a})
-          Filter (#0{b}) IS NOT NULL
-            Join on=(#0{b} = #2{b}) type=differential
-              Get l2
-              ArrangeBy keys=[[#1{b}]]
-                Filter (#1{b}) IS NOT NULL
-                  ReadStorage materialize.public.mv
+          Join on=(#0{b} = #2{b}) type=differential
+            Get l2
+            ArrangeBy keys=[[#1{b}]]
+              Filter (#1{b}) IS NOT NULL
+                ReadStorage materialize.public.mv
     cte l3 =
       TopK group_by=[#0{b}] limit=█
         Project (#0{b}, #1{a})
@@ -366,26 +365,26 @@ Explained Query:
           Negate
             Project ()
               Join on=(#0{b} = #1{b}) type=differential
-                ArrangeBy keys=[[#0{b}]]
-                  Project (#1)
-                    ReadIndex on=t t_a_idx=[*** full scan ***]
+                Get l2
                 ArrangeBy keys=[[#0{b}]]
                   Distinct project=[#0{b}]
                     Project (#1)
-                      Get l2
+                      Get l3
           Project ()
             ReadIndex on=t t_a_idx=[*** full scan ***]
       Project (#0{a}, #2)
-        Get l2
+        Get l3
   With
-    cte l2 =
+    cte l3 =
       Project (#0{a}..=#2{a})
         Join on=(#1{b} = #3{b} = #4{b}) type=delta
           Get l1
           Get l1
-          ArrangeBy keys=[[#0{b}]]
-            Project (#1)
-              Get l0
+          Get l2
+    cte l2 =
+      ArrangeBy keys=[[#0{b}]]
+        Project (#1)
+          Get l0
     cte l1 =
       ArrangeBy keys=[[#1{b}]]
         Get l0
@@ -632,13 +631,12 @@ WHERE t.b = u.c;
 ----
 Explained Query:
   Project (#0{a}, #1{b}, #1{b}, #3{d})
-    Filter (#1{b}) IS NOT NULL
-      Join on=(#1{b} = #2{c}) type=differential
-        ArrangeBy keys=[[#1{b}]]
-          Filter (#1{b}) IS NOT NULL
-            ReadStorage materialize.public.t
-        ArrangeBy keys=[[#0{c}]]
-          ReadIndex on=u u_c=[differential join]
+    Join on=(#1{b} = #2{c}) type=differential
+      ArrangeBy keys=[[#1{b}]]
+        Filter (#1{b}) IS NOT NULL
+          ReadStorage materialize.public.t
+      ArrangeBy keys=[[#0{c}]]
+        ReadIndex on=u u_c=[differential join]
 
 Source materialize.public.t
   filter=((#1{b}) IS NOT NULL)
@@ -658,13 +656,12 @@ WHERE t.b = u.d;
 ----
 Explained Query:
   Project (#0{a}..=#2{c}, #1{b})
-    Filter (#1{b}) IS NOT NULL
-      Join on=(#1{b} = #3{d}) type=differential
-        ArrangeBy keys=[[#1{b}]]
-          Filter (#1{b}) IS NOT NULL
-            ReadStorage materialize.public.t
-        ArrangeBy keys=[[#1{d}]]
-          ReadIndex on=u u_d=[differential join]
+    Join on=(#1{b} = #3{d}) type=differential
+      ArrangeBy keys=[[#1{b}]]
+        Filter (#1{b}) IS NOT NULL
+          ReadStorage materialize.public.t
+      ArrangeBy keys=[[#1{d}]]
+        ReadIndex on=u u_d=[differential join]
 
 Source materialize.public.t
   filter=((#1{b}) IS NOT NULL)
@@ -695,13 +692,12 @@ WHERE t.a = u.c
 ----
 Explained Query:
   Project (#0{a}, #1{b}, #0{a}, #3{d})
-    Filter (#0{a}) IS NOT NULL
-      Join on=(#0{a} = #2{c}) type=differential
-        ArrangeBy keys=[[#0{a}]]
-          ReadIndex on=t t_a_idx_1=[differential join]
-        ArrangeBy keys=[[#0{c}]]
-          Filter (#0{c}) IS NOT NULL
-            ReadIndex on=u u_d=[*** full scan ***]
+    Join on=(#0{a} = #2{c}) type=differential
+      ArrangeBy keys=[[#0{a}]]
+        ReadIndex on=t t_a_idx_1=[differential join]
+      ArrangeBy keys=[[#0{c}]]
+        Filter (#0{c}) IS NOT NULL
+          ReadIndex on=u u_d=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.u_d (*** full scan ***)

@@ -99,25 +99,26 @@ Explained Query:
           Negate // { types: "()" }
             Project () // { types: "()" }
               Join on=(#0 = #1) type=differential // { types: "(integer, integer)" }
-                ArrangeBy keys=[[#0]] // { types: "(integer?)" }
-                  ReadStorage materialize.public.u // { types: "(integer?)" }
+                Get l0 // { types: "(integer)" }
                 ArrangeBy keys=[[#0]] // { types: "(integer)" }
                   Distinct project=[#0] // { types: "(integer)" }
                     Project (#0) // { types: "(integer)" }
-                      Get l0 // { types: "(integer, text?, date?)" }
+                      Get l1 // { types: "(integer, text?, date?)" }
           Project () // { types: "()" }
             ReadStorage materialize.public.u // { types: "(integer?)" }
-      Get l0 // { types: "(integer, text?, date?)" }
+      Get l1 // { types: "(integer, text?, date?)" }
   With
-    cte l0 =
+    cte l1 =
       Project (#0, #2, #3) // { types: "(integer, text?, date?)" }
         Join on=(#0 = #1) type=differential // { types: "(integer, integer, text?, date?)" }
-          ArrangeBy keys=[[#0]] // { types: "(integer)" }
-            Filter (#0) IS NOT NULL // { types: "(integer)" }
-              ReadStorage materialize.public.u // { types: "(integer?)" }
+          Get l0 // { types: "(integer)" }
           ArrangeBy keys=[[#0]] // { types: "(integer, text?, date?)" }
             Filter (#0) IS NOT NULL // { types: "(integer, text?, date?)" }
               ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { types: "(integer)" }
+        Filter (#0) IS NOT NULL // { types: "(integer)" }
+          ReadStorage materialize.public.u // { types: "(integer?)" }
 
 Source materialize.public.t
   filter=((#0) IS NOT NULL)
@@ -151,7 +152,7 @@ Explained Query:
                             ReadStorage materialize.public.u // { types: "(integer?)" }
                       Map (error("more than one record produced in subquery")) // { types: "(double precision)" }
                         Project () // { types: "()" }
-                          Filter error("more than one record produced in subquery") AND (#0 > 1) // { types: "(bigint)" }
+                          Filter (#0 > 1) // { types: "(bigint)" }
                             Reduce aggregates=[count(*)] // { types: "(bigint)" }
                               Project () // { types: "()" }
                                 ReadStorage materialize.public.u // { types: "(integer?)" }

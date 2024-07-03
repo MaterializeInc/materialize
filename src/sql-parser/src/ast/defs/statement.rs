@@ -1808,6 +1808,7 @@ pub enum ClusterFeatureName {
     EnableEagerDeltaJoins,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
+    EnableOuterJoinNullFilter,
 }
 
 impl WithOptionName for ClusterFeatureName {
@@ -1822,7 +1823,8 @@ impl WithOptionName for ClusterFeatureName {
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
             | Self::EnableVariadicLeftJoinLowering
-            | Self::EnableLetrecFixpointAnalysis => false,
+            | Self::EnableLetrecFixpointAnalysis
+            | Self::EnableOuterJoinNullFilter => false,
         }
     }
 }

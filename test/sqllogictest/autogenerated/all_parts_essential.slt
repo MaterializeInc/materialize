@@ -196,7 +196,7 @@ WHERE l_quantity = 24
 ----
 Explained Query:
   Project (#0, #2) // { arity: 2 }
-    Filter (#0) IS NOT NULL AND ((#4 = 24) OR ((#3 = 6) AND (#4 <= 4) AND (#4 >= 3))) // { arity: 25 }
+    Filter ((#4 = 24) OR ((#3 = 6) AND (#4 <= 4) AND (#4 >= 3))) // { arity: 25 }
       Join on=(#0 = #16) type=differential // { arity: 25 }
         implementation
           %0:lineitem[#0]KAeif » %1:orders[#0]KAeif
@@ -243,7 +243,7 @@ WHERE c_acctbal >= o_totalprice
 ----
 Explained Query:
   Project (#0, #4, #17, #28) // { arity: 4 }
-    Filter (#0) IS NOT NULL AND (#17) IS NOT NULL AND (#11 > #20) AND (#10 >= #20) AND (#30 >= #19) // { arity: 33 }
+    Filter (#11 > #20) AND (#10 >= #20) AND (#30 >= #19) // { arity: 33 }
       Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
         implementation
           %0:lineitem » %1:orders[#0]KA » %2:customer[#0]KA
@@ -309,7 +309,7 @@ Explained Query:
   Project (#0..=#4, #3) // { arity: 6 }
     Reduce group_by=[#1, #2] aggregates=[count(*), min(#2), min(#0)] // { arity: 5 }
       Project (#0, #1, #28) // { arity: 3 }
-        Filter (#10 <= 1995-11-14) AND (#30 <= 12907776) AND (#10 >= 1995-04-19) AND (#0) IS NOT NULL AND (#17) IS NOT NULL AND (#30 >= #5) // { arity: 33 }
+        Filter (#10 <= 1995-11-14) AND (#30 <= 12907776) AND (#10 >= 1995-04-19) AND (#30 >= #5) // { arity: 33 }
           Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
             implementation
               %0:lineitem » %1:orders[#0]KA » %2:customer[#0]KAif
@@ -371,7 +371,7 @@ GROUP BY 1,
 Explained Query:
   Reduce group_by=[(#2 * #3), #4] aggregates=[max(#1), max(#0)] // { arity: 4 }
     Project (#0..=#3, #11) // { arity: 5 }
-      Filter (#5) IS NOT NULL AND (#13 < #6) AND (#13 <= #3) // { arity: 16 }
+      Filter (#13 < #6) AND (#13 <= #3) // { arity: 16 }
         Join on=(#4 = #7 AND #5 = #8) type=delta // { arity: 16 }
           implementation
             %0:lineitem » %1:orders[#2]K » %2:customer[#0]KA
@@ -493,7 +493,7 @@ WHERE l_quantity = 17
 ----
 Explained Query:
   Project (#11, #3) // { arity: 2 }
-    Filter (#0) IS NOT NULL AND (#12 <= #5) AND ((#1 = 7) OR (#1 = 33) OR ((#1 = 17) AND (#13 <= "x") AND (#13 >= "s"))) // { arity: 14 }
+    Filter (#12 <= #5) AND ((#1 = 7) OR (#1 = 33) OR ((#1 = 17) AND (#13 <= "x") AND (#13 >= "s"))) // { arity: 14 }
       Join on=(#0 = #2) type=delta // { arity: 14 }
         implementation
           %0:lineitem » %1:orders[#0]KA » %2:customer[×]
@@ -552,7 +552,7 @@ GROUP BY 1
 Explained Query:
   Reduce group_by=[#0] aggregates=[count(*), count(distinct #1)] // { arity: 3 }
     Project (#0, #17) // { arity: 2 }
-      Filter (#4 <= 30) AND (#12 <= 1998-11-27) AND (#12 <= 1992-11-22) AND (#4 >= 1) AND (#12 >= 1992-06-21) AND (#12 >= 1992-07-13) AND (#0) IS NOT NULL AND (#17) IS NOT NULL // { arity: 33 }
+      Filter (#4 <= 30) AND (#12 <= 1998-11-27) AND (#12 <= 1992-11-22) AND (#4 >= 1) AND (#12 >= 1992-06-21) AND (#12 >= 1992-07-13) // { arity: 33 }
         Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
           implementation
             %0:lineitem » %1:orders[#0]KA » %2:customer[#0]KA
@@ -611,7 +611,7 @@ Explained Query:
   Project (#0, #0..=#2) // { arity: 4 }
     Reduce group_by=[#1] aggregates=[min(#0), count(*)] // { arity: 3 }
       Project (#2, #3) // { arity: 2 }
-        Filter (#3) IS NOT NULL AND (#1 < #5) AND (#11 > #4) AND (#11 >= #0) // { arity: 14 }
+        Filter (#1 < #5) AND (#11 > #4) AND (#11 >= #0) // { arity: 14 }
           Join on=(#3 = #6) type=delta // { arity: 14 }
             implementation
               %0:lineitem » %1:orders[×] » %2:customer[#0]KA
@@ -668,7 +668,7 @@ GROUP BY 1
 Explained Query:
   Reduce group_by=[#2] aggregates=[max(#1), max(#0)] // { arity: 3 }
     Project (#0, #2, #28) // { arity: 3 }
-      Filter (#0 <= 280) AND (#0 <= 289) AND (#0 >= 62) AND (#0 >= 117) AND (#17) IS NOT NULL AND (#10 > #20) // { arity: 33 }
+      Filter (#0 <= 280) AND (#0 <= 289) AND (#0 >= 62) AND (#0 >= 117) AND (#10 > #20) // { arity: 33 }
         Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
           implementation
             %0:lineitem » %1:orders[#0]KAiiiif » %2:customer[#0]KA
