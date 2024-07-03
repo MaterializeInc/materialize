@@ -41,12 +41,12 @@ reduce
 reduce
 (call_unary is_null (call_binary add_int_32 #1 #0)) [(int32 false) (int32 false)]
 ----
-((#0) IS NULL OR (#1) IS NULL)
+false
 
 reduce
 (call_unary is_null (call_variadic and [#1 #0])) [(bool false) (bool false)]
 ----
-((#0 AND #1)) IS NULL
+false
 
 reduce
 (call_unary is_null
@@ -116,7 +116,7 @@ reduce
 )
 [(int32 false) (int32 false)]
 ----
-((#0) IS NULL OR (#1) IS NULL)
+false
 
 # Non-null-propagating UnaryFunc around BinaryFunc
 reduce
@@ -194,16 +194,7 @@ reduce
 )
 [(int32 false) (int32 false)]
 ----
-((#0) IS NOT NULL AND (#1) IS NOT NULL)
-
-canonicalize
-[(call_unary not
-    (call_unary is_null (call_binary add_int_32 #1 #0))
-)]
-[(int32 false) (int32 false)]
-----
-(#0) IS NOT NULL
-(#1) IS NOT NULL
+true
 
 reduce
 (

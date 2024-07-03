@@ -2053,7 +2053,11 @@ fn attempt_outer_equijoin(
                             vec![
                                 get_left
                                     .clone()
-                                    .filter(on_predicates.lhs()) // Push local predicates.
+                                    // Push local predicates.
+                                    .filter(on_predicates.lhs())
+                                    // Filter out nulls. This prevents null skew, and also makes
+                                    // more CSE opportunities when the left input's key doesn't have
+                                    // a NOT NULL constraint, saving us an arrangement.
                                     .filter(on_predicates.eq_lhs().map(|e| e.call_is_null().not())),
                                 get_both.clone(),
                             ],
@@ -2085,7 +2089,13 @@ fn attempt_outer_equijoin(
                         // is a semi-join between `right` and `both_keys`.
                         let right_present = MirRelationExpr::join_scalars(
                             vec![
-                                get_right.clone().filter(on_predicates.rhs()), // Push local predicates.
+                                get_right
+                                    .clone()
+                                    // Push local predicates.
+                                    .filter(on_predicates.rhs())
+                                    // Filter out nulls. This prevents null skew, and also makes
+                                    // more CSE opportunities.
+                                    .filter(on_predicates.eq_rhs().map(|e| e.call_is_null().not())),
                                 get_both,
                             ],
                             itertools::zip_eq(

@@ -365,26 +365,26 @@ Explained Query:
           Negate
             Project ()
               Join on=(#0{b} = #1{b}) type=differential
-                ArrangeBy keys=[[#0{b}]]
-                  Project (#1)
-                    ReadIndex on=t t_a_idx=[*** full scan ***]
+                Get l2
                 ArrangeBy keys=[[#0{b}]]
                   Distinct project=[#0{b}]
                     Project (#1)
-                      Get l2
+                      Get l3
           Project ()
             ReadIndex on=t t_a_idx=[*** full scan ***]
       Project (#0{a}, #2)
-        Get l2
+        Get l3
   With
-    cte l2 =
+    cte l3 =
       Project (#0{a}..=#2{a})
         Join on=(#1{b} = #3{b} = #4{b}) type=delta
           Get l1
           Get l1
-          ArrangeBy keys=[[#0{b}]]
-            Project (#1)
-              Get l0
+          Get l2
+    cte l2 =
+      ArrangeBy keys=[[#0{b}]]
+        Project (#1)
+          Get l0
     cte l1 =
       ArrangeBy keys=[[#1{b}]]
         Get l0

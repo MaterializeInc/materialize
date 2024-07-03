@@ -530,7 +530,8 @@ Return
             Negate
               Project (#0, #1)
                 Join on=(#1 = #2)
-                  Get l2
+                  Filter (#1) IS NOT NULL
+                    Get l2
                   Distinct project=[#0]
                     Project (#3)
                       Get l3
