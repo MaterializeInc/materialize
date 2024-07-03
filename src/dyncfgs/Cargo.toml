@@ -18,14 +18,14 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-persist-client = { path = "../persist-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-txn-wal = { path = "../txn-wal" }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
 prost-build = "0.11.2"
 
 [features]
-default = ["mz-build-tools/default"]
+default = ["mz-build-tools/default", "workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

@@ -21,7 +21,10 @@ num-traits = "0.2"
 ordered-float = { version = "4.2.0", features = ["serde"] }
 paste = "1.0.11"
 tracing = "0.1.37"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
 
 [dev-dependencies]
 anyhow = "1.0.66"

@@ -44,10 +44,10 @@ tokio = { version = "1.38.0", default-features = false, features = ["macros", "s
 tracing = "0.1.37"
 url = "2.3.1"
 uuid = { version = "1.7.0", features = ["v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
-default = ["tokio-console"]
+default = ["tokio-console", "workspace-hack"]
 tokio-console = ["mz-ore/tokio-console"]
 
 [package.metadata.cargo-udeps.ignore]

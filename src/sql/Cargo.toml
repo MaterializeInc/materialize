@@ -86,7 +86,10 @@ tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
 uncased = "0.9.7"
 uuid = { version = "1.7.0", features = ["serde", "v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
 
 [dev-dependencies]
 datadriven = "0.8.0"

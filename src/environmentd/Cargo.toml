@@ -116,7 +116,7 @@ tracing-subscriber = "0.3.16"
 tungstenite = { version = "0.20.0" }
 url = "2.3.1"
 uuid = "1.2.2"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2.0.5"
@@ -157,7 +157,7 @@ cc = "1.0.78"
 mz-npm = { path = "../npm" }
 
 [features]
-default = ["tokio-console", "mz-alloc-default"]
+default = ["tokio-console", "mz-alloc-default", "workspace-hack"]
 # When enabled, static assets for the web UI are loaded from disk on every HTTP
 # request rather than compiled into the binary. This vastly speeds up the
 # iteration cycle when developing the web UI.

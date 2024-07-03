@@ -39,7 +39,10 @@ tokio = "1.38.0"
 tokio-stream = "0.1.11"
 tracing = "0.1.37"
 uuid = { version = "1.7.0" }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
 
 [dev-dependencies]
 bytesize = "1.1.0"

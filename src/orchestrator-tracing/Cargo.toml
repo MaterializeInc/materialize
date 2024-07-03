@@ -29,13 +29,13 @@ tracing-capture = { version = "0.1.0", optional = true }
 tracing-subscriber = { version = "0.3.16", default-features = false }
 opentelemetry = { version = "0.21.0", features = ["trace"] }
 opentelemetry_sdk = { version = "0.21.2", features = ["rt-tokio"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["network", "test"] }
 
 [features]
-default = ["tokio-console"]
+default = ["tokio-console", "workspace-hack"]
 tokio-console = ["mz-ore/tokio-console", "mz-repr", "humantime"]
 capture = ["tracing-capture", "mz-ore/capture"]
 

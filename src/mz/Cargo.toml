@@ -40,7 +40,10 @@ toml_edit = { version = "0.20.2", features = ["serde"] }
 thiserror = "1.0.37"
 uuid = "1.2.2"
 url = "2.3.1"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
 
 [dev-dependencies]
 assert_cmd = "2.0.5"

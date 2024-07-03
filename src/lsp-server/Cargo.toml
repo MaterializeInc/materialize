@@ -22,7 +22,10 @@ mz-sql-lexer = { path = "../sql-lexer", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "test"] }
 regex = "1.7.0"
 mz-sql-pretty = { path = "../sql-pretty" }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
 
 [dev-dependencies]
 httparse = "1.8.0"

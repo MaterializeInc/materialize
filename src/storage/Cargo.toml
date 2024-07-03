@@ -95,7 +95,8 @@ tracing-subscriber = "0.3.16"
 thiserror = { version = "1.0.37" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
@@ -115,7 +116,7 @@ tempfile = "3.8.1"
 tokio = { version = "1.38.0", features = ["test-util"] }
 
 [features]
-default = ["mz-build-tools/default"]
+default = ["mz-build-tools/default", "workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

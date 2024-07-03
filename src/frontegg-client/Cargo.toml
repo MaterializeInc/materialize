@@ -21,7 +21,10 @@ tokio = { version = "1.38.0", features = ["macros"] }
 serde_json = "1.0.89"
 uuid = { version = "1.7.0", features = ["serde"] }
 url = "2.3.1"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

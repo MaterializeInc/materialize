@@ -32,7 +32,10 @@ tokio-postgres = { version = "0.7.8", features = ["with-serde_json-1"] }
 tracing = "0.1.37"
 url = "2.3.1"
 uuid = "1.2.2"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
