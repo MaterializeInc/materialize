@@ -168,6 +168,17 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#27253: bpchar and char trim newline")
 
+        if expression.matches(
+            partial(matches_fun_by_name, function_name_in_lower_case="array_agg"),
+            True,
+        ) and expression.matches(
+            partial(
+                involves_data_type_category, data_type_category=DataTypeCategory.RANGE
+            ),
+            True,
+        ):
+            return YesIgnore("#28007: different formatting of array_agg on range")
+
         return super()._matches_problematic_operation_or_function_invocation(
             expression, operation, all_involved_characteristics
         )

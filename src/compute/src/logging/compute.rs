@@ -614,7 +614,11 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         let datum = ExportDatum { id, dataflow_id };
         self.output.export.give((datum, ts, 1));
 
-        self.state.exports.insert(id, ExportState::new(dataflow_id));
+        let existing = self.state.exports.insert(id, ExportState::new(dataflow_id));
+        if existing.is_some() {
+            error!(export = %id, "export already registered");
+        }
+
         *self
             .state
             .dataflow_export_counts
@@ -624,10 +628,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
     fn handle_export_dropped(&mut self, id: GlobalId) {
         let Some(export) = self.state.exports.remove(&id) else {
-            error!(
-                export = ?id,
-                "missing exports entry at time of export drop"
-            );
+            error!(export = %id, "missing exports entry at time of export drop");
             return;
         };
 
@@ -640,8 +641,8 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         match self.state.dataflow_export_counts.get_mut(&dataflow_id) {
             entry @ Some(0) | entry @ None => {
                 error!(
-                    export = ?id,
-                    dataflow = ?dataflow_id,
+                    export = %id,
+                    dataflow = %dataflow_id,
                     "invalid dataflow_export_counts entry at time of export drop: {entry:?}",
                 );
             }
@@ -669,7 +670,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             // Dataflow has not yet shut down.
             let existing = self.state.dataflow_drop_times.insert(id, self.time);
             if existing.is_some() {
-                error!(dataflow = ?id, "dataflow already dropped");
+                error!(dataflow = %id, "dataflow already dropped");
             }
         }
     }
@@ -686,7 +687,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             // Dataflow has not yet been dropped.
             let was_new = self.state.shutdown_dataflows.insert(id);
             if !was_new {
-                error!(dataflow = ?id, "dataflow already shutdown");
+                error!(dataflow = %id, "dataflow already shutdown");
             }
         }
     }
@@ -731,7 +732,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         let existing = self.state.peek_stash.insert(uuid, self.time);
         if existing.is_some() {
             error!(
-                uuid = ?uuid,
+                uuid = %uuid,
                 "peek already registered",
             );
         }
@@ -752,7 +753,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                 .give((PeekDurationDatum { peek_type, bucket }, ts, 1));
         } else {
             error!(
-                uuid = ?uuid,
+                uuid = %uuid,
                 "peek not yet registered",
             );
         }
@@ -832,12 +833,20 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     /// Indicate that a new arrangement exists, start maintaining the heap size state.
     fn handle_arrangement_heap_size_operator(&mut self, operator_id: usize, address: Vec<usize>) {
         let activator = self.state.worker.activator_for(&address);
-        self.state
+        let existing = self
+            .state
             .arrangement_size
             .insert(operator_id, Default::default());
-        self.shared_state
+        if existing.is_some() {
+            error!(%operator_id, "arrangement size operator already registered");
+        }
+        let existing = self
+            .shared_state
             .arrangement_size_activators
             .insert(operator_id, activator);
+        if existing.is_some() {
+            error!(%operator_id, "arrangement size activator already registered");
+        }
     }
 
     /// Indicate that an arrangement has been dropped and we can cleanup the heap size state.

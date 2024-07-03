@@ -74,7 +74,7 @@ granted the [`mz_monitor` role](/manage/access-control/manage-roles#builtin-role
 | `prepared_statement_id`    | [`uuid`]                     | An ID that is unique for each prepared statement. For example, if a statement is prepared once and then executed multiple times, all executions will have the same value for this column (but different values for `execution_id`).                                           |
 | `sql_hash`                 | [`bytea`]                    | An opaque value uniquely identifying the text of the query.                                                                                                                                                                                                                   |
 | `prepared_statement_name`  | [`text`]                     | The name given by the client library to the prepared statement.                                                                                                                                                                                                               |
-| `session_id`               | [`uuid`]                     | An ID that is unique for each session.                                                                                                                                                                                                                                        |
+| `session_id`               | [`uuid`]                     | An ID that is unique for each session. Corresponds to [mz_sessions.id](#mz_sessions). |
 | `prepared_at`              | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
 | `statement_type`           | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
 | `throttled_count`          | [`uint8`]                    | The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, [contact our team](https://materialize.com/docs/support/).                                   |
@@ -552,7 +552,7 @@ referenced from
 
 | Field                | Type                         | Meaning                                                                                                                           |
 |----------------------|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
-| `id`                 | [`uuid`]                     | The globally unique ID of this history entry. Does **not** correspond to [`mz_sessions.id`](#mz_sessions), which can be recycled. |
+| `session_id`         | [`uuid`]                     | The globally unique ID of the session. Corresponds to [`mz_sessions.id`](#mz_sessions).                                           |
 | `connected_at`       | [`timestamp with time zone`] | The time at which the session was established.                                                                                    |
 | `application_name`   | [`text`]                     | The `application_name` session metadata field.                                                                                    |
 | `authenticated_user` | [`text`]                     | The name of the user for which the session was established.                                                                       |
@@ -565,7 +565,8 @@ The `mz_sessions` table contains a row for each active session in the system.
 <!-- RELATION_SPEC mz_internal.mz_sessions -->
 | Field           | Type                           | Meaning                                                                                                                   |
 | --------------- | ------------------------------ | --------                                                                                                                  |
-| `id`            | [`uint4`]                      | The ID of the session.                                                                                                    |
+| `id`            | [`uuid`]                       | The globally unique ID of the session. |
+| `connection_id` | [`uint4`]                      | The connection ID of the session. Unique only for active sessions and can be recycled. Corresponds to [`pg_backend_pid()`](/sql/functions/#pg_backend_pid). |
 | `role_id`       | [`text`]                       | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles). |
 | `connected_at`  | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
 
@@ -1012,7 +1013,7 @@ operations in the system.
 | Field                    | Type                         | Meaning                                                                                                                    |
 | ------------------------ |------------------------------| --------                                                                                                                   |
 | `id`                     | [`text`]                     | The ID of the subscription.                                                                                                |
-| `session_id`             | [`uint4`]                    | The ID of the session that runs the subscription. Corresponds to [`mz_sessions.id`](#mz_sessions).                         |
+| `session_id`             | [`uuid`]                     | The ID of the session that runs the subscription. Corresponds to [`mz_sessions.id`](#mz_sessions).                         |
 | `cluster_id`             | [`text`]                     | The ID of the cluster on which the subscription is running. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
 | `created_at`             | [`timestamp with time zone`] | The time at which the subscription was created.                                                                            |
 | `referenced_object_ids`  | [`text list`]                | The IDs of objects referenced by the subscription. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects)             |
@@ -1046,6 +1047,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 [`timestamp with time zone`]: /sql/types/timestamp
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_raw_unified -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_thinned -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->

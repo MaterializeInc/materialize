@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
@@ -872,7 +873,7 @@ impl DurableType for StorageUsage {
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct StorageCollectionMetadata {
     pub id: GlobalId,
-    pub shard: String,
+    pub shard: ShardId,
 }
 
 impl DurableType for StorageCollectionMetadata {
@@ -900,7 +901,7 @@ impl DurableType for StorageCollectionMetadata {
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct UnfinalizedShard {
-    pub shard: String,
+    pub shard: ShardId,
 }
 
 impl DurableType for UnfinalizedShard {
@@ -1150,21 +1151,21 @@ pub struct StorageCollectionMetadataKey {
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct StorageCollectionMetadataValue {
-    pub(crate) shard: String,
+    pub(crate) shard: ShardId,
 }
 
 /// This value is stored transparently, however, it should only ever be
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct UnfinalizedShardKey {
-    pub(crate) shard: String,
+    pub(crate) shard: ShardId,
 }
 
 /// This value is stored transparently, however, it should only ever be
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct TxnWalShardValue {
-    pub(crate) shard: String,
+    pub(crate) shard: ShardId,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

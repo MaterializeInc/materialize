@@ -30,7 +30,6 @@ use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::global_id::TransientIdGen;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::IntrospectionType;
@@ -216,10 +215,6 @@ pub(super) struct Instance<T> {
     envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
     replica_epochs: BTreeMap<ReplicaId, u64>,
-    /// A generator for transient [`GlobalId`]s.
-    // TODO(#26730): use this to generate IDs for introspection subscribes
-    #[allow(dead_code)]
-    transient_id_gen: Arc<TransientIdGen>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
     /// Dynamic system configuration.
@@ -596,7 +591,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             introspection_tx: _,
             envd_epoch,
             replica_epochs,
-            transient_id_gen: _,
             metrics: _,
             dyncfg: _,
         } = self;
@@ -656,7 +650,6 @@ where
         storage: Arc<dyn StorageCollections<Timestamp = T>>,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
-        transient_id_gen: Arc<TransientIdGen>,
         metrics: InstanceMetrics,
         dyncfg: Arc<ConfigSet>,
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
@@ -688,7 +681,6 @@ where
             introspection_tx,
             envd_epoch,
             replica_epochs: Default::default(),
-            transient_id_gen,
             metrics,
             dyncfg,
         };

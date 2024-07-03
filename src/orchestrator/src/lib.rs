@@ -57,14 +57,14 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     /// If a service with the same ID already exists, its configuration is
     /// updated to match `config`. This may or may not involve restarting the
     /// service, depending on whether the existing service matches `config`.
-    async fn ensure_service(
+    fn ensure_service(
         &self,
         id: &str,
-        config: ServiceConfig<'_>,
+        config: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error>;
 
     /// Drops the identified service, if it exists.
-    async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error>;
+    fn drop_service(&self, id: &str) -> Result<(), anyhow::Error>;
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error>;
@@ -183,9 +183,9 @@ pub struct LabelSelector {
 }
 
 /// Describes the desired state of a service.
-#[derive(Derivative, Clone)]
+#[derive(Derivative)]
 #[derivative(Debug)]
-pub struct ServiceConfig<'a> {
+pub struct ServiceConfig {
     /// An opaque identifier for the executable or container image to run.
     ///
     /// Often names a container on Docker Hub or a path on the local machine.
@@ -196,7 +196,7 @@ pub struct ServiceConfig<'a> {
     /// A function that generates the arguments for each process of the service
     /// given the assigned listen addresses for each named port.
     #[derivative(Debug = "ignore")]
-    pub args: &'a (dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync),
+    pub args: Box<dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync>,
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.

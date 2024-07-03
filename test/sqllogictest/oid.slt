@@ -1081,3 +1081,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16969  pg_attrdef_all_databases_ind
 16970  pg_attribute_all_databases
 16971  pg_attribute_all_databases_ind
+16974  mz_compute_error_counts_raw_unified

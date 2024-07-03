@@ -26,6 +26,7 @@ use mz_repr::{Datum, GlobalId, IntoRowIterator, Row, Timestamp};
 use mz_sql::plan::SubscribeOutput;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
+use uuid::Uuid;
 
 use crate::coord::peek::PeekResponseUnary;
 use crate::{AdapterError, ExecuteResponse};
@@ -94,6 +95,8 @@ pub enum ActiveComputeSinkRetireReason {
 pub struct ActiveSubscribe {
     /// The ID of the connection which created the subscribe.
     pub conn_id: ConnectionId,
+    /// The UUID of the session which created the subscribe.
+    pub session_uuid: Uuid,
     /// The ID of the cluster on which the subscribe is running.
     pub cluster_id: ClusterId,
     /// The IDs of the objects on which the subscribe depends.

@@ -281,13 +281,13 @@ impl Coordinator {
             ..
         } = &plan;
 
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: BTreeSet::from_iter(std::iter::once(*on)),
-            cluster_id: Some(*cluster_id),
-            replica_id: None,
-            role_metadata: session.role_metadata().clone(),
-        };
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            BTreeSet::from_iter(std::iter::once(*on)),
+            Some(*cluster_id),
+            None,
+            session.role_metadata().clone(),
+        );
 
         Ok(CreateIndexStage::Optimize(CreateIndexOptimize {
             validity,

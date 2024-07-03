@@ -37,7 +37,7 @@ pub static MZ_SQL_TEXT_DESC: Lazy<RelationDesc> = Lazy::new(|| {
 
 pub static MZ_SESSION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
-        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("session_id", ScalarType::Uuid.nullable(false))
         .with_column(
             "connected_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),

@@ -301,6 +301,10 @@ mz_compute_dependencies
 SOURCE
 materialize
 mz_internal
+mz_compute_error_counts_raw_unified
+SOURCE
+materialize
+mz_internal
 mz_compute_hydration_statuses
 SOURCE
 materialize

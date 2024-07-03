@@ -41,7 +41,6 @@ use mz_ore::soft_panic_or_log;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::global_id::TransientIdGen;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, ScalarType};
@@ -63,10 +62,8 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_storage_client::controller::StorageController;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
@@ -149,98 +146,6 @@ pub struct CatalogPlans {
 }
 
 impl Catalog {
-    /// Initializes the `storage_controller` to understand all shards that
-    /// `self` expects to exist.
-    ///
-    /// Note that this must be done before creating/rendering collections
-    /// because the storage controller might not be aware of new system
-    /// collections created between versions.
-    async fn initialize_storage_controller_state(
-        &mut self,
-        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
-    ) -> Result<(), mz_catalog::durable::CatalogError> {
-        let collections = self
-            .entries()
-            .filter(|entry| entry.item().is_storage_collection())
-            .map(|entry| entry.id())
-            .collect();
-
-        // Clone the state so that any errors that occur do not leak any
-        // transformations on error.
-        let mut state = self.state.clone();
-
-        let mut storage = self.storage().await;
-        let mut txn = storage.transaction().await?;
-
-        storage_controller
-            .initialize_state(
-                &mut txn,
-                collections,
-                builtin_migration_metadata.previous_storage_collection_ids,
-            )
-            .await
-            .map_err(mz_catalog::durable::DurableCatalogError::from)?;
-
-        let updates = txn.get_and_commit_op_updates();
-        let builtin_updates = state.apply_updates(updates);
-        assert_eq!(builtin_updates, Vec::new());
-        txn.commit().await?;
-        drop(storage);
-
-        // Save updated state.
-        self.state = state;
-        Ok(())
-    }
-
-    /// [`mz_controller::Controller`] depends on durable catalog state to boot,
-    /// so make it available and initialize the controller.
-    pub async fn initialize_controller(
-        &mut self,
-        config: mz_controller::ControllerConfig,
-        envd_epoch: core::num::NonZeroI64,
-        read_only: bool,
-        transient_id_gen: Arc<TransientIdGen>,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
-        // Whether to use the new txn-wal tables implementation or the
-        // legacy one.
-        txn_wal_tables: TxnWalTablesImpl,
-    ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
-    {
-        let mut controller = {
-            let mut storage = self.storage().await;
-            let mut tx = storage.transaction().await?;
-            mz_controller::prepare_initialization(&mut tx)
-                .map_err(mz_catalog::durable::DurableCatalogError::from)?;
-            let updates = tx.get_and_commit_op_updates();
-            assert!(
-                updates.is_empty(),
-                "initializing controller should not produce updates: {updates:?}"
-            );
-            tx.commit().await?;
-
-            let read_only_tx = storage.transaction().await?;
-
-            mz_controller::Controller::new(
-                config,
-                envd_epoch,
-                read_only,
-                transient_id_gen,
-                txn_wal_tables,
-                &read_only_tx,
-            )
-            .await
-        };
-
-        self.initialize_storage_controller_state(
-            &mut *controller.storage,
-            builtin_migration_metadata,
-        )
-        .await?;
-
-        Ok(controller)
-    }
-
     /// Set the optimized plan for the item identified by `id`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_optimized_plan(

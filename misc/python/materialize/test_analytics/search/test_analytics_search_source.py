@@ -18,6 +18,7 @@ from materialize.test_analytics.config.test_analytics_db_config import (
 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 
 ANY_PIPELINE_VALUE = "*"
+ANY_BRANCH_VALUE = "*"
 
 
 class TestAnalyticsDataSource:

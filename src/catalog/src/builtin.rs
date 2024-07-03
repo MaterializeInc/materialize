@@ -2784,13 +2784,13 @@ SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, clust
 transaction_isolation, execution_timestamp, transient_index_id, params, mz_version, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql_hash, mpsh.name AS prepared_statement_name,
-session_id, prepared_at, statement_type, throttled_count,
+mpsh.session_id, prepared_at, statement_type, throttled_count,
 initial_application_name, authenticated_user
 FROM mz_internal.mz_statement_execution_history mseh,
      mz_internal.mz_prepared_statement_history mpsh,
      mz_internal.mz_session_history msh
 WHERE mseh.prepared_statement_id = mpsh.id
-AND mpsh.session_id = msh.id",
+AND mpsh.session_id = msh.session_id",
         access: vec![MONITOR_SELECT],
     }
 });
@@ -3115,7 +3115,7 @@ pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_SUBSCRIPTIONS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("session_id", ScalarType::UInt32.nullable(false))
+        .with_column("session_id", ScalarType::Uuid.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column(
             "created_at",
@@ -3138,7 +3138,8 @@ pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_SESSIONS_OID,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt32.nullable(false))
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("connection_id", ScalarType::UInt32.nullable(false))
         .with_column("role_id", ScalarType::String.nullable(false))
         .with_column(
             "connected_at",
@@ -4680,6 +4681,25 @@ SELECT
 FROM mz_introspection.mz_compute_error_counts_per_worker
 GROUP BY export_id
 HAVING pg_catalog.sum(count) != 0",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    // TODO(#27831): Rename this source to `mz_compute_error_counts_raw`. Currently this causes a
+    // naming conflict because the resolver stumbles over the source with the same name in
+    // `mz_introspection` due to the automatic schema translation.
+    name: "mz_compute_error_counts_raw_unified",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED_OID,
+    desc: RelationDesc::empty()
+        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column(
+            "count",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        ),
+    data_source: IntrospectionType::ComputeErrorCounts,
+    is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
 
@@ -7497,6 +7517,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
+        Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
         Builtin::View(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),

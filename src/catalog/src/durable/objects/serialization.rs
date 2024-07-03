@@ -730,7 +730,9 @@ impl RustType<proto::StorageCollectionMetadataValue> for StorageCollectionMetada
     }
 
     fn from_proto(proto: proto::StorageCollectionMetadataValue) -> Result<Self, TryFromProtoError> {
-        Ok(StorageCollectionMetadataValue { shard: proto.shard })
+        Ok(StorageCollectionMetadataValue {
+            shard: proto.shard.into_rust()?,
+        })
     }
 }
 
@@ -742,7 +744,9 @@ impl RustType<proto::UnfinalizedShardKey> for UnfinalizedShardKey {
     }
 
     fn from_proto(proto: proto::UnfinalizedShardKey) -> Result<Self, TryFromProtoError> {
-        Ok(UnfinalizedShardKey { shard: proto.shard })
+        Ok(UnfinalizedShardKey {
+            shard: proto.shard.into_rust()?,
+        })
     }
 }
 
@@ -754,7 +758,9 @@ impl RustType<proto::TxnWalShardValue> for TxnWalShardValue {
     }
 
     fn from_proto(proto: proto::TxnWalShardValue) -> Result<Self, TryFromProtoError> {
-        Ok(TxnWalShardValue { shard: proto.shard })
+        Ok(TxnWalShardValue {
+            shard: proto.shard.into_rust()?,
+        })
     }
 }
 

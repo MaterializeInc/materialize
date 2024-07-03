@@ -80,7 +80,7 @@ pub struct ComputeState {
     ///  * Subscribes report their frontiers through the `subscribe_response_buffer`.
     pub collections: BTreeMap<GlobalId, CollectionState>,
     /// Collections that were recently dropped and whose removal needs to be reported.
-    pub dropped_collections: Vec<(GlobalId, CollectionState)>,
+    pub dropped_collections: Vec<(GlobalId, DroppedCollection)>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
@@ -514,21 +514,20 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     ///
     /// Collection dropping occurs in three phases:
     ///
-    ///  1. This method removes the collection from the `ComputeState` and drops its dataflow
-    ///     tokens. It does _not_ yet drop the `CollectionState` but adds it to
-    ///     `dropped_collections`.
+    ///  1. This method removes the collection from the [`ComputeState`] and drops its
+    ///     [`CollectionState`], including its held dataflow tokens. It then adds the dropped
+    ///     collection to `dropped_collections`.
     ///  2. The next step of the Timely worker lets the source operators observe the token drops
     ///     and shut themselves down.
-    ///  3. `report_dropped_collections` removes the `CollectionState` from `dropped_collections`,
-    ///     emits any outstanding final responses required by the compute protocol, then drops the
-    ///     `CollectionState`.
+    ///  3. `report_dropped_collections` removes the entry from `dropped_collections` and emits any
+    ///     outstanding final responses required by the compute protocol.
     ///
     /// These steps ensure that we don't report a collection as dropped to the controller before it
     /// has stopped reading from its inputs. Doing so would allow the controller to release its
     /// read holds on the inputs, which could lead to panics from the replica trying to read
     /// already compacted times.
     fn drop_collection(&mut self, id: GlobalId) {
-        let mut collection = self
+        let collection = self
             .compute_state
             .collections
             .remove(&id)
@@ -536,16 +535,15 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // If this collection is an index, remove its trace.
         self.compute_state.traces.remove(&id);
-        // If this collection is a sink, drop its sink token.
-        collection.sink_token.take();
-
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
         // Remember the collection as dropped, for emission of outstanding final compute responses.
-        self.compute_state
-            .dropped_collections
-            .push((id, collection));
+        let dropped = DroppedCollection {
+            reported_frontiers: collection.reported_frontiers,
+            is_subscribe_or_copy: collection.is_subscribe_or_copy,
+        };
+        self.compute_state.dropped_collections.push((id, dropped));
     }
 
     /// Initializes timely dataflow logging and publishes as a view.
@@ -692,7 +690,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 continue;
             }
 
-            let reported = collection.reported_frontiers();
+            let reported = collection.reported_frontiers;
             let write_frontier = (!reported.write_frontier.is_empty()).then(Antichain::new);
             let input_frontier = (!reported.input_frontier.is_empty()).then(Antichain::new);
             let output_frontier = (!reported.output_frontier.is_empty()).then(Antichain::new);
@@ -1529,6 +1527,22 @@ impl CollectionState {
     fn set_reported_output_frontier(&mut self, frontier: ReportedFrontier) {
         self.reported_frontiers.output_frontier = frontier;
     }
+}
+
+/// State remembered about a dropped compute collection.
+///
+/// This is the subset of the full [`CollectionState`] that survives the invocation of
+/// `drop_collection`, until it is finally dropped in `report_dropped_collections`. It includes any
+/// information required to report the dropping of a collection to the controller.
+///
+/// Note that this state must _not_ store any state (such as tokens) whose dropping releases
+/// resources elsewhere in the system. A `DroppedCollection` for a collection dropped during
+/// reconciliation might be alive at the same time as the [`CollectionState`] for the re-created
+/// collection, and if the dropped collection hasn't released all its held resources by the time
+/// the new one is created, conflicts can ensue.
+pub struct DroppedCollection {
+    reported_frontiers: ReportedFrontiers,
+    is_subscribe_or_copy: bool,
 }
 
 /// An event reporting the hydration status of an LIR node in a dataflow.

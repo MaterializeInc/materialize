@@ -20,6 +20,7 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::now::EpochMillis;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_no_log, soft_assert_or_log};
+use mz_persist_types::ShardId;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -2080,7 +2081,7 @@ use crate::durable::async_trait;
 
 #[async_trait]
 impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
-    fn get_collection_metadata(&self) -> BTreeMap<GlobalId, String> {
+    fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId> {
         self.storage_collection_metadata
             .items()
             .into_iter()
@@ -2095,7 +2096,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
 
     fn insert_collection_metadata(
         &mut self,
-        metadata: BTreeMap<GlobalId, String>,
+        metadata: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError<mz_repr::Timestamp>> {
         for (id, shard) in metadata {
             self.storage_collection_metadata
@@ -2119,7 +2120,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
         Ok(())
     }
 
-    fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, String)> {
+    fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ShardId)> {
         self.storage_collection_metadata
             .delete(
                 |StorageCollectionMetadataKey { id }, _| ids.contains(id),
@@ -2135,7 +2136,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
             .collect()
     }
 
-    fn get_unfinalized_shards(&self) -> BTreeSet<String> {
+    fn get_unfinalized_shards(&self) -> BTreeSet<ShardId> {
         self.unfinalized_shards
             .items()
             .into_iter()
@@ -2145,7 +2146,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
 
     fn insert_unfinalized_shards(
         &mut self,
-        s: BTreeSet<String>,
+        s: BTreeSet<ShardId>,
     ) -> Result<(), StorageError<mz_repr::Timestamp>> {
         for shard in s {
             match self
@@ -2160,14 +2161,14 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
         Ok(())
     }
 
-    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<String>) {
+    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<ShardId>) {
         let _ = self.unfinalized_shards.delete(
-            |UnfinalizedShardKey { shard }, _| shards.contains(shard.as_str()),
+            |UnfinalizedShardKey { shard }, _| shards.contains(shard),
             self.op_id,
         );
     }
 
-    fn get_txn_wal_shard(&self) -> Option<String> {
+    fn get_txn_wal_shard(&self) -> Option<ShardId> {
         let items = self.txn_wal_shard.items();
         items
             .into_values()
@@ -2177,7 +2178,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
 
     fn write_txn_wal_shard(
         &mut self,
-        shard: String,
+        shard: ShardId,
     ) -> Result<(), StorageError<mz_repr::Timestamp>> {
         self.txn_wal_shard
             .insert((), TxnWalShardValue { shard }, self.op_id)

@@ -21,7 +21,7 @@ use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{Datum, GlobalId, RowArena, Timestamp};
-use mz_sql::ast::ExplainStage;
+use mz_sql::ast::{ExplainStage, Statement};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
@@ -284,9 +284,10 @@ impl Coordinator {
             .override_from(&explain_ctx);
 
         if cluster.replicas().next().is_none() && explain_ctx.needs_cluster() {
-            return Err(AdapterError::NoClusterReplicasAvailable(
-                cluster.name.clone(),
-            ));
+            return Err(AdapterError::NoClusterReplicasAvailable {
+                name: cluster.name.clone(),
+                is_managed: cluster.is_managed(),
+            });
         }
 
         let optimizer = match copy_to_ctx {
@@ -320,9 +321,10 @@ impl Coordinator {
                 {
                     Some(count) => u64::cast_from(count),
                     None => {
-                        return Err(AdapterError::NoClusterReplicasAvailable(
-                            cluster.name.clone(),
-                        ))
+                        return Err(AdapterError::NoClusterReplicasAvailable {
+                            name: cluster.name.clone(),
+                            is_managed: cluster.is_managed(),
+                        })
                     }
                 };
                 copy_to_ctx.output_batch_count = Some(max_worker_count);
@@ -370,13 +372,13 @@ impl Coordinator {
         )?;
         session.add_notices(notices);
 
-        let validity = PlanValidity {
-            transient_revision: catalog.transient_revision(),
-            dependency_ids: source_ids.clone(),
-            cluster_id: Some(cluster.id()),
-            replica_id: target_replica,
-            role_metadata: session.role_metadata().clone(),
-        };
+        let validity = PlanValidity::new(
+            catalog.transient_revision(),
+            source_ids.clone(),
+            Some(cluster.id()),
+            target_replica,
+            session.role_metadata().clone(),
+        );
 
         Ok(PeekStage::LinearizeTimestamp(PeekStageLinearizeTimestamp {
             validity,
@@ -478,7 +480,7 @@ impl Coordinator {
 
         // Although we have added `sources.depends_on()` to the validity already, also add the
         // sufficient collections for safety.
-        validity.dependency_ids.extend(id_bundle.iter());
+        validity.extend_dependencies(id_bundle.iter());
 
         let determination = self.sequence_peek_timestamp(
             session,
@@ -594,6 +596,7 @@ impl Coordinator {
                             !(matches!(explain_ctx, ExplainContext::PlanInsightsNotice(_))
                                 && optimizer.duration() > opt_limit);
                         let insights_ctx = needs_plan_insights.then(|| PlanInsightsContext {
+                            stmt: plan.select.clone().map(Statement::Select),
                             raw_expr: plan.source.clone(),
                             catalog,
                             compute_instances,
@@ -614,7 +617,7 @@ impl Coordinator {
                                         optimizer,
                                         df_meta,
                                         explain_ctx,
-                                    insights_ctx,
+                                        insights_ctx,
                                     })
                                 }
                                 ExplainContext::PlanInsightsNotice(optimizer_trace) => {
@@ -630,7 +633,7 @@ impl Coordinator {
                                         plan_insights_optimizer_trace: Some(optimizer_trace),
                                         global_lir_plan,
                                         optimization_finished_at,
-                                    insights_ctx,
+                                        insights_ctx,
                                     })
                                 }
                                 ExplainContext::None => PeekStage::Finish(PeekStageFinish {
@@ -645,7 +648,7 @@ impl Coordinator {
                                     plan_insights_optimizer_trace: None,
                                     global_lir_plan,
                                     optimization_finished_at,
-                                insights_ctx,
+                                    insights_ctx,
                                 }),
                                 ExplainContext::Pushdown => {
                                     let (plan, _, _) = global_lir_plan.unapply();
@@ -675,6 +678,7 @@ impl Coordinator {
                                 optimizer,
                                 global_lir_plan,
                                 optimization_finished_at,
+                                source_ids,
                             })
                         }
                         // Internal optimizer errors are handled differently
@@ -927,10 +931,11 @@ impl Coordinator {
         &mut self,
         ctx: &ExecuteContext,
         PeekStageCopyTo {
-            validity,
+            validity: _,
             optimizer,
             global_lir_plan,
             optimization_finished_at,
+            source_ids,
         }: PeekStageCopyTo,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         if let Some(id) = ctx.extra.contents() {
@@ -954,7 +959,7 @@ impl Coordinator {
             conn_id: ctx.session().conn_id().clone(),
             tx,
             cluster_id,
-            depends_on: validity.dependency_ids.clone(),
+            depends_on: source_ids,
         };
         // Add metadata for the new COPY TO. CopyTo returns a `ready` future, so it is safe to drop.
         drop(
