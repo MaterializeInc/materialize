@@ -603,7 +603,7 @@ pub static TXN_WAL_TABLES: VarDefinition = VarDefinition::new(
     // The actual name is kept as "persist_txn_tables" instead of "txn_wal_tables" for historical
     // reasons.
     "persist_txn_tables",
-    value!(TxnWalTablesImpl; TxnWalTablesImpl::Eager),
+    value!(TxnWalTablesImpl; TxnWalTablesImpl::Lazy),
     "\
     Whether to use the new txn-wal tables implementation or the legacy \
     one.
