@@ -2052,21 +2052,14 @@ fn attempt_outer_equijoin(
 
                 both_keys.let_in_fallible(id_gen, |_id_gen, get_both| {
                     if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter = kind {
-                        let mut left_with_local_predicates = get_left
-                            .clone()
-                            .filter(on_predicates.lhs()); // Push local predicates.
-                        if enable_outer_join_null_filter {
-                            // Filter out nulls. This prevents null skew, and also makes
-                            // more CSE opportunities when the left input's key doesn't have
-                            // a NOT NULL constraint, saving us an arrangement.
-                            left_with_local_predicates = left_with_local_predicates
-                                .filter(on_predicates.eq_lhs().map(|e| e.call_is_null().not()))
-                        }
                         // Rows in `left` matched in the inner equijoin. This is
                         // a semi-join between `left` and `both_keys`.
                         let left_present = MirRelationExpr::join_scalars(
                             vec![
-                                left_with_local_predicates,
+                                get_left
+                                    .clone()
+                                    // Push local predicates.
+                                    .filter(on_predicates.lhs(enable_outer_join_null_filter)),
                                 get_both.clone(),
                             ],
                             itertools::zip_eq(
@@ -2093,21 +2086,14 @@ fn attempt_outer_equijoin(
                     }
 
                     if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
-                        let mut right_with_local_predicates = get_right
-                            .clone()
-                            .filter(on_predicates.rhs()); // Push local predicates.
-                        if enable_outer_join_null_filter {
-                            // Filter out nulls. This prevents null skew, and also makes
-                            // more CSE opportunities when the left input's key doesn't have
-                            // a NOT NULL constraint, saving us an arrangement.
-                            right_with_local_predicates = right_with_local_predicates
-                                .filter(on_predicates.eq_rhs().map(|e| e.call_is_null().not()))
-                        }
                         // Rows in `right` matched in the inner equijoin. This
                         // is a semi-join between `right` and `both_keys`.
                         let right_present = MirRelationExpr::join_scalars(
                             vec![
-                                right_with_local_predicates,
+                                get_right
+                                    .clone()
+                                    // Push local predicates.
+                                    .filter(on_predicates.rhs(enable_outer_join_null_filter)),
                                 get_both,
                             ],
                             itertools::zip_eq(
@@ -2385,26 +2371,54 @@ impl OnPredicates {
         )
     }
 
-    /// Return an iterator over the [`OnPredicate::Lhs`] and
-    /// [`OnPredicate::Const`] conditions in the predicates list.
-    fn lhs(&self) -> impl Iterator<Item = MirScalarExpr> + '_ {
-        self.predicates.iter().filter_map(|p| match p {
+    /// Return an iterator over the [`OnPredicate::Lhs`] and [`OnPredicate::Const`] conditions in
+    /// the predicates list, plus some consequences of the predicates. The consequences can be
+    /// applied to the left input before it is fed into the join.
+    fn lhs(&self, enable_outer_join_null_filter: bool) -> impl Iterator<Item = MirScalarExpr> + '_ {
+        // Predicates that are directly present.
+        let direct = self.predicates.iter().filter_map(|p| match p {
             // We treat Const predicates local to both inputs.
             OnPredicate::Const(p) => Some(p.clone()),
             OnPredicate::Lhs(p) => Some(p.clone()),
             _ => None,
-        })
+        });
+
+        // When we have an `x = y` predicate with `x` referring to the lhs, this has the consequence
+        // `x IS NOT NULL`. We can add this consequence as an extra filter on the lhs.
+        // This prevents null skew, and also makes more CSE opportunities when the left input's key
+        // doesn't have a NOT NULL constraint, saving us an arrangement.
+        let consequence = self.eq_lhs().map(|e| e.call_is_null().not());
+
+        if enable_outer_join_null_filter {
+            direct.chain(consequence).collect_vec().into_iter()
+        } else {
+            direct.collect_vec().into_iter()
+        }
     }
 
-    /// Return an iterator over the [`OnPredicate::Rhs`] and
-    /// [`OnPredicate::Const`] conditions in the predicates list.
-    fn rhs(&self) -> impl Iterator<Item = MirScalarExpr> + '_ {
-        self.predicates.iter().filter_map(|p| match p {
+    /// Return an iterator over the [`OnPredicate::Rhs`] and [`OnPredicate::Const`] conditions in
+    /// the predicates list, plus some consequences of the predicates. The consequences can be
+    /// applied to the right input before it is fed into the join.
+    fn rhs(&self, enable_outer_join_null_filter: bool) -> impl Iterator<Item = MirScalarExpr> + '_ {
+        // Predicates that are directly present.
+        let direct = self.predicates.iter().filter_map(|p| match p {
             // We treat Const predicates local to both inputs.
             OnPredicate::Const(p) => Some(p.clone()),
             OnPredicate::Rhs(p) => Some(p.clone()),
             _ => None,
-        })
+        });
+
+        // When we have an `x = y` predicate with `y` referring to the rhs, this has the consequence
+        // `y IS NOT NULL`. We can add this consequence as an extra filter on the rhs.
+        // This prevents null skew, and also makes more CSE opportunities when the right input's key
+        // doesn't have a NOT NULL constraint, saving us an arrangement.
+        let consequence = self.eq_rhs().map(|e| e.call_is_null().not());
+
+        if enable_outer_join_null_filter {
+            direct.chain(consequence).collect_vec().into_iter()
+        } else {
+            direct.collect_vec().into_iter()
+        }
     }
 }
 
