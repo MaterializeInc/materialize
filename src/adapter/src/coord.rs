@@ -3412,14 +3412,12 @@ pub fn serve(
             .spawn(move || {
                 let span = info_span!(parent: parent_span, "coord::coordinator").entered();
 
-                let transient_id_gen = Arc::new(TransientIdGen::new());
                 let controller = handle
                     .block_on({
                         catalog.initialize_controller(
                             controller_config,
                             controller_envd_epoch,
                             read_only_controllers,
-                            Arc::clone(&transient_id_gen),
                             builtin_migration_metadata,
                             controller_txn_wal_tables,
                         )
@@ -3437,7 +3435,7 @@ pub fn serve(
                     strict_serializable_reads_tx,
                     dropped_read_holds_tx,
                     global_timelines: timestamp_oracles,
-                    transient_id_gen,
+                    transient_id_gen: Arc::new(TransientIdGen::new()),
                     active_conns: BTreeMap::new(),
                     storage_read_capabilities: Default::default(),
                     compute_read_capabilities: Default::default(),
