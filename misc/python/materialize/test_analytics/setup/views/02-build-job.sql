@@ -115,14 +115,6 @@ WHERE d.predecessor_index <> 0
 AND d.branch = 'main'
 ;
 
--- only for backwards compatibility
-CREATE OR REPLACE VIEW mv_build_job_success AS
-SELECT * FROM mv_build_job_success_on_main;
-
--- only for backwards compatibility
-CREATE OR REPLACE VIEW v_build_job_success AS
-SELECT * FROM mv_build_job_success_on_main;
-
 CREATE OR REPLACE VIEW v_most_recent_build_job AS
 SELECT
     b.pipeline,
