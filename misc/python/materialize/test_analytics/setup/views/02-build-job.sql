@@ -56,10 +56,10 @@ GROUP BY
 
 -- history of build job success
 CREATE OR REPLACE MATERIALIZED VIEW mv_build_job_success IN CLUSTER test_analytics AS
-WITH MUTUALLY RECURSIVE data (build_id TEXT, pipeline TEXT, build_number INT, build_job_id TEXT, build_step_key TEXT, success BOOL, predecessor_index INT, predecessor_build_number INT) AS
+WITH MUTUALLY RECURSIVE data (build_id TEXT, pipeline TEXT, branch TEXT, build_number INT, build_job_id TEXT, build_step_key TEXT, success BOOL, predecessor_index INT, predecessor_build_number INT) AS
 (
     SELECT
-        bj.build_id, b.pipeline, b.build_number, bj.build_job_id, bj.build_step_key, bj.success, 0, b.build_number
+        bj.build_id, b.pipeline, b.branch, b.build_number, bj.build_job_id, bj.build_step_key, bj.success, 0, b.build_number
     FROM
         build_job bj
     INNER JOIN build b
@@ -68,11 +68,12 @@ WITH MUTUALLY RECURSIVE data (build_id TEXT, pipeline TEXT, build_number INT, bu
     AND bj.is_latest_retry = TRUE
     UNION
     SELECT
-        d.build_id, d.pipeline, d.build_number, d.build_job_id, d.build_step_key, d.success, d.predecessor_index + 1, max(b2.build_number)
+        d.build_id, d.pipeline, d.branch, d.build_number, d.build_job_id, d.build_step_key, d.success, d.predecessor_index + 1, max(b2.build_number)
     FROM
         data d
     INNER JOIN build b2
     ON d.pipeline = b2.pipeline
+    AND d.branch = b2.branch
     AND d.predecessor_build_number > b2.build_number
     INNER JOIN build_job bj2
     ON b2.build_id = bj2.build_id
@@ -81,6 +82,7 @@ WITH MUTUALLY RECURSIVE data (build_id TEXT, pipeline TEXT, build_number INT, bu
     GROUP BY
         d.build_id,
         d.pipeline,
+        d.branch,
         d.build_number,
         d.build_job_id,
         d.build_step_key,
