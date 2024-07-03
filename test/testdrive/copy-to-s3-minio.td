@@ -121,7 +121,8 @@ contains:MAX FILE SIZE cannot be less than 16MB
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
-    FORMAT = 'csv'
+    FORMAT = 'csv',
+    HEADER = true
   );
 
 > COPY (SELECT array[1,2]::int[], false::bool, 'Inf'::double, '{"s": "abc"}'::jsonb, 1::mz_timestamp, 32767::smallint, 2147483647::integer, 9223372036854775807::bigint, 12345678901234567890123.4567890123456789::numeric(39,16), '2010-10-10'::date, '10:10:10'::time, '2010-10-10 10:10:10+00'::timestamp, '2010-10-10 10:10:10+02'::timestamptz, '0 day'::interval, 'aaaa'::text, '\\xAAAA'::bytea, 'това е'::text, 'текст'::bytea) TO 's3://copytos3/test/3'
@@ -152,7 +153,8 @@ contains:S3 bucket path is not empty
     AWS CONNECTION = aws_conn,
     FORMAT = 'csv',
     DELIMITER = ';',
-    QUOTE = '`'
+    QUOTE = '`',
+    HEADER = true
   )
 
 $ set-from-sql var=key-1
@@ -167,12 +169,14 @@ $ s3-verify-data bucket=copytos3 key=test/2
 2
 
 $ s3-verify-data bucket=copytos3 key=test/2_5
+a
 1
 
 $ s3-verify-data bucket=copytos3 key=test/3
 "{1,2}",f,Infinity,"{""s"":""abc""}",1,32767,2147483647,9223372036854775807,12345678901234567890123.4567890123456789,2010-10-10,10:10:10,2010-10-10 10:10:10,2010-10-10 08:10:10+00,00:00:00,aaaa,\x5c7841414141,това е,\xd182d0b5d0bad181d182
 
 $ s3-verify-data bucket=copytos3 key=test/4_5
+array;int4;jsonb;timestamp
 {1,2};83647;`{"s":"ab``c"}`;2010-10-10 10:10:10
 
 # Copy a large amount of data in the background and check to see that the INCOMPLETE
