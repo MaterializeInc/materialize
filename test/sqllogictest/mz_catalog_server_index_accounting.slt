@@ -454,8 +454,8 @@ mz_secrets  privileges
 mz_secrets  schema_id
 mz_session_history  authenticated_user
 mz_session_history  connected_at
-mz_session_history  id
 mz_session_history  initial_application_name
+mz_session_history  session_id
 mz_show_cluster_replicas  cluster
 mz_show_cluster_replicas  ready
 mz_show_cluster_replicas  replica

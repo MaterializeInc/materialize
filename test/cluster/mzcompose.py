@@ -3955,7 +3955,7 @@ def workflow_test_http_race_condition(
     stopping_time = datetime.now() + timedelta(seconds=30)
     while datetime.now() < stopping_time:
         result = c.sql_query(
-            "SELECT * FROM mz_internal.mz_sessions WHERE id <> pg_backend_pid()"
+            "SELECT * FROM mz_internal.mz_sessions WHERE connection_id <> pg_backend_pid()"
         )
         if not result:
             break
