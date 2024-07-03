@@ -106,6 +106,8 @@ optimizer_feature_flags!({
     enable_reduce_mfp_fusion: bool,
     // Enable joint HIR ⇒ MIR lowering of stacks of left joins.
     enable_variadic_left_join_lowering: bool,
+    // Enable the extra null filter implemented in #28018.
+    enable_outer_join_null_filter: bool,
     // Enable cardinality estimation
     enable_cardinality_estimates: bool,
     // An exclusive upper bound on the number of results we may return from a

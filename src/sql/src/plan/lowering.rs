@@ -136,6 +136,8 @@ pub struct Config {
     pub enable_new_outer_join_lowering: bool,
     /// Enable outer join lowering implemented in #25340.
     pub enable_variadic_left_join_lowering: bool,
+    /// Enable the extra null filter implemented in #28018.
+    pub enable_outer_join_null_filter: bool,
 }
 
 impl From<&SystemVars> for Config {
@@ -143,6 +145,7 @@ impl From<&SystemVars> for Config {
         Self {
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
+            enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
         }
     }
 }
@@ -693,6 +696,7 @@ impl HirRelationExpr {
                                     oa,
                                     id_gen,
                                     config.enable_new_outer_join_lowering,
+                                    config.enable_outer_join_null_filter,
                                 )? {
                                     return Ok(joined);
                                 }
@@ -1960,6 +1964,7 @@ fn attempt_outer_equijoin(
     oa: usize,
     id_gen: &mut mz_ore::id_gen::IdGen,
     enable_new_outer_join_lowering: bool,
+    enable_outer_join_null_filter: bool,
 ) -> Result<Option<MirRelationExpr>, PlanError> {
     // TODO(#22581): In theory, we can be smarter and also handle `on`
     // predicates that reference subqueries as long as these subqueries don't
@@ -2047,18 +2052,21 @@ fn attempt_outer_equijoin(
 
                 both_keys.let_in_fallible(id_gen, |_id_gen, get_both| {
                     if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter = kind {
+                        let mut left_with_local_predicates = get_left
+                            .clone()
+                            .filter(on_predicates.lhs()); // Push local predicates.
+                        if enable_outer_join_null_filter {
+                            // Filter out nulls. This prevents null skew, and also makes
+                            // more CSE opportunities when the left input's key doesn't have
+                            // a NOT NULL constraint, saving us an arrangement.
+                            left_with_local_predicates = left_with_local_predicates
+                                .filter(on_predicates.eq_lhs().map(|e| e.call_is_null().not()))
+                        }
                         // Rows in `left` matched in the inner equijoin. This is
                         // a semi-join between `left` and `both_keys`.
                         let left_present = MirRelationExpr::join_scalars(
                             vec![
-                                get_left
-                                    .clone()
-                                    // Push local predicates.
-                                    .filter(on_predicates.lhs())
-                                    // Filter out nulls. This prevents null skew, and also makes
-                                    // more CSE opportunities when the left input's key doesn't have
-                                    // a NOT NULL constraint, saving us an arrangement.
-                                    .filter(on_predicates.eq_lhs().map(|e| e.call_is_null().not())),
+                                left_with_local_predicates,
                                 get_both.clone(),
                             ],
                             itertools::zip_eq(
@@ -2085,17 +2093,21 @@ fn attempt_outer_equijoin(
                     }
 
                     if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
+                        let mut right_with_local_predicates = get_right
+                            .clone()
+                            .filter(on_predicates.rhs()); // Push local predicates.
+                        if enable_outer_join_null_filter {
+                            // Filter out nulls. This prevents null skew, and also makes
+                            // more CSE opportunities when the left input's key doesn't have
+                            // a NOT NULL constraint, saving us an arrangement.
+                            right_with_local_predicates = right_with_local_predicates
+                                .filter(on_predicates.eq_rhs().map(|e| e.call_is_null().not()))
+                        }
                         // Rows in `right` matched in the inner equijoin. This
                         // is a semi-join between `right` and `both_keys`.
                         let right_present = MirRelationExpr::join_scalars(
                             vec![
-                                get_right
-                                    .clone()
-                                    // Push local predicates.
-                                    .filter(on_predicates.rhs())
-                                    // Filter out nulls. This prevents null skew, and also makes
-                                    // more CSE opportunities.
-                                    .filter(on_predicates.eq_rhs().map(|e| e.call_is_null().not())),
+                                right_with_local_predicates,
                                 get_both,
                             ],
                             itertools::zip_eq(
