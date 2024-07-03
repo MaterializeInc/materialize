@@ -34,7 +34,7 @@ class CreateCluster(Check):
                 $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER ROLE materialize CREATECLUSTER
 
-                > CREATE CLUSTER create_cluster2 REPLICAS (replica1 (SIZE '2-2'));
+                > CREATE CLUSTER create_cluster2 (SIZE '2-2');
                 """,
             ]
         ]
@@ -70,8 +70,8 @@ class CreateCluster(Check):
                 ![version>10600] SHOW CREATE CLUSTER create_cluster1;
                 contains: SHOW CREATE for unmanaged clusters not yet supported
 
-                ![version>10600] SHOW CREATE CLUSTER create_cluster2;
-                contains: SHOW CREATE for unmanaged clusters not yet supported
+                >[version>10600] SHOW CREATE CLUSTER create_cluster2;
+                create_cluster2 "CREATE CLUSTER \\"create_cluster2\\" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '2-2', SCHEDULE = MANUAL)"
 
                 > DROP TABLE create_cluster1_table CASCADE;
                 > DROP TABLE create_cluster2_table CASCADE;
