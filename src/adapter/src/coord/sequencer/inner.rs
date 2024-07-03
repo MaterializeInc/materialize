@@ -2223,7 +2223,7 @@ impl Coordinator {
                 ctx.retire(result);
             }
             plan::Explainee::Index(_) => {
-                let result = self.explain_index(&ctx, plan);
+                let result = self.explain_index(&ctx, plan).await;
                 ctx.retire(result);
             }
             plan::Explainee::ReplanView(_) => {
@@ -4572,6 +4572,7 @@ impl CachedStatisticsOracle {
                     cache.insert(*id, stats.num_updates);
                 }
                 Err(StorageError::IdentifierMissing(id)) => {
+                    eprintln!("no statistics for {id}");
                     ::tracing::debug!("no statistics for {id}")
                 }
                 Err(e) => return Err(e),
@@ -4620,8 +4621,12 @@ impl Coordinator {
         .await;
 
         match cached_stats {
-            Ok(stats) => Ok(Box::new(stats)),
+            Ok(stats) => {
+                eprintln!("STATS successfully collected stats for {source_ids:?}");
+                Ok(Box::new(stats))
+            }
             Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
+                eprintln!("STATS timed out");
                 warn!(
                     is_oneshot = is_oneshot,
                     "optimizer statistics collection timed out after {}ms",

@@ -1735,12 +1735,17 @@ mod cardinality {
                         .and_then(|id| results.get(*id))
                         .copied()
                         .unwrap_or(CardinalityEstimate::Unknown),
-                    Id::Global(id) => self
-                        .stats
-                        .get(id)
-                        .copied()
-                        .map(CardinalityEstimate::from)
-                        .unwrap_or(CardinalityEstimate::Unknown),
+                    Id::Global(id) => {
+                        if !self.stats.contains_key(id) {
+                            eprintln!("STATS missing {id} from {:?}", self.stats);
+                        }
+
+                        self.stats
+                            .get(id)
+                            .copied()
+                            .map(CardinalityEstimate::from)
+                            .unwrap_or(CardinalityEstimate::Unknown)
+                    }
                 },
                 Let { .. } | Project { .. } | Map { .. } | ArrangeBy { .. } | Negate { .. } => {
                     results[index - 1].clone()

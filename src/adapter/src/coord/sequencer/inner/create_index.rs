@@ -188,7 +188,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(crate) fn explain_index(
+    pub(crate) async fn explain_index(
         &mut self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
@@ -201,8 +201,64 @@ impl Coordinator {
         let plan::Explainee::Index(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
+        let cluster_id = if let CatalogItem::Index(index) = self.catalog().get_entry(&id).item() {
+            index.cluster_id
+        } else {
+            unreachable!(); // Asserted in `plan_explain_plan`.
+        };
+
+        // TODO(mgree): calculate statistics (need a timestamp)
+        let timeline_context = self.get_timeline_context(id);
+        let stats_when = &plan::QueryWhen::Immediately;
+
+        let id_bundle = self
+            .dataflow_builder(cluster_id)
+            .sufficient_collections(std::iter::once(&id));
+
+        let stats_ts = self.determine_timestamp_for(
+            &ctx.session,
+            &id_bundle,
+            stats_when,
+            cluster_id,
+            &timeline_context,
+            None,
+            None,
+            &mz_sql::session::vars::IsolationLevel::Serializable,
+        );
+
         let CatalogItem::Index(index) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
+        };
+        // ??? is this the right way to do this?
+        let source_ids = self.catalog().get_entry(&id).references();
+
+        let cardinality_stats = match stats_ts {
+            Ok((ts, _read_holds)) => {
+                eprintln!(
+                    "STATS stats_ts.respond_immediately = {}",
+                    ts.respond_immediately()
+                );
+                let timestamp_context = ts.timestamp_context;
+
+                let stats = self
+                    .statistics_oracle(
+                        &ctx.session,
+                        &source_ids.0,
+                        &timestamp_context.antichain(),
+                        true,
+                    )
+                    .await
+                    .unwrap_or_else(|e| {
+                        eprintln!("STATS statistics_oracle = Err({e:?})");
+                        Box::new(mz_transform::EmptyStatisticsOracle)
+                    });
+
+                stats.as_map()
+            }
+            Err(e) => {
+                eprintln!("STATS stats_ts = Err({e:?})");
+                BTreeMap::new()
+            }
         };
 
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
@@ -217,9 +273,6 @@ impl Coordinator {
         let features = OptimizerFeatures::from(self.catalog().system_config())
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
-
-        // TODO(mgree): calculate statistics (need a timestamp)
-        let cardinality_stats = BTreeMap::new();
 
         let explain = match stage {
             ExplainStage::GlobalPlan => {

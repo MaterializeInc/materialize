@@ -552,15 +552,28 @@ impl Coordinator {
             None,
             &mz_sql::session::vars::IsolationLevel::Serializable,
         );
+
         let stats_ts_ctx = match stats_ts {
-            Ok((ts, _read_holds)) => ts.timestamp_context,
-            Err(_) => timestamp_context.clone(),
+            Ok((ts, _read_holds)) => {
+                eprintln!(
+                    "STATS stats_ts.respond_immediately = {}",
+                    ts.respond_immediately()
+                );
+                ts.timestamp_context
+            }
+            Err(e) => {
+                eprintln!("STATS stats_ts = Err({e:?})");
+                timestamp_context.clone()
+            }
         };
 
         let stats = self
             .statistics_oracle(session, &source_ids, &stats_ts_ctx.antichain(), true)
             .await
-            .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
+            .unwrap_or_else(|e| {
+                eprintln!("STATS statistics_oracle = Err({e:?})");
+                Box::new(EmptyStatisticsOracle)
+            });
         let session = session.meta();
         let now = self.catalog().config().now.clone();
         let catalog = self.owned_catalog();
