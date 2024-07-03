@@ -171,6 +171,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 1  object_id  text
 2  replica_id  text
 3  hydrated  boolean
+4  hydration_time  interval
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_operator_hydration_statuses' ORDER BY position
@@ -570,6 +571,7 @@ mz_comments
 mz_compute_dependencies
 mz_compute_error_counts_raw_unified
 mz_compute_hydration_statuses
+mz_compute_hydration_times
 mz_compute_operator_hydration_statuses
 mz_compute_operator_hydration_statuses_per_worker
 mz_frontiers
