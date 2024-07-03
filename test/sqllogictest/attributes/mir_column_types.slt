@@ -152,7 +152,7 @@ Explained Query:
                             ReadStorage materialize.public.u // { types: "(integer?)" }
                       Map (error("more than one record produced in subquery")) // { types: "(double precision)" }
                         Project () // { types: "()" }
-                          Filter error("more than one record produced in subquery") AND (#0 > 1) // { types: "(bigint)" }
+                          Filter (#0 > 1) // { types: "(bigint)" }
                             Reduce aggregates=[count(*)] // { types: "(bigint)" }
                               Project () // { types: "()" }
                                 ReadStorage materialize.public.u // { types: "(integer?)" }

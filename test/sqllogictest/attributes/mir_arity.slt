@@ -69,11 +69,10 @@ Explained Query:
   With
     cte l2 =
       Project (#0..=#3) // { arity: 4 }
-        Filter (#0) IS NOT NULL // { arity: 5 }
-          Join on=(#0 = #4) type=differential // { arity: 5 }
-            Get l1 // { arity: 3 }
-            ArrangeBy keys=[[#1]] // { arity: 2 }
-              ReadIndex on=u u_d_idx=[differential join] // { arity: 2 }
+        Join on=(#0 = #4) type=differential // { arity: 5 }
+          Get l1 // { arity: 3 }
+          ArrangeBy keys=[[#1]] // { arity: 2 }
+            ReadIndex on=u u_d_idx=[differential join] // { arity: 2 }
     cte l1 =
       ArrangeBy keys=[[#0]] // { arity: 3 }
         Filter (#0) IS NOT NULL // { arity: 3 }

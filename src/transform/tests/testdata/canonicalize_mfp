@@ -166,7 +166,7 @@ build apply=CanonicalizeMfp
     [0 3])
 ----
 Project (#0, #3)
-  Filter (#0) IS NOT NULL AND ((#0 = 5) OR (#0 = 1337))
+  Filter ((#0 = 5) OR (#0 = 1337))
     Join on=(#0 = #2)
       Project (#2)
         Filter (#2 > 1234)

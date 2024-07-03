@@ -150,63 +150,55 @@ foo left join bar on foo.a = bar.a
     left join quux on baz.c = quux.c;
 ----
 Explained Query:
-  Return
-    Project (#0..=#2, #14, #15, #17..=#19, #21, #22)
-      Map ((#5) IS NULL, case when #13 then null else #0 end, case when #13 then null else #4 end, (#9) IS NULL, case when #16 then null else #1 end, case when #16 then null else #7 end, case when #16 then null else #8 end, (#12) IS NULL, case when #20 then null else #10 end, case when #20 then null else #11 end)
-        Join on=(#0 = #3 AND #1 = #6 AND #10 = case when (#9) IS NULL then null else #7 end) type=delta
-          ArrangeBy keys=[[#0], [#1]]
-            ReadStorage materialize.public.foo
-          ArrangeBy keys=[[#0]]
-            Union
-              Filter (#0) IS NOT NULL
-                Map (true)
-                  ReadStorage materialize.public.bar
-              Map (null, null)
-                Threshold
-                  Union
-                    Negate
-                      Project (#0)
-                        Filter (#0) IS NOT NULL
-                          ReadStorage materialize.public.bar
-                    Distinct project=[#0]
-                      Project (#0)
-                        Get l0
-          ArrangeBy keys=[[#0], [case when (#3) IS NULL then null else #1 end]]
-            Union
-              Map (true)
-                ReadStorage materialize.public.baz
-              Map (null, null, null)
-                Threshold
-                  Union
-                    Negate
-                      Project (#0)
-                        ReadStorage materialize.public.baz
-                    Distinct project=[#0]
-                      Project (#1)
-                        Get l0
-          ArrangeBy keys=[[#0]]
-            Union
-              Map (true)
-                ReadStorage materialize.public.quux
-              Map (null, null)
-                Threshold
-                  Union
-                    Negate
-                      Project (#0)
-                        ReadStorage materialize.public.quux
-                    Distinct project=[#0]
-                      Union
-                        Project (#1)
-                          ReadStorage materialize.public.baz
-                        Constant
-                          - (null)
-  With
-    cte l0 =
-      Union
-        Project (#0, #1)
+  Project (#0..=#2, #14, #15, #17..=#19, #21, #22)
+    Map ((#5) IS NULL, case when #13 then null else #0 end, case when #13 then null else #4 end, (#9) IS NULL, case when #16 then null else #1 end, case when #16 then null else #7 end, case when #16 then null else #8 end, (#12) IS NULL, case when #20 then null else #10 end, case when #20 then null else #11 end)
+      Join on=(#0 = #3 AND #1 = #6 AND #10 = case when (#9) IS NULL then null else #7 end) type=delta
+        ArrangeBy keys=[[#0], [#1]]
           ReadStorage materialize.public.foo
-        Constant
-          - (null, null)
+        ArrangeBy keys=[[#0]]
+          Union
+            Filter (#0) IS NOT NULL
+              Map (true)
+                ReadStorage materialize.public.bar
+            Map (null, null)
+              Threshold
+                Union
+                  Negate
+                    Project (#0)
+                      Filter (#0) IS NOT NULL
+                        ReadStorage materialize.public.bar
+                  Distinct project=[#0]
+                    Project (#0)
+                      ReadStorage materialize.public.foo
+        ArrangeBy keys=[[#0], [case when (#3) IS NULL then null else #1 end]]
+          Union
+            Map (true)
+              ReadStorage materialize.public.baz
+            Map (null, null, null)
+              Threshold
+                Union
+                  Negate
+                    Project (#0)
+                      ReadStorage materialize.public.baz
+                  Distinct project=[#0]
+                    Project (#1)
+                      ReadStorage materialize.public.foo
+        ArrangeBy keys=[[#0]]
+          Union
+            Map (true)
+              ReadStorage materialize.public.quux
+            Map (null, null)
+              Threshold
+                Union
+                  Negate
+                    Project (#0)
+                      ReadStorage materialize.public.quux
+                  Distinct project=[#0]
+                    Union
+                      Project (#1)
+                        ReadStorage materialize.public.baz
+                      Constant
+                        - (null)
 
 Source materialize.public.foo
 Source materialize.public.bar
@@ -230,31 +222,32 @@ foo left join bar on foo.a = bar.a
 Explained Query:
   Return
     Union
-      Get l4
+      Get l2
       Map (0)
         Union
           Negate
             Project ()
-              Get l4
+              Get l2
           Constant
             - ()
   With
-    cte l4 =
+    cte l2 =
       Reduce aggregates=[count(*)]
         Project ()
           Join on=(#0 = #2 AND #1 = #3 AND #6 = case when (#5) IS NULL then null else #4 end) type=delta
             ArrangeBy keys=[[#0], [#1]]
-              Get l0
+              Project (#0, #1)
+                ReadStorage materialize.public.foo
             ArrangeBy keys=[[#0]]
               Union
-                Get l2
+                Get l0
                 Threshold
                   Union
                     Negate
-                      Get l2
+                      Get l0
                     Distinct project=[#0]
                       Project (#0)
-                        Get l1
+                        ReadStorage materialize.public.foo
             ArrangeBy keys=[[#0], [case when (#2) IS NULL then null else #1 end]]
               Union
                 Project (#0, #1, #3)
@@ -268,35 +261,27 @@ Explained Query:
                           ReadStorage materialize.public.baz
                       Distinct project=[#0]
                         Project (#1)
-                          Get l1
+                          ReadStorage materialize.public.foo
             ArrangeBy keys=[[#0]]
               Union
-                Get l3
+                Get l1
                 Threshold
                   Union
                     Negate
-                      Get l3
+                      Get l1
                     Distinct project=[#0]
                       Union
                         Project (#1)
                           ReadStorage materialize.public.baz
                         Constant
                           - (null)
-    cte l3 =
+    cte l1 =
       Project (#0)
         ReadStorage materialize.public.quux
-    cte l2 =
+    cte l0 =
       Project (#0)
         Filter (#0) IS NOT NULL
           ReadStorage materialize.public.bar
-    cte l1 =
-      Union
-        Get l0
-        Constant
-          - (null, null)
-    cte l0 =
-      Project (#0, #1)
-        ReadStorage materialize.public.foo
 
 Source materialize.public.foo
 Source materialize.public.bar

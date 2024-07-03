@@ -802,29 +802,28 @@ Explained Query:
           Negate // { arity: 3 }
             Project (#0{facts_k01}, #2{facts_d02}, #3) // { arity: 3 }
               Join on=(#4 = coalesce(#1{dim01_k01}, 5)) type=differential // { arity: 5 }
-                ArrangeBy keys=[[coalesce(#1{dim01_k01}, 5)]] // { arity: 4 }
-                  Project (#0{facts_k01}, #1{dim01_k01}, #4, #5) // { arity: 4 }
-                    Filter (#4{facts_d01} > 42) AND (coalesce(#1{dim01_k01}, 5)) IS NOT NULL // { arity: 9 }
-                      ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+                Get l0 // { arity: 4 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Distinct project=[coalesce(#0{dim01_k01}, 5)] // { arity: 1 }
                     Project (#1) // { arity: 1 }
-                      Get l0 // { arity: 7 }
+                      Get l1 // { arity: 7 }
           Project (#0{facts_k01}, #4, #5) // { arity: 3 }
             ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
       Project (#0{facts_k01}, #2{facts_d02}..=#6) // { arity: 6 }
-        Get l0 // { arity: 7 }
+        Get l1 // { arity: 7 }
   With
-    cte l0 =
+    cte l1 =
       Join on=(coalesce(#1{dim01_k01}, 5) = coalesce(#4{dim01_k01}, 5)) type=differential // { arity: 7 }
-        ArrangeBy keys=[[coalesce(#1{dim01_k01}, 5)]] // { arity: 4 }
-          Project (#0{facts_k01}, #1{dim01_k01}, #4, #5) // { arity: 4 }
-            Filter (#4{facts_d01} > 42) // { arity: 9 }
-              ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+        Get l0 // { arity: 4 }
         ArrangeBy keys=[[coalesce(#0{dim01_k01}, 5)]] // { arity: 3 }
           Project (#0{dim01_k01}..=#2{dim01_d02}) // { arity: 3 }
             Filter (#2{dim01_d02} < 24) // { arity: 6 }
               ReadStorage materialize.left_joins_raw.dim01 // { arity: 6 }
+    cte l0 =
+      ArrangeBy keys=[[coalesce(#1{dim01_k01}, 5)]] // { arity: 4 }
+        Project (#0{facts_k01}, #1{dim01_k01}, #4, #5) // { arity: 4 }
+          Filter (#4{facts_d01} > 42) // { arity: 9 }
+            ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
 
 Source materialize.left_joins_raw.facts
 Source materialize.left_joins_raw.dim01
@@ -864,29 +863,28 @@ Explained Query:
           Negate // { arity: 3 }
             Project (#0{facts_k01}, #2{facts_d02}, #3) // { arity: 3 }
               Join on=(#4 = coalesce(#1{dim01_k01}, 5)) type=differential // { arity: 5 }
-                ArrangeBy keys=[[coalesce(#1{dim01_k01}, 5)]] // { arity: 4 }
-                  Project (#0{facts_k01}, #1{dim01_k01}, #4, #5) // { arity: 4 }
-                    Filter (#4{facts_d01} > 42) AND (coalesce(#1{dim01_k01}, 5)) IS NOT NULL // { arity: 9 }
-                      ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+                Get l0 // { arity: 4 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Distinct project=[coalesce(#0{dim01_k01}, 5)] // { arity: 1 }
                     Project (#1) // { arity: 1 }
-                      Get l0 // { arity: 7 }
+                      Get l1 // { arity: 7 }
           Project (#0{facts_k01}, #4, #5) // { arity: 3 }
             ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
       Project (#0{facts_k01}, #2{facts_d02}..=#6) // { arity: 6 }
-        Get l0 // { arity: 7 }
+        Get l1 // { arity: 7 }
   With
-    cte l0 =
+    cte l1 =
       Join on=(coalesce(#1{dim01_k01}, 5) = coalesce(#4{dim01_k01}, 5)) type=differential // { arity: 7 }
-        ArrangeBy keys=[[coalesce(#1{dim01_k01}, 5)]] // { arity: 4 }
-          Project (#0{facts_k01}, #1{dim01_k01}, #4, #5) // { arity: 4 }
-            Filter (#4{facts_d01} > 42) // { arity: 9 }
-              ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+        Get l0 // { arity: 4 }
         ArrangeBy keys=[[coalesce(#0{dim01_k01}, 5)]] // { arity: 3 }
           Project (#0{dim01_k01}..=#2{dim01_d02}) // { arity: 3 }
             Filter (#2{dim01_d02} < 24) // { arity: 6 }
               ReadStorage materialize.left_joins_raw.dim01 // { arity: 6 }
+    cte l0 =
+      ArrangeBy keys=[[coalesce(#1{dim01_k01}, 5)]] // { arity: 4 }
+        Project (#0{facts_k01}, #1{dim01_k01}, #4, #5) // { arity: 4 }
+          Filter (#4{facts_d01} > 42) // { arity: 9 }
+            ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
 
 Source materialize.left_joins_raw.facts
 Source materialize.left_joins_raw.dim01
@@ -913,29 +911,28 @@ materialize.public.v:
           Negate // { arity: 3 }
             Project (#0{facts_k01}, #2{facts_d02}, #3) // { arity: 3 }
               Join on=(#4 = coalesce(#1{dim01_k01}, 5)) type=differential // { arity: 5 }
-                ArrangeBy keys=[[coalesce(#1{dim01_k01}, 5)]] // { arity: 4 }
-                  Project (#0{facts_k01}, #1{dim01_k01}, #4, #5) // { arity: 4 }
-                    Filter (#4{facts_d01} > 42) AND (coalesce(#1{dim01_k01}, 5)) IS NOT NULL // { arity: 9 }
-                      ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+                Get l0 // { arity: 4 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Distinct project=[coalesce(#0{dim01_k01}, 5)] // { arity: 1 }
                     Project (#1) // { arity: 1 }
-                      Get l0 // { arity: 7 }
+                      Get l1 // { arity: 7 }
           Project (#0{facts_k01}, #4, #5) // { arity: 3 }
             ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
       Project (#0{facts_k01}, #2{facts_d02}..=#6) // { arity: 6 }
-        Get l0 // { arity: 7 }
+        Get l1 // { arity: 7 }
   With
-    cte l0 =
+    cte l1 =
       Join on=(coalesce(#1{dim01_k01}, 5) = coalesce(#4{dim01_k01}, 5)) type=differential // { arity: 7 }
-        ArrangeBy keys=[[coalesce(#1{dim01_k01}, 5)]] // { arity: 4 }
-          Project (#0{facts_k01}, #1{dim01_k01}, #4, #5) // { arity: 4 }
-            Filter (#4{facts_d01} > 42) // { arity: 9 }
-              ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+        Get l0 // { arity: 4 }
         ArrangeBy keys=[[coalesce(#0{dim01_k01}, 5)]] // { arity: 3 }
           Project (#0{dim01_k01}..=#2{dim01_d02}) // { arity: 3 }
             Filter (#2{dim01_d02} < 24) // { arity: 6 }
               ReadStorage materialize.left_joins_raw.dim01 // { arity: 6 }
+    cte l0 =
+      ArrangeBy keys=[[coalesce(#1{dim01_k01}, 5)]] // { arity: 4 }
+        Project (#0{facts_k01}, #1{dim01_k01}, #4, #5) // { arity: 4 }
+          Filter (#4{facts_d01} > 42) // { arity: 9 }
+            ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
 
 Source materialize.left_joins_raw.facts
 Source materialize.left_joins_raw.dim01
@@ -971,29 +968,28 @@ materialize.public.mv:
           Negate // { arity: 3 }
             Project (#0{facts_k01}, #2{facts_d02}, #3) // { arity: 3 }
               Join on=(#4 = coalesce(#1{dim01_k01}, 5)) type=differential // { arity: 5 }
-                ArrangeBy keys=[[coalesce(#1{dim01_k01}, 5)]] // { arity: 4 }
-                  Project (#0{facts_k01}, #1{dim01_k01}, #4, #5) // { arity: 4 }
-                    Filter (#4{facts_d01} > 42) AND (coalesce(#1{dim01_k01}, 5)) IS NOT NULL // { arity: 9 }
-                      ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+                Get l0 // { arity: 4 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Distinct project=[coalesce(#0{dim01_k01}, 5)] // { arity: 1 }
                     Project (#1) // { arity: 1 }
-                      Get l0 // { arity: 7 }
+                      Get l1 // { arity: 7 }
           Project (#0{facts_k01}, #4, #5) // { arity: 3 }
             ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
       Project (#0{facts_k01}, #2{facts_d02}..=#6) // { arity: 6 }
-        Get l0 // { arity: 7 }
+        Get l1 // { arity: 7 }
   With
-    cte l0 =
+    cte l1 =
       Join on=(coalesce(#1{dim01_k01}, 5) = coalesce(#4{dim01_k01}, 5)) type=differential // { arity: 7 }
-        ArrangeBy keys=[[coalesce(#1{dim01_k01}, 5)]] // { arity: 4 }
-          Project (#0{facts_k01}, #1{dim01_k01}, #4, #5) // { arity: 4 }
-            Filter (#4{facts_d01} > 42) // { arity: 9 }
-              ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+        Get l0 // { arity: 4 }
         ArrangeBy keys=[[coalesce(#0{dim01_k01}, 5)]] // { arity: 3 }
           Project (#0{dim01_k01}..=#2{dim01_d02}) // { arity: 3 }
             Filter (#2{dim01_d02} < 24) // { arity: 6 }
               ReadStorage materialize.left_joins_raw.dim01 // { arity: 6 }
+    cte l0 =
+      ArrangeBy keys=[[coalesce(#1{dim01_k01}, 5)]] // { arity: 4 }
+        Project (#0{facts_k01}, #1{dim01_k01}, #4, #5) // { arity: 4 }
+          Filter (#4{facts_d01} > 42) // { arity: 9 }
+            ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
 
 Source materialize.left_joins_raw.facts
 Source materialize.left_joins_raw.dim01

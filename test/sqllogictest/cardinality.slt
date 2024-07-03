@@ -154,9 +154,9 @@ SELECT * FROM pexists;
 ----
 Explained Query:
   Return
-    Get l4
+    Get l5
   With Mutually Recursive
-    cte l4 =
+    cte l5 =
       Distinct project=[#0, #1]
         Union
           Distinct project=[#0, #1]
@@ -164,60 +164,60 @@ Explained Query:
               Project (#1, #0)
                 CrossJoin type=differential
                   ArrangeBy keys=[[]]
-                    Get l1
+                    Get l2
                   ArrangeBy keys=[[]]
                     Union
                       Negate
-                        Get l3
+                        Get l4
                       Constant
                         - ()
               Project (#1, #0)
                 Map (true, -1)
-                  Get l3
+                  Get l4
           Constant
             - (1, true)
             - (2, false)
-    cte l3 =
+    cte l4 =
       Distinct project=[]
         Project ()
           Join on=(#0 = #1) type=differential
             ArrangeBy keys=[[#0]]
               Project (#0)
                 Filter #1
-                  Get l2
+                  Get l3
             ArrangeBy keys=[[#0]]
               Project (#0)
                 Filter NOT(#1)
-                  Get l2
-    cte l2 =
+                  Get l3
+    cte l3 =
       Union
         Project (#1, #0)
-          Get l1
-        Get l4
-    cte l1 =
+          Get l2
+        Get l5
+    cte l2 =
       Project (#1, #3)
         Join on=(#0 = #2) type=differential
           ArrangeBy keys=[[#0]]
-            Get l4
+            Get l5
           ArrangeBy keys=[[#0]]
             Union
               Negate
                 Project (#0, #1)
                   Join on=(#2 = least(#0, #1) AND #3 = greatest(#0, #1)) type=differential
                     ArrangeBy keys=[[greatest(#0, #1), least(#0, #1)]]
-                      Project (#1, #2)
-                        Filter (greatest(#1, #2)) IS NOT NULL AND (least(#1, #2)) IS NOT NULL
-                          ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+                      Get l0
                     ArrangeBy keys=[[#1, #0]]
                       Distinct project=[least(#0, #1), greatest(#0, #1)]
-                        Get l0
-              Project (#1, #2)
-                ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+                        Get l1
               Get l0
-    cte l0 =
+              Get l1
+    cte l1 =
       Project (#1, #2)
         Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
           ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+    cte l0 =
+      Project (#1, #2)
+        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
@@ -270,9 +270,9 @@ SELECT * FROM pexists;
 ----
 Explained Query:
   Return
-    Get l4
+    Get l5
   With Mutually Recursive
-    cte l4 =
+    cte l5 =
       Distinct project=[#0, #1]
         Union
           Distinct project=[#0, #1]
@@ -280,60 +280,60 @@ Explained Query:
               Project (#1, #0)
                 CrossJoin type=differential
                   ArrangeBy keys=[[]]
-                    Get l1
+                    Get l2
                   ArrangeBy keys=[[]]
                     Union
                       Negate
-                        Get l3
+                        Get l4
                       Constant
                         - ()
               Project (#1, #0)
                 Map (true, -1)
-                  Get l3
+                  Get l4
           Constant
             - (1, true)
             - (2, false)
-    cte l3 =
+    cte l4 =
       Distinct project=[]
         Project ()
           Join on=(#0 = #1) type=differential
             ArrangeBy keys=[[#0]]
               Project (#0)
                 Filter #1
-                  Get l2
+                  Get l3
             ArrangeBy keys=[[#0]]
               Project (#0)
                 Filter NOT(#1)
-                  Get l2
-    cte l2 =
+                  Get l3
+    cte l3 =
       Union
         Project (#1, #0)
-          Get l1
-        Get l4
-    cte l1 =
+          Get l2
+        Get l5
+    cte l2 =
       Project (#1, #3)
         Join on=(#0 = #2) type=differential
           ArrangeBy keys=[[#0]]
-            Get l4
+            Get l5
           ArrangeBy keys=[[#0]]
             Union
               Negate
                 Project (#0, #1)
                   Join on=(#2 = least(#0, #1) AND #3 = greatest(#0, #1)) type=differential
                     ArrangeBy keys=[[greatest(#0, #1), least(#0, #1)]]
-                      Project (#1, #2)
-                        Filter (greatest(#1, #2)) IS NOT NULL AND (least(#1, #2)) IS NOT NULL
-                          ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+                      Get l0
                     ArrangeBy keys=[[#1, #0]]
                       Distinct project=[least(#0, #1), greatest(#0, #1)]
-                        Get l0
-              Project (#1, #2)
-                ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+                        Get l1
               Get l0
-    cte l0 =
+              Get l1
+    cte l1 =
       Project (#1, #2)
         Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
           ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+    cte l0 =
+      Project (#1, #2)
+        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
