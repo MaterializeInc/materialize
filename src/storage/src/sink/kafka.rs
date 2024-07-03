@@ -220,6 +220,8 @@ struct TransactionalProducer {
     staged_bytes: u64,
     /// The timeout to use for network operations.
     socket_timeout: Duration,
+    /// The maximum duration of a transaction.
+    transaction_timeout: Duration,
 }
 
 impl TransactionalProducer {
@@ -253,12 +255,17 @@ impl TransactionalProducer {
             "compression.type",
             connection.compression_type.to_librdkafka_option().into(),
         );
-        // Set the maximum buffer size limit. We don't want to impose anything lower than the max
-        // here as the operator has nothing better to do with the data than to buffer them.
-        options.insert("queue.buffering.max.kbytes", "2147483647".into());
-        // Disable the default buffer limit of 100k messages. We don't want to impose any limit
-        // here as the operator has nothing better to do with the data than to buffer them.
-        options.insert("queue.buffering.max.messages", "0".into());
+        // Increase limits for the Kafka producer's internal buffering of messages. Currently we
+        // don't have a great backpressure mechanism to tell indexes or views to slow down, so the
+        // only thing we can do with a message that we can't immediately send is to put it in a
+        // buffer and there's no point having buffers within the dataflow layer and Kafka. If the
+        // sink starts falling behind and the buffers start consuming too much memory the best
+        // thing to do is to drop the sink. Sets the buffer size to be 16 GB (note that this
+        // setting is in KB)
+        options.insert("queue.buffering.max.kbytes", format!("{}", 16 << 20));
+        // Set the max messages buffered by the producer at any time to 10MM which is the maximum
+        // allowed value.
+        options.insert("queue.buffering.max.messages", format!("{}", 10_000_000));
         // Make the Kafka producer wait at least 10 ms before sending out MessageSets
         options.insert("queue.buffering.max.ms", format!("{}", 10));
         // Time out transactions after 60 seconds
@@ -300,6 +307,7 @@ impl TransactionalProducer {
             staged_messages: 0,
             staged_bytes: 0,
             socket_timeout: timeout_config.socket_timeout,
+            transaction_timeout: timeout_config.transaction_timeout,
         };
 
         let timeout = timeout_config.socket_timeout;
@@ -340,12 +348,12 @@ impl TransactionalProducer {
     /// retrying is equivalent to adjusting the maximum number of queued items in rdkafka so it is
     /// adviced that callers only handle this error in order to apply backpressure to the rest of
     /// the system.
-    fn send(
+    async fn send(
         &mut self,
         message: &KafkaMessage,
         time: Timestamp,
         diff: Diff,
-    ) -> Result<(), KafkaError> {
+    ) -> Result<(), ContextCreationError> {
         assert_eq!(diff, 1, "invalid sink update");
 
         let mut headers = OwnedHeaders::new().insert(Header {
@@ -388,7 +396,20 @@ impl TransactionalProducer {
         self.staged_messages += 1;
         self.statistics.inc_bytes_staged_by(record_size);
         self.staged_bytes += record_size;
-        self.producer.send(record).map_err(|(e, _)| e)
+        match self.producer.send(record) {
+            Ok(()) => Ok(()),
+            Err((err, record)) => match err.rdkafka_error_code() {
+                Some(RDKafkaErrorCode::QueueFull) => {
+                    // If the internal rdkafka queue is full we have no other option than to flush
+                    // TODO(petrosagg): remove this logic once we fix upgrade to librdkafka 2.3 and
+                    // increase the queue limits
+                    let timeout = self.transaction_timeout;
+                    self.spawn_blocking(move |p| p.flush(timeout)).await?;
+                    self.producer.send(record).map_err(|(err, _)| err.into())
+                }
+                _ => Err(err.into()),
+            },
+        }
     }
 
     /// Commits all the staged updates of the currently open transaction plus a progress record
@@ -405,7 +426,20 @@ impl TransactionalProducer {
         let record = BaseRecord::to(&self.progress_topic)
             .payload(&payload)
             .key(&self.progress_key);
-        self.producer.send(record).map_err(|(e, _)| e)?;
+        match self.producer.send(record) {
+            Ok(()) => {}
+            Err((err, record)) => match err.rdkafka_error_code() {
+                Some(RDKafkaErrorCode::QueueFull) => {
+                    // If the internal rdkafka queue is full we have no other option than to flush
+                    // TODO(petrosagg): remove this logic once we fix the issue that cannot be
+                    // named
+                    let timeout = self.transaction_timeout;
+                    self.spawn_blocking(move |p| p.flush(timeout)).await?;
+                    self.producer.send(record).map_err(|(err, _)| err)?;
+                }
+                _ => return Err(err.into()),
+            },
+        }
 
         let timeout = self.socket_timeout;
         match self
@@ -655,7 +689,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                                         producer.begin_transaction().await?;
                                         transaction_begun = true;
                                     }
-                                    producer.send(&message, time, diff)?;
+                                    producer.send(&message, time, diff).await?;
                                 }
                                 Ordering::Greater => continue,
                             }
@@ -697,7 +731,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                         );
                         extra_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
                         for (message, time, diff) in extra_updates.drain(..) {
-                            producer.send(&message, time, diff)?;
+                            producer.send(&message, time, diff).await?;
                         }
 
                         info!("{name}: committing transaction for {}", progress.pretty());
