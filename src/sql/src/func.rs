@@ -3552,11 +3552,9 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 CASE
                 -- We need to validate the name and privileges to return a proper error before
                 -- anything else.
-                WHEN mz_unsafe.mz_error_if_null(
-                    (SELECT name FROM mz_clusters WHERE name = $2),
-                    'error cluster \"' || $2 || '\" does not exist'
-                ) IS NULL
-                OR NOT mz_internal.mz_validate_privileges($3)
+                WHEN NOT EXISTS (SELECT name FROM mz_clusters WHERE name = $2)
+                THEN mz_unsafe.mz_error_if_null(NULL, 'error cluster \"' || $2 || '\" does not exist')
+                WHEN NOT mz_internal.mz_validate_privileges($3)
                 OR $1 IS NULL
                 OR $2 IS NULL
                 OR $3 IS NULL
