@@ -9,19 +9,19 @@ menu:
 Lists are ordered sequences of homogenously typed elements. Lists' elements can
 be other lists, known as "layered lists."
 
-Detail | Info
--------|------
-**Quick Syntax** | `LIST[[1,2],[3]]`
-**Size** | Variable
-**Catalog name** | Anonymous, but [nameable](../../create-type)
+| Detail           | Info                                         |
+| ---------------- | -------------------------------------------- |
+| **Quick Syntax** | `LIST[[1,2],[3]]`                            |
+| **Size**         | Variable                                     |
+| **Catalog name** | Anonymous, but [nameable](../../create-type) |
 
 ## Syntax
 
 {{< diagram "type-list.svg" >}}
 
-Field | Use
-------|-----
-_element_ | An element of any [data type](../) to place in the list. Note that all elements must be of the same type.
+| Field     | Use                                                                                                       |
+| --------- | --------------------------------------------------------------------------------------------------------- |
+| _element_ | An element of any [data type](../) to place in the list. Note that all elements must be of the same type. |
 
 ## List functions + operators
 
@@ -337,11 +337,11 @@ also be able to infer how list differs from it, as well.
 
 #### Terminology
 
-Feature | Array term | List term
---------|------------|-----------
-**Nested structure** | Multidimensional array | Layered list
-**Accessing single element** | Subscripting | Indexing<sup>1</sup>
-**Accessing range of elements** | Subscripting | Slicing<sup>1</sup>
+| Feature                         | Array term             | List term            |
+| ------------------------------- | ---------------------- | -------------------- |
+| **Nested structure**            | Multidimensional array | Layered list         |
+| **Accessing single element**    | Subscripting           | Indexing<sup>1</sup> |
+| **Accessing range of elements** | Subscripting           | Slicing<sup>1</sup>  |
 
 <sup>1</sup>In some places, such as error messages, Materialize refers to
 both list indexing and list slicing as subscripting.
@@ -519,4 +519,35 @@ SELECT '{{1.5,NULL},{2.25}}'::numeric(38,2) list list AS text_to_list;
      text_to_list
 ----------------------
  {{1.50,NULL},{2.25}}
+```
+
+### List containment
+
+```mzsql
+SELECT LIST[1,4,3] @> LIST[3,1] AS contains;
+```
+```nofmt
+ contains
+----------
+ t
+```
+
+```mzsql
+SELECT LIST[2,7] <@ LIST[1,7,4,2,6] AS is_contained_by;
+```
+```nofmt
+ is_contained_by
+-----------------
+ t
+```
+
+Note that array containment in Postgres does NOT account for duplicates. This is mirrored by the list implementation.
+
+```mzsql
+SELECT LIST[1,3,7] @> LIST[1,3,3,3,3,7] AS contains;
+```
+```nofmt
+ contains
+----------
+ t
 ```
