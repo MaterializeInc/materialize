@@ -549,16 +549,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    to_run = []
+    selected_disruptions = []
     for name in args.disruptions:
         for disruption in disruptions:
             if disruption.name == name:
-                to_run.append(disruption)
+                selected_disruptions.append(disruption)
                 break
         else:
             raise ValueError(f"Unknown disruption {name}")
 
-    sharded_disruptions = buildkite.shard_list(to_run, lambda s: s.name)
+    sharded_disruptions = buildkite.shard_list(selected_disruptions, lambda s: s.name)
     print(
         f"Disruptions in shard with index {buildkite.get_parallelism_index()}: {[d.name for d in sharded_disruptions]}"
     )

@@ -15,7 +15,7 @@ from typing import Any
 
 from pg8000 import Cursor  # type: ignore
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
@@ -398,13 +398,26 @@ disruptions = [
 ]
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test replica isolation by introducing faults of various kinds in replica1
     and then making sure that the cluster continues to operate properly
     """
 
+    parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])
+
+    args = parser.parse_args()
+
+    selected_disruptions = []
+    for name in args.disruptions:
+        for disruption in disruptions:
+            if disruption.name == name:
+                selected_disruptions.append(disruption)
+                break
+        else:
+            raise ValueError(f"Unknown disruption {name}")
+
     c.up("zookeeper", "kafka", "schema-registry", "localstack")
-    for id, disruption in enumerate(disruptions):
+    for id, disruption in enumerate(selected_disruptions):
         run_test(c, disruption, id)
 
 
