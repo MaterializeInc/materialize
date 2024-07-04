@@ -662,6 +662,37 @@ false
 
 > DROP MATERIALIZED VIEW mv_long_hydration;
 
+> SELECT
+    name,
+    now() - INTERVAL '30 minutes' < last_completed_refresh,
+    next_refresh > now() - INTERVAL '6 seconds'
+  FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
+  WHERE
+    mv.id = mvr.materialized_view_id
+  ORDER BY name;
+mv1 true true
+mv10 <null> true
+mv11 true true
+mv12 <null> true
+mv13 <null> true
+mv14 <null> true
+mv14_at_const true <null>
+mv15_ats_const true <null>
+mv16_every_const true <null>
+mv17_before_first <null> true
+mv18_no_replica <null> false
+mv19 true true
+mv2 true true
+mv3 true true
+mv4 true <null>
+mv5 true true
+mv6 true true
+mv7 true <null>
+mv8 true true
+mv9 <null> true
+mv_at_creation true <null>
+mv_no_rep true true
+
 # ----------------------------------------
 # Cleanup
 # ----------------------------------------
