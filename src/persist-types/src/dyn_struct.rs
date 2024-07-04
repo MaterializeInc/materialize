@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow::array::{Array, BooleanBufferBuilder, NullArray, StructArray};
+use arrow::array::{Array, BooleanBufferBuilder, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{Field, Fields};
 
@@ -92,11 +92,7 @@ impl ColumnRef<DynStructCfg> for DynStructCol {
     }
 
     fn to_arrow(&self) -> Arc<dyn Array> {
-        let array: Arc<dyn Array> = match self.to_arrow_struct() {
-            Some(array) => Arc::new(array),
-            None => Arc::new(NullArray::new(self.len)),
-        };
-        array
+        Arc::new(self.to_arrow_struct())
     }
 
     fn from_arrow(cfg: &DynStructCfg, array: &dyn Array) -> Result<Self, String> {
@@ -217,7 +213,7 @@ impl DynStructCol {
         })
     }
 
-    pub(crate) fn to_arrow_struct(&self) -> Option<StructArray> {
+    pub(crate) fn to_arrow_struct(&self) -> StructArray {
         let (mut fields, mut arrays) = (Vec::new(), Vec::new());
         for (name, _stats_fn, col) in self.cols() {
             let (array, is_nullable) = col.to_arrow();
@@ -225,13 +221,10 @@ impl DynStructCol {
             arrays.push(array);
         }
         if fields.is_empty() {
-            return None;
+            StructArray::new_empty_fields(self.len, self.validity.clone())
+        } else {
+            StructArray::new(Fields::from(fields), arrays, self.validity.clone())
         }
-        Some(StructArray::new(
-            Fields::from(fields),
-            arrays,
-            self.validity.clone(),
-        ))
     }
 
     /// Create a [`DynStructCol`] from an [`arrow::array::Array`].

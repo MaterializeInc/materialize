@@ -196,11 +196,6 @@ enum DatumColumnEncoder {
         /// Number of values we've pushed into this builder thus far.
         length: usize,
     },
-    /// Special encoder for a [`ScalarType::Record`] that has no inner fields.
-    ///
-    /// We have a special case for this scenario because Arrow does not allow a
-    /// [`StructArray`] (what normally use to encod a `Record`) with no fields.
-    RecordEmpty(BooleanBuilder),
 }
 
 impl DatumColumnEncoder {
@@ -412,10 +407,6 @@ impl DatumColumnEncoder {
                     nulls.append(true);
                 }
             }
-            (DatumColumnEncoder::RecordEmpty(builder), Datum::List(records)) => {
-                assert!(records.into_iter().next().is_none());
-                builder.append_value(true);
-            }
             (encoder, Datum::Null) => encoder.push_invalid(),
             (encoder, datum) => unimplemented!("can't encode {datum:?} into {encoder:?}"),
         }
@@ -530,7 +521,6 @@ impl DatumColumnEncoder {
                     field.push_invalid();
                 }
             }
-            DatumColumnEncoder::RecordEmpty(builder) => builder.append_null(),
         }
     }
 
@@ -770,7 +760,7 @@ impl DatumColumnEncoder {
             DatumColumnEncoder::Record {
                 fields,
                 mut nulls,
-                length: _,
+                length,
             } => {
                 let (fields, arrays): (Vec<_>, Vec<_>) = fields
                     .into_iter()
@@ -789,11 +779,12 @@ impl DatumColumnEncoder {
                     .unzip();
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
 
-                let array = StructArray::new(Fields::from(fields), arrays, nulls);
+                let array = if fields.is_empty() {
+                    StructArray::new_empty_fields(length, nulls)
+                } else {
+                    StructArray::new(Fields::from(fields), arrays, nulls)
+                };
                 (Arc::new(array), ColumnStatKinds::None)
-            }
-            DatumColumnEncoder::RecordEmpty(mut builder) => {
-                (Arc::new(builder.finish()), ColumnStatKinds::None)
             }
         }
     }
@@ -844,7 +835,6 @@ enum DatumColumnDecoder {
         vals: Box<DatumColumnDecoder>,
         nulls: Option<NullBuffer>,
     },
-    RecordEmpty(BooleanArray),
     Record {
         fields: Vec<Box<DatumColumnDecoder>>,
         nulls: Option<NullBuffer>,
@@ -1081,7 +1071,6 @@ impl DatumColumnDecoder {
                 // Return early because we've already packed the necessary Datums.
                 return;
             }
-            DatumColumnDecoder::RecordEmpty(array) => array.is_valid(idx).then(Datum::empty_list),
             DatumColumnDecoder::Record { fields, nulls } => {
                 let is_valid = nulls.as_ref().map(|n| n.is_valid(idx)).unwrap_or(true);
                 if !is_valid {
@@ -1469,10 +1458,6 @@ fn array_to_decoder(
                 nulls: array.nulls().cloned(),
             }
         }
-        (DataType::Boolean, ScalarType::Record { fields, .. }) if fields.is_empty() => {
-            let empty_record_array = downcast_array::<BooleanArray>(array)?;
-            DatumColumnDecoder::RecordEmpty(empty_record_array.clone())
-        }
         (DataType::Struct(_), ScalarType::Record { fields, .. }) => {
             let record_array = downcast_array::<StructArray>(array)?;
 
@@ -1571,9 +1556,6 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
                 vals: Box::new(inner),
                 nulls: None,
             }
-        }
-        ScalarType::Record { fields, .. } if fields.is_empty() => {
-            DatumColumnEncoder::RecordEmpty(BooleanBuilder::new())
         }
         ScalarType::Record { fields, .. } => {
             let encoders = fields

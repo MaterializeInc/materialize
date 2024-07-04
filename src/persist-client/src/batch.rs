@@ -1061,8 +1061,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             if records.len() == 1 && cfg.batch_columnar_format.is_structured() {
                                 let record = records.pop().expect("checked length above");
                                 let record_ext = ColumnarRecordsStructuredExt {
-                                    key: columnar_part.to_key_arrow().map(|(_, array)| array),
-                                    val: columnar_part.to_val_arrow().map(|(_, array)| array),
+                                    key: columnar_part.to_key_arrow().1,
+                                    val: columnar_part.to_val_arrow().1,
                                 };
                                 updates.updates = BlobTraceUpdates::Both(record, record_ext)
                             }

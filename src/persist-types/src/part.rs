@@ -57,19 +57,17 @@ impl Part {
     }
 
     /// Returns an [`arrow`] array representing the `key` column.
-    pub fn to_key_arrow(&self) -> Option<(Field, StructArray)> {
-        self.key.to_arrow_struct().map(|array| {
-            let field = Field::new("k_s", array.data_type().clone(), false);
-            (field, array)
-        })
+    pub fn to_key_arrow(&self) -> (Field, StructArray) {
+        let array = self.key.to_arrow_struct();
+        let field = Field::new("k_s", array.data_type().clone(), false);
+        (field, array)
     }
 
     /// Returns an [`arrow`] array representing the `val` column.
-    pub fn to_val_arrow(&self) -> Option<(Field, StructArray)> {
-        self.val.to_arrow_struct().map(|array| {
-            let field = Field::new("v_s", array.data_type().clone(), false);
-            (field, array)
-        })
+    pub fn to_val_arrow(&self) -> (Field, StructArray) {
+        let array = self.val.to_arrow_struct();
+        let field = Field::new("v_s", array.data_type().clone(), false);
+        (field, array)
     }
 
     /// Returns [`arrow`] types representing this [`Part`].
@@ -77,27 +75,15 @@ impl Part {
         let (mut fields, mut arrays) = (Vec::new(), Vec::<Arc<dyn Array>>::new());
 
         {
-            // arrow doesn't allow empty struct arrays. To make a future schema
-            // migration for <no columns> <-> <one optional column> easier, we
-            // model this as a missing column (rather than something like
-            // NullArray). This also matches how we'd do the same for nested
-            // structs.
-            if let Some((field, key_array)) = self.to_key_arrow() {
-                fields.push(field);
-                arrays.push(Arc::new(key_array));
-            }
+            let (field, key_array) = self.to_key_arrow();
+            fields.push(field);
+            arrays.push(Arc::new(key_array));
         }
 
         {
-            // arrow doesn't allow empty struct arrays. To make a future schema
-            // migration for <no columns> <-> <one optional column> easier, we
-            // model this as a missing column (rather than something like
-            // NullArray). This also matches how we'd do the same for nested
-            // structs.
-            if let Some((field, val_array)) = self.to_val_arrow() {
-                fields.push(field);
-                arrays.push(Arc::new(val_array));
-            }
+            let (field, val_array) = self.to_val_arrow();
+            fields.push(field);
+            arrays.push(Arc::new(val_array));
         }
 
         {

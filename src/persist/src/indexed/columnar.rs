@@ -556,13 +556,9 @@ impl ColumnarRecords {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnarRecordsStructuredExt {
     /// The structured `k` column.
-    ///
-    /// [`arrow`] does not allow empty [`StructArray`]s so we model an empty `key` column as None.
-    pub key: Option<StructArray>,
+    pub key: StructArray,
     /// The structured `v` column.
-    ///
-    /// [`arrow`] does not allow empty [`StructArray`]s so we model an empty `val` column as None.
-    pub val: Option<StructArray>,
+    pub val: StructArray,
 }
 
 #[cfg(test)]

@@ -753,34 +753,24 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                     validate_structured: true,
                 },
             ) => {
-                let maybe_key = structured
-                    .key
-                    .as_ref()
-                    .map(|col| {
-                        let col = DynStructCol::from_arrow(schemas.key.columns(), col)?;
-                        let decoder = schemas.key.decoder(col.as_ref())?;
-                        Ok::<_, String>(Arc::new(decoder))
-                    })
-                    .transpose();
+                let maybe_key = {
+                    DynStructCol::from_arrow(schemas.key.columns(), &structured.key)
+                        .and_then(|col| schemas.key.decoder(col.as_ref()))
+                };
                 let key = match maybe_key {
-                    Ok(key) => key,
+                    Ok(key) => Some(Arc::new(key)),
                     Err(err) => {
                         tracing::error!(?err, "failed to create key decoder");
                         None
                     }
                 };
 
-                let maybe_val = structured
-                    .val
-                    .as_ref()
-                    .map(|col| {
-                        let col = DynStructCol::from_arrow(schemas.val.columns(), col)?;
-                        let decoder = schemas.val.decoder(col.as_ref())?;
-                        Ok::<_, String>(Arc::new(decoder))
-                    })
-                    .transpose();
+                let maybe_val = {
+                    DynStructCol::from_arrow(schemas.val.columns(), &structured.val)
+                        .and_then(|col| schemas.val.decoder(col.as_ref()))
+                };
                 let val = match maybe_val {
-                    Ok(val) => val,
+                    Ok(val) => Some(Arc::new(val)),
                     Err(err) => {
                         tracing::error!(?err, "failed to create val decoder");
                         None

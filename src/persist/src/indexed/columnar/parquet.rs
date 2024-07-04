@@ -9,10 +9,11 @@
 
 //! Apache Parquet encodings and utils for persist data
 
+use arrow::array::{Array, StructArray};
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
@@ -211,40 +212,27 @@ pub fn decode_parquet_file_kvtd(
 
             // The first 4 columns are our primary (K, V, T, D) and optionally
             // we also have K_S and/or V_S if we wrote structured data.
+            // (If not, those missing columns are equivalent to empty struct columns
+            // with no null entries.)
             let primary_columns = &columns[..4];
-            let k_s_column = schema
-                .fields()
-                .iter()
-                .position(|field| field.name() == "k_s")
-                .map(|idx| columns[idx].as_ref());
-            let v_s_column = schema
-                .fields()
-                .iter()
-                .position(|field| field.name() == "v_s")
-                .map(|idx| columns[idx].as_ref());
+            let column_len = primary_columns[0].len();
+            let find_named = |name: &str| {
+                schema
+                    .fields()
+                    .iter()
+                    .position(|field| field.name() == name)
+                    .map(|idx| Arc::clone(&columns[idx]))
+                    .unwrap_or_else(|| Arc::new(StructArray::new_empty_fields(column_len, None)))
+            };
+            let k_s_column = find_named("k_s");
+            let v_s_column = find_named("v_s");
 
-            if let Some(k_s) = k_s_column.as_ref() {
-                if !matches!(k_s.data_type(), DataType::Struct(_)) {
-                    return Err(
-                        format!("k_s should be a Struct, found {:?}", k_s.data_type()).into(),
-                    );
-                }
-            }
-            if let Some(v_s) = v_s_column.as_ref() {
-                if !matches!(v_s.data_type(), DataType::Struct(_)) {
-                    return Err(
-                        format!("v_s should be a Struct, found {:?}", v_s.data_type()).into(),
-                    );
-                }
-            }
-            if k_s_column.is_none() && v_s_column.is_none() {
-                return Err(
-                    format!("at least one of k_s or v_s should exist, found {schema:?}").into(),
-                );
-            }
-
-            let (records, structured_ext) =
-                decode_arrow_batch_kvtd_ks_vs(primary_columns, k_s_column, v_s_column, metrics)?;
+            let (records, structured_ext) = decode_arrow_batch_kvtd_ks_vs(
+                primary_columns,
+                &*k_s_column,
+                &*v_s_column,
+                metrics,
+            )?;
             Ok(BlobTraceUpdates::Both(records, structured_ext))
         }
         unknown => Err(format!("unkown ProtoFormatMetadata, {unknown:?}"))?,

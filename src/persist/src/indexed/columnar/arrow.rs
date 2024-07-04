@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, AsArray, BinaryArray, PrimitiveArray};
+use arrow::array::{Array, AsArray, BinaryArray, PrimitiveArray, StructArray};
 use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Schema};
 use mz_dyncfg::Config;
@@ -88,19 +88,14 @@ pub fn encode_arrow_batch_kvtd_ks_vs(
     let mut fields: Vec<_> = (*SCHEMA_ARROW_RS_KVTD).fields().iter().cloned().collect();
     let mut arrays = encode_arrow_batch_kvtd(records);
 
-    if let Some(key_array) = &structured.key {
-        let key_field = Field::new("k_s", key_array.data_type().clone(), false);
+    let mut push_array = |name: &str, array: &StructArray| {
+        let key_field = Field::new(name, array.data_type().clone(), false);
 
         fields.push(Arc::new(key_field));
-        arrays.push(Arc::new(key_array.clone()));
-    }
-
-    if let Some(val_array) = &structured.val {
-        let val_field = Field::new("v_s", val_array.data_type().clone(), false);
-
-        fields.push(Arc::new(val_field));
-        arrays.push(Arc::new(val_array.clone()));
-    }
+        arrays.push(Arc::new(array.clone()));
+    };
+    push_array("k_s", &structured.key);
+    push_array("v_s", &structured.val);
 
     (fields, arrays)
 }
@@ -182,15 +177,14 @@ pub fn decode_arrow_batch_kvtd(
 /// Converts an arrow [(K, V, T, D)] Chunk into a ColumnarRecords.
 pub fn decode_arrow_batch_kvtd_ks_vs(
     cols: &[Arc<dyn Array>],
-    maybe_key_col: Option<&dyn Array>,
-    maybe_val_col: Option<&dyn Array>,
+    key_col: &dyn Array,
+    val_col: &dyn Array,
     metrics: &ColumnarMetrics,
 ) -> Result<(ColumnarRecords, ColumnarRecordsStructuredExt), String> {
     let same_length = cols
         .iter()
         .map(|col| col.as_ref())
-        .chain(maybe_key_col.as_deref().into_iter())
-        .chain(maybe_val_col.as_deref().into_iter())
+        .chain([key_col, val_col])
         .map(|col| col.len())
         .all_equal();
     if !same_length {
@@ -201,22 +195,16 @@ pub fn decode_arrow_batch_kvtd_ks_vs(
     let primary_records = decode_arrow_batch_kvtd(cols, metrics)?;
 
     // Optionally we might have 'K_S' and/or 'V_S' columns.
-    let key = maybe_key_col
-        .map(|col| {
-            col.as_any()
-                .downcast_ref::<arrow::array::StructArray>()
-                .ok_or_else(|| format!("k_s column doesn't match schema"))
-        })
-        .transpose()?
-        .cloned();
-    let val = maybe_val_col
-        .map(|col| {
-            col.as_any()
-                .downcast_ref::<arrow::array::StructArray>()
-                .ok_or_else(|| format!("v_s column doesn't match schema"))
-        })
-        .transpose()?
-        .cloned();
+    let key = key_col
+        .as_any()
+        .downcast_ref::<arrow::array::StructArray>()
+        .ok_or_else(|| format!("k_s column doesn't match schema"))?
+        .clone();
+    let val = val_col
+        .as_any()
+        .downcast_ref::<arrow::array::StructArray>()
+        .ok_or_else(|| format!("v_s column doesn't match schema"))?
+        .clone();
 
     Ok((primary_records, ColumnarRecordsStructuredExt { key, val }))
 }
