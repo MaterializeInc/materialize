@@ -540,7 +540,6 @@ class KafkaSink(DBObject):
     cluster: "Cluster"
     schema: Schema
     envelope: str
-    format: str
     key: str
 
     def __init__(
@@ -556,22 +555,36 @@ class KafkaSink(DBObject):
         self.cluster = cluster
         self.schema = schema
         self.base_object = base_object
-        self.format = rng.choice(
-            ["AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn", "JSON"]
-        )
+        universal_formats = [
+            "FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+            "FORMAT JSON",
+        ]
+        single_column_formats = ["FORMAT BYTES", "FORMAT TEXT"]
+        formats = universal_formats.copy()
+        if len(base_object.columns) == 1:
+            formats.extend(single_column_formats)
+        self.format = rng.choice(formats)
         self.envelope = (
             "UPSERT" if self.format == "JSON" else rng.choice(["DEBEZIUM", "UPSERT"])
         )
         if self.envelope == "UPSERT":
-            key_cols = ", ".join(
-                [
-                    column.name(True)
-                    for column in rng.sample(
-                        base_object.columns, k=rng.randint(1, len(base_object.columns))
-                    )
-                ]
-            )
-            self.key = f"KEY ({key_cols}) NOT ENFORCED"
+            key_cols = [
+                column.name(True)
+                for column in rng.sample(
+                    base_object.columns, k=rng.randint(1, len(base_object.columns))
+                )
+            ]
+            self.key = f"KEY ({', '.join(key_cols)}) NOT ENFORCED"
+            if rng.choice([True, False]):
+                key_formats = universal_formats.copy()
+                if len(key_cols) == 1:
+                    key_formats.extend(single_column_formats)
+                value_formats = universal_formats.copy()
+                if len(base_object.columns) == 1:
+                    value_formats.extend(single_column_formats)
+                self.format = (
+                    f"KEY {rng.choice(key_formats)} VALUE {rng.choice(value_formats)}"
+                )
         else:
             self.key = ""
         self.rename = 0
@@ -586,7 +599,7 @@ class KafkaSink(DBObject):
 
     def create(self, exe: Executor) -> None:
         topic = f"sink_topic{self.sink_id}"
-        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}) {self.key} FORMAT {self.format} ENVELOPE {self.envelope}"
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}) {self.key} {self.format} ENVELOPE {self.envelope}"
         exe.execute(query)
 
 

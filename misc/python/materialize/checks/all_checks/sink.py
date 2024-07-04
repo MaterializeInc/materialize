@@ -215,10 +215,6 @@ class SinkTables(Check):
                 """
                 $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_table_keys = true;
-                """
-            )
-            + dedent(
-                """
                 > CREATE TABLE sink_large_transaction_table (f1 INTEGER, f2 TEXT, PRIMARY KEY (f1));
                 > CREATE DEFAULT INDEX ON sink_large_transaction_table;
 
@@ -986,6 +982,70 @@ class AlterSink(Check):
                 true 102 ccc
 
                 > DROP SOURCE sink_alter_source CASCADE;
+            """
+            )
+        )
+
+
+@externally_idempotent(False)
+class SinkFormat(Check):
+    """Check SINK with KEY FORMAT and VALUE FORMAT"""
+
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.108.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            schemas()
+            + dedent(
+                """
+                > CREATE TABLE sink_format_table (f1 INTEGER, f2 TEXT, f3 INT, PRIMARY KEY (f1));
+                > CREATE DEFAULT INDEX ON sink_format_table;
+                > INSERT INTO sink_format_table VALUES (1, 'A', 10);
+                > CREATE CLUSTER sink_format_sink1_cluster SIZE '1';
+
+                > CREATE SINK sink_format_sink1
+                  IN CLUSTER sink_format_sink1_cluster
+                  FROM sink_format_table
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-format-sink-${testdrive.seed}')
+                  KEY (f1)
+                  KEY FORMAT TEXT
+                  VALUE FORMAT JSON
+                  ENVELOPE UPSERT;
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(schemas() + dedent(s))
+            for s in [
+                """
+                > INSERT INTO sink_format_table VALUES (2, 'B', 20);
+                """,
+                """
+                > INSERT INTO sink_format_table VALUES (3, 'C', 30);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                # We check the contents of the sink topics by re-ingesting them.
+                > CREATE SOURCE sink_format_source
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-format-sink-${testdrive.seed}')
+                  KEY FORMAT TEXT
+                  VALUE FORMAT JSON
+                  ENVELOPE UPSERT
+
+                > SELECT key, data->>'f2', data->>'f3' FROM sink_format_source
+                1 A 10
+                2 B 20
+                3 C 30
+
+                > DROP SOURCE sink_format_source CASCADE;
             """
             )
         )
