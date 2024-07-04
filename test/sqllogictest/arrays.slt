@@ -1392,3 +1392,20 @@ query T
 SELECT ARRAY[2,7] @> ARRAY[1,7,4,2,6] AS is_contained_by
 ----
 false
+
+# verify fix for issue #28035
+query T
+SELECT '{}'::TEXT[][] @> '{{a, b}, {a, A}}'::TEXT[][];
+----
+false
+
+statement ok
+CREATE TABLE t5 (row_index int, multi_dim_text_array_empty TEXT[][], multi_dim_text_array_two_elem TEXT[][]);
+
+statement ok
+INSERT INTO t5 SELECT 0, '{{}}'::TEXT[][], '{{a, b}, {a, A}}'::TEXT[][];
+
+query T
+SELECT ((multi_dim_text_array_empty) @> (multi_dim_text_array_two_elem)) FROM t5;
+----
+false

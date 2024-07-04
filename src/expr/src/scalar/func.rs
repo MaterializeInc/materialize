@@ -4304,7 +4304,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                     max_layer: max_layer.into_rust()?,
                 }),
                 ArrayContains(()) => Ok(BinaryFunc::ArrayContains),
-                ArrayContainsArray(rev) => Ok(BinaryFunc::ListContainsList { rev }),
+                ArrayContainsArray(rev) => Ok(BinaryFunc::ArrayContainsArray { rev }),
                 ArrayLength(()) => Ok(BinaryFunc::ArrayLength),
                 ArrayLower(()) => Ok(BinaryFunc::ArrayLower),
                 ArrayRemove(()) => Ok(BinaryFunc::ArrayRemove),
