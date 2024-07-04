@@ -103,6 +103,18 @@ ARRAY_OPERATION_TYPES.append(
 
 ARRAY_OPERATION_TYPES.append(
     DbOperation(
+        "$ @> $",
+        [
+            ArrayOperationParam(),
+            ElementOfOtherCollectionOperationParam(index_of_previous_param=0),
+        ],
+        BooleanReturnTypeSpec(),
+        comment="contains",
+    )
+)
+
+ARRAY_OPERATION_TYPES.append(
+    DbOperation(
         "$ = ANY ($)",
         [
             AnyOperationParam(),
