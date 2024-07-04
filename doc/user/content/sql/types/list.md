@@ -459,10 +459,6 @@ You can [cast](../../functions/cast) the following types to `list`:
 - [`text`](../text) (explicitly). See [details](#text-to-list-casts).
 - Other `lists` as noted above.
 
-### Known limitations
-
-- `list` data can only be sent to PostgreSQL as `text` {{% gh 4628 %}}
-
 ## Examples
 
 ### Literals
