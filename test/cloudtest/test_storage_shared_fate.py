@@ -46,7 +46,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM;
 
-            $ kafka-verify-topic sink=materialize.public.sink{i} await-value-schema=true
+            $ kafka-verify-topic sink=materialize.public.sink{i} await-value-schema=true await-key-schema=true
 
             > CREATE SOURCE sink{i}_check
               IN CLUSTER storage_shared_fate
