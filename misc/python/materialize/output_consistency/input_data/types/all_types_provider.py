@@ -36,6 +36,9 @@ from materialize.output_consistency.input_data.types.number_types_provider impor
 from materialize.output_consistency.input_data.types.range_type_provider import (
     RANGE_DATA_TYPES,
 )
+from materialize.output_consistency.input_data.types.record_types_provider import (
+    RECORD_DATA_TYPE,
+)
 from materialize.output_consistency.input_data.types.string_type_provider import (
     STRING_DATA_TYPES,
 )
@@ -56,6 +59,7 @@ DATA_TYPES: list[DataType] = list(
         ARRAY_DATA_TYPES,
         RANGE_DATA_TYPES,
         [UUID_DATA_TYPE],
+        [RECORD_DATA_TYPE],
     )
 )
 
