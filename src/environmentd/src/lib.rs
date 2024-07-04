@@ -371,12 +371,12 @@ impl Listeners {
                 strconv::parse_bool(x).map_err(|x| x.to_string())
             })?;
             let catalog = openable_adapter_storage.get_enable_0dt_deployment().await?;
-            let computed = catalog.or(ld).or(default).unwrap_or(false);
+            let computed = ld.or(catalog).or(default).unwrap_or(false);
             info!(
                 %computed,
-                ?default,
                 ?ld,
                 ?catalog,
+                ?default,
                 "determined value for enable_0dt_deployment system parameter",
             );
             computed
@@ -413,15 +413,15 @@ impl Listeners {
             let catalog = openable_adapter_storage
                 .get_0dt_deployment_max_wait()
                 .await?;
-            let computed = catalog
-                .or(ld)
+            let computed = ld
+                .or(catalog)
                 .or(default)
                 .unwrap_or(WITH_0DT_DEPLOYMENT_MAX_WAIT.default().clone());
             info!(
                 ?computed,
-                ?default,
                 ?ld,
                 ?catalog,
+                ?default,
                 "determined value for {} system parameter",
                 WITH_0DT_DEPLOYMENT_MAX_WAIT.name()
             );
