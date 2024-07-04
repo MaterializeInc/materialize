@@ -16,6 +16,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.util import selected_by_name
 
 SERVICES = [
     Materialized(options=["--persist-pubsub-url=http://toxiproxy:6879"]),
@@ -73,16 +74,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    selected_disruptions = []
-    for name in args.disruptions:
-        for disruption in disruptions:
-            if disruption.name == name:
-                selected_disruptions.append(disruption)
-                break
-        else:
-            raise ValueError(f"Unknown disruption {name}")
-
-    for disruption in selected_disruptions:
+    for disruption in selected_by_name(args.disruptions, disruptions):
         c.down(destroy_volumes=True)
         c.up("redpanda", "materialized")
         c.up("testdrive", persistent=True)

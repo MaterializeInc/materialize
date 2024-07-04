@@ -23,6 +23,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import selected_by_name
 
 SERVICES = [
     Zookeeper(),
@@ -407,17 +408,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    selected_disruptions = []
-    for name in args.disruptions:
-        for disruption in disruptions:
-            if disruption.name == name:
-                selected_disruptions.append(disruption)
-                break
-        else:
-            raise ValueError(f"Unknown disruption {name}")
-
     c.up("zookeeper", "kafka", "schema-registry", "localstack")
-    for id, disruption in enumerate(selected_disruptions):
+    for id, disruption in enumerate(selected_by_name(args.disruptions, disruptions)):
         run_test(c, disruption, id)
 
 

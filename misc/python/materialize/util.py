@@ -18,10 +18,11 @@ import os
 import pathlib
 import random
 import subprocess
+from collections.abc import Iterator
 from enum import Enum
 from pathlib import Path
 from threading import Thread
-from typing import TypeVar
+from typing import Protocol, TypeVar
 
 import zstandard
 
@@ -116,3 +117,22 @@ def compute_sha256_of_file(path: str | Path) -> str:
 
 def compute_sha256_of_utf8_string(string: str) -> str:
     return hashlib.sha256(bytes(string, encoding="utf-8")).hexdigest()
+
+
+class HasName(Protocol):
+    name: str
+
+
+U = TypeVar("U", bound=HasName)
+
+
+def selected_by_name(selected: list[str], objs: list[U]) -> Iterator[U]:
+    for name in selected:
+        for obj in objs:
+            if obj.name == name:
+                yield obj
+                break
+        else:
+            raise ValueError(
+                f"Unknown object with name {name} in {[obj.name for obj in objs]}"
+            )

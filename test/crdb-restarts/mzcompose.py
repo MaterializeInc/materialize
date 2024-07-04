@@ -17,6 +17,7 @@ from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
+from materialize.util import selected_by_name
 
 CRDB_NODE_COUNT = 4
 TESTDRIVE_TIMEOUT = (
@@ -145,16 +146,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    selected_disruptions = []
-    for name in args.disruptions:
-        for disruption in DISRUPTIONS:
-            if disruption.name == name:
-                selected_disruptions.append(disruption)
-                break
-        else:
-            raise ValueError(f"Unknown disruption {name}")
-
-    for d in selected_disruptions:
+    for d in selected_by_name(args.disruptions, DISRUPTIONS):
         run_disruption(c, d)
 
 
