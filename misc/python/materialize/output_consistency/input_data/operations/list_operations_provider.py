@@ -23,6 +23,9 @@ from materialize.output_consistency.input_data.params.list_operation_param impor
     ListOfOtherElementOperationParam,
     ListOperationParam,
 )
+from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
+    BooleanReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.return_specs.collection_entry_return_spec import (
     CollectionEntryReturnTypeSpec,
 )
@@ -74,6 +77,20 @@ LIST_OPERATION_TYPES.append(
         ],
         ListReturnTypeSpec(),
         comment="prepend element to list (equal to list_prepend)",
+    )
+)
+
+LIST_OPERATION_TYPES.append(
+    DbOperation(
+        "$ @> $",
+        [
+            ListOperationParam(),
+            ElementOfOtherCollectionOperationParam(index_of_previous_param=0),
+        ],
+        BooleanReturnTypeSpec(),
+        comment="contains",
+        # TODO: re-enable when #28044 is fixed
+        is_enabled=False,
     )
 )
 
