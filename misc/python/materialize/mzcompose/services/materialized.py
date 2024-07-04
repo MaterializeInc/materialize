@@ -54,6 +54,7 @@ class Materialized(Service):
         sanity_restart: bool = True,
         platform: str | None = None,
         healthcheck: list[str] | None = None,
+        deploy_generation: int | None = None,
     ) -> None:
         if name is None:
             name = "materialized"
@@ -124,6 +125,9 @@ class Materialized(Service):
 
         if propagate_crashes:
             command += ["--orchestrator-process-propagate-crashes"]
+
+        if deploy_generation != None:
+            command += [f"--deploy-generation={deploy_generation}"]
 
         self.default_storage_size = (
             str(default_size)

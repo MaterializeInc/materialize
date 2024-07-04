@@ -27,7 +27,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(sanity_restart=False),
+    Materialized(sanity_restart=False, deploy_generation=0),
     Testdrive(materialize_params={"cluster": "cluster"}, no_reset=True, seed=1),
 ]
 
@@ -141,7 +141,7 @@ def workflow_basic(c: Composition) -> None:
 
     # Restart in a new deploy generation, which will cause Materialize to
     # boot in read-only mode.
-    with c.override(Materialized(environment_extra=["MZ_DEPLOY_GENERATION=1"])):
+    with c.override(Materialized(deploy_generation=1)):
         c.up("materialized")
 
         c.testdrive(
@@ -233,7 +233,7 @@ def workflow_basic(c: Composition) -> None:
                 "CMD-SHELL",
                 """[ "$(curl -f localhost:6878/api/leader/status)" = '{"status":"IsLeader"}' ]""",
             ],
-            environment_extra=["MZ_DEPLOY_GENERATION=1"],
+            deploy_genreation=1,
         )
     ):
         c.up("materialized")
