@@ -11,12 +11,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import ServiceHealthcheck
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
+from materialize.util import selected_by_name
 
 CRDB_NODE_COUNT = 4
 TESTDRIVE_TIMEOUT = (
@@ -138,10 +139,14 @@ DISRUPTIONS = [
 ]
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Perform rolling restarts on a CRDB cluster with CRDB_NODE_COUNT nodes and
     confirm that Mz does not hang for longer than the expected."""
-    for d in DISRUPTIONS:
+    parser.add_argument("disruptions", nargs="*", default=[d.name for d in DISRUPTIONS])
+
+    args = parser.parse_args()
+
+    for d in selected_by_name(args.disruptions, DISRUPTIONS):
         run_disruption(c, d)
 
 
