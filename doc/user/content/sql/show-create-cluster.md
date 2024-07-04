@@ -1,6 +1,6 @@
 ---
 title: "SHOW CREATE CLUSTER"
-description: "`SHOW CREATE CLUSTER` returns the statement used to create the cluster."
+description: "`SHOW CREATE CLUSTER` returns the DDL statement used to create the cluster."
 menu:
   main:
     parent: commands
