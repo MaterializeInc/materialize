@@ -127,8 +127,6 @@ class AlterClusterToManaged(Check):
 
                 >[version>10600] SHOW CREATE CLUSTER alter_cluster1;
                 alter_cluster1 "CREATE CLUSTER \\"alter_cluster1\\" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '2-2', SCHEDULE = MANUAL)"
-
-                > DROP TABLE alter_cluster1_table CASCADE;
            """
             )
         )
