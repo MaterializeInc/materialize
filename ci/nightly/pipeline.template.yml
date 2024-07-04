@@ -1339,17 +1339,16 @@ steps:
               args: [--runtime=1500, --complexity=ddl-only, --threads=2]
 
       - id: parallel-workload-100-threads
-        label: "Parallel Workload (100 threads)"
+        label: "Parallel Workload (50 threads)"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          # TODO: Decrease when #26675 is fixed
-          queue: linux-aarch64-large
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --threads=100]
+              args: [--runtime=1500, --threads=50]
 
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"

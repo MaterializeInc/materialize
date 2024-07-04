@@ -23,6 +23,7 @@ from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.action import (
     Action,
+    ActionList,
     BackupRestoreAction,
     CancelAction,
     KillAction,
@@ -359,6 +360,7 @@ def run(
             if thread.is_alive():
                 print(f"{thread.name} still running: {worker.exe.last_log}")
         print("Threads have not stopped within 5 minutes, exiting hard")
+        print_stats(num_queries, workers)
         # TODO(def-): Switch to failing exit code when #23582 is fixed
         os._exit(0)
 
@@ -386,7 +388,12 @@ def run(
         else:
             raise ValueError("Sessions did not clean up within 30s of threads stopping")
     conn.close()
+    print_stats(num_queries, workers)
 
+
+def print_stats(
+    num_queries: defaultdict[ActionList, Counter[type[Action]]], workers: list[Worker]
+) -> None:
     ignored_errors: defaultdict[str, Counter[type[Action]]] = defaultdict(Counter)
     num_failures = 0
     for worker in workers:
@@ -415,6 +422,7 @@ def run(
             for action_class, count in counter.items()
         )
         print(f"  {error}: {text}")
+    assert failed < 50
 
 
 def parse_common_args(parser: argparse.ArgumentParser) -> None:
