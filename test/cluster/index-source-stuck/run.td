@@ -77,7 +77,7 @@ Explained Query:
             - ()
   With
     cte l0 =
-      Reduce aggregates=[min(#0)] monotonic
+      Reduce aggregates=[min(#0)]
         ReadIndex on=mv mv_counter_idx=[*** full scan ***]
 
 Used Indexes:
