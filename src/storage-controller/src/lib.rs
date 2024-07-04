@@ -2872,10 +2872,10 @@ where
             // Same as our other differential collections, but for these the
             // preparation logic currently doesn't do anything.
             IntrospectionType::ComputeDependencies
-            | IntrospectionType::ComputeHydrationStatus
             | IntrospectionType::ComputeOperatorHydrationStatus
             | IntrospectionType::ComputeMaterializedViewRefreshes
-            | IntrospectionType::ComputeErrorCounts => {
+            | IntrospectionType::ComputeErrorCounts
+            | IntrospectionType::ComputeHydrationTimes => {
                 self.collection_manager
                     .register_differential_collection(id, read_handle_fn);
 
@@ -3030,10 +3030,10 @@ where
 
             // Truncate compute-maintained collections.
             IntrospectionType::ComputeDependencies
-            | IntrospectionType::ComputeHydrationStatus
             | IntrospectionType::ComputeOperatorHydrationStatus
             | IntrospectionType::ComputeMaterializedViewRefreshes
-            | IntrospectionType::ComputeErrorCounts => {
+            | IntrospectionType::ComputeErrorCounts
+            | IntrospectionType::ComputeHydrationTimes => {
                 // Differential collections start with an empty
                 // desired state. No need to manually reset.
             }

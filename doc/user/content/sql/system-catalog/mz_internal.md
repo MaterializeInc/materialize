@@ -264,16 +264,19 @@ SQL objects that don't exist in the compute layer (such as views) are omitted.
 
 ## `mz_compute_hydration_statuses`
 
-The `mz_compute_hydration_statuses` table describes the per-replica hydration status of each compute object (index, materialized view, or subscription).
+The `mz_compute_hydration_statuses` view describes the per-replica hydration status of each compute object (index, materialized view).
 
 A compute object is hydrated on a given replica when it has fully processed the initial snapshot of data available in its inputs.
 
 <!-- RELATION_SPEC mz_internal.mz_compute_hydration_statuses -->
-| Field        | Type        | Meaning  |
-| -----------  | ----------- | -------- |
-| `object_id`  | [`text`]    | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions). |
-| `replica_id` | [`text`]    | The ID of a cluster replica. |
-| `hydrated`   | [`boolean`] | Whether the compute object is hydrated on the replica. |
+| Field            | Type         | Meaning  |
+| ---------------- | ------------ | -------- |
+| `object_id`      | [`text`]     | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views) |
+| `replica_id`     | [`text`]     | The ID of a cluster replica. |
+| `hydrated`       | [`boolean`]  | Whether the compute object is hydrated on the replica. |
+| `hydration_time` | [`interval`] | The amount of time it took for the replica to hydrate the compute object. |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_hydration_times -->
 
 ## `mz_compute_operator_hydration_statuses`
 

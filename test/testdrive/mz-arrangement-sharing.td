@@ -779,6 +779,7 @@ ArrangeBy[[Column(13)]]                       1
 "Arrange Compute(DataflowCurrent)"
 "Arrange Compute(ErrorCount)"
 "Arrange Compute(FrontierCurrent)"
+"Arrange Compute(HydrationTime)"
 "Arrange Compute(ImportFrontierCurrent)"
 "Arrange Compute(PeekCurrent)"
 "Arrange Compute(PeekDuration)"
@@ -818,6 +819,12 @@ ALTER SYSTEM SET enable_introspection_subscribes = true
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
   GROUP BY mdod.name
   ORDER BY mdod.name
-AccumulableErrorCheck 1
-"ArrangeAccumulable [val: empty]" 1
-ReduceAccumulable 1
+AccumulableErrorCheck 2
+"Arrange ReduceCollation" 1
+"Arrange ReduceMinsMaxes" 1
+"ArrangeAccumulable [val: empty]" 2
+ReduceAccumulable 2
+ReduceCollation 1
+"ReduceCollation Errors" 1
+ReduceMinsMaxes 1
+"ReduceMinsMaxes Error Check" 1

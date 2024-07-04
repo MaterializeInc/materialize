@@ -10,7 +10,7 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET max_result_size TO 128;
+ALTER SYSTEM SET max_result_size TO 10000;
 ----
 COMPLETE 0
 
@@ -30,12 +30,12 @@ statement ok
 CREATE TABLE t1 (a int);
 
 statement ok
-INSERT INTO t1 SELECT * FROM generate_series(1, 16);
+INSERT INTO t1 SELECT * FROM generate_series(1, 1000);
 
 statement ok
 SET cluster TO 'c1';
 
 # Note: 'total' in the error message here is important because it indicates we failed when
 # aggregating the result from multiple workers, as opposed to on any single worker.
-query error db error: ERROR: total result exceeds max size of 128 B
+query error db error: ERROR: total result exceeds max size of 10.0 KB
 SELECT * FROM t1;

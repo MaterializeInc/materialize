@@ -1819,6 +1819,14 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinL
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
+    name: "mz_compute_hydration_times_per_worker",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::LOG_MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER_OID,
+    variant: LogVariant::Compute(ComputeLog::HydrationTime),
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_ACTIVE_PEEKS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_active_peeks_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -1996,18 +2004,6 @@ pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSo
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("dependency_id", ScalarType::String.nullable(false)),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-});
-pub static MZ_COMPUTE_HYDRATION_STATUSES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_compute_hydration_statuses",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_STATUSES_OID,
-    data_source: IntrospectionType::ComputeHydrationStatus,
-    desc: RelationDesc::empty()
-        .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("replica_id", ScalarType::String.nullable(false))
-        .with_column("hydrated", ScalarType::Bool.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -4703,6 +4699,54 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: Lazy<BuiltinSource> = Lazy::new(
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_COMPUTE_HYDRATION_TIMES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_compute_hydration_times",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_TIMES_OID,
+    desc: RelationDesc::empty()
+        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("time_ns", ScalarType::UInt64.nullable(true)),
+    data_source: IntrospectionType::ComputeHydrationTimes,
+    is_retained_metrics_object: true,
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_COMPUTE_HYDRATION_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_compute_hydration_statuses",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_STATUSES_OID,
+    column_defs: None,
+    sql: "
+WITH
+    dataflows AS (
+        SELECT
+            object_id,
+            replica_id,
+            time_ns IS NOT NULL AS hydrated,
+            ((time_ns / 1000) || 'microseconds')::interval AS hydration_time
+        FROM mz_internal.mz_compute_hydration_times
+    ),
+    -- MVs that have advanced to the empty frontier don't have a dataflow installed anymore and
+    -- therefore don't show up in `mz_compute_hydration_times`. We still want to show them here to
+    -- avoid surprises for people joining `mz_materialized_views` against this relation (like the
+    -- blue-green readiness query does), so we include them as 'hydrated'.
+    complete_mvs AS (
+        SELECT
+            mv.id,
+            f.replica_id,
+            true AS hydrated,
+            NULL::interval AS hydration_time
+        FROM mz_materialized_views mv
+        JOIN mz_internal.mz_cluster_replica_frontiers f ON f.object_id = mv.id
+        WHERE f.write_frontier IS NULL
+    )
+SELECT * FROM dataflows
+UNION ALL
+SELECT * FROM complete_mvs",
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_operator_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -7289,6 +7333,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_COMPUTE_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_ERROR_COUNTS_RAW),
+        Builtin::Log(&MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_KAFKA_SOURCES),
@@ -7511,15 +7556,16 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
         Builtin::Source(&MZ_MATERIALIZED_VIEW_REFRESHES),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
-        Builtin::Source(&MZ_COMPUTE_HYDRATION_STATUSES),
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
-        Builtin::View(&MZ_HYDRATION_STATUSES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
+        Builtin::Source(&MZ_COMPUTE_HYDRATION_TIMES),
         Builtin::View(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
+        Builtin::View(&MZ_COMPUTE_HYDRATION_STATUSES),
+        Builtin::View(&MZ_HYDRATION_STATUSES),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),
