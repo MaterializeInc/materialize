@@ -99,6 +99,7 @@ class TestAnalyticsDataSource:
             """
             ),
             verbose=False,
+            statement_timeout="5s",
         )
 
         result = []
