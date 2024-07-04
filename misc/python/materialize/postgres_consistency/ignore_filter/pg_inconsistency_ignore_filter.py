@@ -584,6 +584,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if "array_agg on character not yet supported" in mz_error_msg:
             return YesIgnore("#27252: array_agg on character")
 
+        if "array subscript does not support slices" in mz_error_msg:
+            return YesIgnore("array subscript does not support slices")
+
+        if "|| does not support implicitly casting" in mz_error_msg:
+            return YesIgnore("#28024: no implicit casting from ...[] to ...[]")
+
         return NoIgnore()
 
     def _shall_ignore_content_mismatch(
