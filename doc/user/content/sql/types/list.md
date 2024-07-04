@@ -523,6 +523,8 @@ SELECT '{{1.5,NULL},{2.25}}'::numeric(38,2) list list AS text_to_list;
 
 ### List containment
 
+{{< warn-if-unreleased "v0.107" >}}
+
 ```mzsql
 SELECT LIST[1,4,3] @> LIST[3,1] AS contains;
 ```
