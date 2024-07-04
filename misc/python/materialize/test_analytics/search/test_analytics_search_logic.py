@@ -8,7 +8,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+import re
 import time
 
 from materialize.buildkite_insights.annotation_search.annotation_search_presentation import (
@@ -111,4 +111,5 @@ def _print_summary(
 
 def _like_pattern_to_regex(like_pattern: str) -> str:
     like_pattern = like_pattern.strip("%")
+    like_pattern = re.escape(like_pattern)
     return like_pattern.replace("%", ".*")
