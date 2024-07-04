@@ -14,7 +14,7 @@ from materialize.output_consistency.input_data.params.list_operation_param impor
     ListOperationParam,
 )
 from materialize.output_consistency.input_data.params.range_operation_param import (
-    RangeLikeOtherListOperationParam,
+    RangeLikeOtherRangeOperationParam,
     RangeOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
@@ -50,7 +50,7 @@ RANGE_OPERATION_TYPES.append(
         "$ * $",
         [
             RangeOperationParam(),
-            RangeLikeOtherListOperationParam(index_of_previous_param=0),
+            RangeLikeOtherRangeOperationParam(index_of_previous_param=0),
         ],
         RangeReturnTypeSpec(),
         comment="Intersection of two ranges",
@@ -62,7 +62,7 @@ RANGE_OPERATION_TYPES.append(
         "$ && $",
         [
             RangeOperationParam(),
-            RangeLikeOtherListOperationParam(index_of_previous_param=0),
+            RangeLikeOtherRangeOperationParam(index_of_previous_param=0),
         ],
         RangeReturnTypeSpec(),
         comment="Overlap of two ranges",

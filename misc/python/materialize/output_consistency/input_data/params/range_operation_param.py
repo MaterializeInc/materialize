@@ -34,7 +34,7 @@ class RangeOperationParam(CollectionOperationParam):
         )
 
 
-class RangeLikeOtherListOperationParam(CollectionLikeOtherCollectionOperationParam):
+class RangeLikeOtherRangeOperationParam(CollectionLikeOtherCollectionOperationParam):
     def get_collection_type_category(self) -> DataTypeCategory:
         return DataTypeCategory.RANGE
 
