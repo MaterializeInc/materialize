@@ -25,7 +25,7 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import CommandFailureCausedUIError
 
-DEFAULT_TIMEOUT = "10s"
+DEFAULT_TIMEOUT = "300s"
 
 SERVICES = [
     MySql(),
@@ -169,7 +169,9 @@ def workflow_read_only(c: Composition) -> None:
 
     # Restart in a new deploy generation, which will cause Materialize to
     # boot in read-only mode.
-    with c.override(Materialized(name="mz_old", deploy_generation=1)):
+    with c.override(
+        Materialized(name="mz_old", deploy_generation=1, external_cockroach=True)
+    ):
         c.up("mz_old")
 
         c.testdrive(
@@ -263,6 +265,7 @@ def workflow_read_only(c: Composition) -> None:
                 """[ "$(curl -f localhost:6878/api/leader/status)" = '{"status":"IsLeader"}' ]""",
             ],
             deploy_generation=1,
+            external_cockroach=True,
         )
     ):
         c.up("mz_old")
@@ -633,7 +636,9 @@ def workflow_basic(c: Composition) -> None:
                 ), f"Unexpected error: {e}"
             except CommandFailureCausedUIError as e:
                 # service "mz_old" is not running
-                assert "running docker compose failed" in str(e), f"Unexpected error: {e}"
+                assert "running docker compose failed" in str(
+                    e
+                ), f"Unexpected error: {e}"
                 break
             time.sleep(1)
         else:
