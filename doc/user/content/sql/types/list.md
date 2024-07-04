@@ -544,7 +544,7 @@ SELECT LIST[2,7] <@ LIST[1,7,4,2,6] AS is_contained_by;
 Note that array containment in Postgres does NOT account for duplicates. This is mirrored by the list implementation.
 
 ```mzsql
-SELECT LIST[1,3,7] @> LIST[1,3,3,3,3,7] AS contains;
+SELECT LIST[7,3,1] @> LIST[1,3,3,3,3,7] AS contains;
 ```
 ```nofmt
  contains
