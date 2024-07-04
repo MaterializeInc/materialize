@@ -89,8 +89,6 @@ LIST_OPERATION_TYPES.append(
         ],
         BooleanReturnTypeSpec(),
         comment="contains",
-        # TODO: re-enable when #28044 is fixed
-        is_enabled=False,
     )
 )
 
