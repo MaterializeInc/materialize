@@ -21,6 +21,9 @@ from materialize.output_consistency.input_data.params.enum_constant_operation_pa
 from materialize.output_consistency.input_data.params.map_operation_param import (
     MapOperationParam,
 )
+from materialize.output_consistency.input_data.params.record_operation_param import (
+    RecordOperationParam,
+)
 from materialize.output_consistency.input_data.params.string_operation_param import (
     StringOperationParam,
 )
@@ -132,7 +135,15 @@ MAP_OPERATION_TYPES.append(
     )
 )
 
-# TODO: map_build operates on records
+MAP_OPERATION_TYPES.append(
+    DbFunction(
+        "map_build",
+        [
+            RecordOperationParam(),
+        ],
+        MapReturnTypeSpec(map_value_type_category=DataTypeCategory.UNDETERMINED),
+    )
+)
 
 for operation in MAP_OPERATION_TYPES:
     # Postgres does not support the map type

@@ -122,3 +122,7 @@ COLLECTION_INDEX_PARAM_OPT = EnumConstantOperationParam(
 ARRAY_DIMENSION_PARAM = EnumConstantOperationParam(
     ["0", "1", "8"], add_quotes=False, add_invalid_value=False
 )
+
+RECORD_FIELD_PARAM = EnumConstantOperationParam(
+    ["f1", "f2", "f3", "f4"], add_quotes=False, add_invalid_value=True
+)
