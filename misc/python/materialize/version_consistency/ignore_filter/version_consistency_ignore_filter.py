@@ -45,6 +45,7 @@ MZ_VERSION_0_88_0 = MzVersion.parse_mz("v0.88.0")
 MZ_VERSION_0_93_0 = MzVersion.parse_mz("v0.93.0")
 MZ_VERSION_0_95_0 = MzVersion.parse_mz("v0.95.0")
 MZ_VERSION_0_99_0 = MzVersion.parse_mz("v0.99.0")
+MZ_VERSION_0_107_0 = MzVersion.parse_mz("v0.107.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -174,6 +175,18 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             return YesIgnore(
                 "Casting intervals to mz_timestamps introduced in PR 26970"
             )
+
+        if (
+            self.lower_version < MZ_VERSION_0_107_0 <= self.higher_version
+            and expression.matches(
+                partial(
+                    matches_op_by_pattern,
+                    pattern="$ @> $",
+                ),
+                True,
+            )
+        ):
+            return YesIgnore("Contains on list and array introduced in PR 27959")
 
         return super().shall_ignore_expression(expression, row_selection)
 
