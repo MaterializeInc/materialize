@@ -31,6 +31,12 @@ def get_ancestor_overrides_for_performance_regressions(
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "MinMax":
+        # PR#27988 (adapter: always declare MV imports non-monotonic) increased wallclock and memory
+        min_ancestor_mz_version_per_commit[
+            "c18aa43828a7d2e9527151a0251c1f75a06d1469"
+        ] = MzVersion.parse_mz("v0.108.0")
+
     if scenario_class_name == "AccumulateReductions":
         # PR#26807 (compute: hydration status based on output frontiers) increased messages
         min_ancestor_mz_version_per_commit[
