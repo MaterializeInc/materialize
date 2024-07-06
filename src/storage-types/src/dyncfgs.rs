@@ -76,15 +76,6 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     available.",
 );
 
-/// The timeout when seeking through a consumer when fast-forwarding it. We expect this
-/// to happen quickly.
-pub const KAFKA_FAST_FORWARD_SEEK_TIMEOUT: Config<Duration> = Config::new(
-    "kafka_fast_forward_seek_timeout",
-    Duration::from_secs(1),
-    "The timeout when seeking through a consumer when fast-forwarding it. We expect this \
-    to happen quickly.",
-);
-
 // MySQL
 
 /// Replication heartbeat interval requested from the MySQL server.
@@ -184,7 +175,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_POLL_MAX_WAIT)
-        .add(&KAFKA_FAST_FORWARD_SEEK_TIMEOUT)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
