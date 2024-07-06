@@ -736,32 +736,40 @@ impl SourceRender for KafkaSourceConnection {
                 for position in topic_positions {
                     // The offset begins in the `Offset::Invalid` state in which case we simply
                     // skip this partition.
-                    if let Offset::Offset(offset) = position.offset() {
-                        let pid = position.partition();
-                        let upper_offset = MzOffset::from(u64::try_from(offset).unwrap());
-                        let upper =
-                            Partitioned::new_singleton(RangeBound::exact(pid), upper_offset);
+                    match position.offset() {
+                        Offset::Offset(offset) => {
+                            let pid = position.partition();
+                            let upper_offset = MzOffset::from(u64::try_from(offset).unwrap());
+                            let upper =
+                                Partitioned::new_singleton(RangeBound::exact(pid), upper_offset);
 
-                        let part_cap = reader.partition_capabilities.get_mut(&pid).unwrap();
-                        part_cap.data.downgrade(&upper);
+                            let part_cap = reader.partition_capabilities.get_mut(&pid).unwrap();
+                            part_cap.data.downgrade(&upper);
 
-                        if is_snapshotting {
-                            // The `.position()` of the consumer represents what offset we have
-                            // read up to.
-                            snapshot_staged += offset.try_into().unwrap_or(0u64);
-                            // This will always be `Some` at this point.
-                            if let Some(snapshot_total) = snapshot_total {
-                                // We will eventually read past the snapshot total, so we need
-                                // to bound it here.
-                                snapshot_staged = std::cmp::min(snapshot_staged, snapshot_total);
+                            if is_snapshotting {
+                                // The `.position()` of the consumer represents what offset we have
+                                // read up to.
+                                snapshot_staged += offset.try_into().unwrap_or(0u64);
+                                // This will always be `Some` at this point.
+                                if let Some(snapshot_total) = snapshot_total {
+                                    // We will eventually read past the snapshot total, so we need
+                                    // to bound it here.
+                                    snapshot_staged =
+                                        std::cmp::min(snapshot_staged, snapshot_total);
+                                }
                             }
-                        }
 
-                        // We use try_downgrade here because during the initial snapshot phase the
-                        // data capability is not beyond the progress capability and therefore a
-                        // normal downgrade would panic. Once it catches up though the data
-                        // capbility is what's pushing the progress capability forward.
-                        let _ = part_cap.progress.try_downgrade(&upper);
+                            // We use try_downgrade here because during the initial snapshot phase the
+                            // data capability is not beyond the progress capability and therefore a
+                            // normal downgrade would panic. Once it catches up though the data
+                            // capbility is what's pushing the progress capability forward.
+                            let _ = part_cap.progress.try_downgrade(&upper);
+                        }
+                        _ => {
+                            let partition = position.partition();
+                            let last_offset = reader.last_offsets[&partition];
+                            reader.fast_forward_consumer(partition, last_offset + 1);
+                        }
                     }
                 }
 
