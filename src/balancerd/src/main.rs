@@ -47,15 +47,18 @@ fn main() {
         .build()
         .expect("Failed building the Runtime");
 
+    let metrics_registry = MetricsRegistry::new();
     let (_, _tracing_guard) = runtime
         .block_on(args.tracing.configure_tracing(
             StaticTracingConfig {
                 service_name: "balancerd",
                 build_info: BUILD_INFO,
             },
-            MetricsRegistry::new(),
+            metrics_registry.clone(),
         ))
         .expect("failed to init tracing");
+
+    runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
 
     let root_span = info_span!("balancer");
     let res = match args.command {
