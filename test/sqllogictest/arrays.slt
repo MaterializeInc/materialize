@@ -1409,3 +1409,33 @@ query T
 SELECT ((multi_dim_text_array_empty) @> (multi_dim_text_array_two_elem)) FROM t5;
 ----
 false
+
+query t
+SELECT '{}'::numeric[] @> '{}'::numeric[];
+----
+true
+
+query t
+SELECT '{1,2}'::numeric[] @> '{}'::numeric[];
+----
+true
+
+query t
+SELECT '{}'::numeric[] @> '{1,2}'::numeric[];
+----
+false
+
+query t
+SELECT '{NULL}'::numeric[] @> '{NULL}'::numeric[];
+----
+false
+
+query t
+SELECT '{NULL, 1}'::numeric[] @> '{1}'::numeric[];
+----
+true
+
+query t
+SELECT '{1}'::numeric[] @> '{1, NULL}'::numeric[];
+----
+false
