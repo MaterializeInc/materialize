@@ -37,7 +37,7 @@ RECORD_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 RECORD_OPERATION_TYPES.append(
     DbFunction(
-        "record",
+        "row",
         [StringOperationParam(), AnyOperationParam()],
         RecordReturnTypeSpec(),
         comment="variant useful for map_build",
@@ -46,7 +46,7 @@ RECORD_OPERATION_TYPES.append(
 
 RECORD_OPERATION_TYPES.append(
     DbFunction(
-        "record",
+        "row",
         [
             AnyOperationParam(),
             AnyOperationParam(optional=True),
