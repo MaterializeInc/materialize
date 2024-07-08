@@ -1630,9 +1630,14 @@ fn list_contains_list<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_list();
     let b = b.unwrap_list();
 
-    b.iter()
-        .all(|item_b| a.iter().any(|item_a| item_a == item_b))
-        .into()
+    // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a, even if a contains NULL.
+    if b.iter().contains(&Datum::Null) {
+        Datum::False
+    } else {
+        b.iter()
+            .all(|item_b| a.iter().any(|item_a| item_a == item_b))
+            .into()
+    }
 }
 
 // TODO(jamii) nested loops are possibly not the fastest way to do this
@@ -4304,7 +4309,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                     max_layer: max_layer.into_rust()?,
                 }),
                 ArrayContains(()) => Ok(BinaryFunc::ArrayContains),
-                ArrayContainsArray(rev) => Ok(BinaryFunc::ListContainsList { rev }),
+                ArrayContainsArray(rev) => Ok(BinaryFunc::ArrayContainsArray { rev }),
                 ArrayLength(()) => Ok(BinaryFunc::ArrayLength),
                 ArrayLower(()) => Ok(BinaryFunc::ArrayLower),
                 ArrayRemove(()) => Ok(BinaryFunc::ArrayRemove),
@@ -7304,9 +7309,14 @@ fn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_array().elements();
     let b = b.unwrap_array().elements();
 
-    b.iter()
-        .all(|item_b| a.iter().any(|item_a| item_a == item_b))
-        .into()
+    // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a, even if a contains NULL.
+    if b.iter().contains(&Datum::Null) {
+        Datum::False
+    } else {
+        b.iter()
+            .all(|item_b| a.iter().any(|item_a| item_a == item_b))
+            .into()
+    }
 }
 
 fn array_array_concat<'a>(
