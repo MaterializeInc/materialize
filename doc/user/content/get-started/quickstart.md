@@ -24,13 +24,13 @@ the superpowers of an operational data warehouse first-hand:
 
 * **Consistency**: results are always correct; never even transiently wrong.
 
-## Before you begin
+## Prerequisite
 
-All you need is a Materialize account. If you already have one —
-great! If not, [sign up for a playground account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation) first.
+A Materialize account to sign into the [Materialize console](https://console.materialize.com/). If you do not have an account, you can [sign up for a free trial account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
-When you're ready, head over to the [Materialize console](https://console.materialize.com/),
-and pop open the SQL Shell.
+## Step 0. Sign into the Console
+
+Open the [Materialize console](https://console.materialize.com/) and, if not already signed in, sign in. By default, the SQL Shell should display in the console.  You can also select SQL Shell in the console's left-hand menu.
 
 ## Step 1. Ingest streaming data
 
@@ -117,8 +117,8 @@ for each auction at its `end_time`.
         -- Where all auctions have completed
       AND mz_now() >= auctions.end_time
     ORDER BY auctions.id,
-      bids.bid_time DESC,
-      bids.amount,
+      bids.amount DESC,
+      bids.bid_time,
       bids.buyer;
     ```
 
@@ -303,8 +303,7 @@ DROP SOURCE auction_house CASCADE;
 DROP TABLE fraud_accounts;
 ```
 
-## What's next?
+
 
 [//]: # "TODO(morsapaes) Extend to suggest third party tools. dbt, Census and Metabase could all fit here to do interesting things as a follow-up."
 
-To get started with your own data, [upgrade your playground to a trial account](https://materialize.com/trial/?utm_campaign=General&utm_source=documentation).

@@ -23,9 +23,9 @@ data freshness**.
 
 ## Ready to get started? 🚀
 
-1. Sign up for a Materialize account.
+1. Sign up for a [free trial Materialize account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 2. Follow the quickstart guide to learn the basics.
-3. Connect your own data sources and start building with a free trial.
+3. Connect your own data sources and start building.
 
 {{</ callout >}}
 
