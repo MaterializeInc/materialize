@@ -258,7 +258,6 @@ impl Catalog {
             http_host_name: config.http_host_name,
         };
 
-        let is_read_only = storage.is_read_only();
         let mut updates: Vec<_> = storage.sync_to_current_updates().await?;
         let mut txn = storage.transaction().await?;
 
@@ -279,22 +278,20 @@ impl Catalog {
             }
             // Add any new builtin objects and remove old ones.
             let migrated_builtins = add_new_remove_old_builtin_items_migration(&mut txn)?;
-            if !is_read_only {
-                let cluster_sizes = BuiltinBootstrapClusterSizes {
-                    system_cluster: config.builtin_system_cluster_replica_size,
-                    catalog_server_cluster: config.builtin_catalog_server_cluster_replica_size,
-                    probe_cluster: config.builtin_probe_cluster_replica_size,
-                    support_cluster: config.builtin_support_cluster_replica_size,
-                };
-                // TODO(jkosh44) These functions should clean up old clusters, replicas, and
-                // roles like they do for builtin items and introspection sources, but they
-                // don't.
-                add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
-                add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
-                add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
-                add_new_builtin_roles_migration(&mut txn)?;
-                remove_invalid_config_param_role_defaults_migration(&mut txn)?;
-            }
+            let cluster_sizes = BuiltinBootstrapClusterSizes {
+                system_cluster: config.builtin_system_cluster_replica_size,
+                catalog_server_cluster: config.builtin_catalog_server_cluster_replica_size,
+                probe_cluster: config.builtin_probe_cluster_replica_size,
+                support_cluster: config.builtin_support_cluster_replica_size,
+            };
+            // TODO(jkosh44) These functions should clean up old clusters, replicas, and
+            // roles like they do for builtin items and introspection sources, but they
+            // don't.
+            add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
+            add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
+            add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
+            add_new_builtin_roles_migration(&mut txn)?;
+            remove_invalid_config_param_role_defaults_migration(&mut txn)?;
             migrated_builtins
         };
         let op_updates = txn.get_and_commit_op_updates();
