@@ -25,11 +25,11 @@ pub const ENABLE_0DT_DEPLOYMENT: Config<bool> = Config::new(
     "Whether to enable zero-downtime deployments (experimental).",
 );
 
-/// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
+/// Enable logging of statement lifecycle events in mz_catalog_unstable.mz_statement_lifecycle_history.
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "enable_statement_lifecycle_logging",
     false,
-    "Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.",
+    "Enable logging of statement lifecycle events in mz_catalog_unstable.mz_statement_lifecycle_history.",
 );
 
 /// Enable installation of introspection subscribes.
