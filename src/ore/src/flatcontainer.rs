@@ -15,11 +15,12 @@
 
 //! Flat container utilities
 
-use flatcontainer::impls::deduplicate::ConsecutiveOffsetPairs;
+use flatcontainer::impls::deduplicate::ConsecutiveIndexPairs;
 use flatcontainer::{OptionRegion, Push, Region, ReserveItems, StringRegion};
 use serde::{Deserialize, Serialize};
 
 pub use item::ItemRegion;
+pub use offset::MzOffsetOptimized;
 pub use tuple::*;
 
 /// Associate a type with a flat container region.
@@ -252,6 +253,7 @@ mod tuple {
     mod differential {
         use differential_dataflow::difference::Semigroup;
         use differential_dataflow::lattice::Lattice;
+        use differential_dataflow::trace::implementations::merge_batcher_flat::RegionUpdate;
         use differential_dataflow::trace::implementations::Update;
         use timely::progress::Timestamp;
 
@@ -272,52 +274,58 @@ mod tuple {
             RR::Owned: Clone + Ord + Semigroup,
             for<'a> RR::ReadItem<'a>: Copy + Ord,
         {
-            type KeyGat<'a> = KR::ReadItem<'a> where Self: 'a;
-            type ValGat<'a> = VR::ReadItem<'a> where Self: 'a;
-            type TimeGat<'a> = TR::ReadItem<'a> where Self: 'a;
+            type Key = KR::Owned;
+            type Val = VR::Owned;
             type Time = TR::Owned;
-            type DiffGat<'a> = RR::ReadItem<'a> where Self: 'a;
             type Diff = RR::Owned;
+        }
+
+        impl<KR, VR, TR, RR> RegionUpdate for MzTupleABCRegion<MzTupleABRegion<KR, VR>, TR, RR>
+        where
+            KR: MzRegion,
+            for<'a> KR::ReadItem<'a>: Copy + Ord,
+            VR: MzRegion,
+            for<'a> VR::ReadItem<'a>: Copy + Ord,
+            TR: MzRegion,
+            for<'a> TR::ReadItem<'a>: Copy + Ord,
+            RR: MzRegion,
+            for<'a> RR::ReadItem<'a>: Copy + Ord,
+        {
+            type Key<'a> = KR::ReadItem<'a> where Self: 'a;
+            type Val<'a> = VR::ReadItem<'a> where Self: 'a;
+            type Time<'a> = TR::ReadItem<'a> where Self: 'a;
+            type TimeOwned = TR::Owned;
+            type Diff<'a> = RR::ReadItem<'a> where Self: 'a;
+            type DiffOwned = RR::Owned;
 
             fn into_parts<'a>(
-                ((key, val), time, diff): Self::ItemRef<'a>,
-            ) -> (
-                Self::KeyGat<'a>,
-                Self::ValGat<'a>,
-                Self::TimeGat<'a>,
-                Self::DiffGat<'a>,
-            ) {
+                ((key, val), time, diff): Self::ReadItem<'a>,
+            ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time<'a>, Self::Diff<'a>) {
                 (key, val, time, diff)
             }
 
-            type Key = KR::Owned;
-            type Val = VR::Owned;
-            type ItemRef<'a> = ((Self::KeyGat<'a>, Self::ValGat<'a>), Self::TimeGat<'a>, Self::DiffGat<'a>)
-            where
-                Self: 'a;
-
-            fn reborrow_key<'b, 'a: 'b>(item: Self::KeyGat<'a>) -> Self::KeyGat<'b>
+            fn reborrow_key<'b, 'a: 'b>(item: Self::Key<'a>) -> Self::Key<'b>
             where
                 Self: 'a,
             {
                 KR::reborrow(item)
             }
 
-            fn reborrow_val<'b, 'a: 'b>(item: Self::ValGat<'a>) -> Self::ValGat<'b>
+            fn reborrow_val<'b, 'a: 'b>(item: Self::Val<'a>) -> Self::Val<'b>
             where
                 Self: 'a,
             {
                 VR::reborrow(item)
             }
 
-            fn reborrow_time<'b, 'a: 'b>(item: Self::TimeGat<'a>) -> Self::TimeGat<'b>
+            fn reborrow_time<'b, 'a: 'b>(item: Self::Time<'a>) -> Self::Time<'b>
             where
                 Self: 'a,
             {
                 TR::reborrow(item)
             }
 
-            fn reborrow_diff<'b, 'a: 'b>(item: Self::DiffGat<'a>) -> Self::DiffGat<'b>
+            fn reborrow_diff<'b, 'a: 'b>(item: Self::Diff<'a>) -> Self::Diff<'b>
             where
                 Self: 'a,
             {
@@ -374,7 +382,7 @@ mod copy {
 
 impl MzRegionPreference for String {
     type Owned = String;
-    type Region = ItemRegion<ConsecutiveOffsetPairs<StringRegion>>;
+    type Region = ItemRegion<ConsecutiveIndexPairs<StringRegion>>;
 }
 
 mod vec {
@@ -395,11 +403,11 @@ impl<T: MzRegionPreference> MzRegionPreference for Option<T> {
 mod lgalloc {
     //! A region that stores slices of clone types in lgalloc
 
-    use flatcontainer::impls::offsets::{OffsetContainer, OffsetOptimized};
-    use flatcontainer::{CopyIter, Push, Region, ReserveItems};
-
     use crate::flatcontainer::MzIndex;
     use crate::region::LgAllocVec;
+    use flatcontainer::impls::index::{IndexContainer, IndexOptimized};
+    use flatcontainer::impls::storage::Storage;
+    use flatcontainer::{Push, PushIter, Region, ReserveItems};
 
     /// A container for owned types.
     ///
@@ -426,7 +434,7 @@ mod lgalloc {
     #[derive(Debug)]
     pub struct LgAllocOwnedRegion<T> {
         slices: LgAllocVec<T>,
-        offsets: OffsetOptimized,
+        offsets: IndexOptimized,
     }
 
     impl<T: Clone> Clone for LgAllocOwnedRegion<T> {
@@ -458,7 +466,7 @@ mod lgalloc {
         {
             let mut this = Self {
                 slices: LgAllocVec::with_capacity(regions.map(|r| r.slices.len()).sum()),
-                offsets: OffsetOptimized::default(),
+                offsets: IndexOptimized::default(),
             };
             this.offsets.push(0);
             this
@@ -510,7 +518,7 @@ mod lgalloc {
         fn default() -> Self {
             let mut this = Self {
                 slices: LgAllocVec::default(),
-                offsets: OffsetOptimized::default(),
+                offsets: IndexOptimized::default(),
             };
             this.offsets.push(0);
             this
@@ -607,14 +615,14 @@ mod lgalloc {
         }
     }
 
-    impl<T, J: IntoIterator<Item = T>> ReserveItems<CopyIter<J>> for LgAllocOwnedRegion<T>
+    impl<T, J: IntoIterator<Item = T>> ReserveItems<PushIter<J>> for LgAllocOwnedRegion<T>
     where
         [T]: ToOwned,
     {
         #[inline]
         fn reserve_items<I>(&mut self, items: I)
         where
-            I: Iterator<Item = CopyIter<J>> + Clone,
+            I: Iterator<Item = PushIter<J>> + Clone,
         {
             self.slices
                 .reserve(items.flat_map(|i| i.0.into_iter()).count());
@@ -760,10 +768,11 @@ mod item {
 mod lgallocvec {
     //! A vector-like structure that stores its contents in lgalloc.
 
-    use flatcontainer::{Push, Region, ReserveItems};
-
     use crate::flatcontainer::MzIndex;
     use crate::region::LgAllocVec;
+    use flatcontainer::impls::index::IndexContainer;
+    use flatcontainer::impls::storage::Storage;
+    use flatcontainer::{Push, Region, ReserveItems};
 
     impl<T: Clone> Region for LgAllocVec<T> {
         type Owned = T;
@@ -803,6 +812,59 @@ mod lgallocvec {
             Self: 'a,
         {
             item
+        }
+    }
+
+    impl<T> Storage<T> for LgAllocVec<T> {
+        fn with_capacity(capacity: usize) -> Self {
+            Self::with_capacity(capacity)
+        }
+
+        fn reserve(&mut self, additional: usize) {
+            self.reserve(additional);
+        }
+
+        fn clear(&mut self) {
+            self.clear();
+        }
+
+        fn heap_size<F: FnMut(usize, usize)>(&self, callback: F) {
+            self.heap_size(callback);
+        }
+
+        fn len(&self) -> usize {
+            self.len()
+        }
+
+        fn is_empty(&self) -> bool {
+            self.is_empty()
+        }
+    }
+
+    impl<T: Copy> IndexContainer<T> for LgAllocVec<T> {
+        type Iter<'a> = std::iter::Copied<std::slice::Iter<'a, T>>
+        where
+            Self: 'a;
+
+        fn index(&self, index: usize) -> T {
+            self[index]
+        }
+
+        fn push(&mut self, item: T) {
+            self.push(item);
+        }
+
+        fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I)
+        where
+            I::IntoIter: ExactSizeIterator,
+        {
+            for item in iter {
+                self.push(item);
+            }
+        }
+
+        fn iter(&self) -> Self::Iter<'_> {
+            self.iter().copied()
         }
     }
 
@@ -856,6 +918,82 @@ mod lgallocvec {
             assert_eq!(region.index(0), &42);
             assert_eq!(region.index(1), &43);
             assert_eq!(region.index(2), &44);
+        }
+    }
+}
+
+mod offset {
+    use crate::flatcontainer::MzIndex;
+    use flatcontainer::impls::index::{IndexContainer, IndexOptimized};
+    use flatcontainer::impls::storage::Storage;
+
+    /// TODO
+    #[derive(Default, Clone, Debug)]
+    pub struct MzOffsetOptimized(IndexOptimized);
+
+    impl Storage<MzIndex> for MzOffsetOptimized {
+        fn with_capacity(capacity: usize) -> Self {
+            Self(IndexOptimized::with_capacity(capacity))
+        }
+
+        fn reserve(&mut self, additional: usize) {
+            self.0.reserve(additional)
+        }
+
+        fn clear(&mut self) {
+            self.0.clear();
+        }
+
+        fn heap_size<F: FnMut(usize, usize)>(&self, callback: F) {
+            self.0.heap_size(callback);
+        }
+
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+
+        fn is_empty(&self) -> bool {
+            self.0.is_empty()
+        }
+    }
+
+    impl IndexContainer<MzIndex> for MzOffsetOptimized {
+        type Iter<'a> = MzOffsetOptimizedIter<<IndexOptimized as IndexContainer<usize>>::Iter<'a>>
+        where
+            Self: 'a;
+
+        fn index(&self, index: usize) -> MzIndex {
+            MzIndex(self.0.index(index))
+        }
+
+        fn push(&mut self, item: MzIndex) {
+            self.0.push(item.0);
+        }
+
+        fn extend<I: IntoIterator<Item = MzIndex>>(&mut self, iter: I)
+        where
+            I::IntoIter: ExactSizeIterator,
+        {
+            self.0.extend(iter.into_iter().map(|item| item.0));
+        }
+
+        fn iter(&self) -> Self::Iter<'_> {
+            MzOffsetOptimizedIter(self.0.iter())
+        }
+    }
+
+    /// TODO
+    #[derive(Clone, Copy, Debug)]
+    pub struct MzOffsetOptimizedIter<I>(I);
+
+    impl<I> Iterator for MzOffsetOptimizedIter<I>
+    where
+        I: Iterator<Item = usize>,
+    {
+        type Item = MzIndex;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.0.next().map(MzIndex)
         }
     }
 }

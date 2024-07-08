@@ -496,6 +496,7 @@ mod vec {
             self.reserve(count);
             let len = self.len();
             unsafe {
+                #[allow(clippy::as_conversions)]
                 std::ptr::copy_nonoverlapping(
                     slice.as_ptr(),
                     self.elements.as_mut_ptr().add(len) as *const MaybeUninit<T> as *mut T,
@@ -512,6 +513,7 @@ mod vec {
             let len = self.len();
             unsafe {
                 data.set_len(0);
+                #[allow(clippy::as_conversions)]
                 std::ptr::copy_nonoverlapping(
                     data.as_ptr(),
                     self.elements.as_mut_ptr().add(len) as *const MaybeUninit<T> as *mut T,
@@ -532,6 +534,11 @@ mod vec {
         /// The number of elements in the array.
         pub fn len(&self) -> usize {
             self.length
+        }
+
+        /// Returns `true` if the array contains no elements.
+        pub fn is_empty(&self) -> bool {
+            self.len() == 0
         }
 
         /// The number of elements this array can absorb.
@@ -587,6 +594,11 @@ mod vec {
             if new_len > self.capacity() {
                 self.grow(new_len);
             }
+        }
+
+        /// Iterate over the elements.
+        pub fn iter(&self) -> std::slice::Iter<'_, T> {
+            self.deref().iter()
         }
     }
 
