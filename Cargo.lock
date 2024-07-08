@@ -4261,6 +4261,8 @@ dependencies = [
  "hyper 0.14.27",
  "hyper-openssl 0.9.2",
  "jsonwebtoken",
+ "mz-alloc",
+ "mz-alloc-default",
  "mz-build-info",
  "mz-environmentd",
  "mz-frontegg-auth",
