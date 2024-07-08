@@ -13,6 +13,7 @@ use mz_audit_log::{
     EventDetails, EventType, EventV1, IdNameV1, StorageUsageV1, VersionedEvent,
     VersionedStorageUsage,
 };
+use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, IdAlloc};
 use mz_catalog::durable::{
     test_bootstrap_args, test_persist_backed_catalog_state, CatalogError, DurableCatalogError,
@@ -24,6 +25,7 @@ use mz_persist_client::PersistClient;
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
+use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 use std::time::Duration;
 use uuid::Uuid;
@@ -427,4 +429,120 @@ async fn test_schemas(openable_state: Box<dyn OpenableDurableCatalogState>) {
     "###);
 
     Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_non_writer_commits() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let openable_state1 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let openable_state2 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let openable_state3 = test_persist_backed_catalog_state(persist_client, organization_id).await;
+    test_non_writer_commits(openable_state1, openable_state2, openable_state3).await;
+}
+
+async fn test_non_writer_commits(
+    openable_state1: Box<dyn OpenableDurableCatalogState>,
+    openable_state2: Box<dyn OpenableDurableCatalogState>,
+    openable_state3: Box<dyn OpenableDurableCatalogState>,
+) {
+    let deploy_generation = 0;
+    let mut writer_state = openable_state1
+        .open(
+            SYSTEM_TIME(),
+            &test_bootstrap_args(),
+            deploy_generation,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut savepoint_state = openable_state2
+        .open_savepoint(
+            SYSTEM_TIME(),
+            &test_bootstrap_args(),
+            deploy_generation,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut reader_state = openable_state3
+        .open_read_only(&test_bootstrap_args())
+        .await
+        .unwrap();
+
+    // Drain initial snapshots.
+    let _ = writer_state.sync_to_current_updates().await.unwrap();
+    let _ = savepoint_state.sync_to_current_updates().await.unwrap();
+    let _ = reader_state.sync_to_current_updates().await.unwrap();
+
+    // Commit write with writer.
+    let role_name = "joe";
+    let role_id = {
+        let mut txn = writer_state.transaction().await.unwrap();
+        let (role_id, _) = txn
+            .insert_user_role(
+                role_name.to_string(),
+                RoleAttributes::new(),
+                RoleMembership::new(),
+                RoleVars::default(),
+            )
+            .unwrap();
+        // Drain updates.
+        let _ = txn.get_and_commit_op_updates();
+        txn.commit().await.unwrap();
+
+        let roles = writer_state.snapshot().await.unwrap().roles;
+        let role = roles
+            .get(&proto::RoleKey {
+                id: Some(role_id.into_proto()),
+            })
+            .unwrap();
+        assert_eq!(role_name, &role.name);
+
+        role_id
+    };
+
+    // Savepoint can successfully commit transaction.
+    {
+        let db_name = "db";
+        let mut txn = savepoint_state.transaction().await.unwrap();
+        let (db_id, _) = txn
+            .insert_user_database(db_name, RoleId::User(42), Vec::new())
+            .unwrap();
+        let DatabaseId::User(db_id) = db_id else {
+            panic!("unexpected id variant: {db_id:?}");
+        };
+        // Drain updates.
+        let _ = txn.get_and_commit_op_updates();
+        txn.commit().await.unwrap();
+
+        let snapshot = savepoint_state.snapshot().await.unwrap();
+
+        // Savepoint catalogs do not yet know how to update themselves in response to concurrent
+        // writes from writer catalogs, so it should not see the new role.
+        let roles = snapshot.roles;
+        let role = roles.get(&proto::RoleKey {
+            id: Some(role_id.into_proto()),
+        });
+        assert_eq!(None, role);
+
+        let dbs = snapshot.databases;
+        let db = dbs
+            .get(&proto::DatabaseKey {
+                id: Some(proto::DatabaseId {
+                    value: Some(proto::database_id::Value::User(db_id)),
+                }),
+            })
+            .unwrap();
+        assert_eq!(db_name, &db.name);
+    }
+
+    // Read-only catalog can successfully commit empty transaction.
+    {
+        let txn = reader_state.transaction().await.unwrap();
+        txn.commit().await.unwrap();
+    }
 }

@@ -79,13 +79,19 @@ pub type Epoch = NonZeroI64;
 /// If a catalog is not opened, then resources should be release via [`Self::expire`].
 #[async_trait]
 pub trait OpenableDurableCatalogState: Debug + Send {
+    // TODO(jkosh44) Teaching savepoint mode how to listen to additional
+    // durable updates will be necessary for zero down time upgrades.
     /// Opens the catalog in a mode that accepts and buffers all writes,
     /// but never durably commits them. This is used to check and see if
     /// opening the catalog would be successful, without making any durable
     /// changes.
     ///
-    /// `epoch_lower_bound` is used as a lower bound for the epoch that is used by the returned
-    /// catalog.
+    /// Once a savepoint catalog reads an initial snapshot from durable
+    /// storage, it will never read another update from durable storage. As a
+    /// consequence, savepoint catalogs can never be fenced.
+    ///
+    /// `epoch_lower_bound` is used as a lower bound for the epoch that is
+    /// used by the returned catalog.
     ///
     /// Will return an error in the following scenarios:
     ///   - Catalog initialization fails.

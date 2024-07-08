@@ -2070,8 +2070,11 @@ impl<'a> Transaction<'a> {
         let durable_storage = self.commit_internal().await?;
         // Drain all the updates from the commit since it is assumed that they were already applied.
         let updates = durable_storage.sync_updates(commit_ts).await?;
-        // This is bad because it means that we performed the transaction with an out of date state.
-        soft_assert_no_log!(updates.iter().all(|update| update.ts == commit_ts),
+        // Writable and savepoint catalogs should have consumed all updates before committing a
+        // transaction, otherwise the commit was performed with an out of date state.
+        // Read-only catalogs can only commit empty transactions, so they don't need to consume all
+        // updates before committing.
+        soft_assert_no_log!(durable_storage.is_read_only() || updates.iter().all(|update| update.ts == commit_ts),
             "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, updates:{updates:?}");
         Ok(())
     }
