@@ -17,7 +17,10 @@ from materialize.output_consistency.expression.expression_characteristics import
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
-from materialize.output_consistency.output.base_output_printer import BaseOutputPrinter
+from materialize.output_consistency.output.base_output_printer import (
+    BaseOutputPrinter,
+    OutputPrinterMode,
+)
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.selection import (
@@ -32,7 +35,12 @@ MAX_ERRORS_WITH_REPRODUCTION_CODE = 5
 
 
 class ReproductionCodePrinter(BaseOutputPrinter):
-    def __init__(self, input_data: ConsistencyTestInputData):
+    def __init__(
+        self,
+        input_data: ConsistencyTestInputData,
+        mode: OutputPrinterMode = OutputPrinterMode.PRINT,
+    ):
+        super().__init__(mode=mode)
         self.input_data = input_data
 
     def print_reproduction_code(self, errors: list[ValidationError]) -> None:
