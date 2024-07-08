@@ -43,14 +43,22 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         super().__init__(mode=mode)
         self.input_data = input_data
 
+    def clone(self, mode: OutputPrinterMode):
+        return ReproductionCodePrinter(self.input_data, mode)
+
+    def get_reproduction_code_of_error(self, error: ValidationError) -> str:
+        reproduction_code_generator = self.clone(OutputPrinterMode.COLLECT)
+        reproduction_code_generator.print_reproduction_code_of_error(error)
+        return "\n".join(reproduction_code_generator.collected_output)
+
     def print_reproduction_code(self, errors: list[ValidationError]) -> None:
         for i, error in enumerate(errors):
             if i == MAX_ERRORS_WITH_REPRODUCTION_CODE:
                 break
 
-            self.__print_reproduction_code_of_error(error)
+            self.print_reproduction_code_of_error(error)
 
-    def __print_reproduction_code_of_error(self, error: ValidationError) -> None:
+    def print_reproduction_code_of_error(self, error: ValidationError) -> None:
         query_template = error.query_execution.query_template
 
         if error.col_index is None:
