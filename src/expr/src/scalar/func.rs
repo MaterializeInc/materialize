@@ -1631,7 +1631,11 @@ fn list_contains_list<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_list();
 
     b.iter()
-        .all(|item_b| a.iter().any(|item_a| item_a == item_b))
+        .all(|item_b| {
+            a.iter()
+                // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a.
+                .any(|item_a| item_b != Datum::Null && item_a == item_b)
+        })
         .into()
 }
 
@@ -7305,7 +7309,11 @@ fn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_array().elements();
 
     b.iter()
-        .all(|item_b| a.iter().any(|item_a| item_a == item_b))
+        .all(|item_b| {
+            a.iter()
+                // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a.
+                .any(|item_a| item_b != Datum::Null && item_a == item_b)
+        })
         .into()
 }
 

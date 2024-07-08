@@ -2988,32 +2988,32 @@ SELECT LIST[2,7] @> LIST[1,7,4,2,6] AS is_contained_by
 false
 
 
-query t
+query T
 SELECT '{}'::numeric list @> '{}'::numeric list;
 ----
 true
 
-query t
+query T
 SELECT '{1,2}'::numeric list @> '{}'::numeric list;
 ----
 true
 
-query t
+query T
 SELECT '{}'::numeric list @> '{1,2}'::numeric list;
 ----
 false
 
-query t
+query T
 SELECT '{NULL}'::numeric list @> '{NULL}'::numeric list;
 ----
 false
 
-query t
+query T
 SELECT '{NULL, 1}'::numeric list @> '{1}'::numeric list;
 ----
 true
 
-query t
+query T
 SELECT '{1}'::numeric list @> '{1, NULL}'::numeric list;
 ----
 false
