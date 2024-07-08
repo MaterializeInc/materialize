@@ -49,7 +49,7 @@ SELECT
     EXTRACT(WEEK FROM date) AS week,
     b.branch,
     b.pipeline,
-    max(b.build_id)
+    max(b.build_id) AS build_id
 FROM build b
 GROUP BY
     EXTRACT(YEAR FROM date),
