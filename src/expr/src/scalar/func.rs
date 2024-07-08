@@ -1633,7 +1633,7 @@ fn list_contains_list<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     b.iter()
         .all(|item_b| {
             a.iter()
-                // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a.
+                // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a, even if a contains NULL.
                 .any(|item_a| item_b != Datum::Null && item_a == item_b)
         })
         .into()
@@ -7311,7 +7311,7 @@ fn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     b.iter()
         .all(|item_b| {
             a.iter()
-                // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a.
+                // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a, even if a contains NULL.
                 .any(|item_a| item_b != Datum::Null && item_a == item_b)
         })
         .into()
