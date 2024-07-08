@@ -479,3 +479,66 @@ WHERE
     AND mda.address[1] = dataflows.dataflow_address
     AND mdo.id = dataflows.dataflow_operator;
 ```
+
+## I dropped an index, why haven't my plans and dataflows changed?
+
+It's likely that your index has **downstream dependencies**. If an index has
+dependent objects downstream, its underlying dataflow will continue to be
+maintained and take up resources until all dependent object are dropped or
+altered, or Materialize is restarted.
+
+[//]: # "TODO(chaas) Add reference to the console once it's available."
+
+To check if there are residual dataflows on a specific cluster, run the
+following query:
+
+```mzsql
+SET CLUSTER TO <cluster_name>;
+
+SELECT ce.export_id AS dropped_index_id,
+       s.name AS dropped_index_name,
+       s.id AS dataflow_id
+FROM mz_internal.mz_dataflow_arrangement_sizes s
+JOIN mz_internal.mz_compute_exports ce ON ce.dataflow_id = s.id
+LEFT JOIN mz_catalog.mz_objects o ON o.id = ce.export_id
+WHERE o.id IS NULL;
+```
+
+You can then use the `dropped_index_id` object identifier to list the downstream
+dependencies of the residual dataflow, using:
+
+```mzsql
+SELECT do.id AS dependent_object_id,
+       do.name AS dependent_object_name,
+       db.name AS dependent_object_database,
+       s.name AS dependent_object_schema
+FROM mz_internal.mz_compute_dependencies cd
+LEFT JOIN mz_catalog.mz_objects do ON cd.object_id = do.id
+LEFT JOIN mz_catalog.mz_schemas s ON do.schema_id = s.id
+LEFT JOIN mz_catalog.mz_databases db ON s.database_id = db.id
+WHERE cd.dependency_id = <dropped_index_id>;
+```
+
+To force a re-plan of the downstream objects that doesn't consider the dropped
+index, you can:
+
+{{< warning >}}
+Forcing a re-plan using any of the approaches below **will trigger hydration**,
+which incurs downtime while the objects are recreated and backfilled with
+pre-existing data. We recommend doing a [blue/green deployment](/manage/dbt/development-workflows/#bluegreen-deployments)
+to handle these changes in production environments.
+{{< /warning >}}
+
+* Drop and recreate all downstream dependencies;
+
+* Restart the cluster by setting it's replication factor to `0`, then back to
+  the original value.
+
+    ```mzsql
+    -- Note the original replication factor for the cluster
+    SHOW CREATE CLUSTER <cluster_name>;
+
+    ALTER CLUSTER <cluster_name> SET (REPLICATION FACTOR = 0);
+
+    ALTER CLUSTER <cluster_name> SET (REPLICATION FACTOR = <original_value>)
+    ```
