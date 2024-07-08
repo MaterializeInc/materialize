@@ -472,7 +472,7 @@ impl State {
                             SELECT cluster_id, id FROM mz_catalog.mz_indexes
                         UNION ALL
                             SELECT cluster_id, id
-                            FROM mz_internal.mz_subscriptions
+                            FROM mz_catalog_unstable.mz_subscriptions
                     )
                     AS t (cluster_id, object_id)
                 WHERE cluster_id IS NOT NULL AND object_id LIKE 'u%'
