@@ -69,11 +69,7 @@ pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Vec<arrow::array::ArrayRe
         None,
     )
     .expect("valid ts array");
-    let diff = PrimitiveArray::<arrow::datatypes::Int64Type>::try_new(
-        (*x.diffs).as_ref().to_vec().into(),
-        None,
-    )
-    .expect("valid diff array");
+    let diff = x.diffs.clone();
 
     vec![Arc::new(key), Arc::new(val), Arc::new(ts), Arc::new(diff)]
 }
@@ -202,7 +198,7 @@ pub fn decode_arrow_batch_kvtd(
     let val_data = Arc::new(to_region(val.value_data(), metrics));
 
     let timestamps = Arc::new(to_region(&time.values()[..], metrics));
-    let diffs = Arc::new(to_region(&diff.values()[..], metrics));
+    let diffs = realloc_primitive(diff, metrics);
 
     let len = key.len();
     let ret = ColumnarRecords {

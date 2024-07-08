@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::{cmp, fmt};
 
 use ::arrow::array::Array;
+use ::arrow::array::Int64Array;
 use ::arrow::datatypes::ArrowNativeType;
 use bytes::Bytes;
 use mz_ore::bytes::MaybeLgBytes;
@@ -96,7 +97,7 @@ pub struct ColumnarRecords {
     val_data: MaybeLgBytes,
     val_offsets: Arc<MetricsRegion<i32>>,
     timestamps: Arc<MetricsRegion<i64>>,
-    diffs: Arc<MetricsRegion<i64>>,
+    diffs: Int64Array,
 }
 
 impl fmt::Debug for ColumnarRecords {
@@ -118,7 +119,7 @@ impl ColumnarRecords {
         self.key_data.as_ref().len()
             + self.val_data.as_ref().len()
             + 8 * (*self.timestamps).as_ref().len()
-            + 8 * (*self.diffs).as_ref().len()
+            + self.diffs.values().inner().len()
     }
 
     /// Read the record at `idx`, if there is one.
@@ -142,7 +143,7 @@ impl ColumnarRecords {
             val_data: self.val_data.as_ref(),
             val_offsets: (*self.val_offsets).as_ref(),
             timestamps: (*self.timestamps).as_ref(),
-            diffs: (*self.diffs).as_ref(),
+            diffs: self.diffs.values(),
         }
     }
 
@@ -495,7 +496,7 @@ impl ColumnarRecordsBuilder {
             val_data: MaybeLgBytes::Bytes(Bytes::from(self.val_data)),
             val_offsets: Arc::new(metrics.lgbytes_arrow.heap_region(self.val_offsets)),
             timestamps: Arc::new(metrics.lgbytes_arrow.heap_region(self.timestamps)),
-            diffs: Arc::new(metrics.lgbytes_arrow.heap_region(self.diffs)),
+            diffs: self.diffs.into(),
         };
         debug_assert_eq!(ret.borrow().validate(), Ok(()));
         ret
@@ -519,7 +520,7 @@ impl ColumnarRecords {
             val_offsets: (*self.val_offsets).as_ref().to_vec(),
             val_data: Bytes::copy_from_slice(self.val_data.as_ref()),
             timestamps: (*self.timestamps).as_ref().to_vec(),
-            diffs: (*self.diffs).as_ref().to_vec(),
+            diffs: self.diffs.values().to_vec(),
         }
     }
 
@@ -535,7 +536,7 @@ impl ColumnarRecords {
             val_offsets: Arc::new(lgbytes.lgbytes_arrow.heap_region(proto.val_offsets)),
             val_data: MaybeLgBytes::Bytes(proto.val_data),
             timestamps: Arc::new(lgbytes.lgbytes_arrow.heap_region(proto.timestamps)),
-            diffs: Arc::new(lgbytes.lgbytes_arrow.heap_region(proto.diffs)),
+            diffs: proto.diffs.into(),
         };
         let () = ret
             .borrow()
