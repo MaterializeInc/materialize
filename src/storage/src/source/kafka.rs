@@ -52,7 +52,7 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp;
 use timely::PartialOrder;
 use tokio::sync::Notify;
-use tracing::{error, info, trace, warn};
+use tracing::{error, info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
@@ -106,8 +106,6 @@ pub struct KafkaSourceReader {
     health_status: Arc<Mutex<HealthStatus>>,
     /// Per partition capabilities used to produce messages
     partition_capabilities: BTreeMap<PartitionId, PartitionCapability>,
-    /// Timeout when fast-forwarding the consumer.
-    consumer_seek_timeout: Duration,
 }
 
 /// A partially-filled version of `ProgressStatisticsUpdate`. This allows us to
@@ -466,8 +464,6 @@ impl SourceRender for KafkaSourceConnection {
                 ),
                 health_status,
                 partition_capabilities,
-                consumer_seek_timeout: mz_storage_types::dyncfgs::KAFKA_FAST_FORWARD_SEEK_TIMEOUT
-                    .get(config.config.config_set()),
             };
 
             let offset_committer = KafkaResumeUpperProcessor {
@@ -977,72 +973,6 @@ impl KafkaSourceReader {
         );
     }
 
-    /// Fast-forward consumer to specified Kafka Offset. Prints a warning if failed to do so
-    /// Assumption: if offset does not exist (for instance, because of compaction), will seek
-    /// to the next available offset
-    fn fast_forward_consumer(&self, pid: PartitionId, next_offset: i64) {
-        let res = self.consumer.seek(
-            &self.topic_name,
-            pid,
-            Offset::Offset(next_offset),
-            self.consumer_seek_timeout,
-        );
-        match res {
-            Ok(_) => {
-                let res = self.consumer.position().unwrap_or_default().to_topic_map();
-                let position = res
-                    .get(&(self.topic_name.clone(), pid))
-                    .and_then(|p| match p {
-                        Offset::Offset(o) => Some(o),
-                        _ => None,
-                    });
-                if let Some(position) = position {
-                    if *position != next_offset {
-                        warn!(
-                            source_id = self.id.to_string(),
-                            worker_id = self.worker_id,
-                            num_workers = self.worker_count,
-                            "did not fast-forward consumer on \
-                            partition {} to the correct Kafka offset. Currently \
-                            at offset: {} Expected offset: {}",
-                            pid,
-                            position,
-                            next_offset
-                        );
-                    } else {
-                        info!(
-                            source_id = self.id.to_string(),
-                            worker_id = self.worker_id,
-                            num_workers = self.worker_count,
-                            "successfully fast-forwarded consumer on \
-                            partition {} to Kafka offset {}.",
-                            pid,
-                            position
-                        );
-                    }
-                } else {
-                    warn!(
-                        source_id = self.id.to_string(),
-                        worker_id = self.worker_id,
-                        num_workers = self.worker_count,
-                        "tried to fast-forward consumer on \
-                        partition {} to Kafka offset {}. Could not obtain new consumer position",
-                        pid,
-                        next_offset
-                    );
-                }
-            }
-            Err(e) => error!(
-                source_id = self.id.to_string(),
-                worker_id = self.worker_id,
-                num_workers = self.worker_count,
-                "failed to fast-forward consumer for source {}, Error:{}",
-                self.source_name,
-                e
-            ),
-        }
-    }
-
     /// Read any statistics JSON blobs generated via the rdkafka statistics callback.
     fn update_stats(&mut self) {
         while let Ok(stats) = self.stats_rx.try_recv() {
@@ -1102,7 +1032,7 @@ impl KafkaSourceReader {
                 source_id = self.id.to_string(),
                 worker_id = self.worker_id,
                 num_workers = self.worker_count,
-                "kafka message before expected offset, skipping: \
+                "kafka message before expected offset: \
                 source {} (reading topic {}, partition {}) \
                 received offset {} expected offset {:?}",
                 self.source_name,
@@ -1111,11 +1041,7 @@ impl KafkaSourceReader {
                 offset.offset,
                 last_offset + 1,
             );
-            // Seek to the *next* offset that we have not yet processed
-            self.fast_forward_consumer(partition, last_offset + 1);
-            // We explicitly should not consume the message as we have already processed it
-            // However, we make sure to activate the source to make sure that we get a chance
-            // to read from this consumer again (even if no new data arrives)
+            // We explicitly should not consume the message as we have already processed it.
             None
         } else {
             *last_offset_ref = offset_as_i64;
