@@ -304,7 +304,10 @@ pub enum MirRelationExpr {
 
 impl PartialEq for MirRelationExpr {
     fn eq(&self, other: &Self) -> bool {
-        structured_diff::MreDiff::new(self, other).next().is_none()
+        // Capture the result and test it wrt `Ord` implementation in test environments.
+        let result = structured_diff::MreDiff::new(self, other).next().is_none();
+        mz_ore::soft_assert_eq_no_log!(result, self.cmp(other) == Ordering::Equal);
+        result
     }
 }
 impl Eq for MirRelationExpr {}
@@ -3648,7 +3651,7 @@ mod structured_diff {
                             limits: limits2,
                         },
                     ) => {
-                        if ids1 != ids2 || limits1 != limits2 {
+                        if ids1 != ids2 || values1.len() != values2.len() || limits1 != limits2 {
                             return Some((expr1, expr2));
                         } else {
                             self.todo.push((body1, body2));
@@ -3733,7 +3736,7 @@ mod structured_diff {
                             implementation: impl2,
                         },
                     ) => {
-                        if eq1 != eq2 || impl1 != impl2 {
+                        if inputs1.len() != inputs2.len() || eq1 != eq2 || impl1 != impl2 {
                             return Some((expr1, expr2));
                         } else {
                             self.todo.extend(inputs1.iter().zip(inputs2.iter()));
