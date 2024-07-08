@@ -78,8 +78,7 @@ MYSQL_RANGE_FUNCTION = (
 
 
 def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.up("dbt", persistent=True)
-    c.up("testdrive", persistent=True)
+    c.up("dbt", "testdrive", persistent=True)
 
     materialize_url = f"postgres://{quote(MATERIALIZE_PROD_SANDBOX_USERNAME)}:{quote(MATERIALIZE_PROD_SANDBOX_APP_PASSWORD)}@{quote(MATERIALIZE_PROD_SANDBOX_HOSTNAME)}:6875"
 

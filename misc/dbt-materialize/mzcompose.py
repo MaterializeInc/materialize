@@ -69,8 +69,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             with c.test_case(test_case.name):
                 with c.override(materialized):
                     c.down()
-                    c.up("redpanda")
-                    c.up("materialized")
+                    c.up("redpanda", "materialized")
                     c.up("testdrive", persistent=True)
 
                     # Create a topic that some tests rely on

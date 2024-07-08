@@ -94,12 +94,16 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "localstack")
-    c.up("materialized")
-
     # Create a cluster and verify that tests pass.
-    c.up("clusterd1")
-    c.up("clusterd2")
+    c.up(
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+        "localstack",
+        "materialized",
+        "clusterd1",
+        "clusterd2",
+    )
 
     # Make sure cluster1 is owned by the system so it doesn't get dropped
     # between testdrive runs.
@@ -128,8 +132,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.run_testdrive_files(*args.glob)
 
     # Add a replica to that cluster and verify that tests still pass.
-    c.up("clusterd3")
-    c.up("clusterd4")
+    c.up("clusterd3", "clusterd4")
 
     c.sql(
         """
@@ -162,11 +165,9 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
 def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     """Ensure clusterds correctly crash if used in unsupported communication config"""
     c.down(destroy_volumes=True)
-    c.up("materialized")
 
     # Create a remote cluster and verify that tests pass.
-    c.up("clusterd1")
-    c.up("clusterd2")
+    c.up("materialized", "clusterd1", "clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
         "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -250,8 +251,7 @@ def workflow_test_github_15531(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.up("clusterd1")
+    c.up("materialized", "clusterd1")
 
     # helper function to get command history metrics
     def find_command_history_metrics(c: Composition) -> tuple[int, int, int, int]:
@@ -424,8 +424,7 @@ def workflow_test_github_15535(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.up("clusterd1")
+    c.up("materialized", "clusterd1")
 
     c.sql(
         "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -485,9 +484,7 @@ def workflow_test_github_15799(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.up("clusterd1")
-    c.up("clusterd2")
+    c.up("materialized", "clusterd1", "clusterd2")
 
     c.sql(
         "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -540,8 +537,7 @@ def workflow_test_github_15930(c: Composition) -> None:
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.up("clusterd1")
+        c.up("materialized", "clusterd1")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -644,8 +640,7 @@ def workflow_test_github_15496(c: Composition) -> None:
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.up("clusterd1")
+        c.up("materialized", "clusterd1")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -717,8 +712,7 @@ def workflow_test_github_17177(c: Composition) -> None:
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.up("clusterd1")
+        c.up("materialized", "clusterd1")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -796,8 +790,7 @@ def workflow_test_github_17510(c: Composition) -> None:
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.up("clusterd1")
+        c.up("materialized", "clusterd1")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -970,8 +963,7 @@ def workflow_test_github_17509(c: Composition) -> None:
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.up("clusterd1")
+        c.up("materialized", "clusterd1")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -1064,8 +1056,7 @@ def workflow_test_github_19610(c: Composition) -> None:
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.up("clusterd1")
+        c.up("materialized", "clusterd1")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -1172,8 +1163,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.up("clusterd1")
+        c.up("materialized", "clusterd1")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -1339,8 +1329,7 @@ def workflow_test_remote_storage(c: Composition) -> None:
         c.kill("materialized")
         c.up("materialized")
         c.kill("clusterd1")
-        c.up("clusterd1")
-        c.up("clusterd2")
+        c.up("clusterd1", "clusterd2")
         c.run_testdrive_files("storage/02-after-environmentd-restart.td")
 
         # just kill one of the clusterd's and make sure we can recover.
@@ -1349,8 +1338,7 @@ def workflow_test_remote_storage(c: Composition) -> None:
         c.run_testdrive_files("storage/03-while-clusterd-down.td")
 
         # Bring back both clusterd's
-        c.up("clusterd1")
-        c.up("clusterd2")
+        c.up("clusterd1", "clusterd2")
         c.run_testdrive_files("storage/04-after-clusterd-restart.td")
 
 
@@ -1528,9 +1516,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.up("clusterd1")
-    c.up("clusterd2")
+    c.up("materialized", "clusterd1", "clusterd2")
 
     c.sql(
         "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -1617,9 +1603,7 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.up("clusterd1")
-    c.up("clusterd2")
+    c.up("materialized", "clusterd1", "clusterd2")
 
     c.sql(
         "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -1735,9 +1719,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
 
-    c.up("materialized")
-    c.up("clusterd1")
-    c.up("clusterd2")
+    c.up("materialized", "clusterd1", "clusterd2")
 
     c.sql(
         "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -1889,8 +1871,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
 
-    c.up("materialized")
-    c.up("clusterd1")
+    c.up("materialized", "clusterd1")
 
     c.sql(
         "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -2072,8 +2053,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.up("clusterd1")
+    c.up("materialized", "clusterd1")
 
     c.sql(
         "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -2331,8 +2311,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
     """Test metrics exposed by replicas."""
 
     c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.up("clusterd1")
+    c.up("materialized", "clusterd1")
 
     def fetch_metrics() -> Metrics:
         resp = c.exec(
@@ -2786,8 +2765,7 @@ def workflow_test_profile_fetch(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.up("clusterd1")
+    c.up("materialized", "clusterd1")
 
     envd_port = c.port("materialized", 6878)
     envd_url = f"http://localhost:{envd_port}/prof/"
@@ -2973,9 +2951,7 @@ def workflow_test_index_source_stuck(
         Clusterd(name="clusterd2"),
         Materialized(),
     ):
-        c.up("materialized")
-        c.up("clusterd1")
-        c.up("clusterd2")
+        c.up("materialized", "clusterd1", "clusterd2")
         c.run_testdrive_files("index-source-stuck/run.td")
 
 
@@ -2991,8 +2967,7 @@ def workflow_test_github_cloud_7998(
         Clusterd(name="clusterd1"),
         Materialized(),
     ):
-        c.up("materialized")
-        c.up("clusterd1")
+        c.up("materialized", "clusterd1")
 
         c.run_testdrive_files("github-cloud-7998/setup.td")
 
@@ -3149,10 +3124,7 @@ def workflow_blue_green_deployment(
         Clusterd(name="clusterd2"),
         Materialized(),
     ):
-        c.up("materialized")
-        c.up("clusterd1")
-        c.up("clusterd2")
-        c.up("clusterd3")
+        c.up("materialized", "clusterd1", "clusterd2", "clusterd3")
         c.run_testdrive_files("blue-green-deployment/setup.td")
 
         threads = [PropagatingThread(target=fn) for fn in (selects, subscribe)]
@@ -3246,8 +3218,7 @@ def workflow_cluster_drop_concurrent(
         Clusterd(name="clusterd1"),
         Materialized(),
     ):
-        c.up("materialized")
-        c.up("clusterd1")
+        c.up("materialized", "clusterd1")
         c.run_testdrive_files("cluster-drop-concurrent/setup.td")
         threads = [
             PropagatingThread(target=fn, name=name)
@@ -3883,8 +3854,7 @@ def workflow_test_github_26215(c: Composition, parser: WorkflowArgumentParser) -
                 )
             )
 
-        c.up("materialized")
-        c.up("clusterd1")
+        c.up("materialized", "clusterd1")
         c.up("testdrive", persistent=True)
 
         # Create an unmanaged cluster that isn't restarted together with materialized,
