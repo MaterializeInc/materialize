@@ -56,7 +56,7 @@ query TTTTTTTT
 SELECT
   n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
 FROM
-  mz_internal.mz_notices n JOIN
+  mz_catalog_unstable.mz_notices n JOIN
   mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
 WHERE
   idx.name = 't_idx_empty_key'
@@ -79,7 +79,7 @@ query TTTTTTTT
 SELECT
   n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
 FROM
-  mz_internal.mz_notices n JOIN
+  mz_catalog_unstable.mz_notices n JOIN
   mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
 WHERE
   idx.name = 't_idx_empty_key'

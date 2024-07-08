@@ -893,7 +893,7 @@ class Composition:
         results = self.sql_query(
             f"""
             SELECT name, status, error, details
-            FROM mz_internal.mz_source_statuses
+            FROM mz_catalog_unstable.mz_source_statuses
             WHERE NOT(
                 status IN ('running', 'starting') OR
                 (type = 'progress' AND status = 'created')
@@ -907,7 +907,7 @@ class Composition:
         results = self.sql_query(
             f"""
             SELECT name, status, error, details
-            FROM mz_internal.mz_sink_statuses
+            FROM mz_catalog_unstable.mz_sink_statuses
             WHERE status NOT IN ('running', 'dropped')
             AND {exclusion_clause}
             """
@@ -918,9 +918,9 @@ class Composition:
         results = self.sql_query(
             """
             SELECT mz_clusters.name, mz_cluster_replicas.name, status, reason
-            FROM mz_internal.mz_cluster_replica_statuses
+            FROM mz_catalog_unstable.mz_cluster_replica_statuses
             JOIN mz_cluster_replicas
-            ON mz_internal.mz_cluster_replica_statuses.replica_id = mz_cluster_replicas.id
+            ON mz_cluster_replica_statuses.replica_id = mz_cluster_replicas.id
             JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
             WHERE status NOT IN ('ready', 'not-ready')
             """

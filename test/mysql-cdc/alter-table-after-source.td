@@ -400,11 +400,11 @@ $ mysql-execute name=mysql
 DROP TABLE drop_table;
 
 # TODO: redesign ceased status #25768
-# > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'drop_table';
+# > SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'drop_table';
 # ceased
 
 # this should not brick the whole source
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'mz_source';
 running
 
 # the subsources are in a bad state so we need to drop the source so the

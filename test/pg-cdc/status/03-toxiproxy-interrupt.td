@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT COUNT(*) = 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%connection closed%';
+> SELECT COUNT(*) = 0 FROM mz_catalog_unstable.mz_source_statuses WHERE error LIKE '%connection closed%';
 true
 
 # This REST call will cause toxiproxy to close the connection.
@@ -20,11 +20,11 @@ $ http-request method=POST url=http://toxiproxy:8474/proxies/postgres content-ty
   "enabled": false
 }
 
-> SELECT COUNT(*) > 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%connection closed%';
+> SELECT COUNT(*) > 0 FROM mz_catalog_unstable.mz_source_statuses WHERE error LIKE '%connection closed%';
 true
 
 # Ensure we don't lose ceased status even if source is stalled
-> SELECT name, status FROM mz_internal.mz_source_statuses;
+> SELECT name, status FROM mz_catalog_unstable.mz_source_statuses;
 pg_source           stalled
 pg_source_progress  running
 t                   ceased

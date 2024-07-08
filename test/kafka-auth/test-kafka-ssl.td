@@ -107,7 +107,7 @@ contains:Invalid CA certificate
 
 > ALTER CONNECTION kafka RESET (SSL KEY), RESET (SSL CERTIFICATE), RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = false);
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'text_data';
 stalled
 
 > ALTER CONNECTION kafka
@@ -115,7 +115,7 @@ stalled
     DROP (SSL CERTIFICATE),
     SET (SSL CERTIFICATE AUTHORITY '${ca-crt}');
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'text_data';
 running
 
 # ALTER CONNECTION for Kafka + SSH
@@ -139,24 +139,24 @@ contains:Connection refused
 
 > ALTER CONNECTION testdrive_no_reset_connections.public.ssh SET (HOST = 'abcd') WITH (VALIDATE = false);
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data_ssh';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'text_data_ssh';
 stalled
 
 > ALTER CONNECTION testdrive_no_reset_connections.public.ssh SET (HOST = 'ssh-bastion-host') WITH (VALIDATE = true);
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data_ssh';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'text_data_ssh';
 running
 
 # Break SSH connection via port
 
 > ALTER CONNECTION testdrive_no_reset_connections.public.ssh SET (PORT = 1) WITH (VALIDATE = false);
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data_ssh';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'text_data_ssh';
 stalled
 
 > ALTER CONNECTION testdrive_no_reset_connections.public.ssh RESET (PORT) WITH (VALIDATE = true);
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data_ssh';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'text_data_ssh';
 running
 
 # Swap out SSH connection
@@ -164,26 +164,26 @@ running
 > SELECT COUNT(*) FROM mz_ssh_tunnel_connections
 2
 
-> SELECT COUNT(*) FROM mz_internal.mz_object_dependencies WHERE referenced_object_id = 'u1';
+> SELECT COUNT(*) FROM mz_catalog_unstable.mz_object_dependencies WHERE referenced_object_id = 'u1';
 1
 
 ! DROP CONNECTION testdrive_no_reset_connections.public.ssh;
 contains:still depended upon by connection "kafka_ssh"
 
-> SELECT COUNT(*) FROM mz_internal.mz_object_dependencies WHERE referenced_object_id = 'u1';
+> SELECT COUNT(*) FROM mz_catalog_unstable.mz_object_dependencies WHERE referenced_object_id = 'u1';
 1
 
 > ALTER CONNECTION kafka_ssh SET (BROKER 'kafka:9093' USING SSH TUNNEL testdrive_no_reset_connections.public.ssh_backup);
 
 # We've removed all dependencies on testdrive_no_reset_connections.public.ssh, so it could be dropped
-> SELECT COUNT(*) FROM mz_internal.mz_object_dependencies WHERE referenced_object_id = 'u1';
+> SELECT COUNT(*) FROM mz_catalog_unstable.mz_object_dependencies WHERE referenced_object_id = 'u1';
 0
 
 # Break new SSH tunnel to show that we can fix it
 
 > ALTER CONNECTION testdrive_no_reset_connections.public.ssh_backup SET (PORT = 1) WITH (VALIDATE = false);
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data_ssh';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'text_data_ssh';
 stalled
 
 $ kafka-ingest topic=text-data format=bytes
@@ -191,7 +191,7 @@ papaya
 
 > ALTER CONNECTION testdrive_no_reset_connections.public.ssh_backup RESET (PORT) WITH (VALIDATE = true);
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data_ssh';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'text_data_ssh';
 running
 
 > SELECT * FROM text_data

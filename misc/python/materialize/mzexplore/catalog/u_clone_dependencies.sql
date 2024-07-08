@@ -22,7 +22,7 @@ WITH
     SELECT
       od.object_id, od.referenced_object_id
     FROM
-      mz_internal.mz_object_dependencies od
+      mz_catalog_unstable.mz_object_dependencies od
     WHERE
       od.object_id IN (SELECT id FROM mz_catalog.mz_views) AND
       od.referenced_object_id ilike 'u%'
@@ -32,7 +32,7 @@ WITH
     WITH MUTUALLY RECURSIVE
       reach(source_id text, target_id text) AS (
         -- Start from requested source_ids.
-        SELECT object_id, referenced_object_id FROM mz_internal.mz_object_dependencies WHERE object_id IN ({source_ids})
+        SELECT object_id, referenced_object_id FROM mz_catalog_unstable.mz_object_dependencies WHERE object_id IN ({source_ids})
 
         UNION
 

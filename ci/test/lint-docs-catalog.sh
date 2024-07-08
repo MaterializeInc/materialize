@@ -23,7 +23,8 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 
 catalog_files=(
-  doc/user/content/sql/system-catalog/mz_internal.md
+  # TODO(#28102) uncomment this when the mz_cluster_unstable docs are added
+  # doc/user/content/sql/system-catalog/mz_cluster_unstable.md
   doc/user/content/sql/system-catalog/mz_introspection.md
   doc/user/content/sql/system-catalog/mz_catalog.md
 )

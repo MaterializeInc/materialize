@@ -668,13 +668,13 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                     dedent(
                         f"""
                 > select sum(records_indexed)
-                  from mz_internal.mz_source_statistics_raw st
+                  from mz_catalog_unstable.mz_source_statistics_raw st
                   join mz_sources s on s.id = st.id
                   where name = 's1';
                 {repeat + 2}
 
                 > select bool_and(rehydration_latency IS NOT NULL)
-                  from mz_internal.mz_source_statistics_raw st
+                  from mz_catalog_unstable.mz_source_statistics_raw st
                   join mz_sources s on s.id = st.id
                   where name = 's1';
                 true
@@ -686,7 +686,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 while rehydration_latency == last_latency:
                     rehydration_latency = c.sql_query(
                         """select max(rehydration_latency)
-                        from mz_internal.mz_source_statistics_raw st
+                        from mz_catalog_unstable.mz_source_statistics_raw st
                         join mz_sources s on s.id = st.id
                         where name = 's1';"""
                     )[0]

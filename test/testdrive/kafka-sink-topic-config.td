@@ -77,5 +77,5 @@ $ kafka-verify-topic sink=materialize.public.topic_config partition-count=1 topi
 $ skip-if
 SELECT '${arg.uses-redpanda}'::BOOL
 
-> SELECT status, error FROM mz_internal.mz_sink_statuses WHERE name = 'topic_config_unknown';
+> SELECT status, error FROM mz_catalog_unstable.mz_sink_statuses WHERE name = 'topic_config_unknown';
 stalled "kafka: Error creating topic testdrive-kafka-config-unknown-${testdrive.seed} for sink: Admin operation error: InvalidConfig (Broker: Configuration is invalid)"

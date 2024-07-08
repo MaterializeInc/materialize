@@ -58,7 +58,7 @@ statement ok
 ALTER INDEX idx_c SET (RETAIN HISTORY FOR '1m')
 
 query TTT
-SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+SELECT o.name, h.strategy, h.value FROM mz_catalog_unstable.mz_history_retention_strategies h
 JOIN mz_objects o ON o.id = h.id
 WHERE o.id LIKE 'u%' AND o.name LIKE 'idx_%'
 ORDER BY o.name
@@ -71,7 +71,7 @@ statement ok
 ALTER INDEX idx_a SET (RETAIN HISTORY FOR '7m')
 
 query TTT
-SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+SELECT o.name, h.strategy, h.value FROM mz_catalog_unstable.mz_history_retention_strategies h
 JOIN mz_objects o ON o.id = h.id
 WHERE o.id LIKE 'u%' AND o.name LIKE 'idx_%'
 ORDER BY o.name
@@ -87,7 +87,7 @@ statement ok
 ALTER INDEX idx_c SET (RETAIN HISTORY FOR '4m')
 
 query TTT
-SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+SELECT o.name, h.strategy, h.value FROM mz_catalog_unstable.mz_history_retention_strategies h
 JOIN mz_objects o ON o.id = h.id
 WHERE o.id LIKE 'u%' AND o.name LIKE 'idx_%'
 ORDER BY o.name
@@ -115,7 +115,7 @@ CREATE VIEW counter_view AS SELECT * FROM counter
 ----
 
 query TTT
-SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+SELECT o.name, h.strategy, h.value FROM mz_catalog_unstable.mz_history_retention_strategies h
 JOIN mz_objects o ON o.id = h.id
 WHERE o.id LIKE 'u%'
 ORDER BY o.name
@@ -143,7 +143,7 @@ ALTER SOURCE counter SET (RETAIN HISTORY FOR '1m')
 ----
 
 query TTT
-SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+SELECT o.name, h.strategy, h.value FROM mz_catalog_unstable.mz_history_retention_strategies h
 JOIN mz_objects o ON o.id = h.id
 WHERE o.id LIKE 'u%'
 ORDER BY o.name
@@ -175,7 +175,7 @@ statement ok
 ALTER INDEX idx_b RESET (RETAIN HISTORY)
 
 query TTT
-SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+SELECT o.name, h.strategy, h.value FROM mz_catalog_unstable.mz_history_retention_strategies h
 JOIN mz_objects o ON o.id = h.id
 WHERE o.id LIKE 'u%'
 ORDER BY o.name

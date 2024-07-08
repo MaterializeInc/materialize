@@ -30,6 +30,6 @@ $ kafka-create-topic topic=topic partitions=1
 > SELECT
     ks.topic
   FROM mz_sources s
-  JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
+  JOIN mz_catalog_unstable.mz_kafka_sources ks ON s.id = ks.id
   WHERE s.name = 'topic'
 testdrive-topic-${testdrive.seed}

@@ -81,7 +81,7 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
     u.messages_received,
     u.records_indexed
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('up_no_update', 'up_quick')
 up_no_update 3 3 48 48 48 16
 up_quick     6 6  0  0 48 16
@@ -128,7 +128,7 @@ true
     u.messages_received,
     u.records_indexed
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('up_no_update', 'up_quick')
 up_no_update 3 3 48 48 48 16
 up_quick     6 6  0  0 48 16
@@ -168,7 +168,7 @@ up_quick     6 6  0  0 48 16
 #     u.messages_received > 48,
 #     u.records_indexed
 #   FROM mz_sources s
-#   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+#   JOIN mz_catalog_unstable.mz_source_statistics u ON s.id = u.id
 #   WHERE s.name IN ('up_with_update')
 # up_with_update true true 48 48 true 16
 

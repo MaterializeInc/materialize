@@ -40,7 +40,7 @@ mammalmore    moose    2
     SUM(u.records_indexed),
     bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -51,7 +51,7 @@ $ set-from-sql var=rehydrated-state-bytes
 SELECT
     (SUM(u.bytes_indexed))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 # Ensure we process updates correctly.
@@ -76,7 +76,7 @@ mammalmore    moose               2
     SUM(u.bytes_indexed) != ${rehydrated-state-bytes},
     SUM(u.records_indexed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -86,7 +86,7 @@ $ set-from-sql var=state-bytes
 SELECT
     (SUM(u.bytes_indexed))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
@@ -96,7 +96,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
     SUM(u.bytes_indexed) > ${state-bytes},
     SUM(u.records_indexed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -116,7 +116,7 @@ mammalmore    moose               2
 > SELECT
     SUM(u.records_indexed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name

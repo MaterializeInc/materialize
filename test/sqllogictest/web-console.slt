@@ -21,7 +21,7 @@ reset-server
 query TTTTI
 SELECT r.id, r.name as replica_name, r.cluster_id, r.size, coalesce(floor(u.memory_percent), 0)
 FROM mz_cluster_replicas r
-JOIN mz_internal.mz_cluster_replica_utilization u ON u.replica_id = r.id
+JOIN mz_catalog_unstable.mz_cluster_replica_utilization u ON u.replica_id = r.id
 WHERE r.cluster_id = 'u1'
 ORDER BY r.id;
 ----
@@ -30,7 +30,7 @@ u1  r1  u1  2  0
 # useSinkErrors(...)
 query ITI
 SELECT MAX(extract(epoch from h.occurred_at) * 1000) as last_occurred, h.error, COUNT(h.occurred_at)
-FROM mz_internal.mz_sink_status_history h
+FROM mz_catalog_unstable.mz_sink_status_history h
 WHERE sink_id = 'u1'
 AND error IS NOT NULL
 AND h.occurred_at BETWEEN '2022-01-01T00:00:00.000Z' AND '2022-12-31T11:59:59.999Z'
@@ -43,7 +43,7 @@ LIMIT 10;
 # useBucketedSinkErrors(...)
 query IT
 SELECT COUNT(error) count, EXTRACT(epoch FROM date_bin(interval '15 seconds', occurred_at, '2022-01-01T00:00:00.000Z')) * 1000 as bin_start
-FROM mz_internal.mz_sink_status_history
+FROM mz_catalog_unstable.mz_sink_status_history
 WHERE sink_id = 'u1'
 AND occurred_at BETWEEN '2022-01-01T00:00:00.000Z' AND '2022-12-31T11:59:59.999Z'
 GROUP BY bin_start
@@ -56,7 +56,7 @@ SELECT s.id, d.name as database_name, sc.name as schema_name, s.name, s.type, s.
 FROM mz_sinks s
 INNER JOIN mz_schemas sc ON sc.id = s.schema_id
 INNER JOIN mz_databases d ON d.id = sc.database_id
-LEFT OUTER JOIN mz_internal.mz_sink_statuses st
+LEFT OUTER JOIN mz_catalog_unstable.mz_sink_statuses st
 ON st.id = s.id
 WHERE s.id LIKE 'u%'
 AND CAST(d.id as text) = 'does_not_exist'
@@ -93,8 +93,8 @@ SHOW allowed_cluster_replica_sizes;
 
 query IT
 SELECT COUNT(error) count, EXTRACT(epoch FROM date_bin(interval '15 seconds', occurred_at, '2023-06-01T00:00:00.000Z')) * 1000 as bin_start
-FROM mz_internal.mz_source_status_history
-JOIN mz_internal.mz_object_dependencies d ON source_id = d.referenced_object_id
+FROM mz_catalog_unstable.mz_source_status_history
+JOIN mz_catalog_unstable.mz_object_dependencies d ON source_id = d.referenced_object_id
 WHERE (d.object_id = 'u1' OR source_id = 'u1')
 AND occurred_at BETWEEN '2022-01-01T00:00:00.000Z' AND '2022-12-31T11:59:59.999Z'
 GROUP BY bin_start
@@ -122,7 +122,7 @@ s4  mz_support  NULL  NULL  NULL
 query TTT
 SELECT r.id, u.cpu_percent, u.memory_percent
 FROM mz_cluster_replicas r
-JOIN mz_internal.mz_cluster_replica_utilization u ON u.replica_id = r.id
+JOIN mz_catalog_unstable.mz_cluster_replica_utilization u ON u.replica_id = r.id
 WHERE r.cluster_id = 'does_not_exist'
 AND r.id = 'does_not_exist'
 ----
@@ -178,8 +178,8 @@ u3 public u1 materialize
 
 query ITI
 SELECT MAX(extract(epoch from h.occurred_at) * 1000) as last_occurred, h.error, COUNT(h.occurred_at)
-FROM mz_internal.mz_source_status_history h
-JOIN mz_internal.mz_object_dependencies d ON h.source_id = d.referenced_object_id
+FROM mz_catalog_unstable.mz_source_status_history h
+JOIN mz_catalog_unstable.mz_object_dependencies d ON h.source_id = d.referenced_object_id
 WHERE (d.object_id = 'does_not_exist' OR source_id = 'does_not_exist')
 AND error IS NOT NULL
 AND h.occurred_at BETWEEN '2022-01-01T00:00:00.000Z' AND '2022-12-31T11:59:59.999Z'
@@ -195,7 +195,7 @@ SELECT s.id, d.name as database_name, sc.name as schema_name, s.name, s.type, s.
 FROM mz_sources s
 INNER JOIN mz_schemas sc ON sc.id = s.schema_id
 INNER JOIN mz_databases d ON d.id = sc.database_id
-LEFT OUTER JOIN mz_internal.mz_source_statuses st ON st.id = s.id
+LEFT OUTER JOIN mz_catalog_unstable.mz_source_statuses st ON st.id = s.id
 WHERE s.id LIKE 'u%'
 AND s.type <> 'subsource'
 AND d.id = 'does_not_exist'
@@ -208,7 +208,7 @@ AND sc.id = 'does_not_exist';
 query TT
 SELECT id, name
 FROM mz_sources s
-JOIN mz_internal.mz_object_dependencies d ON s.id = d.referenced_object_id
+JOIN mz_catalog_unstable.mz_object_dependencies d ON s.id = d.referenced_object_id
 WHERE d.object_id = 'does_not_exist';
 ----
 
@@ -282,26 +282,26 @@ SELECT id, address, name, parent_id, arrangement_records, elapsed_ns FROM all_op
 
 # Ensure indexes are used where expected.
 query T multiline
-EXPLAIN SELECT * FROM mz_internal.mz_kafka_sources
+EXPLAIN SELECT * FROM mz_catalog_unstable.mz_kafka_sources
 ----
 Explained Query (fast path):
-  ReadIndex on=mz_internal.mz_kafka_sources mz_kafka_sources_ind=[*** full scan ***]
+  ReadIndex on=mz_catalog_unstable.mz_kafka_sources mz_kafka_sources_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_kafka_sources_ind (*** full scan ***)
+  - mz_catalog_unstable.mz_kafka_sources_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM mz_internal.mz_webhook_sources
+EXPLAIN SELECT * FROM mz_catalog_unstable.mz_webhook_sources
 ----
 Explained Query (fast path):
-  ReadIndex on=mz_internal.mz_webhook_sources mz_webhook_sources_ind=[*** full scan ***]
+  ReadIndex on=mz_catalog_unstable.mz_webhook_sources mz_webhook_sources_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_webhook_sources_ind (*** full scan ***)
+  - mz_catalog_unstable.mz_webhook_sources_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 

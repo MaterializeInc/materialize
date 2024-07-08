@@ -1281,7 +1281,7 @@ def workflow_test_gh_25633(c: Composition) -> None:
             SELECT
                 (u.rehydration_latency)::text
             FROM mz_sources s
-            JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+            JOIN mz_catalog_unstable.mz_source_statistics u ON s.id = u.id
             WHERE s.name IN ('count')
             """
         )[0][0]
@@ -2025,8 +2025,8 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         output = c.sql_query(
             """
             SELECT r.name, c.name, t.name
-            FROM mz_internal.mz_subscriptions s
-              JOIN mz_internal.mz_sessions e ON (e.id = s.session_id)
+            FROM mz_catalog_unstable.mz_subscriptions s
+              JOIN mz_catalog_unstable.mz_sessions e ON (e.id = s.session_id)
               JOIN mz_roles r ON (r.id = e.role_id)
               JOIN mz_clusters c ON (c.id = s.cluster_id)
               JOIN mz_tables t ON (t.id = s.referenced_object_ids[1])
@@ -2591,7 +2591,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
         input=dedent(
             """
             > SELECT *
-              FROM mz_internal.mz_compute_hydration_statuses
+              FROM mz_catalog_unstable.mz_compute_hydration_statuses
               WHERE object_id LIKE 'u%'
             """
         )
@@ -3044,7 +3044,7 @@ def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -
             input=dedent(
                 """
                 > SELECT write_frontier
-                  FROM mz_internal.mz_frontiers
+                  FROM mz_catalog_unstable.mz_frontiers
                   JOIN mz_materialized_views ON (object_id = id)
                   WHERE name = 'mv'
                 0
@@ -3188,7 +3188,7 @@ def workflow_test_subscribe_hydration_status(
             """
             > SET cluster = mz_catalog_server
             > SELECT DISTINCT h.time_ns IS NOT NULL
-              FROM mz_internal.mz_subscriptions s,
+              FROM mz_catalog_unstable.mz_subscriptions s,
               unnest(s.referenced_object_ids) as sroi(id)
               JOIN mz_introspection.mz_compute_hydration_times_per_worker h ON h.export_id = s.id
               JOIN mz_tables t ON (t.id = sroi.id)
@@ -3207,7 +3207,7 @@ def workflow_test_subscribe_hydration_status(
             """
             > SET cluster = mz_catalog_server
             > SELECT DISTINCT h.time_ns IS NOT NULL
-              FROM mz_internal.mz_subscriptions s,
+              FROM mz_catalog_unstable.mz_subscriptions s,
               unnest(s.referenced_object_ids) as sroi(id)
               JOIN mz_introspection.mz_compute_hydration_times_per_worker h ON h.export_id = s.id
               JOIN mz_tables t ON (t.id = sroi.id)
@@ -3363,7 +3363,7 @@ def workflow_test_refresh_mv_warmup(
 
                 ## 2. Check that mv2's dataflow hydrates, even though we are a long time away from the next refresh.
                 > SELECT hydrated
-                  FROM mz_internal.mz_compute_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
+                  FROM mz_catalog_unstable.mz_compute_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
                   WHERE name = 'mv2';
                 true
 
@@ -3415,7 +3415,7 @@ def workflow_test_refresh_mv_restart(
         query_t1_frontier = dedent(
             """
             SELECT read_frontier
-            FROM mz_internal.mz_frontiers ft JOIN mz_tables t ON (t.id = ft.object_id)
+            FROM mz_catalog_unstable.mz_frontiers ft JOIN mz_tables t ON (t.id = ft.object_id)
             WHERE t.name = 't';
             """
         )
@@ -3431,9 +3431,9 @@ def workflow_test_refresh_mv_restart(
                 # Wait for introspection objects to be populated.
                 > SELECT count(*) > 0 FROM mz_catalog.mz_materialized_views;
                 true
-                > SELECT count(*) > 0 FROM mz_internal.mz_materialized_view_refresh_strategies;
+                > SELECT count(*) > 0 FROM mz_catalog_unstable.mz_materialized_view_refresh_strategies;
                 true
-                > SELECT count(*) > 0 FROM mz_internal.mz_materialized_view_refreshes;
+                > SELECT count(*) > 0 FROM mz_catalog_unstable.mz_materialized_view_refreshes;
                 true
 
                 # Check that no MV is missing from any of the introspection objects.
@@ -3442,8 +3442,8 @@ def workflow_test_refresh_mv_restart(
                 > SELECT *
                   FROM
                     mz_catalog.mz_materialized_views mv
-                    FULL OUTER JOIN mz_internal.mz_materialized_view_refreshes mvr ON (mv.id = mvr.materialized_view_id)
-                    FULL OUTER JOIN mz_internal.mz_materialized_view_refresh_strategies mvrs ON (mv.id = mvrs.materialized_view_id)
+                    FULL OUTER JOIN mz_catalog_unstable.mz_materialized_view_refreshes mvr ON (mv.id = mvr.materialized_view_id)
+                    FULL OUTER JOIN mz_catalog_unstable.mz_materialized_view_refresh_strategies mvrs ON (mv.id = mvrs.materialized_view_id)
                   WHERE
                     mv.id IS NULL OR
                     mvr.materialized_view_id IS NULL OR
@@ -3857,12 +3857,12 @@ def workflow_test_github_26215(c: Composition, parser: WorkflowArgumentParser) -
 
                 -- Run the frontier query once to make `tokio-postgres` collect type information.
                 -- If we don't do this it will inject SELECTs into the transaction, making it fail.
-                > SELECT write_frontier FROM mz_internal.mz_frontiers WHERE false
+                > SELECT write_frontier FROM mz_catalog_unstable.mz_frontiers WHERE false
 
                 > BEGIN
                 > DECLARE c CURSOR FOR SUBSCRIBE (
                     SELECT write_frontier
-                    FROM mz_internal.mz_frontiers
+                    FROM mz_catalog_unstable.mz_frontiers
                     JOIN mz_sources ON (id = object_id)
                     WHERE name = 'lineitem'
                   )
@@ -3956,7 +3956,7 @@ def workflow_test_http_race_condition(
     stopping_time = datetime.now() + timedelta(seconds=30)
     while datetime.now() < stopping_time:
         result = c.sql_query(
-            "SELECT * FROM mz_internal.mz_sessions WHERE connection_id <> pg_backend_pid()"
+            "SELECT * FROM mz_catalog_unstable.mz_sessions WHERE connection_id <> pg_backend_pid()"
         )
         if not result:
             break
@@ -4032,7 +4032,7 @@ def workflow_test_read_frontier_advancement(
         output = c.sql_query(
             """
             SELECT object_id, read_frontier
-            FROM mz_internal.mz_frontiers
+            FROM mz_catalog_unstable.mz_frontiers
             WHERE object_id LIKE 'u%'
             """
         )
@@ -4099,7 +4099,7 @@ def workflow_test_adhoc_system_indexes(
         """
         ALTER SYSTEM SET enable_unstable_dependencies = on;
         SET cluster = mz_catalog_server;
-        CREATE INDEX mz_test_idx2 ON mz_internal.mz_hydration_statuses (hydrated);
+        CREATE INDEX mz_test_idx2 ON mz_catalog_unstable.mz_hydration_statuses (hydrated);
         ALTER SYSTEM SET enable_unstable_dependencies = off;
         """,
         port=6877,
@@ -4117,11 +4117,11 @@ def workflow_test_adhoc_system_indexes(
     )
     assert output[0] == ["u2", "mz_hydration_statuses", "mz_catalog_server"], output
     output = c.sql_query(
-        "EXPLAIN SELECT * FROM mz_internal.mz_hydration_statuses WHERE hydrated"
+        "EXPLAIN SELECT * FROM mz_catalog_unstable.mz_hydration_statuses WHERE hydrated"
     )
     assert "mz_test_idx2" in output[0][0]
     output = c.sql_query(
-        "SELECT * FROM mz_internal.mz_hydration_statuses WHERE hydrated"
+        "SELECT * FROM mz_catalog_unstable.mz_hydration_statuses WHERE hydrated"
     )
     assert len(output) > 0
 
@@ -4147,7 +4147,7 @@ def workflow_test_adhoc_system_indexes(
     c.sql(
         """
         DROP INDEX mz_test_idx1;
-        DROP INDEX mz_internal.mz_test_idx2;
+        DROP INDEX mz_catalog_unstable.mz_test_idx2;
         """,
         port=6877,
         user="mz_system",

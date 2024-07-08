@@ -7198,19 +7198,19 @@ from
                     ) as subq_1
             ) as subq_2
       ) as subq_3
-where (case when (((select "collection_timestamp" from mz_internal.mz_storage_usage_by_shard limit 1 offset 4)
-          ) < ((select pg_catalog.min("occurred_at") from mz_internal.mz_source_status_history)
+where (case when (((select "collection_timestamp" from mz_catalog_unstable.mz_storage_usage_by_shard limit 1 offset 4)
+          ) < ((select pg_catalog.min("occurred_at") from mz_catalog_unstable.mz_source_status_history)
           ))
       and ((case when subq_3."c0" is NULL then TIMESTAMPTZ '2023-01-01 01:23:45+06' else TIMESTAMPTZ '2023-01-01 01:23:45+06' end
-          ) <> (pg_catalog.now())) then case when (((select pg_catalog.sum("connection_id") from mz_internal.mz_sessions)
+          ) <> (pg_catalog.now())) then case when (((select pg_catalog.sum("connection_id") from mz_catalog_unstable.mz_sessions)
             ) - (0::uint8)) >= ((select "worker_id" from mz_introspection.mz_arrangement_sharing_per_worker limit 1 offset 3)
           ) then numrange(0,0) else numrange(0,0) end
-       else case when (((select pg_catalog.sum("connection_id") from mz_internal.mz_sessions)
+       else case when (((select pg_catalog.sum("connection_id") from mz_catalog_unstable.mz_sessions)
             ) - (0::uint8)) >= ((select "worker_id" from mz_introspection.mz_arrangement_sharing_per_worker limit 1 offset 3)
           ) then numrange(0,0) else numrange(0,0) end
        end
     ) >= (case when (0::uint4) > (pg_catalog.mod(
-        CAST((select 1 from mz_internal.mz_subscriptions limit 1 offset 2)
+        CAST((select 1 from mz_catalog_unstable.mz_subscriptions limit 1 offset 2)
            as uint4),
         CAST((4294967295::uint4) * (2::uint4) as uint4))) then case when (mz_catalog.map_length(
           mz_internal.mz_role_oid_memberships())) = ((select pg_catalog.min("rolconnlimit") from pg_catalog.pg_roles)
