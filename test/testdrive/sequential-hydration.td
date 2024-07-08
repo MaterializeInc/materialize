@@ -26,7 +26,7 @@ ALTER SYSTEM SET compute_hydration_concurrency = 1;
 
 > CREATE INDEX idx1 ON mv1 (a)
 > SELECT DISTINCT name, hydrated
-  FROM mz_internal.mz_hydration_statuses
+  FROM mz_catalog_unstable.mz_hydration_statuses
   JOIN mz_indexes ON (id = object_id)
   WHERE id LIKE 'u%'
 idx1  false
@@ -34,7 +34,7 @@ idx1  false
 > CREATE VIEW v12 AS SELECT * FROM mv1 JOIN mv2 USING (a)
 > CREATE INDEX idx12 ON v12 (a)
 > SELECT DISTINCT name, hydrated
-  FROM mz_internal.mz_hydration_statuses
+  FROM mz_catalog_unstable.mz_hydration_statuses
   JOIN mz_indexes ON (id = object_id)
   WHERE id LIKE 'u%'
 idx1  false
@@ -42,7 +42,7 @@ idx12 false
 
 > CREATE INDEX idx3 ON mv3 (a)
 > SELECT DISTINCT name, hydrated
-  FROM mz_internal.mz_hydration_statuses
+  FROM mz_catalog_unstable.mz_hydration_statuses
   JOIN mz_indexes ON (id = object_id)
   WHERE id LIKE 'u%'
 idx1  false
@@ -51,7 +51,7 @@ idx3  true
 
 > ALTER CLUSTER source1 SET (REPLICATION FACTOR 1)
 > SELECT DISTINCT name, hydrated
-  FROM mz_internal.mz_hydration_statuses
+  FROM mz_catalog_unstable.mz_hydration_statuses
   JOIN mz_indexes ON (id = object_id)
   WHERE id LIKE 'u%'
 idx1  true
@@ -60,7 +60,7 @@ idx3  true
 
 > ALTER CLUSTER source2 SET (REPLICATION FACTOR 1)
 > SELECT DISTINCT name, hydrated
-  FROM mz_internal.mz_hydration_statuses
+  FROM mz_catalog_unstable.mz_hydration_statuses
   JOIN mz_indexes ON (id = object_id)
   WHERE id LIKE 'u%'
 idx1  true

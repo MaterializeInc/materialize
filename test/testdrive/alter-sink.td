@@ -69,7 +69,7 @@ $ kafka-verify-data format=avro sink=materialize.public.incompatible_sink sort-m
 > ALTER SINK incompatible_sink SET FROM post_alter_incompatible;
 
 > SELECT st.error LIKE '%schema being registered is incompatible with an earlier schema%'
-  FROM mz_sinks s JOIN mz_internal.mz_sink_statuses st ON s.id = st.id
+  FROM mz_sinks s JOIN mz_catalog_unstable.mz_sink_statuses st ON s.id = st.id
   WHERE s.name = 'incompatible_sink';
 true
 

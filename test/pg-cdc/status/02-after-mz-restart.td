@@ -9,7 +9,7 @@
 
 # Subsource does not have its status changed
 > SELECT status = 'ceased' AND error ILIKE '%incompatible schema change%'
-    FROM mz_internal.mz_source_statuses
+    FROM mz_catalog_unstable.mz_source_statuses
     WHERE name = 't'
 true
 

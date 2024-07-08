@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT status FROM mz_internal.mz_sink_statuses
+> SELECT status FROM mz_catalog_unstable.mz_sink_statuses
 running
 
 # Exclude history from other tests, so only look at currently existing sinks
-> SELECT * FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_sink_status_history.sink_id = mz_sinks.id WHERE status = 'stalled';
+> SELECT * FROM mz_catalog_unstable.mz_sink_status_history JOIN mz_sinks ON mz_sink_status_history.sink_id = mz_sinks.id WHERE status = 'stalled';

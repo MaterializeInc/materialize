@@ -94,7 +94,7 @@ contains: column "f_nonexistent" does not exist
 > DROP CLUSTER c
 
 # This will be executed on mz_catalog_server, due to auto-routing of catalog queries.
-> SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics
+> SELECT count(*) > 0 FROM mz_catalog_unstable.mz_cluster_replica_metrics
 true
 
 # Test that we're correctly recording transaction isolation
@@ -119,7 +119,7 @@ serializable
 #
 # When we do so, we will need to change this test to encode the improved behavior.
 
-> WITH all_stmts AS (SELECT mseh.*, mpsh.*, mst.sql, mst.redacted_sql FROM mz_internal.mz_statement_execution_history mseh RIGHT JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id RIGHT JOIN (SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_internal.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash),
+> WITH all_stmts AS (SELECT mseh.*, mpsh.*, mst.sql, mst.redacted_sql FROM mz_catalog_unstable.mz_statement_execution_history mseh RIGHT JOIN mz_catalog_unstable.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id RIGHT JOIN (SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_catalog_unstable.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
   SELECT c.name, all_stmts.cluster_name, all_stmts.application_name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql, all_stmts.transaction_isolation, all_stmts.transient_index_id ~ '^t[0-9]+$',
   all_stmts.database_name, all_stmts.search_path::text
@@ -145,11 +145,11 @@ quickstart quickstart my_app 1 {} success <null> <null> <null> true "PREPARE p A
 quickstart quickstart my_app 1 {} success <null> <null> <null> true "SET cluster TO c" "strict serializable" <null> materialize {public}
 mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 constant true "SELECT 'beginning real test!'" "strict serializable" <null> materialize {public}
 mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 constant true "SELECT 'serializable'" serializable <null> materialize {public}
-mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable" true materialize {public}
+mz_catalog_server mz_catalog_server my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_catalog_unstable.mz_cluster_replica_metrics" "strict serializable" true materialize {public}
 
-> WITH all_stmts AS (SELECT mseh.id, mseh.began_at, mst.sql FROM mz_internal.mz_statement_execution_history mseh JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash),
+> WITH all_stmts AS (SELECT mseh.id, mseh.began_at, mst.sql FROM mz_catalog_unstable.mz_statement_execution_history mseh JOIN mz_catalog_unstable.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_catalog_unstable.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
-  SELECT sql, event_type FROM test_begin, mz_internal.mz_statement_lifecycle_history mslh
+  SELECT sql, event_type FROM test_begin, mz_catalog_unstable.mz_statement_lifecycle_history mslh
   JOIN all_stmts ON mslh.statement_id = all_stmts.id
   WHERE all_stmts.began_at >= test_begin.began_at AND all_stmts.sql NOT LIKE '%sduiahsdfuoiahsdf%'
 BEGIN execution-began
@@ -199,11 +199,11 @@ COMMIT execution-finished
 "SELECT * FROM t" execution-finished
 "SELECT * FROM t" optimization-finished
 "SELECT * FROM t" storage-dependencies-finished
-"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" compute-dependencies-finished
-"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" execution-began
-"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" execution-finished
-"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" optimization-finished
-"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" storage-dependencies-finished
+"SELECT count(*) > 0 FROM mz_catalog_unstable.mz_cluster_replica_metrics" compute-dependencies-finished
+"SELECT count(*) > 0 FROM mz_catalog_unstable.mz_cluster_replica_metrics" execution-began
+"SELECT count(*) > 0 FROM mz_catalog_unstable.mz_cluster_replica_metrics" execution-finished
+"SELECT count(*) > 0 FROM mz_catalog_unstable.mz_cluster_replica_metrics" optimization-finished
+"SELECT count(*) > 0 FROM mz_catalog_unstable.mz_cluster_replica_metrics" storage-dependencies-finished
 "SELECT count(*) FROM t" compute-dependencies-finished
 "SELECT count(*) FROM t" compute-dependencies-finished
 "SELECT count(*) FROM t" execution-began
@@ -237,11 +237,11 @@ COMMIT execution-finished
 > ROLLBACK
 
 > WITH begin_tid AS
-  (SELECT transaction_id FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, mz_internal.mz_sql_text mst
+  (SELECT transaction_id FROM mz_catalog_unstable.mz_statement_execution_history mseh, mz_catalog_unstable.mz_prepared_statement_history mpsh, mz_catalog_unstable.mz_sql_text mst
    WHERE mseh.prepared_statement_id = mpsh.id
    AND mpsh.sql_hash = mst.sql_hash
    AND mst.sql = 'BEGIN --hello')
-  SELECT sql FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, begin_tid, mz_internal.mz_sql_text mst
+  SELECT sql FROM mz_catalog_unstable.mz_statement_execution_history mseh, mz_catalog_unstable.mz_prepared_statement_history mpsh, begin_tid, mz_catalog_unstable.mz_sql_text mst
   WHERE mseh.prepared_statement_id = mpsh.id
   AND mseh.transaction_id = begin_tid.transaction_id
   AND mpsh.sql_hash = mst.sql_hash
@@ -255,18 +255,18 @@ ROLLBACK
 
 > CREATE SECRET my_super_secret AS '123';
 
-> SELECT redacted_sql FROM mz_internal.mz_recent_activity_log_redacted WHERE statement_type = 'create_secret';
+> SELECT redacted_sql FROM mz_catalog_unstable.mz_recent_activity_log_redacted WHERE statement_type = 'create_secret';
 "CREATE SECRET my_super_secret AS '<REDACTED>'"
 
-> SELECT sql FROM mz_internal.mz_recent_activity_log WHERE statement_type = 'create_secret';
+> SELECT sql FROM mz_catalog_unstable.mz_recent_activity_log WHERE statement_type = 'create_secret';
 "CREATE SECRET my_super_secret AS '<REDACTED>'"
 
 > ALTER SECRET my_super_secret AS '456';
 
-> SELECT redacted_sql FROM mz_internal.mz_recent_activity_log_redacted WHERE statement_type = 'alter_secret';
+> SELECT redacted_sql FROM mz_catalog_unstable.mz_recent_activity_log_redacted WHERE statement_type = 'alter_secret';
 "ALTER SECRET my_super_secret AS '<REDACTED>'"
 
-> SELECT sql FROM mz_internal.mz_recent_activity_log WHERE statement_type = 'alter_secret';
+> SELECT sql FROM mz_catalog_unstable.mz_recent_activity_log WHERE statement_type = 'alter_secret';
 "ALTER SECRET my_super_secret AS '<REDACTED>'"
 
 # Test that the number of rows returned in query history respects OFFSET and LIMIT.
@@ -288,14 +288,14 @@ ROLLBACK
 
 > SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0;
 
-> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 4';
+> SELECT rows_returned FROM mz_catalog_unstable.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 4';
 1
 
-> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 2';
+> SELECT rows_returned FROM mz_catalog_unstable.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 2';
 2
 
-> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 100';
+> SELECT rows_returned FROM mz_catalog_unstable.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 100';
 0
 
-> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0';
+> SELECT rows_returned FROM mz_catalog_unstable.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0';
 0

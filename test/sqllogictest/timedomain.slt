@@ -82,7 +82,7 @@ SELECT * FROM t
 # This may stop failing in the future if a view in pg_catalog starts to depend on this. In that case
 # just change this query to select from an object that isn't referenced from pg_catalog.
 query error Transactions can only reference objects in the same timedomain.
-SELECT * FROM mz_internal.mz_show_default_privileges
+SELECT * FROM mz_catalog_unstable.mz_show_default_privileges
 
 statement ok
 ROLLBACK

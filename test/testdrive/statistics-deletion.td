@@ -71,7 +71,7 @@ one:two
 
 > SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
   FROM mz_sinks s
-  JOIN mz_internal.mz_sink_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_sink_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('sink_size', 'sink_cluster')
   GROUP BY s.name
 sink_size 1 1 true true
@@ -80,7 +80,7 @@ sink_cluster 1 1 true true
 > SELECT s.name,
   SUM(u.updates_committed) > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert_size', 'upsert_cluster', 's', 'bids')
   GROUP BY s.id, s.name
 upsert_size true
@@ -145,34 +145,34 @@ WHERE s.name IN ('bids') AND sch.name = 'subsources_cluster'
 > DROP SOURCE subsources_cluster.s CASCADE;
 
 > SELECT COUNT(*)
-  FROM mz_internal.mz_sink_statistics_raw u
+  FROM mz_catalog_unstable.mz_sink_statistics_raw u
   WHERE u.id = '${sink-size-id}'
 0
 > SELECT COUNT(*)
-  FROM mz_internal.mz_sink_statistics_raw u
+  FROM mz_catalog_unstable.mz_sink_statistics_raw u
   WHERE u.id = '${sink-cluster-id}'
 0
 > SELECT COUNT(*)
-  FROM mz_internal.mz_sink_statistics_raw u
+  FROM mz_catalog_unstable.mz_sink_statistics_raw u
   WHERE u.id = '${upsert-size-id}'
 0
 > SELECT COUNT(*)
-  FROM mz_internal.mz_sink_statistics_raw u
+  FROM mz_catalog_unstable.mz_sink_statistics_raw u
   WHERE u.id = '${upsert-cluster-id}'
 0
 > SELECT COUNT(*)
-  FROM mz_internal.mz_sink_statistics_raw u
+  FROM mz_catalog_unstable.mz_sink_statistics_raw u
   WHERE u.id = '${subsources-size-top-level-id}'
 0
 > SELECT COUNT(*)
-  FROM mz_internal.mz_sink_statistics_raw u
+  FROM mz_catalog_unstable.mz_sink_statistics_raw u
   WHERE u.id = '${subsources-size-bids-id}'
 0
 > SELECT COUNT(*)
-  FROM mz_internal.mz_sink_statistics_raw u
+  FROM mz_catalog_unstable.mz_sink_statistics_raw u
   WHERE u.id = '${subsources-cluster-top-level-id}'
 0
 > SELECT COUNT(*)
-  FROM mz_internal.mz_sink_statistics_raw u
+  FROM mz_catalog_unstable.mz_sink_statistics_raw u
   WHERE u.id = '${subsources-cluster-bids-id}'
 0

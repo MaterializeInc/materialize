@@ -63,7 +63,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     assert (
         "unknown"
         == mz.environmentd.sql_query(
-            f"SELECT status FROM mz_internal.mz_aws_privatelink_connection_status_history WHERE connection_id = '{aws_connection_id}'"
+            f"SELECT status FROM mz_catalog_unstable.mz_aws_privatelink_connection_status_history WHERE connection_id = '{aws_connection_id}'"
         )[0][0]
     )
 

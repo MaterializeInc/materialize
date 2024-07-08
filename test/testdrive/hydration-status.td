@@ -8,9 +8,9 @@
 # by the Apache License, Version 2.0.
 
 # Test reporting of dataflow hydration status through
-# `mz_internal.mz_compute_hydration_statuses`,
-# `mz_internal.mz_hydration_statuses`, and
-# `mz_internal.mz_compute_operator_hydration_statuses`.
+# `mz_catalog_unstable.mz_compute_hydration_statuses`,
+# `mz_catalog_unstable.mz_hydration_statuses`, and
+# `mz_catalog_unstable.mz_compute_operator_hydration_statuses`.
 #
 # Note that all of the below tests only assert that the `hydrated` flag
 # eventually becomes `true`, not that it starts off as `false`. That's because
@@ -31,20 +31,20 @@
 # relations exclude transient dataflow.
 
 > SELECT DISTINCT left(h.object_id, 1), h.hydrated
-  FROM mz_internal.mz_compute_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE r.name LIKE 'hydrated_test%';
 s true
 
 > SELECT DISTINCT left(h.object_id, 1), h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE r.name LIKE 'hydrated_test%';
 s true
 
 # No operator-level hydration status logging for introspection dataflows.
 > SELECT DISTINCT left(h.object_id, 1), h.hydrated
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE r.name LIKE 'hydrated_test%';
 
@@ -56,7 +56,7 @@ s true
 > CREATE MATERIALIZED VIEW mv_const AS SELECT 1
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
-  FROM mz_internal.mz_compute_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -67,7 +67,7 @@ mv       hydrated_test_1 true true
 mv_const hydrated_test_1 true false
 
 > SELECT o.name, r.name, h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -78,7 +78,7 @@ mv       hydrated_test_1 true
 mv_const hydrated_test_1 true
 
 > SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -94,7 +94,7 @@ mv_const hydrated_test_1 true
 > CREATE CLUSTER REPLICA test.hydrated_test_2 SIZE '1'
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
-  FROM mz_internal.mz_compute_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -108,7 +108,7 @@ mv_const hydrated_test_1 true false
 mv_const hydrated_test_2 true false
 
 > SELECT o.name, r.name, h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -125,7 +125,7 @@ mv_const hydrated_test_2 true
 # already fully computed so it wasn't installed on the replica and no operators
 # exist.
 > SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -143,7 +143,7 @@ mv_const hydrated_test_1 true
 > DROP CLUSTER REPLICA test.hydrated_test_1
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
-  FROM mz_internal.mz_compute_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -154,7 +154,7 @@ mv       hydrated_test_2 true true
 mv_const hydrated_test_2 true false
 
 > SELECT o.name, r.name, h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -165,7 +165,7 @@ mv       hydrated_test_2 true
 mv_const hydrated_test_2 true
 
 > SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -178,7 +178,7 @@ mv       hydrated_test_2 true
 > DROP CLUSTER REPLICA test.hydrated_test_2
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
-  FROM mz_internal.mz_compute_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -186,7 +186,7 @@ mv       hydrated_test_2 true
       o.id NOT LIKE 's%';
 
 > SELECT o.name, r.name, h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -194,7 +194,7 @@ mv       hydrated_test_2 true
       o.id NOT LIKE 's%';
 
 > SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -207,7 +207,7 @@ mv       hydrated_test_2 true
 > CREATE CLUSTER REPLICA test.hydrated_test_3 SIZE '1'
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
-  FROM mz_internal.mz_compute_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -218,7 +218,7 @@ mv       hydrated_test_3 true true
 mv_const hydrated_test_3 true false
 
 > SELECT o.name, r.name, h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -229,7 +229,7 @@ mv       hydrated_test_3 true
 mv_const hydrated_test_3 true
 
 > SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -243,7 +243,7 @@ mv       hydrated_test_3 true
 > DROP MATERIALIZED VIEW mv_const;
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
-  FROM mz_internal.mz_compute_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -252,7 +252,7 @@ mv       hydrated_test_3 true
 mv  hydrated_test_3 true true
 
 > SELECT o.name, r.name, h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -261,7 +261,7 @@ mv  hydrated_test_3 true true
 mv  hydrated_test_3 true
 
 > SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -292,7 +292,7 @@ mv  hydrated_test_3 true
 > CREATE SOURCE web IN CLUSTER test FROM WEBHOOK BODY FORMAT JSON
 
 > SELECT o.name, r.name, h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -312,7 +312,7 @@ users         hydrated_test_3 true
 > DROP CLUSTER REPLICA test.hydrated_test_3
 
 > SELECT o.name, r.name, h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -324,7 +324,7 @@ users         hydrated_test_3 true
 > CREATE CLUSTER REPLICA test.hydrated_test_4 SIZE '1'
 
 > SELECT o.name, r.name, h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -346,7 +346,7 @@ users         hydrated_test_4 true
 > DROP MATERIALIZED VIEW mv
 
 > SELECT o.name, r.name, h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -381,7 +381,7 @@ users         hydrated_test_4 true
   SELECT * FROM x;
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
-  FROM mz_internal.mz_compute_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -392,7 +392,7 @@ mv_wmr_const hydrated_test_4 true  false
 mv_wmr_stuck hydrated_test_4 false false
 
 > SELECT o.name, r.name, h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
@@ -403,7 +403,7 @@ mv_wmr_const hydrated_test_4 true
 mv_wmr_stuck hydrated_test_4 false
 
 > SELECT o.name, r.name, bool_and(h.hydrated)
-  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  FROM mz_catalog_unstable.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE

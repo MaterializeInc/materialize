@@ -22,7 +22,7 @@
       mz_clusters AS c
           JOIN mz_cluster_replicas AS r ON r.cluster_id = c.id
           JOIN
-              mz_internal.mz_cluster_replica_utilization AS u
+              mz_catalog_unstable.mz_cluster_replica_utilization AS u
               ON r.id = u.replica_id
   WHERE c.name IN ( 'foo', 'bar', 'xyzzy' )
   ORDER BY c.name, r.name, process_id

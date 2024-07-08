@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Ensure definite error is set for the source
-> SELECT COUNT(*) > 0 FROM mz_internal.mz_source_statuses WHERE status = 'stalled' AND error LIKE '%invalid timeline%';
+> SELECT COUNT(*) > 0 FROM mz_catalog_unstable.mz_source_statuses WHERE status = 'stalled' AND error LIKE '%invalid timeline%';
 true
 
 ! SELECT * FROM t1;

@@ -12,7 +12,7 @@
 > DROP CLUSTER REPLICA sc.r1
 > CREATE CLUSTER REPLICA sc.r1 SIZE '32'
 
-> SELECT status FROM mz_internal.mz_source_statuses st
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
   AND s.name in ('dynamic_text', 'fixed_text', 'fixed_plus_csr', 'dynamic_plus_csr')
 stalled

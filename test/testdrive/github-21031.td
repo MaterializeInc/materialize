@@ -42,7 +42,7 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
     e.export_id = i.id
 1
 
-> SELECT count(*) FROM mz_internal.mz_subscriptions
+> SELECT count(*) FROM mz_catalog_unstable.mz_subscriptions
 0
 
 > SELECT count(*)

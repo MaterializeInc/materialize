@@ -45,7 +45,7 @@ $ kafka-verify-data format=json key=false sink=materialize.public.nonexisting so
 # glitch where the sink would stall once before becoming healthy due to a glitch
 # in the topic creation code path when access to `DescribeConfigs` is banned.
 > SELECT DISTINCT status FROM mz_sinks
-  JOIN mz_internal.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
+  JOIN mz_catalog_unstable.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
   WHERE mz_sinks.name = 'nonexisting'
 starting
 running
@@ -69,7 +69,7 @@ $ kafka-verify-data format=json key=false sink=materialize.public.preexisting so
 # glitch where the sink would stall once before becoming healthy due to a glitch
 # in the topic creation code path when access to `DescribeConfigs` is banned.
 > SELECT DISTINCT status FROM mz_sinks
-  JOIN mz_internal.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
+  JOIN mz_catalog_unstable.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
   WHERE mz_sinks.name = 'preexisting'
 starting
 running

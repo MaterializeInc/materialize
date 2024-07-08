@@ -26,7 +26,7 @@ a
     u.updates_staged,
     u.updates_committed
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('webhook_text')
 webhook_text 1 true 1 1
 
@@ -34,7 +34,7 @@ $ set-from-sql var=bytes-received
 SELECT
     (u.bytes_received)::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('webhook_text')
 
 $ webhook-append database=materialize schema=public name=webhook_text
@@ -47,7 +47,7 @@ b
     u.updates_staged,
     u.updates_committed
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('webhook_text')
 webhook_text 2 true 2 2
 
@@ -56,6 +56,6 @@ webhook_text 2 true 2 2
 > SELECT
     count(*)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('webhook_text')
 0

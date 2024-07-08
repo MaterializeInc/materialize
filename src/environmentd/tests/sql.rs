@@ -1382,7 +1382,7 @@ async fn test_utilization_hold() {
     // `mz_catalog_server` tests indexes, `quickstart` tests tables.
     // The bool determines whether we are testing indexes.
     const CLUSTERS_TO_TRY: &[&str] = &["mz_catalog_server", "quickstart"];
-    const QUERIES_TO_TRY: &[&str] = &["SELECT * FROM mz_internal.mz_cluster_replica_statuses"];
+    const QUERIES_TO_TRY: &[&str] = &["SELECT * FROM mz_catalog_unstable.mz_cluster_replica_statuses"];
 
     let now_millis = 619388520000;
     let past_millis = now_millis - THIRTY_DAYS_MS;
@@ -2175,7 +2175,7 @@ fn test_support_user_permissions() {
         .is_err());
 
     assert!(internal_client
-        .query("SELECT * FROM mz_internal.mz_comments", &[])
+        .query("SELECT * FROM mz_catalog_unstable.mz_comments", &[])
         .is_ok());
     assert!(internal_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
@@ -2188,7 +2188,7 @@ fn test_support_user_permissions() {
         .batch_execute("SET CLUSTER TO 'mz_system'")
         .unwrap();
     assert!(internal_client
-        .query("SELECT * FROM mz_internal.mz_comments", &[])
+        .query("SELECT * FROM mz_catalog_unstable.mz_comments", &[])
         .is_ok());
     assert!(internal_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
@@ -2202,7 +2202,7 @@ fn test_support_user_permissions() {
         .unwrap();
     assert!(internal_client.query("SELECT * FROM t1", &[]).is_err());
     assert!(internal_client
-        .query("SELECT * FROM mz_internal.mz_comments", &[])
+        .query("SELECT * FROM mz_catalog_unstable.mz_comments", &[])
         .is_ok());
     assert!(internal_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
@@ -2579,7 +2579,7 @@ fn test_subscribe_on_dropped_source() {
             .max_duration(Duration::from_secs(10))
             .retry(|_| {
                 let row = client
-                    .query_one("SELECT count(*) FROM mz_internal.mz_subscriptions;", &[])
+                    .query_one("SELECT count(*) FROM mz_catalog_unstable.mz_subscriptions;", &[])
                     .unwrap();
                 let count: i64 = row.get(0);
                 if count < 1 {
@@ -2602,7 +2602,7 @@ fn test_subscribe_on_dropped_source() {
             .max_duration(Duration::from_secs(100))
             .retry(|_| {
                 let row = client
-                    .query_one("SELECT count(*) FROM mz_internal.mz_subscriptions;", &[])
+                    .query_one("SELECT count(*) FROM mz_catalog_unstable.mz_subscriptions;", &[])
                     .unwrap();
                 let count: i64 = row.get(0);
                 if count > 0 {
@@ -2734,14 +2734,14 @@ fn test_mz_sessions() {
     // Active session appears in mz_sessions.
     assert_eq!(
         foo_client
-            .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+            .query_one("SELECT count(*) FROM mz_catalog_unstable.mz_sessions", &[])
             .unwrap()
             .get::<_, i64>(0),
         1,
     );
     let foo_session_row = foo_client
         .query_one(
-            "SELECT connection_id::int8, role_id FROM mz_internal.mz_sessions",
+            "SELECT connection_id::int8, role_id FROM mz_catalog_unstable.mz_sessions",
             &[],
         )
         .unwrap();
@@ -2764,14 +2764,14 @@ fn test_mz_sessions() {
             .unwrap();
         assert_eq!(
             bar_client
-                .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+                .query_one("SELECT count(*) FROM mz_catalog_unstable.mz_sessions", &[])
                 .unwrap()
                 .get::<_, i64>(0),
             2,
         );
         let bar_session_row = bar_client
             .query_one(
-                &format!("SELECT role_id FROM mz_internal.mz_sessions WHERE connection_id <> {foo_conn_id}"),
+                &format!("SELECT role_id FROM mz_catalog_unstable.mz_sessions WHERE connection_id <> {foo_conn_id}"),
                 &[],
             )
             .unwrap();
@@ -2790,7 +2790,7 @@ fn test_mz_sessions() {
 
     assert_eq!(
         foo_client
-            .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+            .query_one("SELECT count(*) FROM mz_catalog_unstable.mz_sessions", &[])
             .unwrap()
             .get::<_, i64>(0),
         1,
@@ -2798,7 +2798,7 @@ fn test_mz_sessions() {
     assert_eq!(
         foo_client
             .query_one(
-                "SELECT connection_id::int8 FROM mz_internal.mz_sessions",
+                "SELECT connection_id::int8 FROM mz_catalog_unstable.mz_sessions",
                 &[]
             )
             .unwrap()
@@ -2816,14 +2816,14 @@ fn test_mz_sessions() {
             .unwrap();
         assert_eq!(
             other_foo_client
-                .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+                .query_one("SELECT count(*) FROM mz_catalog_unstable.mz_sessions", &[])
                 .unwrap()
                 .get::<_, i64>(0),
             2,
         );
         let other_foo_session_row = foo_client
             .query_one(
-                &format!("SELECT connection_id::int8, role_id FROM mz_internal.mz_sessions WHERE connection_id <> {foo_conn_id}"),
+                &format!("SELECT connection_id::int8, role_id FROM mz_catalog_unstable.mz_sessions WHERE connection_id <> {foo_conn_id}"),
                 &[],
             )
             .unwrap();
@@ -2838,7 +2838,7 @@ fn test_mz_sessions() {
 
     assert_eq!(
         foo_client
-            .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+            .query_one("SELECT count(*) FROM mz_catalog_unstable.mz_sessions", &[])
             .unwrap()
             .get::<_, i64>(0),
         1,
@@ -2846,7 +2846,7 @@ fn test_mz_sessions() {
     assert_eq!(
         foo_client
             .query_one(
-                "SELECT connection_id::int8 FROM mz_internal.mz_sessions",
+                "SELECT connection_id::int8 FROM mz_catalog_unstable.mz_sessions",
                 &[]
             )
             .unwrap()
@@ -3137,7 +3137,7 @@ fn test_pg_cancel_backend() {
             .retry(|_| {
                 let conn_id: String = client2
                     .query_one(
-                        "SELECT s.connection_id::text FROM mz_internal.mz_subscriptions b JOIN mz_internal.mz_sessions s ON s.id = b.session_id",
+                        "SELECT s.connection_id::text FROM mz_catalog_unstable.mz_subscriptions b JOIN mz_catalog_unstable.mz_sessions s ON s.id = b.session_id",
                         &[],
                     )?
                     .get(0);
@@ -3299,7 +3299,7 @@ fn test_pg_cancel_dropped_role() {
         .query_one(
             &format!(
                 "SELECT s.connection_id
-         FROM mz_internal.mz_sessions s
+         FROM mz_catalog_unstable.mz_sessions s
          JOIN mz_roles r ON s.role_id = r.id
          WHERE r.name = '{dropped_role}'"
             ),
@@ -3427,7 +3427,7 @@ async fn test_explain_as_of() {
                 .get(0);
             let now: u64 = now.parse().unwrap();
             let ts = now - 3000;
-            let query = format!("mz_internal.mz_cluster_replica_statuses AS OF {ts}");
+            let query = format!("mz_catalog_unstable.mz_cluster_replica_statuses AS OF {ts}");
             let query_ts = try_get_explain_timestamp(&query, &client).await?;
             assert_eq!(ts, query_ts);
             client

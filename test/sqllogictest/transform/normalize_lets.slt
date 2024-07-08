@@ -576,7 +576,7 @@ select
            as int2))) # (case when ((cast(null as oid)) < (cast(null as oid)))
           or (((subq_0."c2" is not NULL)
               and ((numrange(0,0)) <= (numrange(0,0))))
-            and ((((select "write_frontier" from mz_internal.mz_frontiers limit 1 offset 1)
+            and ((((select "write_frontier" from mz_catalog_unstable.mz_frontiers limit 1 offset 1)
                   ) <> ((select pg_catalog.max("time") from mz_introspection.mz_compute_import_frontiers_per_worker)
                   ))
               or (false))) then pg_catalog.abs(
@@ -595,11 +595,11 @@ from
         (select "id" from mz_introspection.mz_scheduling_elapsed_raw limit 1 offset 57)
            as c4
       from
-        mz_internal.mz_cluster_replica_history as ref_0
+        mz_catalog_unstable.mz_cluster_replica_history as ref_0
       where ref_0."replica_id" is NULL
       limit 102) as subq_0
 where (~ (select "replication_factor" from mz_catalog.mz_clusters limit 1 offset 5)
-      ) <= (~ case when (case when (((((select "details" from mz_internal.mz_sink_statuses limit 1 offset 4)
+      ) <= (~ case when (case when (((((select "details" from mz_catalog_unstable.mz_sink_statuses limit 1 offset 4)
                     ) >= ((select pg_catalog.jsonb_agg("id") from mz_introspection.mz_dataflow_operators)
                     ))
                 or ((cast(0 as name)) >= (cast(null as name))))

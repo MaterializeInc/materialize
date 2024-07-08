@@ -276,16 +276,16 @@ ALTER SYSTEM SET enable_unstable_dependencies = true
 > SELECT * FROM mv7
 
 > SELECT f.write_frontier
-  FROM mz_internal.mz_frontiers f
+  FROM mz_catalog_unstable.mz_frontiers f
   JOIN mz_materialized_views m ON (m.id = f.object_id)
   WHERE m.name = 'mv7'
 <null>
 
 # Verify that `t4`'s read frontier advances past the read frontier of `mv7`.
 > SELECT ft.read_frontier > fm.read_frontier
-  FROM mz_internal.mz_frontiers fm
+  FROM mz_catalog_unstable.mz_frontiers fm
   JOIN mz_materialized_views m ON (m.id = fm.object_id)
-  JOIN mz_internal.mz_frontiers ft ON (true)
+  JOIN mz_catalog_unstable.mz_frontiers ft ON (true)
   JOIN mz_tables t ON (t.id = ft.object_id)
   WHERE m.name = 'mv7' AND t.name = 't4'
 true
@@ -302,15 +302,15 @@ true
 > SELECT * FROM mv7
 
 > SELECT f.write_frontier
-  FROM mz_internal.mz_frontiers f
+  FROM mz_catalog_unstable.mz_frontiers f
   JOIN mz_materialized_views m ON (m.id = f.object_id)
   WHERE m.name = 'mv7'
 <null>
 
 > SELECT ft.read_frontier > fm.read_frontier
-  FROM mz_internal.mz_frontiers fm
+  FROM mz_catalog_unstable.mz_frontiers fm
   JOIN mz_materialized_views m ON (m.id = fm.object_id)
-  JOIN mz_internal.mz_frontiers ft ON (true)
+  JOIN mz_catalog_unstable.mz_frontiers ft ON (true)
   JOIN mz_tables t ON (t.id = ft.object_id)
   WHERE m.name = 'mv7' AND t.name = 't4'
 true
@@ -329,15 +329,15 @@ true
 > SELECT * FROM mv7
 
 > SELECT f.write_frontier
-  FROM mz_internal.mz_frontiers f
+  FROM mz_catalog_unstable.mz_frontiers f
   JOIN mz_materialized_views m ON (m.id = f.object_id)
   WHERE m.name = 'mv7'
 <null>
 
 > SELECT ft.read_frontier > fm.read_frontier
-  FROM mz_internal.mz_frontiers fm
+  FROM mz_catalog_unstable.mz_frontiers fm
   JOIN mz_materialized_views m ON (m.id = fm.object_id)
-  JOIN mz_internal.mz_frontiers ft ON (true)
+  JOIN mz_catalog_unstable.mz_frontiers ft ON (true)
   JOIN mz_tables t ON (t.id = ft.object_id)
   WHERE m.name = 'mv7' AND t.name = 't4'
 true
@@ -355,7 +355,7 @@ true
 > ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 2)
 
 > SELECT r.name, h.hydrated
-  FROM mz_internal.mz_hydration_statuses h
+  FROM mz_catalog_unstable.mz_hydration_statuses h
   JOIN mz_materialized_views m ON (m.id = h.object_id)
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE m.name = 'mv8'
@@ -370,7 +370,7 @@ r2 true
 
 # Check that all operators have hydrated.
 > SELECT DISTINCT hydrated
-  FROM mz_internal.mz_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
+  FROM mz_catalog_unstable.mz_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
   WHERE name = 'mv9';
 true
 
@@ -380,7 +380,7 @@ true
   SELECT DISTINCT x, y FROM t2, t3;
 
 > SELECT DISTINCT hydrated
-  FROM mz_internal.mz_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
+  FROM mz_catalog_unstable.mz_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
   WHERE name = 'mv10';
 true
 
@@ -464,7 +464,7 @@ true
 
 # The MV's write frontier should move away from 0.
 > SELECT f.write_frontier > 0
-  FROM mz_internal.mz_frontiers f
+  FROM mz_catalog_unstable.mz_frontiers f
   JOIN mz_materialized_views m ON (m.id = f.object_id)
   WHERE m.name = 'mv12'
 true
@@ -584,39 +584,39 @@ DROP CLUSTER REPLICA scheduled_cluster.unbilled;
 ## Check the above MVs in `mz_materialized_view_refreshes`.
 
 > SELECT last_completed_refresh, next_refresh
-  FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
+  FROM mz_catalog_unstable.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
   WHERE mv.id = mvr.materialized_view_id AND (name = 'mv14_at_const' OR name = 'mv15_ats_const');
 32503766340000 <null>
 32503766340000 <null>
 
 > SELECT last_completed_refresh < mz_now(), next_refresh
-  FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
+  FROM mz_catalog_unstable.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
   WHERE mv.id = mvr.materialized_view_id AND name = 'mv_at_creation';
 true <null>
 
 > SELECT last_completed_refresh, next_refresh
-  FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
+  FROM mz_catalog_unstable.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
   WHERE mv.id = mvr.materialized_view_id AND name = 'mv16_every_const';
 18446744073709551615 <null>
 
 > SELECT last_completed_refresh, next_refresh > mz_now()
-  FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
+  FROM mz_catalog_unstable.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
   WHERE mv.id = mvr.materialized_view_id AND name = 'mv17_before_first';
 <null> true
 
 > SELECT last_completed_refresh, next_refresh < mz_now()
-  FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
+  FROM mz_catalog_unstable.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
   WHERE mv.id = mvr.materialized_view_id AND name = 'mv18_no_replica';
 <null> true
 
 > SELECT next_refresh::string::int8 - last_completed_refresh::string::int8
-  FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
+  FROM mz_catalog_unstable.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
   WHERE mv.id = mvr.materialized_view_id AND name = 'mv19';
 2000
 
 # Also check an old MV.
 > SELECT next_refresh::string::int8 - last_completed_refresh::string::int8
-  FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
+  FROM mz_catalog_unstable.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
   WHERE mv.id = mvr.materialized_view_id AND name = 'mv1';
 8000
 
@@ -640,7 +640,7 @@ true <null>
 <null>
 
 > SELECT hydrated
-  FROM mz_internal.mz_hydration_statuses JOIN mz_materialized_views ON (object_id = id)
+  FROM mz_catalog_unstable.mz_hydration_statuses JOIN mz_materialized_views ON (object_id = id)
   WHERE name = 'mv_long_hydration';
 true
 
@@ -656,7 +656,7 @@ true
 <null>
 
 > SELECT hydrated
-  FROM mz_internal.mz_hydration_statuses JOIN mz_materialized_views ON (object_id = id)
+  FROM mz_catalog_unstable.mz_hydration_statuses JOIN mz_materialized_views ON (object_id = id)
   WHERE name = 'mv_long_hydration';
 false
 
@@ -666,7 +666,7 @@ false
     name,
     now() - INTERVAL '30 minutes' < last_completed_refresh,
     next_refresh > now() - INTERVAL '6 seconds'
-  FROM mz_internal.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
+  FROM mz_catalog_unstable.mz_materialized_view_refreshes mvr, mz_catalog.mz_materialized_views mv
   WHERE
     mv.id = mvr.materialized_view_id
   ORDER BY name;

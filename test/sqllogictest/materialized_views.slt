@@ -1493,7 +1493,7 @@ SELECT
   interval,
   now() - aligned_to < INTERVAL '30 minutes',
   now() - at < INTERVAL '30 minutes'
-FROM mz_internal.mz_materialized_view_refresh_strategies mvrs, mz_catalog.mz_materialized_views mv
+FROM mz_catalog_unstable.mz_materialized_view_refresh_strategies mvrs, mz_catalog.mz_materialized_views mv
 WHERE mv.id = mvrs.materialized_view_id
 ORDER BY name;
 ----
@@ -1543,7 +1543,7 @@ WITH (REFRESH EVERY '1 sec') AS SELECT * FROM t2;
 
 query TTT
 SELECT name, cs.type, cs.refresh_rehydration_time_estimate
-FROM mz_internal.mz_cluster_schedules cs, mz_catalog.mz_clusters c
+FROM mz_catalog_unstable.mz_cluster_schedules cs, mz_catalog.mz_clusters c
 WHERE c.id = cs.cluster_id
 ORDER BY name;
 ----
