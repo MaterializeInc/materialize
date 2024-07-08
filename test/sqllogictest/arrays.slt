@@ -1445,3 +1445,8 @@ query T
 SELECT '{1, 2, 3, NULL}'::numeric[] @> '{1, NULL}'::numeric[];
 ----
 false
+
+query T
+----
+SELECT ARRAY[1,3,7,NULL] @> ARRAY[1,3,7,NULL] AS contains;
+false
