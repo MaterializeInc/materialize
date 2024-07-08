@@ -2115,6 +2115,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_alter_table_add_column,
+        desc: "Enable ALTER TABLE ... ADD COLUMN ...",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

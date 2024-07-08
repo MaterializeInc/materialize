@@ -1174,6 +1174,11 @@ fn generate_rbac_requirements(
                 ..Default::default()
             }
         }
+        Plan::AlterTableAddColumn(plan::AlterTablePlan { relation_id, .. }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*relation_id)],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::ReadThenWrite(plan::ReadThenWritePlan {
             id,
             selection,

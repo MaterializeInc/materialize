@@ -125,6 +125,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AlterSystemResetAll(_)
         | Plan::AlterRole(_)
         | Plan::AlterOwner(_)
+        | Plan::AlterTableAddColumn(_)
         | Plan::Declare(_)
         | Plan::Fetch(_)
         | Plan::Close(_)

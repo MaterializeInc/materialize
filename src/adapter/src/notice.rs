@@ -189,6 +189,7 @@ impl AdapterNotice {
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
             AdapterNotice::PlanNotice(notice) => match notice {
                 PlanNotice::ObjectDoesNotExist { .. } => Severity::Notice,
+                PlanNotice::ColumnAlreadyExists { .. } => Severity::Notice,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => Severity::Warning,
             },
             AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
@@ -288,6 +289,7 @@ impl AdapterNotice {
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PlanNotice(plan) => match plan {
                 PlanNotice::ObjectDoesNotExist { .. } => SqlState::UNDEFINED_OBJECT,
+                PlanNotice::ColumnAlreadyExists { .. } => SqlState::DUPLICATE_COLUMN,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => SqlState::WARNING,
             },
             AdapterNotice::UnknownSessionDatabase(_) => SqlState::from_code("MZ004"),
