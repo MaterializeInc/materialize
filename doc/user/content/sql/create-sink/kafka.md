@@ -66,10 +66,9 @@ Field                               | Value  | Description
 `COMPRESSION TYPE`                  | `text`              | The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: `none`.
 `TRANSACTIONAL ID PREFIX`           | `text`              | The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
 `PROGRESS GROUP ID PREFIX`          | `text`              | The prefix of the consumer group ID to use when reading from the progress topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
-`TOPIC REPLICATION FACTOR`          | `int`               | {{< warn-if-unreleased-inline "v0.104" >}} The replication factor to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
-`TOPIC PARTITION COUNT`             | `int`               | {{< warn-if-unreleased-inline "v0.104" >}} The partition count to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
-`PROGRESS TOPIC REPLICATION FACTOR` | `int`               | {{< warn-if-unreleased-inline "v0.104" >}} The partition count to use when creating the Kafka [progress topic](#exactly-once-processing) (if the Kafka topic does not already exist).<br>Default: Broker's default.
-`TOPIC CONFIG`                      | `map[text => text]` | {{< warn-if-unreleased-inline "v0.104" >}} Any topic-level configs to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>See the [Kafka documentation](https://kafka.apache.org/documentation/#topicconfigs) for available configs.<br>Default: empty.
+`TOPIC REPLICATION FACTOR`          | `int`               | The replication factor to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+`TOPIC PARTITION COUNT`             | `int`               | The partition count to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+`TOPIC CONFIG`                      | `map[text => text]` | Any topic-level configs to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>See the [Kafka documentation](https://kafka.apache.org/documentation/#topicconfigs) for available configs.<br>Default: empty.
 
 
 ### CSR `CONNECTION` options
@@ -288,7 +287,7 @@ SQL type                     | Conversion
 [`numeric`]                  | Values are converted to a JSON string containing the decimal representation of the number.
 [`record`]                   | Records are converted to JSON objects. The names and ordering of the fields in the object match the names and ordering of the fields in the record.
 [`smallint`]                 | values are converted to JSON numbers.
-[`timestamp`][`timestamp with time zone`] | Values are converted to JSON strings containing the number of milliseconds since the Unix epoch.
+[`timestamp`][`timestamp`]<br>[`timestamptz`][`timestamp`] | Values are converted to JSON strings containing the fractional number of milliseconds since the Unix epoch. The fractional component has microsecond precision (i.e., three digits of precision). Example: `"1720032185.312"`
 [`uint2`]                    | Values are converted to JSON numbers.
 [`uint4`]                    | Values are converted to JSON numbers.
 [`uint8`]                    | Values are converted to JSON numbers.
@@ -371,7 +370,8 @@ If the connection's [progress topic](#exactly-once-processing) does not exist,
 Materialize will attempt to create it with a single partition, the broker's
 default replication factor, compaction enabled, and both size- and time-based
 retention disabled. The replication factor can be overridden using the
-`PROGRESS TOPIC REPLICATION FACTOR` option in the [connection options](#connection-options).
+`PROGRESS TOPIC REPLICATION FACTOR` option when creating a connection
+[`CREATE CONNECTION`](/sql/create-connection).
 
 To customize topic-level configuration, including compaction settings and other
 values, use the `TOPIC CONFIG` option in the [connection options](#connection-options)
@@ -482,7 +482,7 @@ There are three ways to resolve this error:
 * Create a materialized view that deduplicates the input relation by the
   desired upsert key:
 
-  ```sql
+  ```mzsql
   -- For each row with the same key `k`, the `ORDER BY` clause ensures we
   -- keep the row with the largest value of `v`.
   CREATE MATERIALIZED VIEW deduped AS
@@ -507,7 +507,7 @@ There are three ways to resolve this error:
 * Use the `NOT ENFORCED` clause to disable Materialize's validation of the key's
   uniqueness:
 
-  ```sql
+  ```mzsql
   CREATE SINK s
   FROM original_input
   INTO KAFKA CONNECTION kafka_connection (TOPIC 't')
@@ -545,7 +545,7 @@ statements. For more details on creating connections, check the
 {{< tabs tabID="1" >}}
 {{< tab "SSL">}}
 
-```sql
+```mzsql
 CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
 CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
 
@@ -559,7 +559,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 {{< tab "SASL">}}
 
-```sql
+```mzsql
 CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
@@ -578,7 +578,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< tabs tabID="1" >}}
 {{< tab "SSL">}}
 
-```sql
+```mzsql
 CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
 CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
 CREATE SECRET csr_password AS '<CSR_PASSWORD>';
@@ -595,7 +595,7 @@ CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
 {{< /tab >}}
 {{< tab "Basic HTTP Authentication">}}
 
-```sql
+```mzsql
 CREATE SECRET IF NOT EXISTS csr_username AS '<CSR_USERNAME>';
 CREATE SECRET IF NOT EXISTS csr_password AS '<CSR_PASSWORD>';
 
@@ -616,7 +616,7 @@ CREATE CONNECTION csr_basic_http
 {{< tabs >}}
 {{< tab "Avro">}}
 
-```sql
+```mzsql
 CREATE SINK avro_sink
   FROM <source, table or mview>
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
@@ -628,7 +628,7 @@ CREATE SINK avro_sink
 {{< /tab >}}
 {{< tab "JSON">}}
 
-```sql
+```mzsql
 CREATE SINK json_sink
   FROM <source, table or mview>
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_json_topic')
@@ -645,7 +645,7 @@ CREATE SINK json_sink
 {{< tabs >}}
 {{< tab "Avro">}}
 
-```sql
+```mzsql
 CREATE SINK avro_sink
   FROM <source, table or mview>
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
@@ -658,7 +658,7 @@ CREATE SINK avro_sink
 
 #### Topic configuration
 
-```sql
+```mzsql
 CREATE SINK custom_topic_sink
   IN CLUSTER my_io_cluster
   FROM <source, table or mview>
@@ -666,7 +666,6 @@ CREATE SINK custom_topic_sink
     TOPIC 'test_avro_topic',
     TOPIC PARTITION COUNT 4,
     TOPIC REPLICATION FACTOR 2,
-    PROGRESS TOPIC REPLICATION FACTOR 2,
     TOPIC CONFIG MAP['cleanup.policy' => 'compact']
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -675,7 +674,7 @@ CREATE SINK custom_topic_sink
 
 #### Schema compatibility levels
 
-```sql
+```mzsql
 CREATE SINK compatibility_level_sink
   IN CLUSTER my_io_cluster
   FROM <source, table or mview>
@@ -694,7 +693,7 @@ CREATE SINK compatibility_level_sink
 Consider the following sink, `docs_sink`, built on top of a relation `t` with
 several [SQL comments](/sql/comment-on) attached.
 
-```sql
+```mzsql
 CREATE TABLE t (key int NOT NULL, value text NOT NULL);
 COMMENT ON TABLE t IS 'SQL comment on t';
 COMMENT ON COLUMN t.value IS 'SQL comment on t.value';

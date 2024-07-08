@@ -10,13 +10,17 @@
 # run.py — build and run a core service or test.
 
 import argparse
+import atexit
 import os
 import shlex
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
+import time
 import uuid
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 import psutil
@@ -270,47 +274,66 @@ def main() -> int:
     else:
         raise UIError(f"unknown program {args.program}")
 
-    print(f"$ {' '.join(command)}")
-    # We go through a dance here familiar to shell authors where both
-    # the parent and child try to put the child into its own process
-    # group.  (See the comments in jobs.c:make_child() in bash, for
-    # example, which further cite the POSIX Rationale.)  We will later
-    # kill this group, which catches children like clusterd which
-    # outlive their parent (and hence, their PPID is 1; but their PGID
-    # remains the child's).  We also put the child into the foreground
-    # to ensure signals, such as SIGINT from ^C and SIGQUIT from ^\,
-    # are delivered to it, rather than to us.
+    # We fork off a process that moves to its own process group and then runs
+    # `command`. This parent process continues running until `command` exits,
+    # and then kills `command`'s process group. This avoids leaking "grandchild"
+    # processes--e.g., if we spawn an `environmentd` process that in turn spawns
+    # `clusterd` processes, and then `environmentd` panics, we want to clean up
+    # those `clusterd` processes before we exit.
+    #
+    # This isn't foolproof. If this script itself crashes, that can leak
+    # processes. The subprocess can also intentionally daemonize (i.e., move to
+    # another process group) to evade our detection. But this catches the vast
+    # majority of cases and is simple to reason about.
+
     child_pid = os.fork()
     assert child_pid >= 0
-    if child_pid == 0:
-        try:
-            os.setsid()
-            os.setpgid(os.getpid(), os.getpid())
-        except OSError:
-            pass
-        _set_foreground_process(os.getpid())
-        os.execvpe(command[0], command, env)
+    if child_pid > 0:
+        # This is the parent process, responsible for cleaning up after the
+        # child.
 
-    try:
-        os.setpgid(child_pid, child_pid)
-    except OSError:
-        pass
-    (_, ws) = os.wait()
-    try:
-        os.killpg(child_pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    exit(os.waitstatus_to_exitcode(ws))
+        # First, arrange to terminate all processes in the child's process group
+        # when we exit.
+        def _kill_childpg():
+            try:
+                os.killpg(child_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
+        atexit.register(_kill_childpg)
 
-def _set_foreground_process(pid: int) -> None:
-    # Conventionally, stderr is used for this purpose as the
-    # least-likely stream to be redirected in an interactive context.
-    if not os.isatty(sys.stderr.fileno()):
-        return
-    signal.signal(signal.SIGTTOU, signal.SIG_IGN)
-    with open(os.ttyname(sys.stderr.fileno()), "w") as tty:
-        os.tcsetpgrp(tty.fileno(), os.getpgrp())
+        # Wait for the child to exit then propagate its exit status.
+        _, ws = os.waitpid(child_pid, 0)
+        exit(os.waitstatus_to_exitcode(ws))
+
+    # This is the child. First, move to a dedicated process group.
+    os.setpgid(child_pid, child_pid)
+
+    # Then, spawn the desired command.
+    print(f"$ {' '.join(command)}")
+    if args.program == "environmentd":
+        # Automatically restart `environmentd` after it halts, but not more than
+        # once every 5s to prevent hot loops. This simulates what happens when
+        # running in Kubernetes, which restarts failed `environmentd` process
+        # automatically. (We don't restart after a panic, since panics are
+        # generally unexpected and we don't want to inadvertently hide them
+        # during local development.)
+        while True:
+            last_start_time = datetime.now()
+            proc = subprocess.run(command, env=env)
+            if proc.returncode == 2:
+                wait = max(
+                    timedelta(seconds=5) - (datetime.now() - last_start_time),
+                    timedelta(seconds=0),
+                )
+                print(f"environmentd halted; will restart in {wait.total_seconds()}s")
+                time.sleep(wait.total_seconds())
+            else:
+                break
+    else:
+        proc = subprocess.run(command, env=env)
+
+    exit(proc.returncode)
 
 
 def _build(

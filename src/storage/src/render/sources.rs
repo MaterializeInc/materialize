@@ -12,6 +12,7 @@
 //! See [`render_source`] for more details.
 
 use std::collections::BTreeMap;
+use std::iter;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -542,8 +543,17 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
 
         // We can now apply the key envelope
         let key_row = match upsert_envelope.style {
-            UpsertStyle::Debezium { .. } | UpsertStyle::Default(KeyEnvelope::Flattened) => key,
-            UpsertStyle::Default(KeyEnvelope::Named(_)) => {
+            // flattened or debezium
+            UpsertStyle::Debezium { .. }
+            | UpsertStyle::Default(KeyEnvelope::Flattened)
+            | UpsertStyle::ValueErrInline {
+                key_envelope: KeyEnvelope::Flattened,
+            } => key,
+            // named
+            UpsertStyle::Default(KeyEnvelope::Named(_))
+            | UpsertStyle::ValueErrInline {
+                key_envelope: KeyEnvelope::Named(_),
+            } => {
                 if key.iter().nth(1).is_none() {
                     key
                 } else {
@@ -551,12 +561,16 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
                     row_buf.clone()
                 }
             }
-            UpsertStyle::Default(KeyEnvelope::None) => unreachable!(),
+            UpsertStyle::Default(KeyEnvelope::None)
+            | UpsertStyle::ValueErrInline {
+                key_envelope: KeyEnvelope::None,
+            } => unreachable!(),
         };
 
         let key = UpsertKey::from_key(Ok(&key_row));
 
         let metadata = result.metadata;
+
         let value = match result.value {
             Some(Ok(ref row)) => match upsert_envelope.style {
                 UpsertStyle::Debezium { after_idx } => match row.iter().nth(after_idx).unwrap() {
@@ -572,12 +586,38 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
                     packer.extend(key_row.iter().chain(row.iter()).chain(metadata.iter()));
                     Some(Ok(row_buf.clone()))
                 }
+                UpsertStyle::ValueErrInline { .. } => {
+                    let mut packer = row_buf.packer();
+                    packer.extend(key_row.iter());
+                    // The 'value' record contains all value columns
+                    packer.push_list(row.iter());
+                    // The 'error' column is null
+                    packer.push(Datum::Null);
+                    packer.extend(metadata.iter());
+                    Some(Ok(row_buf.clone()))
+                }
             },
-            Some(Err(inner)) => Some(Err(UpsertError::Value(UpsertValueError {
-                for_key: key_row,
-                inner,
-                is_legacy_dont_touch_it: false,
-            }))),
+            Some(Err(inner)) => {
+                match upsert_envelope.style {
+                    UpsertStyle::ValueErrInline { .. } => {
+                        // inline the error in the data output
+                        let err_string = inner.to_string();
+                        let mut packer = row_buf.packer();
+                        packer.extend(key_row.iter());
+                        // The 'value' column is null
+                        packer.push(Datum::Null);
+                        // The 'error' column is a record with a 'description' column
+                        packer.push_list(iter::once(Datum::String(&err_string)));
+                        packer.extend(metadata.iter());
+                        Some(Ok(row_buf.clone()))
+                    }
+                    _ => Some(Err(UpsertError::Value(UpsertValueError {
+                        for_key: key_row,
+                        inner,
+                        is_legacy_dont_touch_it: false,
+                    }))),
+                }
+            }
             None => None,
         };
 

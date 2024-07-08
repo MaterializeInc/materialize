@@ -29,18 +29,68 @@ use tokio::sync::oneshot;
 use tokio::sync::watch::Receiver;
 
 use crate::collection_mgmt::CollectionManager;
+use StatsState::*;
+
+#[derive(Debug)]
+pub(super) enum StatsState<Stat> {
+    /// This stat is fully initialized.
+    Initialized(Stat),
+    /// This stat has not been initialized. We must write a `zero_value`
+    /// in one interval, before writing the first real update.
+    NeedsInit {
+        zero_value: Stat,
+        future_update: Stat,
+    },
+}
+
+impl<Stat: Clone> StatsState<Stat> {
+    pub(super) fn new(zero_value: Stat) -> Self {
+        let future_update = zero_value.clone();
+        StatsState::NeedsInit {
+            zero_value,
+            future_update,
+        }
+    }
+
+    /// Get a copy of the stat value that should be emitted to the statistics table.
+    /// After calling this, you must call `mark_initialized`. (These are separate
+    /// to avoid some clones).
+    fn stat_to_emit(&mut self) -> &mut Stat {
+        match self {
+            Initialized(stat) => stat,
+            NeedsInit { zero_value, .. } => zero_value,
+        }
+    }
+
+    /// Make this stat as initialized.
+    fn mark_initialized(&mut self) {
+        match self {
+            Initialized(_) => {}
+            NeedsInit { future_update, .. } => *self = Initialized(future_update.clone()),
+        }
+    }
+
+    /// Get a reference to a stat for additional incorporation.
+    pub(super) fn stat(&mut self) -> &mut Stat {
+        match self {
+            Initialized(stat) => stat,
+            NeedsInit { future_update, .. } => future_update,
+        }
+    }
+}
 
 /// Conversion trait to allow multiple shapes of data in [`spawn_statistics_scraper`].
 pub(super) trait AsStats<Stats> {
-    fn as_stats(&self) -> &BTreeMap<GlobalId, Option<Stats>>;
-    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, Option<Stats>>;
+    fn as_stats(&self) -> &BTreeMap<GlobalId, StatsState<Stats>>;
+    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, StatsState<Stats>>;
 }
 
-impl<Stats> AsStats<Stats> for BTreeMap<GlobalId, Option<Stats>> {
-    fn as_stats(&self) -> &BTreeMap<GlobalId, Option<Stats>> {
+impl<Stats> AsStats<Stats> for BTreeMap<GlobalId, StatsState<Stats>> {
+    fn as_stats(&self) -> &BTreeMap<GlobalId, StatsState<Stats>> {
         self
     }
-    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, Option<Stats>> {
+
+    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, StatsState<Stats>> {
         self
     }
 }
@@ -58,7 +108,7 @@ pub(super) fn spawn_statistics_scraper<StatsWrapper, Stats, T>(
 ) -> Box<dyn Any + Send + Sync>
 where
     StatsWrapper: AsStats<Stats> + Debug + Send + 'static,
-    Stats: PackableStats + Debug + Send + 'static,
+    Stats: PackableStats + Clone + Debug + Send + 'static,
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
@@ -80,12 +130,12 @@ where
 
                 shared_stats
                     .as_mut_stats()
-                    .insert(current.0, Some(current.1));
+                    .insert(current.0, StatsState::Initialized(current.1));
             }
 
             let mut row_buf = Row::default();
             for (_, stats) in shared_stats.as_stats().iter() {
-                if let Some(stats) = stats {
+                if let StatsState::Initialized(stats) = stats {
                     stats.pack(row_buf.packer());
                     correction.push((row_buf.clone(), 1));
                 }
@@ -100,7 +150,7 @@ where
             current_metrics.extend(correction.iter().cloned());
 
             collection_mgmt
-                .update_desired(statistics_collection_id, correction)
+                .differential_append(statistics_collection_id, correction)
                 .await;
         }
 
@@ -134,12 +184,12 @@ where
                     // up the coordinator. Because we are just moving some data around, we should
                     // be fine!
                     {
-                        let shared_stats = shared_stats.lock().expect("poisoned");
-                        for (_, stats) in shared_stats.as_stats().iter() {
-                            if let Some(stats) = stats {
-                                stats.pack(row_buf.packer());
-                                correction.push((row_buf.clone(), 1));
-                            }
+                        let mut shared_stats = shared_stats.lock().expect("poisoned");
+                        for (_, stats) in shared_stats.as_mut_stats().iter_mut() {
+                            let stat = stats.stat_to_emit();
+                            stat.pack(row_buf.packer());
+                            correction.push((row_buf.clone(), 1));
+                            stats.mark_initialized();
                         }
                     }
 
@@ -152,7 +202,7 @@ where
                     if !correction.is_empty() {
                         current_metrics.extend(correction.iter().cloned());
                         collection_mgmt
-                            .update_desired(statistics_collection_id, correction)
+                            .differential_append(statistics_collection_id, correction)
                             .await;
                     }
                 }
@@ -173,7 +223,7 @@ pub(super) struct SourceStatistics {
     /// sources must initialize the first values, but we need `None` to mark a source
     /// having been created vs dropped (particularly when a cluster can race and report
     /// statistics for a dropped source, which we must ignore).
-    pub source_statistics: BTreeMap<GlobalId, Option<SourceStatisticsUpdate>>,
+    pub source_statistics: BTreeMap<GlobalId, StatsState<SourceStatisticsUpdate>>,
     /// A shared map with atomics for webhook appenders to update the (currently 4)
     /// statistics that can meaningfully produce. These are periodically
     /// copied into `source_statistics` [`spawn_webhook_statistics_scraper`] to avoid
@@ -182,10 +232,11 @@ pub(super) struct SourceStatistics {
 }
 
 impl AsStats<SourceStatisticsUpdate> for SourceStatistics {
-    fn as_stats(&self) -> &BTreeMap<GlobalId, Option<SourceStatisticsUpdate>> {
+    fn as_stats(&self) -> &BTreeMap<GlobalId, StatsState<SourceStatisticsUpdate>> {
         &self.source_statistics
     }
-    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, Option<SourceStatisticsUpdate>> {
+
+    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, StatsState<SourceStatisticsUpdate>> {
         &mut self.source_statistics
     }
 }
@@ -225,10 +276,7 @@ pub(super) fn spawn_webhook_statistics_scraper(
                         shared_stats
                             .source_statistics
                             .entry(*id)
-                            .and_modify(|current| match current {
-                                Some(ref mut current) => current.incorporate(ws.drain_into_update(*id)),
-                                None => *current = Some(ws.drain_into_update(*id)),
-                            });
+                            .and_modify(|current| current.stat().incorporate(ws.drain_into_update(*id)));
                     }
                 }
             }

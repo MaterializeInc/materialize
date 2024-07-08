@@ -517,7 +517,7 @@ def workflow_test_github_15799(c: Composition) -> None:
 
         -- query the introspection sources on the replica with logging enabled
         SET cluster_replica = logging_on;
-        SELECT * FROM mz_internal.mz_active_peeks, mz_internal.mz_compute_exports;
+        SELECT * FROM mz_introspection.mz_active_peeks, mz_introspection.mz_compute_exports;
 
         -- verify that the other replica has not crashed and still responds
         SET cluster_replica = logging_off;
@@ -567,7 +567,7 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
+            > SELECT 1 FROM mz_introspection.mz_compute_frontiers_per_worker LIMIT 1;
             1
                 """
             )
@@ -582,7 +582,7 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
+            > SELECT 1 FROM mz_introspection.mz_compute_frontiers_per_worker LIMIT 1;
             1
                 """
             )
@@ -615,7 +615,7 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
+            > SELECT 1 FROM mz_introspection.mz_compute_frontiers_per_worker LIMIT 1;
             1
             > SELECT * FROM t;
             42
@@ -2480,7 +2480,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_commands_total("allow_compaction")
     assert count > 0, f"got {count}"
     count = metrics.get_commands_total("create_dataflow")
-    assert count == 3, f"got {count}"
+    assert count >= 3, f"got {count}"
     count = metrics.get_commands_total("peek")
     assert count == 2, f"got {count}"
     count = metrics.get_commands_total("cancel_peek")
@@ -2514,7 +2514,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_responses_total("peek_response")
     assert count == 2, f"got {count}"
     count = metrics.get_responses_total("subscribe_response")
-    assert count == 0, f"got {count}"
+    assert count > 0, f"got {count}"
 
     # mz_compute_response_message_bytes_total
     count = metrics.get_response_bytes_total("frontiers")
@@ -2522,7 +2522,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_response_bytes_total("peek_response")
     assert count > 0, f"got {count}"
     count = metrics.get_response_bytes_total("subscribe_response")
-    assert count == 0, f"got {count}"
+    assert count > 0, f"got {count}"
 
     count = metrics.get_value("mz_compute_controller_replica_count")
     assert count == 1, f"got {count}"
@@ -2533,7 +2533,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_value("mz_compute_controller_peek_count")
     assert count == 0, f"got {count}"
     count = metrics.get_value("mz_compute_controller_subscribe_count")
-    assert count == 0, f"got {count}"
+    assert count > 0, f"got {count}"
     count = metrics.get_value("mz_compute_controller_command_queue_size")
     assert count < 10, f"got {count}"
     count = metrics.get_value("mz_compute_controller_response_queue_size")
@@ -3187,10 +3187,11 @@ def workflow_test_subscribe_hydration_status(
     c.testdrive(
         input=dedent(
             """
-            > SELECT h.hydrated
+            > SET cluster = mz_catalog_server
+            > SELECT DISTINCT h.time_ns IS NOT NULL
               FROM mz_internal.mz_subscriptions s,
               unnest(s.referenced_object_ids) as sroi(id)
-              JOIN mz_internal.mz_compute_hydration_statuses h ON (h.object_id = s.id)
+              JOIN mz_introspection.mz_compute_hydration_times_per_worker h ON h.export_id = s.id
               JOIN mz_tables t ON (t.id = sroi.id)
               WHERE t.name = 'mz_tables'
             true
@@ -3205,10 +3206,11 @@ def workflow_test_subscribe_hydration_status(
     c.testdrive(
         input=dedent(
             """
-            > SELECT h.hydrated
+            > SET cluster = mz_catalog_server
+            > SELECT DISTINCT h.time_ns IS NOT NULL
               FROM mz_internal.mz_subscriptions s,
               unnest(s.referenced_object_ids) as sroi(id)
-              JOIN mz_internal.mz_compute_hydration_statuses h ON (h.object_id = s.id)
+              JOIN mz_introspection.mz_compute_hydration_times_per_worker h ON h.export_id = s.id
               JOIN mz_tables t ON (t.id = sroi.id)
               WHERE t.name = 'mz_tables'
             """
@@ -3340,22 +3342,22 @@ def workflow_test_refresh_mv_warmup(
             input=dedent(
                 """
                 ## 1. We shouldn't have a dataflow for mv1.
-                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
                 > SELECT mz_unsafe.mz_sleep(0.5);
                 <null>
-                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
                 > SELECT mz_unsafe.mz_sleep(0.5);
                 <null>
-                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
                 > SELECT mz_unsafe.mz_sleep(0.5);
                 <null>
-                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
                 > SELECT mz_unsafe.mz_sleep(0.5);
                 <null>
-                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
                 > SELECT mz_unsafe.mz_sleep(0.5);
                 <null>
-                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
 
                 > SELECT * FROM mv1;
                 10000000
@@ -3955,7 +3957,7 @@ def workflow_test_http_race_condition(
     stopping_time = datetime.now() + timedelta(seconds=30)
     while datetime.now() < stopping_time:
         result = c.sql_query(
-            "SELECT * FROM mz_internal.mz_sessions WHERE id <> pg_backend_pid()"
+            "SELECT * FROM mz_internal.mz_sessions WHERE connection_id <> pg_backend_pid()"
         )
         if not result:
             break

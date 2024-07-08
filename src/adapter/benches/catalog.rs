@@ -9,7 +9,6 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use mz_adapter::catalog::{Catalog, Op};
-use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistClient;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use tokio::runtime::Runtime;
@@ -20,13 +19,9 @@ fn bench_transact(c: &mut Criterion) {
         let runtime = Runtime::new().unwrap();
 
         let mut catalog = runtime.block_on(async {
-            Catalog::open_debug_catalog(
-                PersistClient::new_for_tests().await,
-                Uuid::new_v4(),
-                SYSTEM_TIME.clone(),
-            )
-            .await
-            .unwrap()
+            Catalog::open_debug_catalog(PersistClient::new_for_tests().await, Uuid::new_v4())
+                .await
+                .unwrap()
         });
         let mut id = 0;
         b.iter(|| {

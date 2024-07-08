@@ -117,6 +117,7 @@ Debugging
 Dec
 Decimal
 Declare
+Decoding
 Decorrelated
 Default
 Defaults
@@ -142,6 +143,7 @@ Endpoint
 Enforced
 Envelope
 Error
+Errors
 Escape
 Estimate
 Every

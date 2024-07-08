@@ -64,6 +64,7 @@ class Check:
         assert False
 
     def validate(self) -> Testdrive:
+        """Note that the validation method may be invoked multiple times (depending on the scenario)."""
         assert False
 
     def start_initialize(self, e: Executor, a: "Action") -> None:

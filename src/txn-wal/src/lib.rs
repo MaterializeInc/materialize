@@ -207,7 +207,7 @@ use std::fmt::Write;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::ConfigSet;
 use mz_ore::instrument;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
@@ -265,18 +265,10 @@ mod proto {
 /// Adds the full set of all txn-wal `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
-        .add(&crate::INIT_FORGET_ALL)
         .add(&crate::operator::DATA_SHARD_RETRYER_CLAMP)
         .add(&crate::operator::DATA_SHARD_RETRYER_INITIAL_BACKOFF)
         .add(&crate::operator::DATA_SHARD_RETRYER_MULTIPLIER)
 }
-
-/// Used by storage controller as a temporary escape hatch for #25992.
-pub const INIT_FORGET_ALL: Config<bool> = Config::new(
-    "persist_txn_init_forget_all",
-    false,
-    "Whether to call forget_all (true) or empty txn and apply_eager (false) at boot",
-);
 
 /// A reasonable default implementation of [TxnsCodec].
 ///

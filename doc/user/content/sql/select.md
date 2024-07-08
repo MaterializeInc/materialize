@@ -79,7 +79,7 @@ Queries that can't simply read out from an index will create an ephemeral datafl
 the results. These dataflows are bound to the active [cluster](/get-started/key-concepts#clusters),
  which you can change using:
 
-```sql
+```mzsql
 SET cluster = <cluster name>;
 ```
 
@@ -157,7 +157,7 @@ This assumes you've already [created a source](../create-source).
 The following query creates a view representing the total of all
 purchases made by users per region, and then creates an index on this view.
 
-```sql
+```mzsql
 CREATE VIEW purchases_by_region AS
     SELECT region.id, sum(purchase.total)
     FROM mysql_simple_purchase AS purchase
@@ -176,7 +176,7 @@ dropped.
 
 Assuming you've created the indexed view listed above, named `purchases_by_region`, you can simply read from the index with an ad hoc `SELECT` query:
 
-```sql
+```mzsql
 SELECT * FROM purchases_by_region;
 ```
 
@@ -184,7 +184,7 @@ In this case, Materialize simply returns the results that the index is maintaini
 
 ### Ad hoc querying
 
-```sql
+```mzsql
 SELECT region.id, sum(purchase.total)
 FROM mysql_simple_purchase AS purchase
 JOIN mysql_simple_user AS user ON purchase.user_id = user.id
@@ -199,7 +199,7 @@ you may want to create an [index](/sql/create-index) (in memory) and/or a [mater
 
 ### Using regular CTEs
 
-```sql
+```mzsql
 WITH
   regional_sales (region, total_sales) AS (
     SELECT region, sum(amount)

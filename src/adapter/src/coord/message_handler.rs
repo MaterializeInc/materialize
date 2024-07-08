@@ -21,8 +21,8 @@ use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
-use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{soft_assert_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
@@ -41,9 +41,7 @@ use crate::coord::{
     AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
-use crate::session::Session;
 use crate::telemetry::{EventDetails, SegmentClientExt};
-use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
@@ -183,6 +181,12 @@ impl Coordinator {
                 } => {
                     self.sequence_staged(ctx, span, stage).await;
                 }
+                Message::IntrospectionSubscribeStageReady {
+                    span,
+                    stage,
+                } => {
+                    self.sequence_staged((), span, stage).await;
+                }
                 Message::ExplainTimestampStageReady {
                     ctx,
                     span,
@@ -197,20 +201,29 @@ impl Coordinator {
                 } => {
                     self.sequence_staged(ctx, span, stage).await;
                 }
+                Message::ClusterStageReady{
+                    ctx,
+                    span,
+                    stage,
+                } => {
+                    self.sequence_staged(ctx, span, stage).await;
+                }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;
                 }
                 Message::PrivateLinkVpcEndpointEvents(events) => {
-                    self.controller
-                        .storage
-                        .append_introspection_updates(
-                            mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
-                            events
-                                .into_iter()
-                                .map(|e| (mz_repr::Row::from(e), 1))
-                                .collect(),
-                        )
-                        .await;
+                    if !self.controller.read_only() {
+                        self.controller
+                            .storage
+                            .append_introspection_updates(
+                                mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
+                                events
+                                    .into_iter()
+                                    .map(|e| (mz_repr::Row::from(e), 1))
+                                    .collect(),
+                            )
+                            .await;
+                    }
                 }
                 Message::CheckSchedulingPolicies => {
                     self.check_scheduling_policies().await;
@@ -374,19 +387,27 @@ impl Coordinator {
                 self.send_peek_response(uuid, response, otel_ctx);
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
-                match self.active_compute_sinks.get_mut(&sink_id) {
-                    Some(ActiveComputeSink::Subscribe(active_subscribe)) => {
-                        let finished = active_subscribe.process_response(response);
-                        if finished {
-                            self.retire_compute_sinks(btreemap! {
-                                sink_id => ActiveComputeSinkRetireReason::Finished,
-                            })
-                            .await;
-                        }
+                if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =
+                    self.active_compute_sinks.get_mut(&sink_id)
+                {
+                    let finished = active_subscribe.process_response(response);
+                    if finished {
+                        self.retire_compute_sinks(btreemap! {
+                            sink_id => ActiveComputeSinkRetireReason::Finished,
+                        })
+                        .await;
                     }
-                    _ => {
-                        tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
-                    }
+
+                    soft_assert_or_log!(
+                        !self.introspection_subscribes.contains_key(&sink_id),
+                        "`sink_id` {sink_id} unexpectedly found in both `active_subscribes` \
+                         and `introspection_subscribes`",
+                    );
+                } else if self.introspection_subscribes.contains_key(&sink_id) {
+                    self.handle_introspection_subscribe_batch(sink_id, response)
+                        .await;
+                } else {
+                    tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
                 }
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {
@@ -562,6 +583,7 @@ impl Coordinator {
             connection_gid,
             mut plan_validity,
             otel_ctx,
+            dependency_ids,
         }: CreateConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
@@ -589,7 +611,7 @@ impl Coordinator {
                 ctx.session_mut(),
                 connection_gid,
                 plan,
-                ResolvedIds(plan_validity.dependency_ids),
+                ResolvedIds(dependency_ids),
             )
             .await;
         ctx.retire(result);
@@ -604,6 +626,7 @@ impl Coordinator {
             connection_gid,
             mut plan_validity,
             otel_ctx,
+            dependency_ids: _,
         }: AlterConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
@@ -745,19 +768,20 @@ impl Coordinator {
                 new_process_status,
             );
 
-            self.catalog_transact(
-                None::<&Session>,
-                vec![
-                    catalog::Op::WeirdBuiltinTableUpdates {
-                        builtin_table_update: builtin_table_retraction,
-                    },
-                    catalog::Op::WeirdBuiltinTableUpdates {
-                        builtin_table_update: builtin_table_addition,
-                    },
-                ],
-            )
-            .await
-            .unwrap_or_terminate("updating cluster status cannot fail");
+            let mut builtin_table_updates = vec![builtin_table_retraction, builtin_table_addition];
+
+            if self.controller.read_only() {
+                self.buffered_builtin_table_updates
+                    .as_mut()
+                    .expect("in read-only mode")
+                    .append(&mut builtin_table_updates);
+            } else {
+                self.builtin_table_update()
+                    .execute(builtin_table_updates)
+                    .await
+                    .instrument(info_span!("coord::message_cluster_event::table_updates"))
+                    .await;
+            }
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");

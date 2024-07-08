@@ -254,7 +254,7 @@ impl Coordinator {
             (StatementLifecycleHistory, statement_lifecycle_updates),
             (SqlText, sql_text_updates),
         ] {
-            if !updates.is_empty() {
+            if !updates.is_empty() && !self.controller.read_only() {
                 self.controller
                     .storage
                     .append_introspection_updates(type_, updates)
@@ -433,6 +433,8 @@ impl Coordinator {
             began_at,
             cluster_id,
             cluster_name,
+            database_name,
+            search_path,
             application_name,
             transaction_isolation,
             execution_timestamp,
@@ -453,6 +455,10 @@ impl Coordinator {
             },
             Datum::String(&*application_name),
             cluster_name.as_ref().map(String::as_str).into(),
+            Datum::String(database_name),
+        ]);
+        packer.push_list(search_path.iter().map(|s| Datum::String(s)));
+        packer.extend([
             Datum::String(&*transaction_isolation),
             (*execution_timestamp).into(),
             Datum::UInt64(*transaction_id),
@@ -732,6 +738,13 @@ impl Coordinator {
             cluster_name: None,
             execution_timestamp: None,
             transient_index_id: None,
+            database_name: session.vars().database().into(),
+            search_path: session
+                .vars()
+                .search_path()
+                .iter()
+                .map(|s| s.as_str().to_string())
+                .collect(),
         };
         let mseh_update = Self::pack_statement_began_execution_update(&record);
         self.statement_logging

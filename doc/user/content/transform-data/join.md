@@ -90,7 +90,7 @@ involving `LATERAL` joins, Materialize can optimize away the join entirely.
 As a simple example, the following query uses `LATERAL` to count from 1 to `x`
 for all the values of `x` in `xs`.
 
-```sql
+```mzsql
 SELECT * FROM
   (VALUES (1), (3)) xs (x)
   CROSS JOIN LATERAL generate_series(1, x) y;
@@ -145,7 +145,7 @@ valid.
 
 ![inner join diagram](/images/join-inner.png)
 
-```sql
+```mzsql
 SELECT
   employees."name" AS employee,
   managers."name" AS manager
@@ -169,7 +169,7 @@ is referenced.
 
 ![left outer join diagram](/images/join-left-outer.png)
 
-```sql
+```mzsql
 SELECT
   employees."name" AS employee,
   managers."name" AS manager
@@ -197,7 +197,7 @@ table contain `NULL` wherever the left-hand table is referenced.
 
 ![right outer join diagram](/images/join-right-outer.png)
 
-```sql
+```mzsql
 SELECT
   employees."name" AS employee,
   managers."name" AS manager
@@ -223,7 +223,7 @@ other table is referenced.
 
 ![full outer join diagram](/images/join-full-outer.png)
 
-```sql
+```mzsql
 SELECT
   employees."name" AS employee,
   managers."name" AS manager

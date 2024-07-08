@@ -84,7 +84,7 @@ If your JSON messages have a consistent shape, we recommend creating a parsing
 [view](/get-started/key-concepts/#views) that maps the individual fields to
 columns with the required data types:
 
-```sql
+```mzsql
 -- extract jsonb into typed columns
 CREATE VIEW my_typed_source AS
   SELECT

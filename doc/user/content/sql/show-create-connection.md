@@ -18,7 +18,7 @@ _connection&lowbar;name_ | The connection you want to get the `CREATE` statement
 
 ## Examples
 
-```sql
+```mzsql
 SHOW CREATE CONNECTION kafka_connection;
 ```
 

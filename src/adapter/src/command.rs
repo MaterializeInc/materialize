@@ -128,7 +128,7 @@ pub enum Command {
         tx: oneshot::Sender<Result<serde_json::Value, anyhow::Error>>,
     },
 
-    ControllerAllowWrites {
+    AllowWrites {
         tx: oneshot::Sender<Result<bool, anyhow::Error>>,
     },
 }
@@ -148,7 +148,7 @@ impl Command {
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
-            | Command::ControllerAllowWrites { .. } => None,
+            | Command::AllowWrites { .. } => None,
         }
     }
 
@@ -166,7 +166,7 @@ impl Command {
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
-            | Command::ControllerAllowWrites { .. } => None,
+            | Command::AllowWrites { .. } => None,
         }
     }
 }
@@ -301,6 +301,8 @@ pub enum ExecuteResponse {
     CreatedClusterReplica,
     /// The requested index was created.
     CreatedIndex,
+    /// The requested introspection subscribe was created.
+    CreatedIntrospectionSubscribe,
     /// The requested secret was created.
     CreatedSecret,
     /// The requested sink was created.
@@ -509,6 +511,9 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::Updated => Err(()),
             ExecuteResponseKind::ValidatedConnection => Ok(ExecuteResponse::ValidatedConnection),
             ExecuteResponseKind::SendingRowsImmediate => Err(()),
+            ExecuteResponseKind::CreatedIntrospectionSubscribe => {
+                Ok(ExecuteResponse::CreatedIntrospectionSubscribe)
+            }
         }
     }
 }
@@ -576,6 +581,7 @@ impl ExecuteResponse {
             TransactionRolledBack { .. } => Some("ROLLBACK".into()),
             Updated(n) => Some(format!("UPDATE {}", n)),
             ValidatedConnection => Some("VALIDATE CONNECTION".into()),
+            CreatedIntrospectionSubscribe => Some("CREATE INTROSPECTION SUBSCRIBE".into()),
         }
     }
 
@@ -602,7 +608,8 @@ impl ExecuteResponse {
             | AlterSecret
             | AlterConnection
             | AlterSource
-            | AlterSink => &[AlteredObject],
+            | AlterSink
+            | AlterTableAddColumn => &[AlteredObject],
             AlterDefaultPrivileges => &[AlteredDefaultPrivileges],
             AlterSetCluster => &[AlteredObject],
             AlterRole => &[AlteredRole],

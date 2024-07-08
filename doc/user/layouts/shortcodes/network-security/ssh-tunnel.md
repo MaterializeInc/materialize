@@ -14,7 +14,7 @@ Before you begin, make sure you have access to a bastion host. You will need:
 
 In Materialize, create an [SSH tunnel connection](/sql/create-connection/#ssh-tunnel) to the bastion host:
 
-```sql
+```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST '<SSH_BASTION_HOST>',
     USER '<SSH_BASTION_USER>',
@@ -29,7 +29,7 @@ created in the previous step.
 
 1. Materialize stores public keys for SSH tunnels in the system catalog. Query [`mz_ssh_tunnel_connections`](/sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections) to retrieve the public keys for the SSH tunnel connection you just created:
 
-    ```sql
+    ```mzsql
     SELECT
         mz_connections.name,
         mz_ssh_tunnel_connections.*
@@ -112,7 +112,7 @@ created in the previous step.
 
 5. Retrieve the static egress IPs from Materialize and configure the firewall rules (e.g. AWS Security Groups) for your bastion host to allow SSH traffic for those IP addresses only.
 
-    ```sql
+    ```mzsql
     SELECT * FROM mz_catalog.mz_egress_ips;
     ```
 
@@ -126,7 +126,7 @@ created in the previous step.
 
 To confirm that the SSH tunnel connection is correctly configured, use the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
 
-```sql
+```mzsql
 VALIDATE CONNECTION ssh_connection;
 ```
 

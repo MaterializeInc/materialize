@@ -18,7 +18,7 @@ _index&lowbar;name_ | The index you want use. You can find available index names
 
 ## Examples
 
-```sql
+```mzsql
 SHOW INDEXES FROM my_view;
 ```
 
@@ -28,7 +28,7 @@ SHOW INDEXES FROM my_view;
  my_view_idx | t   | quickstart | {a, b}
 ```
 
-```sql
+```mzsql
 SHOW CREATE INDEX my_view_idx;
 ```
 

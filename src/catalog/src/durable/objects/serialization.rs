@@ -216,12 +216,14 @@ impl RustType<proto::replica_config::Location> for ReplicaLocation {
                 disk,
                 billed_as,
                 internal,
+                pending,
             } => proto::replica_config::Location::Managed(proto::replica_config::ManagedLocation {
                 size: size.to_string(),
                 availability_zone: availability_zone.clone(),
                 disk: *disk,
                 billed_as: billed_as.clone(),
                 internal: *internal,
+                pending: *pending,
             }),
         }
     }
@@ -243,6 +245,7 @@ impl RustType<proto::replica_config::Location> for ReplicaLocation {
                 disk: location.disk,
                 internal: location.internal,
                 size: location.size,
+                pending: location.pending,
             }),
         }
     }
@@ -727,7 +730,9 @@ impl RustType<proto::StorageCollectionMetadataValue> for StorageCollectionMetada
     }
 
     fn from_proto(proto: proto::StorageCollectionMetadataValue) -> Result<Self, TryFromProtoError> {
-        Ok(StorageCollectionMetadataValue { shard: proto.shard })
+        Ok(StorageCollectionMetadataValue {
+            shard: proto.shard.into_rust()?,
+        })
     }
 }
 
@@ -739,7 +744,9 @@ impl RustType<proto::UnfinalizedShardKey> for UnfinalizedShardKey {
     }
 
     fn from_proto(proto: proto::UnfinalizedShardKey) -> Result<Self, TryFromProtoError> {
-        Ok(UnfinalizedShardKey { shard: proto.shard })
+        Ok(UnfinalizedShardKey {
+            shard: proto.shard.into_rust()?,
+        })
     }
 }
 
@@ -751,7 +758,9 @@ impl RustType<proto::TxnWalShardValue> for TxnWalShardValue {
     }
 
     fn from_proto(proto: proto::TxnWalShardValue) -> Result<Self, TryFromProtoError> {
-        Ok(TxnWalShardValue { shard: proto.shard })
+        Ok(TxnWalShardValue {
+            shard: proto.shard.into_rust()?,
+        })
     }
 }
 

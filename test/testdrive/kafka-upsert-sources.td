@@ -625,3 +625,49 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json-
 "\"int\"" 99
 "\"object\"" "{\"y\":\"z\"}"
 "\"str\"" "\"bye\""
+
+
+#
+# Test Inline error handling with value decode failures
+#
+
+$ kafka-create-topic topic=inline-value-errors-1 partitions=1
+
+$ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=inline-value-errors-1
+val1:{"a":,"c":"d"}
+val2:[1,2,
+
+> CREATE CLUSTER inline_error_cluster SIZE '${arg.default-storage-size}';
+
+# should error without the feature flag enabled
+! CREATE SOURCE value_decode_error
+  IN CLUSTER inline_error_cluster
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-inline-value-errors-1-${testdrive.seed}')
+  KEY FORMAT TEXT
+  VALUE FORMAT JSON
+  ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE));
+contains:The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT is not supported
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_upsert_inline_errors = true
+
+# This source will inline errors and not propagate them
+> CREATE SOURCE value_decode_error
+  IN CLUSTER inline_error_cluster
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-inline-value-errors-1-${testdrive.seed}')
+  KEY FORMAT TEXT
+  VALUE FORMAT JSON
+  ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE));
+
+> SELECT key, value::text, error::text FROM value_decode_error
+val1 <null> "(\"Bytes: Failed to decode JSON: {\"\"a\"\":,\"\"c\"\":\"\"d\"\"} (original bytes: [7b, 22, 61, 22, 3a, 2c, 22, 63, 22, 3a, 22, 64, 22, 7d])\")"
+val2 <null> "(\"Bytes: Failed to decode JSON: [1,2, (original bytes: [5b, 31, 2c, 32, 2c])\")"
+
+# replace the bad values with good ones
+$ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=inline-value-errors-1
+val1:{"a": 1,"c":"d"}
+val2:[1,2,3]
+
+> SELECT key, value::text, error::text FROM value_decode_error
+val1 "(\"{\"\"a\"\":1,\"\"c\"\":\"\"d\"\"}\")" <null>
+val2 "(\"[1,2,3]\")" <null>

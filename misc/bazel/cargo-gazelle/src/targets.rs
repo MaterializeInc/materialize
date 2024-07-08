@@ -248,19 +248,24 @@ impl RustBinary {
                 "can only generate `rust_binary` rules for binary build targets, found {x:?}"
             ),
         };
+        let name = name.to_case(Case::Snake);
+
         let maybe_library = metadata
             .build_targets()
             .find(|target| matches!(target.id(), BuildTargetId::Library));
 
         // Adjust the target name to avoid a possible conflict.
+        tracing::debug!(
+            maybe_library = ?maybe_library.as_ref().map(|t| t.name()),
+            binary_name = name,
+            "name for rust_binary"
+        );
         let target_name = match &maybe_library {
-            Some(library) if library.name() == name => {
-                QuotedString::new(format!("{}_bin", name.to_case(Case::Snake)))
-            }
-            _ => QuotedString::new(name.to_case(Case::Snake)),
+            Some(library) if library.name() == name => QuotedString::new(format!("{}_bin", name)),
+            _ => QuotedString::new(&name),
         };
 
-        if crate_config.binary(name).common().skip() {
+        if crate_config.binary(&name).common().skip() {
             return Ok(None);
         }
 
@@ -306,7 +311,7 @@ impl RustBinary {
         }
 
         // Extend with any extra config specified in the Cargo.toml.
-        let bin_config = crate_config.binary(name);
+        let bin_config = crate_config.binary(&name);
 
         deps.extend(crate_config.lib().extra_deps());
         proc_macro_deps.extend(crate_config.lib().extra_proc_macro_deps());

@@ -195,44 +195,48 @@ Used Indexes:
 
 Target cluster: quickstart
 
+# _No_ propagation of monotonicity through materialized views.
+
 > CREATE MATERIALIZED VIEW m1 AS SELECT b FROM non_dbz_data;
 
 > CREATE VIEW v11 AS SELECT * FROM m1 ORDER BY b LIMIT 3;
 
-# Check arrangements, seeing new arrangements can mean a significant increase
-# in memory consumptions and should be understood before adapting the values.
-> SET cluster_replica = r1
-
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"ArrangeBy[[Column(0), Column(1)]]"
-"ArrangeBy[[Column(0), Column(1)]]-errors"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-ArrangeBy[[Column(0)]]-errors
-"ArrangeMonotonic [val: empty]"
-"ArrangeMonotonic [val: empty]"
-"ArrangeMonotonic [val: empty]"
-"Arranged TopK input"
-ReduceMonotonic
-ReduceMonotonic
-ReduceMonotonic
-"Reduced TopK input"
-
-# Propagating monotonicity analysis through materialized views
-
 ? EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v11;
 Explained Query:
-  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3 must_consolidate
     Get::PassArrangements materialize.public.m1
       raw=true
 
 Source materialize.public.m1
 
 Target cluster: quickstart
+
+# Check arrangements, seeing new arrangements can mean a significant increase
+# in memory consumptions and should be understood before adapting the values.
+> SET cluster_replica = r1
+
+> SELECT mdod.dataflow_name, mdod.name
+  FROM mz_introspection.mz_arrangement_sharing mash
+  JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
+  JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
+  WHERE export_id LIKE 'u%'
+"Dataflow: materialize.public.i1_primary_idx" ArrangeBy[[Column(0)]]
+"Dataflow: materialize.public.i1_primary_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.i4_primary_idx" ArrangeBy[[Column(0)]]
+"Dataflow: materialize.public.i4_primary_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.i6_primary_idx" ArrangeBy[[Column(0)]]
+"Dataflow: materialize.public.i6_primary_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
+"Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
+"Dataflow: materialize.public.i8_primary_idx" ArrangeBy[[Column(0)]]
+"Dataflow: materialize.public.i8_primary_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.i9_primary_idx" ArrangeBy[[Column(0)]]
+"Dataflow: materialize.public.i9_primary_idx" ArrangeBy[[Column(0)]]-errors
+"Dataflow: materialize.public.monotonic_fused" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.monotonic_fused" ReduceMonotonic
+"Dataflow: materialize.public.monotonic_max" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.monotonic_max" ReduceMonotonic
+"Dataflow: materialize.public.monotonic_min" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.monotonic_min" ReduceMonotonic
+"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
+"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"

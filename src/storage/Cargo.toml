@@ -22,6 +22,7 @@ bytesize = "1.1.0"
 bincode = "1"
 chrono = { version = "0.4.35", default-features = false, features = ["std"] }
 clap = { version = "3.2.24", features = ["derive", "env"] }
+columnation = { git = "https://github.com/frankmcsherry/columnation" }
 crossbeam-channel = "0.5.8"
 csv-core = { version = "0.1.10" }
 dec = "0.4.8"
@@ -85,7 +86,7 @@ sha2 = "0.10.6"
 timely = { version = "0.12.0", default-features = false, features = [
     "bincode",
 ] }
-tokio = { version = "1.32.0", features = ["fs", "rt", "sync", "test-util"] }
+tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }
 tokio-stream = "0.1.11"
 tokio-util = { version = "0.7.4", features = ["io"] }
@@ -111,7 +112,7 @@ mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 itertools = "0.10.5"
 num_cpus = "1.14.0"
 tempfile = "3.8.1"
-tokio = { version = "1.32.0", features = ["test-util"] }
+tokio = { version = "1.38.0", features = ["test-util"] }
 
 [features]
 default = ["mz-build-tools/default"]

@@ -389,39 +389,43 @@ contains:upsert key could not be validated as unique
 # in memory consumptions and should be understood before adapting the values.
 > SET cluster_replica = r1
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"Arrange ReduceMinsMaxes"
-"Arrange ReduceMinsMaxes"
-"Arranged DistinctBy"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"Arranged MinsMaxesHierarchical input"
-"DistinctBy"
-DistinctByErrorCheck
-ReduceMinsMaxes
-ReduceMinsMaxes
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
-"Reduced Fallibly MinsMaxesHierarchical"
+> SELECT mdod.dataflow_name, mdod.name
+  FROM mz_introspection.mz_arrangement_sharing mash
+  JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
+  JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
+  WHERE export_id LIKE 'u%'
+"Dataflow: materialize.public.input_keyed" "Arrange ReduceMinsMaxes"
+"Dataflow: materialize.public.input_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_keyed" ReduceMinsMaxes
+"Dataflow: materialize.public.input_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_keyed_ab" "Arranged DistinctBy"
+"Dataflow: materialize.public.input_keyed_ab" DistinctBy
+"Dataflow: materialize.public.input_keyed_ab" DistinctByErrorCheck
+"Dataflow: materialize.public.input_with_deletions_keyed" "Arrange ReduceMinsMaxes"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.input_with_deletions_keyed" ReduceMinsMaxes
+"Dataflow: materialize.public.input_with_deletions_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.input_with_deletions_keyed" "Reduced Fallibly MinsMaxesHierarchical"

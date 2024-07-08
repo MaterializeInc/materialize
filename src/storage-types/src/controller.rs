@@ -203,7 +203,7 @@ pub enum StorageError<T> {
     /// Collection metadata already exists for ID.
     CollectionMetadataAlreadyExists(GlobalId),
     /// Some other collection is already writing to this persist shard.
-    PersistShardAlreadyInUse(String),
+    PersistShardAlreadyInUse(ShardId),
     /// Txn WAL shard already exists.
     TxnWalShardAlreadyExists,
     /// The item that a subsource refers to is unexpectedly missing from the
@@ -219,6 +219,9 @@ pub enum StorageError<T> {
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
+    /// We are in read-only mode and were asked to do a something that requires
+    /// writing.
+    ReadOnly,
 }
 
 impl<T: Debug + Display + 'static> Error for StorageError<T> {
@@ -245,6 +248,7 @@ impl<T: Debug + Display + 'static> Error for StorageError<T> {
             Self::RtrTimeout(_) => None,
             Self::RtrDropFailure(_) => None,
             Self::Generic(err) => err.source(),
+            Self::ReadOnly => None,
         }
     }
 }
@@ -331,6 +335,7 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
                 "real-time source dropped before ingesting the upstream system's visible frontier"
             ),
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
+            Self::ReadOnly => write!(f, "cannot write in read-only mode"),
         }
     }
 }
@@ -461,7 +466,7 @@ impl TxnsCodec for TxnsCodecRow {
     }
 
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
-        fn col<'a, T: Data>(stats: &'a StructStats, col: &str) -> Option<&'a T::Stats> {
+        fn col<'a, T: Data>(stats: &'a StructStats, col: &str) -> Option<T::Stats> {
             stats
                 .col::<T>(col)
                 .map_err(|err| error!("unexpected stats type for col {}: {}", col, err))

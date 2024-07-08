@@ -25,9 +25,8 @@ use mz_adapter::catalog::{Catalog, Op};
 use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_catalog::memory::objects::{CatalogItem, Table};
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
-use mz_sql::ast::{Expr, Statement};
+use mz_sql::ast::Statement;
 use mz_sql::catalog::CatalogDatabase;
 use mz_sql::names::{
     self, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
@@ -52,7 +51,7 @@ async fn datadriven() {
         // Context. This is just a test, so the performance hit of this doesn't matter
         // (and in practice there will be no contention).
 
-        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             let catalog = Arc::new(Mutex::new(catalog));
             f.run_async(|test_case| {
                 let catalog = Arc::clone(&catalog);
@@ -96,7 +95,7 @@ async fn datadriven() {
                                                 test_case.input.trim_end()
                                             )),
                                             desc: RelationDesc::empty(),
-                                            defaults: vec![Expr::null(); 0],
+                                            defaults: vec![],
                                             conn_id: None,
                                             resolved_ids: ResolvedIds(BTreeSet::new()),
                                             custom_logical_compaction_window: None,

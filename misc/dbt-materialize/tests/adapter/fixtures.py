@@ -342,3 +342,42 @@ test_pseudo_types = """
 
     SELECT '{a=>1, b=>2}'::map[text=>int] AS a, ROW(1, 2) AS b, LIST[[1,2],[3]] AS c
 """
+
+cross_database_reference_schema_yml = """
+version: 2
+
+sources:
+  - name: test_database_1
+    database: test_database_1
+    schema: public
+    tables:
+      - name: table1
+
+  - name: test_database_2
+    database: test_database_2
+    schema: public
+    tables:
+      - name: table2
+
+models:
+    - name: cross_db_reference
+      description: "A model that references tables from two different databases"
+      columns:
+          - name: id
+            description: "The ID from test_database_1.table1 that matches test_database_2.table2"
+"""
+
+cross_database_reference_sql = """
+{{ config(materialized='materialized_view', schema='public') }}
+    WITH db1_data AS (
+        SELECT id
+        FROM {{ source('test_database_1', 'table1') }}
+    ),
+    db2_data AS (
+        SELECT id
+        FROM {{ source('test_database_2', 'table2') }}
+    )
+    SELECT db1_data.id
+    FROM db1_data
+    JOIN db2_data ON db1_data.id = db2_data.id
+"""

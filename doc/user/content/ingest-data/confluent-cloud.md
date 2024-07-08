@@ -88,7 +88,7 @@ of the following steps:
     Step 4. The `<your-api-key>` and `<your-api-secret>` are from the _Create
     an API Key_ step.
 
-    ```sql
+    ```mzsql
       CREATE SECRET confluent_username AS '<your-api-key>';
       CREATE SECRET confluent_password AS '<your-api-secret>';
 

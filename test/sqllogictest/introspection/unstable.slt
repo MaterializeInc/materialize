@@ -12,7 +12,7 @@ mode cockroach
 # Introspection sources are unstable.
 
 statement error cannot create view with unstable dependencies
-CREATE VIEW v AS SELECT count(*) FROM mz_internal.mz_active_peeks
+CREATE VIEW v AS SELECT count(*) FROM mz_introspection.mz_active_peeks
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false
@@ -20,11 +20,11 @@ ALTER SYSTEM SET enable_rbac_checks TO false
 COMPLETE 0
 
 # Following #26434, this still goes through RBAC now
-statement error must be owner of VIEW mz_internal.mz_active_peeks
-CREATE DEFAULT INDEX ON mz_internal.mz_active_peeks
+statement error must be owner of VIEW mz_introspection.mz_active_peeks
+CREATE DEFAULT INDEX ON mz_introspection.mz_active_peeks
 
 simple conn=mz_system,user=mz_system
-CREATE DEFAULT INDEX ON mz_internal.mz_active_peeks
+CREATE DEFAULT INDEX ON mz_introspection.mz_active_peeks
 ----
 db error: ERROR: cannot create index with unstable dependencies
 DETAIL: The object depends on the following unstable objects:
@@ -38,14 +38,14 @@ COMPLETE 0
 # Introspection views are unstable.
 
 statement error cannot create view with unstable dependencies
-CREATE VIEW v AS SELECT count(*) FROM mz_internal.mz_scheduling_elapsed
+CREATE VIEW v AS SELECT count(*) FROM mz_introspection.mz_scheduling_elapsed
 
 # Unstable temporary views are allowed
 
 statement ok
-CREATE TEMPORARY VIEW v AS SELECT count(*) FROM mz_internal.mz_scheduling_elapsed
+CREATE TEMPORARY VIEW v AS SELECT count(*) FROM mz_introspection.mz_scheduling_elapsed
 
 # SELECTs from unstable objects are allowed.
 
 statement ok
-SELECT * FROM mz_internal.mz_active_peeks
+SELECT * FROM mz_introspection.mz_active_peeks

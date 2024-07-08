@@ -432,6 +432,13 @@ pub static MAX_POSTGRES_CONNECTIONS: VarDefinition = VarDefinition::new(
     false,
 );
 
+pub static MAX_MYSQL_CONNECTIONS: VarDefinition = VarDefinition::new(
+    "max_mysql_connections",
+    value!(u32; 1000),
+    "The maximum number of MySQL connections in the region, across all schemas (Materialize).",
+    false,
+);
+
 pub static MAX_AWS_PRIVATELINK_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_aws_privatelink_connections",
     value!(u32; 0),
@@ -1982,13 +1989,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_mysql_source,
-        desc: "Create a MySQL connection or source",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_load_generator_key_value,
         desc: "Create a LOAD GENERATOR KEY VALUE",
         default: false,
@@ -2053,13 +2053,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: wait_catalog_consolidation_on_startup,
-        desc: "When opening the Catalog, wait for consolidation to complete before returning",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_copy_to_expr,
         desc: "COPY ... TO 's3://...'",
         default: false,
@@ -2108,6 +2101,27 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_envelope_upsert_inline_errors,
+        desc: "The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_outer_join_null_filter,
+        desc: "Add an extra null filter to the semi-join part of outer join lowering",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_alter_table_add_column,
+        desc: "Enable ALTER TABLE ... ADD COLUMN ...",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2120,6 +2134,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             enable_cardinality_estimates: vars.enable_cardinality_estimates(),
+            enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
         }

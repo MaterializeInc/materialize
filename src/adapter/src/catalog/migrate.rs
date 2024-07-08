@@ -13,7 +13,7 @@ use std::str::FromStr;
 use futures::future::BoxFuture;
 use maplit::btreeset;
 use mz_catalog::durable::{Item, Transaction};
-use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+use mz_catalog::memory::objects::StateUpdate;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp};
@@ -84,8 +84,9 @@ where
 pub(crate) async fn migrate(
     state: &CatalogState,
     tx: &mut Transaction<'_>,
+    item_updates: Vec<StateUpdate>,
     now: NowFn,
-    boot_ts: Timestamp,
+    _boot_ts: Timestamp,
     _connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let catalog_version = tx.get_catalog_content_version();
@@ -117,14 +118,6 @@ pub(crate) async fn migrate(
 
     // Load up a temporary catalog.
     let mut state = state.clone();
-    let item_updates = tx
-        .get_items()
-        .map(|item| StateUpdate {
-            kind: StateUpdateKind::Item(item),
-            ts: boot_ts,
-            diff: StateDiff::Addition,
-        })
-        .collect();
     // The catalog is temporary, so we can throw out the builtin updates.
     let _ = state.apply_updates_for_bootstrap(item_updates).await;
 
@@ -196,7 +189,7 @@ fn assign_new_user_global_ids(
 
     // !WARNING!
     //
-    // double-check that using this fn doesn't interfer with any other
+    // double-check that using this fn doesn't interfere with any other
     // migrations
 
     // Convert the IDs we need into a set with constant-time lookup.
@@ -677,6 +670,8 @@ pub(crate) fn durable_migrate(
     let boot_ts = boot_ts.into();
     catalog_fix_system_cluster_replica_ids_v_0_95_0(tx, boot_ts)?;
     catalog_rename_mz_introspection_cluster_v_0_103_0(tx, boot_ts)?;
+    catalog_add_new_unstable_schemas_v_0_106_0(tx)?;
+    catalog_remove_wait_catalog_consolidation_on_startup_v_0_108_0(tx);
     Ok(())
 }
 
@@ -804,4 +799,62 @@ fn catalog_rename_mz_introspection_cluster_v_0_103_0(
     tx.insert_audit_log_event(rename_event);
 
     Ok(())
+}
+
+/// This migration applies the rename of the built-in `mz_introspection` cluster to
+/// `mz_catalog_server` to the durable catalog state.
+fn catalog_add_new_unstable_schemas_v_0_106_0(tx: &mut Transaction) -> Result<(), anyhow::Error> {
+    use mz_catalog::durable::initialize::{
+        MZ_CATALOG_UNSTABLE_SCHEMA_ID, MZ_INTROSPECTION_SCHEMA_ID,
+    };
+    use mz_pgrepr::oid::{SCHEMA_MZ_CATALOG_UNSTABLE_OID, SCHEMA_MZ_INTROSPECTION_OID};
+    use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+    use mz_repr::namespaces::{MZ_CATALOG_UNSTABLE_SCHEMA, MZ_INTROSPECTION_SCHEMA};
+    use mz_sql::names::SchemaId;
+    use mz_sql::rbac;
+    use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+
+    let schema_ids: BTreeSet<_> = tx
+        .get_schemas()
+        .filter_map(|schema| match schema.id {
+            SchemaId::User(_) => None,
+            SchemaId::System(id) => Some(id),
+        })
+        .collect();
+    let schema_privileges = vec![
+        rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema),
+        MzAclItem {
+            grantee: MZ_SUPPORT_ROLE_ID,
+            grantor: MZ_SYSTEM_ROLE_ID,
+            acl_mode: AclMode::USAGE,
+        },
+        rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID),
+    ];
+
+    if !schema_ids.contains(&MZ_CATALOG_UNSTABLE_SCHEMA_ID) {
+        tx.insert_system_schema(
+            MZ_CATALOG_UNSTABLE_SCHEMA_ID,
+            MZ_CATALOG_UNSTABLE_SCHEMA,
+            MZ_SYSTEM_ROLE_ID,
+            schema_privileges.clone(),
+            SCHEMA_MZ_CATALOG_UNSTABLE_OID,
+        )?;
+    }
+    if !schema_ids.contains(&MZ_INTROSPECTION_SCHEMA_ID) {
+        tx.insert_system_schema(
+            MZ_INTROSPECTION_SCHEMA_ID,
+            MZ_INTROSPECTION_SCHEMA,
+            MZ_SYSTEM_ROLE_ID,
+            schema_privileges.clone(),
+            SCHEMA_MZ_INTROSPECTION_OID,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// This migration removes the server configuration parameter
+/// "wait_catalog_consolidation_on_startup" which is no longer used.
+fn catalog_remove_wait_catalog_consolidation_on_startup_v_0_108_0(tx: &mut Transaction) {
+    tx.remove_system_config("wait_catalog_consolidation_on_startup");
 }

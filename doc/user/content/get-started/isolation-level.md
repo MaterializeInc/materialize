@@ -35,11 +35,11 @@ Isolation level is a configuration parameter that can be set by the user on a se
 
 ## Examples
 
-```sql
+```mzsql
 SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
 ```
 
-```sql
+```mzsql
 SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
 ```
 

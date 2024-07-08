@@ -23,7 +23,6 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::num::NonZeroI64;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -84,9 +83,10 @@ pub enum IntrospectionType {
 
     // Collections written by the compute controller.
     ComputeDependencies,
-    ComputeHydrationStatus,
     ComputeOperatorHydrationStatus,
     ComputeMaterializedViewRefreshes,
+    ComputeErrorCounts,
+    ComputeHydrationTimes,
 
     // Written by the Adapter for tracking AWS PrivateLink Connection Status History
     PrivatelinkConnectionStatusHistory,
@@ -198,18 +198,18 @@ pub enum Response<T> {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct StorageMetadata {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub collection_metadata: BTreeMap<GlobalId, String>,
-    pub unfinalized_shards: BTreeSet<String>,
+    pub collection_metadata: BTreeMap<GlobalId, ShardId>,
+    pub unfinalized_shards: BTreeSet<ShardId>,
 }
 
 impl StorageMetadata {
     pub fn get_collection_shard<T>(&self, id: GlobalId) -> Result<ShardId, StorageError<T>> {
-        let shard_str = self
+        let shard_id = self
             .collection_metadata
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))?;
 
-        ShardId::from_str(shard_str).map_err(|e| StorageError::Generic(anyhow::anyhow!(e)))
+        Ok(*shard_id)
     }
 }
 
@@ -223,7 +223,7 @@ pub trait StorageTxn<T> {
     /// Retrieve all of the visible storage metadata.
     ///
     /// The value of this map should be treated as opaque.
-    fn get_collection_metadata(&self) -> BTreeMap<GlobalId, String>;
+    fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId>;
 
     /// Add new storage metadata for a collection.
     ///
@@ -231,36 +231,60 @@ pub trait StorageTxn<T> {
     /// this data.
     fn insert_collection_metadata(
         &mut self,
-        s: BTreeMap<GlobalId, String>,
+        s: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError<T>>;
 
     /// Remove the metadata associated with the identified collections.
     ///
     /// Subsequent calls to [`StorageTxn::get_collection_metadata`] must not
     /// include these keys.
-    fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, String)>;
+    fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ShardId)>;
 
     /// Retrieve all of the shards that are no longer in use by an active
     /// collection but are yet to be finalized.
-    fn get_unfinalized_shards(&self) -> BTreeSet<String>;
+    fn get_unfinalized_shards(&self) -> BTreeSet<ShardId>;
 
     /// Insert the specified values as unfinalized shards.
-    fn insert_unfinalized_shards(&mut self, s: BTreeSet<String>) -> Result<(), StorageError<T>>;
+    fn insert_unfinalized_shards(&mut self, s: BTreeSet<ShardId>) -> Result<(), StorageError<T>>;
 
     /// Mark the specified shards as finalized, deleting them from the
     /// unfinalized shard collection.
-    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<String>);
+    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<ShardId>);
 
     /// Get the txn WAL shard for this environment if it exists.
-    fn get_txn_wal_shard(&self) -> Option<String>;
+    fn get_txn_wal_shard(&self) -> Option<ShardId>;
 
     /// Store the specified shard as the environment's txn WAL shard.
     ///
     /// The implementor should error if the shard is already specified.
-    fn write_txn_wal_shard(&mut self, shard: String) -> Result<(), StorageError<T>>;
+    fn write_txn_wal_shard(&mut self, shard: ShardId) -> Result<(), StorageError<T>>;
 }
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+
+/// A predicate for a `Row` filter.
+pub type RowPredicate = Box<dyn Fn(&Row) -> bool + Send + Sync>;
+
+/// High-level write operations applicable to storage collections.
+pub enum StorageWriteOp {
+    /// Append a set of rows with specified multiplicities.
+    ///
+    /// The multiplicities may be negative, so an `Append` operation can perform
+    /// both insertions and retractions.
+    Append { updates: Vec<(Row, Diff)> },
+    /// Delete all rows matching the given predicate.
+    Delete { filter: RowPredicate },
+}
+
+impl StorageWriteOp {
+    /// Returns whether this operation appends an empty set of updates.
+    pub fn is_empty_append(&self) -> bool {
+        match self {
+            Self::Append { updates } => updates.is_empty(),
+            Self::Delete { .. } => false,
+        }
+    }
+}
 
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
@@ -272,6 +296,20 @@ pub trait StorageController: Debug {
     /// and so it is important for a user to invoke this method as soon as it is comfortable.
     /// This method can be invoked immediately, at the potential expense of performance.
     fn initialization_complete(&mut self);
+
+    /// Allow this controller and instances controlled by it to write to
+    /// external systems.
+    ///
+    /// If the controller has previously been told about tables (via
+    /// [StorageController::create_collections]), the caller must provide a
+    /// `register_ts`, the timestamp at which any tables that are known to the
+    /// controller should be registered in the txn system.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the controller knows about tables but no `register_ts` is
+    /// provided.
+    async fn allow_writes(&mut self, register_ts: Option<Self::Timestamp>);
 
     /// Update storage configuration with new parameters.
     fn update_parameters(&mut self, config_params: StorageParameters);
@@ -673,29 +711,13 @@ pub trait StorageController: Debug {
 
     /// Updates the desired state of the given introspection type.
     ///
-    /// Rows passed in `updates` MUST have the correct schema for the given
+    /// Rows passed in `op` MUST have the correct schema for the given
     /// introspection type, as readers rely on this and might panic otherwise.
     async fn update_introspection_collection(
         &mut self,
         type_: IntrospectionType,
-        updates: Vec<(Row, Diff)>,
+        op: StorageWriteOp,
     );
-
-    /// Resets the txns system to a set of invariants necessary for correctness.
-    ///
-    /// Must be called on boot before create_collections or the various appends.
-    /// This is true _regardless_ of whether the txn-wal feature is on or
-    /// not. See the big comment in the impl of the method for details. Ideally,
-    /// this would have just been folded into `Controller::new`, but it needs
-    /// the timestamp and there are boot dependency issues.
-    ///
-    /// TODO: This can be removed once we've flipped to the new txns system for
-    /// good and there is no possibility of the old code running concurrently
-    /// with the new code.
-    async fn init_txns(
-        &mut self,
-        init_ts: Self::Timestamp,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// On boot, seed the controller's metadata/state.
     async fn initialize_state(

@@ -23,7 +23,7 @@ _table\_name_ | The name of the tablefrom which to retrieve rows.
 The expression `TABLE t` is exactly equivalent to the following [`SELECT`]
 expression:
 
-```sql
+```mzsql
 SELECT * FROM t;
 ```
 
@@ -31,7 +31,7 @@ SELECT * FROM t;
 
 Using a `TABLE` expression as a standalone statement:
 
-```sql
+```mzsql
 TABLE t;
 ```
 ```nofmt
@@ -43,7 +43,7 @@ TABLE t;
 
 Using a `TABLE` expression in place of a [`SELECT`] expression:
 
-```sql
+```mzsql
 TABLE t ORDER BY a DESC LIMIT 1;
 ```
 ```nofmt

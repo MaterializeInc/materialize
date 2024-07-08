@@ -66,6 +66,7 @@ steps:
         command: ci/test/check-merge-with-target.sh
         inputs:
           - Cargo.lock
+          - Cargo.toml
           - "**/Cargo.toml"
           - "**/*.rs"
         depends_on: []
@@ -115,6 +116,7 @@ steps:
         command: bin/ci-builder run stable ci/test/lint-slow.sh
         inputs:
           - Cargo.lock
+          - Cargo.toml
           - "**/Cargo.toml"
           - "**/*.rs"
         depends_on: []
@@ -133,6 +135,7 @@ steps:
           RUSTUP_TOOLCHAIN: $RUST_VERSION
         inputs:
           - Cargo.lock
+          - Cargo.toml
           - "**/Cargo.toml"
           - "**/*.rs"
         depends_on: []
@@ -147,6 +150,7 @@ steps:
         command: bin/ci-builder run stable ci/test/lint-deps.sh
         inputs:
           - Cargo.lock
+          - Cargo.toml
           - "**/Cargo.toml"
           - "**/*.rs"
         depends_on: []
@@ -215,9 +219,10 @@ steps:
 
   - id: cargo-test
     label: Cargo test
-    timeout_in_minutes: 45
+    timeout_in_minutes: 60
     inputs:
       - Cargo.lock
+      - Cargo.toml
       - ".config/nextest.toml"
       - "**/Cargo.toml"
       - "**/*.rs"
@@ -595,7 +600,11 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
-          args: [--scenario=KafkaUpsertUnique]
+          args:
+            [
+              --scenario=KafkaUpsertUnique,
+              --other-tag=common-ancestor,
+            ]
     coverage: skip
     agents:
       queue: linux-aarch64-small

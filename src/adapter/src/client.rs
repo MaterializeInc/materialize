@@ -698,7 +698,7 @@ impl SessionClient {
     /// No authorization is performed, so access to this function must be
     /// limited to internal servers or superusers.
     pub async fn controller_allow_writes(&mut self) -> Result<bool, anyhow::Error> {
-        self.send_without_session(|tx| Command::ControllerAllowWrites { tx })
+        self.send_without_session(|tx| Command::AllowWrites { tx })
             .await
     }
 
@@ -871,7 +871,7 @@ impl SessionClient {
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }
                 | Command::Dump { .. } => {}
-                Command::ControllerAllowWrites { .. } => {}
+                Command::AllowWrites { .. } => {}
             };
             cmd
         });
@@ -885,11 +885,13 @@ impl SessionClient {
                     drop(guarded_rx);
 
                     let res = res.expect("sender dropped");
-                    let status = if res.result.is_ok() {
-                        "success"
-                    } else {
-                        "error"
-                    };
+                    let status = res.result.is_ok().then_some("success").unwrap_or("error");
+                    if let Err(err) = res.result.as_ref() {
+                        if name_hint.should_trace_errors() {
+                            tracing::warn!(?err, ?name_hint, "adapter response error");
+                        }
+                    }
+
                     if let Some(typ) = typ {
                         inner_client
                             .metrics

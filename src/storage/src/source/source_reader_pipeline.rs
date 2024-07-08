@@ -34,7 +34,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::stream::StreamExt;
@@ -49,13 +48,14 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::SourceError;
+use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
+use mz_timely_util::containers::stack::StackWrapper;
 use mz_timely_util::operator::StreamExt as _;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -68,7 +68,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
+use timely::{Container, PartialOrder};
 use tokio_stream::wrappers::WatchStream;
 use tracing::{info, trace};
 
@@ -76,7 +76,7 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::metrics::source::SourceMetrics;
 use crate::metrics::StorageMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockFollower, ReclockOperator};
-use crate::source::types::{SourceMessage, SourceOutput, SourceReaderError, SourceRender};
+use crate::source::types::{SourceMessage, SourceOutput, SourceRender, StackedCollection};
 use crate::statistics::SourceStatistics;
 
 /// Shared configuration information for all source types. This is used in the
@@ -160,7 +160,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Time>, Diff>,
-        Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
+        Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
     )>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
@@ -262,7 +262,7 @@ fn source_render_operator<G, C>(
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
@@ -320,7 +320,7 @@ where
                     // Downstream consumers of this data will preserve this
                     // status.
                     Err(ref error) => HealthStatusUpdate::stalled(
-                        error.inner.to_string(),
+                        error.to_string(),
                         Some("retracting the errored value may resume the source".to_string()),
                     ),
                 };
@@ -346,14 +346,14 @@ where
                     Err(_) => {}
                 }
             }
-            data_output.give_container(&cap_data, &mut data).await;
+            data_output.give_container(&cap_data, &mut data);
 
             for statuses in statuses_by_idx.values_mut() {
                 if statuses.is_empty() {
                     continue;
                 }
 
-                health_output.give_container(&health_cap, statuses).await;
+                health_output.give_container(&health_cap, statuses);
                 statuses.clear()
             }
         }
@@ -496,7 +496,7 @@ where
         );
 
         let cap = cap_set.delayed(cap_set.first().unwrap());
-        remap_output.give_container(&cap, &mut initial_batch.updates).await;
+        remap_output.give_container(&cap, &mut initial_batch.updates);
         drop(cap);
         cap_set.downgrade(initial_batch.upper);
 
@@ -524,7 +524,7 @@ where
                     );
 
                     let cap = cap_set.delayed(cap_set.first().unwrap());
-                    remap_output.give_container(&cap, &mut remap_trace_batch.updates).await;
+                    remap_output.give_container(&cap, &mut remap_trace_batch.updates);
 
                     // If the last remap trace closed the input, we no longer
                     // need to (or can) advance the timestamper.
@@ -537,7 +537,7 @@ where
                     let mut remap_trace_batch = timestamper.advance().await;
 
                     let cap = cap_set.delayed(cap_set.first().unwrap());
-                    remap_output.give_container(&cap, &mut remap_trace_batch.updates).await;
+                    remap_output.give_container(&cap, &mut remap_trace_batch.updates);
 
                     cap_set.downgrade(remap_trace_batch.upper);
                 }
@@ -561,17 +561,17 @@ where
 /// Receives un-timestamped batches from the source reader and updates to the
 /// remap trace on a second input. This operator takes the remap information,
 /// reclocks incoming batches and sends them forward.
-fn reclock_operator<G, FromTime, D, M>(
+fn reclock_operator<G, FromTime, M>(
     scope: &G,
     config: RawSourceCreationConfig,
     mut timestamper: ReclockFollower<FromTime, mz_repr::Timestamp>,
     mut source_rx: InstrumentedUnboundedReceiver<
         Event<
             FromTime,
-            Vec<(
-                (usize, Result<SourceMessage, SourceReaderError>),
+            StackWrapper<(
+                (usize, Result<SourceMessage, DataflowError>),
                 FromTime,
-                D,
+                Diff,
             )>,
         >,
         M,
@@ -579,13 +579,12 @@ fn reclock_operator<G, FromTime, D, M>(
     remap_trace_updates: Collection<G, FromTime, Diff>,
     source_metrics: Arc<SourceMetrics>,
 ) -> Vec<(
-    Collection<G, SourceOutput<FromTime>, D>,
-    Collection<G, SourceError, Diff>,
+    Collection<G, SourceOutput<FromTime>, Diff>,
+    Collection<G, DataflowError, Diff>,
 )>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
-    D: Semigroup + Into<Diff> + 'static,
     M: InstrumentedChannelMetric + 'static,
 {
     let RawSourceCreationConfig {
@@ -613,7 +612,8 @@ where
 
     let operator_name = format!("reclock({})", id);
     let mut reclock_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-    let (mut reclocked_output, reclocked_stream) = reclock_op.new_output();
+    let (mut reclocked_output, reclocked_stream) =
+        reclock_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates.inner, Pipeline);
 
     reclock_op.build(move |capabilities| async move {
@@ -627,8 +627,8 @@ where
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
 
         // Stash of batches that have not yet been timestamped.
-        type Batch<T, D> = Vec<((usize, Result<SourceMessage, SourceReaderError>), T, D)>;
-        let mut untimestamped_batches: Vec<(FromTime, Batch<FromTime, D>)> = Vec::new();
+        type Batch<T> = Vec<((usize, Result<SourceMessage, DataflowError>), T, Diff)>;
+        let mut untimestamped_batches: Vec<(FromTime, Batch<FromTime>)> = Vec::new();
 
         // Stash of reclock updates that are still beyond the upper frontier
         let mut remap_updates_stash = vec![];
@@ -685,8 +685,8 @@ where
                         );
                         work_to_do.notify_one();
                     }
-                    Event::Messages(time, batch) => {
-                        untimestamped_batches.push((time, batch));
+                    Event::Messages(time, mut batch) => {
+                        untimestamped_batches.push((time, batch.drain().cloned().collect()));
                         work_to_do.notify_one();
                     }
                 },
@@ -734,17 +734,11 @@ where
                                 };
                                 (idx, Ok(ok))
                             }
-                            Err(SourceReaderError { inner }) => {
-                                let err = SourceError {
-                                    source_id: id,
-                                    error: inner,
-                                };
-                                (idx, Err(err))
-                            }
+                            Err(err) => (idx, Err(err)),
                         };
 
                         let ts_cap = cap_set.delayed(&into_ts);
-                        reclocked_output.give(&ts_cap, (output, into_ts, diff)).await;
+                        reclocked_output.give(&ts_cap, (output, into_ts, diff));
                         total_processed += 1;
                     }
                     // The loop above might have completely emptied batches. We can now remove them

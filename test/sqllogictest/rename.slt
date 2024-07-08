@@ -64,7 +64,7 @@ SELECT event_type, object_type, details FROM mz_audit_events WHERE event_type = 
 ----
 alter
 schema
-{"database_name":"materialize","id":"u8","new_name":"b2","old_name":"b1"}
+{"database_name":"materialize","id":"u10","new_name":"b2","old_name":"b1"}
 
 query I
 SELECT x FROM b2.t

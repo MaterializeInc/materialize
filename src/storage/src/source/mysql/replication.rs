@@ -44,16 +44,18 @@ use std::convert::Infallible;
 use std::num::NonZeroU64;
 use std::pin::pin;
 
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::AsCollection;
 use futures::StreamExt;
 use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
 use mz_ore::future::InTask;
 use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
+use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Concat, Map};
+use timely::dataflow::operators::core::Map;
+use timely::dataflow::operators::Concat;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -64,8 +66,8 @@ use mz_mysql_util::{
     query_sys_var, MySqlConn, MySqlError, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::result::ResultExt;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::GlobalId;
+use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{
@@ -73,7 +75,7 @@ use mz_timely_util::builder_async::{
 };
 
 use crate::metrics::source::mysql::MySqlSourceMetrics;
-use crate::source::types::SourceReaderError;
+use crate::source::types::{SourceMessage, StackedCollection};
 use crate::source::RawSourceCreationConfig;
 
 use super::{
@@ -105,7 +107,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     rewind_stream: &Stream<G, RewindRequest>,
     metrics: MySqlSourceMetrics,
 ) -> (
-    Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
+    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
     Stream<G, ReplicationError>,
     PressOnDropButton,
@@ -114,7 +116,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
-    let (mut data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     // Captures DefiniteErrors that affect the entire source, including all subsources
     let (mut definite_error_handle, definite_errors) =
@@ -464,14 +466,11 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     });
 
     // TODO: Split row decoding into a separate operator that can be distributed across all workers
-    let replication_updates = data_stream
-        .as_collection()
-        .map(|(output_index, row)| (output_index, row.err_into()));
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 
     (
-        replication_updates,
+        data_stream.as_collection(),
         upper_stream,
         errors,
         button.press_on_drop(),

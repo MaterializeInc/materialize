@@ -208,7 +208,7 @@ where
         }
 
         debug!("{} emitting {:?}", name, subscribe.remap);
-        remap_output.give(&cap, subscribe.remap.clone()).await;
+        remap_output.give(&cap, subscribe.remap.clone());
 
         loop {
             let _ = txns_cache.update_ge(&subscribe.remap.logical_upper).await;
@@ -237,7 +237,7 @@ where
                         logical_upper: new_upper,
                     };
                     debug!("{} emitting {:?}", name, subscribe.remap);
-                    remap_output.give(&cap, subscribe.remap.clone()).await;
+                    remap_output.give(&cap, subscribe.remap.clone());
                 }
                 // We know there are no writes in `[logical_upper,
                 // new_progress)`, so advance our output frontier.
@@ -337,7 +337,7 @@ where
             if remap.physical_upper != physical_upper {
                 physical_upper = remap.physical_upper.clone();
                 debug!("{} emitting {:?}", name, remap);
-                remap_output.give(&cap, remap).await;
+                remap_output.give(&cap, remap);
             } else {
                 debug!("{} not emitting {:?}", name, remap);
             }
@@ -433,7 +433,7 @@ where
                     // `mfp_and_decode` (after this operator) do the necessary
                     // filtering.
                     debug!("{} emitting data {:?}", name, data);
-                    passthrough_output.give_container(&cap, &mut data).await;
+                    passthrough_output.give_container(&cap, &mut data);
                 }
                 AsyncEvent::Progress(new_progress) => {
                     // If `until.less_equal(new_progress)`, it means that all

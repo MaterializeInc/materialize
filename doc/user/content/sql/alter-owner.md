@@ -26,11 +26,11 @@ index owner is always kept in-sync with the owner of the underlying relation.
 
 ## Examples
 
-```sql
+```mzsql
 ALTER TABLE t OWNER TO joe;
 ```
 
-```sql
+```mzsql
 ALTER CLUSTER REPLICA production.r1 OWNER TO admin;
 ```
 

@@ -104,7 +104,7 @@ use crate::coord::{
     AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
     CreateConnectionValidationReady, ExecuteContext, ExplainContext, Message, PendingRead,
     PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, StageResult, Staged,
-    TargetCluster, WatchSetResponse,
+    StagedContext, TargetCluster, WatchSetResponse,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
@@ -115,6 +115,7 @@ use crate::session::{
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, ReadHolds};
 
+mod cluster;
 mod create_index;
 mod create_materialized_view;
 mod create_view;
@@ -155,34 +156,40 @@ impl Coordinator {
     /// execute both on and off of the coordinator thread. Stages can either produce another stage
     /// to execute or a final response. An explicit [Span] is passed to allow for convenient
     /// tracing.
-    pub(crate) async fn sequence_staged<S: Staged + 'static>(
+    pub(crate) async fn sequence_staged<S>(
         &mut self,
-        mut ctx: ExecuteContext,
+        mut ctx: S::Ctx,
         parent_span: Span,
         mut stage: S,
-    ) {
-        let cancel_enabled = stage.cancel_enabled();
-        if cancel_enabled {
-            // Channel to await cancellation. Insert a new channel, but check if the previous one
-            // was already canceled.
-            if let Some((_prev_tx, prev_rx)) = self
-                .staged_cancellation
-                .insert(ctx.session.conn_id().clone(), watch::channel(false))
-            {
-                let was_canceled = *prev_rx.borrow();
-                if was_canceled {
-                    ctx.retire(Err(AdapterError::Canceled));
-                    return;
-                }
-            }
-        } else {
-            // If no cancel allowed, remove it so handle_spawn doesn't observe any previous value
-            // when cancel_enabled may have been true on an earlier stage.
-            self.staged_cancellation.remove(ctx.session.conn_id());
-        }
+    ) where
+        S: Staged + 'static,
+        S::Ctx: Send + 'static,
+    {
         return_if_err!(stage.validity().check(self.catalog()), ctx);
         loop {
-            let cancel_enabled = stage.cancel_enabled();
+            let mut cancel_enabled = stage.cancel_enabled();
+            if let Some(session) = ctx.session() {
+                if cancel_enabled {
+                    // Channel to await cancellation. Insert a new channel, but check if the previous one
+                    // was already canceled.
+                    if let Some((_prev_tx, prev_rx)) = self
+                        .staged_cancellation
+                        .insert(session.conn_id().clone(), watch::channel(false))
+                    {
+                        let was_canceled = *prev_rx.borrow();
+                        if was_canceled {
+                            ctx.retire(Err(AdapterError::Canceled));
+                            return;
+                        }
+                    }
+                } else {
+                    // If no cancel allowed, remove it so handle_spawn doesn't observe any previous value
+                    // when cancel_enabled may have been true on an earlier stage.
+                    self.staged_cancellation.remove(session.conn_id());
+                }
+            } else {
+                cancel_enabled = false
+            };
             let next = stage
                 .stage(self, &mut ctx)
                 .instrument(parent_span.clone())
@@ -211,27 +218,30 @@ impl Coordinator {
         }
     }
 
-    fn handle_spawn<T, F>(
+    fn handle_spawn<C, T, F>(
         &mut self,
-        ctx: ExecuteContext,
+        ctx: C,
         handle: JoinHandle<Result<T, AdapterError>>,
         cancel_enabled: bool,
         f: F,
     ) where
+        C: StagedContext + Send + 'static,
         T: Send + 'static,
-        F: FnOnce(ExecuteContext, T) + Send + 'static,
+        F: FnOnce(C, T) + Send + 'static,
     {
-        let rx: BoxFuture<()> =
-            if let Some((_tx, rx)) = self.staged_cancellation.get(ctx.session().conn_id()) {
-                let mut rx = rx.clone();
-                Box::pin(async move {
-                    // Wait for true or dropped sender.
-                    let _ = rx.wait_for(|v| *v).await;
-                    ()
-                })
-            } else {
-                Box::pin(future::pending())
-            };
+        let rx: BoxFuture<()> = if let Some((_tx, rx)) = ctx
+            .session()
+            .and_then(|session| self.staged_cancellation.get(session.conn_id()))
+        {
+            let mut rx = rx.clone();
+            Box::pin(async move {
+                // Wait for true or dropped sender.
+                let _ = rx.wait_for(|v| *v).await;
+                ()
+            })
+        } else {
+            Box::pin(future::pending())
+        };
         spawn(|| "sequence_staged", async move {
             tokio::select! {
                 res = handle => {
@@ -686,14 +696,15 @@ impl Coordinator {
                         ctx,
                         result,
                         connection_gid,
-                        plan_validity: PlanValidity {
+                        plan_validity: PlanValidity::new(
                             transient_revision,
-                            dependency_ids: resolved_ids.0,
-                            cluster_id: None,
-                            replica_id: None,
+                            resolved_ids.0.clone(),
+                            None,
+                            None,
                             role_metadata,
-                        },
+                        ),
                         otel_ctx,
+                        dependency_ids: resolved_ids.0,
                     },
                 ));
                 if let Err(e) = result {
@@ -2213,6 +2224,7 @@ impl Coordinator {
                         target_cluster,
                         None,
                         ExplainContext::Pushdown,
+                        Some(ctx.session().vars().max_query_result_size()),
                     ),
                     ctx
                 );
@@ -2571,12 +2583,14 @@ impl Coordinator {
         self.sequence_peek(
             peek_ctx,
             plan::SelectPlan {
+                select: None,
                 source: selection,
                 when: QueryWhen::FreshestTableWrite,
                 finishing,
                 copy_to: None,
             },
             TargetCluster::Active,
+            None,
         )
         .await;
 
@@ -3054,13 +3068,13 @@ impl Coordinator {
 
         let otel_ctx = OpenTelemetryContext::obtain();
 
-        let plan_validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: BTreeSet::from_iter([plan.sink.from]),
-            cluster_id: Some(plan.in_cluster),
-            replica_id: None,
-            role_metadata: ctx.session().role_metadata().clone(),
-        };
+        let plan_validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            BTreeSet::from_iter([plan.sink.from]),
+            Some(plan.in_cluster),
+            None,
+            ctx.session().role_metadata().clone(),
+        );
 
         // Re-resolve items in the altered statement
         // Parse statement.
@@ -3334,14 +3348,15 @@ impl Coordinator {
                             ctx,
                             result,
                             connection_gid: id,
-                            plan_validity: PlanValidity {
+                            plan_validity: PlanValidity::new(
                                 transient_revision,
-                                dependency_ids,
-                                cluster_id: None,
-                                replica_id: None,
+                                dependency_ids.clone(),
+                                None,
+                                None,
                                 role_metadata,
-                            },
+                            ),
                             otel_ctx,
+                            dependency_ids,
                         },
                     ));
                     if let Err(e) = result {
@@ -4454,6 +4469,20 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::ReassignOwned)
+    }
+
+    #[instrument]
+    // TODO(parkmycar): Remove this once we have an actual implementation.
+    #[allow(clippy::unused_async)]
+    pub(super) async fn sequence_alter_table(
+        &mut self,
+        _session: &Session,
+        _plan: plan::AlterTablePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        Err(AdapterError::PlanError(plan::PlanError::Unsupported {
+            feature: "ALTER TABLE ... ADD COLUMN ...".to_string(),
+            issue_no: Some(28082),
+        }))
     }
 }
 

@@ -429,9 +429,7 @@ where
             while let Some(event) = desired_input.next().await {
                 match event {
                     Event::Data([_output_cap, data_output_cap], mut data) => {
-                        data_output
-                            .give_container(&data_output_cap, &mut data)
-                            .await;
+                        data_output.give_container(&data_output_cap, &mut data);
                     }
                     Event::Progress(_) => {}
                 }
@@ -489,9 +487,7 @@ where
                 match event {
                     Event::Data([_output_cap, data_output_cap], mut data) => {
                         // Just passthrough the data.
-                        data_output
-                            .give_container(&data_output_cap, &mut data)
-                            .await;
+                        data_output.give_container(&data_output_cap, &mut data);
                         continue;
                     }
                     Event::Progress(frontier) => {
@@ -528,7 +524,7 @@ where
                     batch_description
                 );
 
-                output.give(&cap, batch_description).await;
+                output.give(&cap, batch_description);
 
                 // We downgrade our capability to the batch
                 // description upper, as there will never be
@@ -876,7 +872,7 @@ where
                         batch_tokens.push(batch);
                     }
 
-                    output.give_container(&cap, &mut batch_tokens).await;
+                    output.give_container(&cap, &mut batch_tokens);
 
                     processed_desired_frontier.clone_from(&desired_frontier);
                     processed_descriptions_frontier.clone_from(&batch_descriptions_frontier);

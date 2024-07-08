@@ -1794,6 +1794,10 @@ fn plan_set_expr(
                     show::plan_show_create_connection(qcx.scx, stmt.clone())?,
                     show::describe_show_create_connection(qcx.scx, stmt)?,
                 ),
+                ShowStatement::ShowCreateCluster(stmt) => to_hirscope(
+                    show::plan_show_create_cluster(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_cluster(qcx.scx, stmt)?,
+                ),
                 ShowStatement::ShowCreateIndex(stmt) => to_hirscope(
                     show::plan_show_create_index(qcx.scx, stmt.clone())?,
                     show::describe_show_create_index(qcx.scx, stmt)?,
@@ -3200,10 +3204,9 @@ fn invent_column_name(
                     _ => unreachable!(),
                 };
 
-                if schema
-                    == &SchemaSpecifier::from(*ecx.qcx.scx.catalog.get_mz_internal_schema_id())
+                if schema == &SchemaSpecifier::from(ecx.qcx.scx.catalog.get_mz_internal_schema_id())
                     || schema
-                        == &SchemaSpecifier::from(*ecx.qcx.scx.catalog.get_mz_unsafe_schema_id())
+                        == &SchemaSpecifier::from(ecx.qcx.scx.catalog.get_mz_unsafe_schema_id())
                 {
                     None
                 } else {

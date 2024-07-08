@@ -11,11 +11,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.util import selected_by_name
 
 SERVICES = [
     Materialized(options=["--persist-pubsub-url=http://toxiproxy:6879"]),
@@ -67,10 +68,13 @@ disruptions = [
 ]
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test that the system is able to make progress in the face of PubSub disruptions."""
+    parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])
 
-    for disruption in disruptions:
+    args = parser.parse_args()
+
+    for disruption in selected_by_name(args.disruptions, disruptions):
         c.down(destroy_volumes=True)
         c.up("redpanda", "materialized")
         c.up("testdrive", persistent=True)

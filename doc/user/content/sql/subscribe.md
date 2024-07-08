@@ -222,7 +222,7 @@ Below are the recommended ways to work around this.
 
 As an example, we'll create a [counter load generator](https://materialize.com/docs/sql/create-source/load-generator/#creating-a-counter-load-generator) that emits a row every second:
 
-```sql
+```mzsql
 CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;
 ```
 
@@ -235,14 +235,14 @@ Next, let's subscribe to the `counter` load generator source that we've created 
 
 First, declare a `SUBSCRIBE` cursor:
 
-```sql
+```mzsql
 BEGIN;
 DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM counter);
 ```
 
 Then, use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it's ready:
 
-```sql
+```mzsql
 FETCH ALL c;
 ```
 
@@ -250,19 +250,19 @@ That will retrieve all of the rows that are currently available.
 If there are no rows available, it will wait until there are some ready and return those.
 A `timeout` can be used to specify a window in which to wait for rows. This will return up to the specified count (or `ALL`) of rows that are ready within the timeout. To retrieve up to 100 rows that are available in at most the next `1s`:
 
-```sql
+```mzsql
 FETCH 100 c WITH (timeout='1s');
 ```
 
 To retrieve all available rows available over the next `1s`:
 
-```sql
+```mzsql
 FETCH ALL c WITH (timeout='1s');
 ```
 
 A `0s` timeout can be used to return rows that are available now without waiting:
 
-```sql
+```mzsql
 FETCH ALL c WITH (timeout='0s');
 ```
 
@@ -270,7 +270,7 @@ FETCH ALL c WITH (timeout='0s');
 
 If you want to use `SUBSCRIBE` from an interactive SQL session (e.g.`psql`), wrap the query in `COPY`:
 
-```sql
+```mzsql
 COPY (SUBSCRIBE (SELECT * FROM counter)) TO STDOUT;
 ```
 
@@ -319,11 +319,11 @@ value columns.
 * Using this modifier, the output rows will have the following
 structure:
 
-   ```sql
+   ```mzsql
    SUBSCRIBE mview ENVELOPE UPSERT (KEY (key));
    ```
 
-   ```sql
+   ```mzsql
    mz_timestamp | mz_state | key  | value
    -------------|----------|------|--------
    100          | upsert   | 1    | 2
@@ -336,7 +336,7 @@ structure:
 
   _Insert_
 
-  ```sql
+  ```mzsql
    -- at time 200, add a new row with key=3, value=6
    mz_timestamp | mz_state | key  | value
    -------------|----------|------|--------
@@ -347,7 +347,7 @@ structure:
 
   _Update_
 
-  ```sql
+  ```mzsql
    -- at time 300, update key=1's value to 10
    mz_timestamp | mz_state | key  | value
    -------------|----------|------|--------
@@ -361,7 +361,7 @@ structure:
 
   _Delete_
 
-  ```sql
+  ```mzsql
    -- at time 400, delete all rows
    mz_timestamp | mz_state | key  | value
    -------------|----------|------|--------
@@ -380,7 +380,7 @@ structure:
 
   _Key violation_
 
-  ```sql
+  ```mzsql
    -- at time 500, introduce a key_violation
    mz_timestamp | mz_state        | key  | value
    -------------|-----------------|------|--------
@@ -412,11 +412,11 @@ value of the columns.
 * Using this modifier, the output rows will have the following
 structure:
 
-   ```sql
+   ```mzsql
    SUBSCRIBE mview ENVELOPE DEBEZIUM (KEY (key));
    ```
 
-   ```sql
+   ```mzsql
    mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
    100          | upsert   | 1    | NULL         | 2
@@ -428,7 +428,7 @@ structure:
 
   _Insert_
 
-  ```sql
+  ```mzsql
    -- at time 200, add a new row with key=3, value=6
    mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
@@ -442,7 +442,7 @@ structure:
 
   _Update_
 
-  ```sql
+  ```mzsql
    -- at time 300, update key=1's value to 10
    mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
@@ -456,7 +456,7 @@ structure:
 
   _Delete_
 
-  ```sql
+  ```mzsql
    -- at time 400, delete all rows
    mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
@@ -475,7 +475,7 @@ structure:
 
   _Key violation_
 
-  ```sql
+  ```mzsql
    -- at time 500, introduce a key_violation
    mz_timestamp | mz_state        | key  | before_value | after_value
    -------------|-----------------|------|--------------|-------
@@ -499,7 +499,7 @@ to sort the rows within each distinct timestamp.
 * The `ORDER BY` expression can take any column in the underlying object or
   query, including `mz_diff`.
 
-   ```sql
+   ```mzsql
    SUBSCRIBE mview WITHIN TIMESTAMP ORDER BY c1, c2 DESC NULLS LAST, mz_diff;
 
    mz_timestamp | mz_diff | c1            | c2   | c3
@@ -518,7 +518,7 @@ to sort the rows within each distinct timestamp.
 
 When you're done, you can drop the `counter` load generator source:
 
-```sql
+```mzsql
 DROP SOURCE counter;
 ```
 

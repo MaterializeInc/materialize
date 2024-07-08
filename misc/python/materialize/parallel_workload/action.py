@@ -916,10 +916,13 @@ class FlipFlagsAction(Action):
         BOOLEAN_FLAG_VALUES = ["TRUE", "FALSE"]
 
         self.flags_with_values: dict[str, list[str]] = dict()
-        for flag in ["catalog", "snapshot", "txn"]:
+        for flag in ["catalog", "source", "snapshot", "txn"]:
             self.flags_with_values[f"persist_use_critical_since_{flag}"] = (
                 BOOLEAN_FLAG_VALUES
             )
+        self.flags_with_values["persist_claim_unclaimed_compactions"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["persist_roundtrip_spine"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_optimize_ignored_data_fetch"] = (
             BOOLEAN_FLAG_VALUES
@@ -933,6 +936,7 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_columnar_format"] = ["row", "both"]
+        self.flags_with_values["persist_batch_record_part_format"] = BOOLEAN_FLAG_VALUES
 
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
@@ -1967,10 +1971,10 @@ write_action_list = ActionList(
         (InsertAction, 50),
         (SelectOneAction, 1),  # can be mixed with writes
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
-        (HttpPostAction, 50),
+        (HttpPostAction, 5),
         (CommitRollbackAction, 10),
         (ReconnectAction, 1),
-        (SourceInsertAction, 50),
+        (SourceInsertAction, 5),
         (FlipFlagsAction, 2),
     ],
     autocommit=False,

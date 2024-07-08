@@ -84,15 +84,14 @@ use std::convert::Infallible;
 use std::rc::Rc;
 use std::time::Duration;
 
-use differential_dataflow::Collection;
 use itertools::Itertools as _;
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{simple_query_opt, PostgresError};
-use mz_repr::{Datum, Diff, Row};
+use mz_repr::{Datum, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_storage_types::errors::SourceErrorDetails;
+use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{
     MzOffset, PostgresSourceConnection, SourceExport, SourceTimestamp,
@@ -107,8 +106,8 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::Client;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
-use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+use crate::source::types::{ProgressStatisticsUpdate, SourceRender, StackedCollection};
+use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
 mod snapshot;
@@ -127,7 +126,7 @@ impl SourceRender for PostgresSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -197,14 +196,7 @@ impl SourceRender for PostgresSourceConnection {
 
         let stats_stream = stats_stream.concat(&snapshot_stats);
 
-        let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
-            let res = res.map(|row| SourceMessage {
-                key: Row::default(),
-                value: row,
-                metadata: Row::default(),
-            });
-            (output, res)
-        });
+        let updates = snapshot_updates.concat(&repl_updates);
 
         let init = std::iter::once(HealthStatusMessage {
             index: 0,
@@ -325,11 +317,11 @@ pub enum DefiniteError {
     CastError(#[source] EvalError),
 }
 
-impl From<DefiniteError> for SourceReaderError {
+impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
-        SourceReaderError {
-            inner: SourceErrorDetails::Other(err.to_string()),
-        }
+        DataflowError::SourceError(Box::new(SourceError {
+            error: SourceErrorDetails::Other(err.to_string()),
+        }))
     }
 }
 

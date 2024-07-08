@@ -173,3 +173,26 @@ INSERT INTO t1 VALUES((SELECT 1 ORDER BY (SELECT x FROM t1 LIMIT 1)));
 COMMIT;
 ----
 db error: ERROR: INSERT INTO t1 VALUES ((SELECT 1 ORDER BY (SELECT x FROM t1 LIMIT 1))) cannot be run inside a transaction block
+
+statement ok
+ROLLBACK
+
+# Verify that max_query_result_size doesn't affect read part of RTW queries.
+# See #27428
+statement ok
+SET max_query_result_size = '8B';
+
+query error db error: ERROR: result exceeds max size of 8 B
+SELECT generate_series(1, 100)
+
+statement ok
+INSERT INTO t SELECT * FROM t
+
+# But the internal var does limit.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_result_size = 1
+----
+COMPLETE 0
+
+statement error db error: ERROR: result exceeds max size of 1 B
+INSERT INTO t SELECT * FROM t

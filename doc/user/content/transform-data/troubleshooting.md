@@ -110,7 +110,7 @@ It's important to note that this only applies to basic queries against **a
 single** source, materialized view or table, with no ordering, filters or
 offsets.
 
-```sql
+```mzsql
 SELECT <column list or *>
 FROM <source, materialized view or table>
 LIMIT <25 or less>;
@@ -125,7 +125,7 @@ to get the execution plan for the query, and validate that it starts with
 Use temporal flters to filter results on a timestamp column that correlates with
 the insertion or update time of each row. For example:
 
-```sql
+```mzsql
 WHERE mz_now() <= event_ts + INTERVAL '1hr'
 ```
 
@@ -187,7 +187,7 @@ The measure of cluster busyness is CPU. You can monitor CPU usage in the
 the **"Clusters"** tab in the navigation bar, and clicking into the cluster.
 You can also grab CPU usage from the system catalog using SQL:
 
-```sql
+```mzsql
 SELECT cru.cpu_percent
 FROM mz_internal.mz_cluster_replica_utilization cru
 LEFT JOIN mz_catalog.mz_cluster_replicas cr ON cru.replica_id = cr.id
@@ -200,6 +200,7 @@ WHERE c.name = <CLUSTER_NAME>;
 The most common reasons for query hanging are:
 
 * An upstream source is stalled
+* An upstream object is still hydrating
 * Your cluster is unhealthy
 
 Each of these reasons requires a different approach for troubleshooting. Follow
@@ -217,6 +218,21 @@ guidance.
 <!-- TODO: update this to use the query history UI once it's available -->
 To detect and address stalled sources, follow the [`Ingest data` troubleshooting](/ingest-data/troubleshooting)
 guide.
+
+### Hydrating upstream objects
+
+When a source, materialized view, or index is created or updated, it must first
+be backfilled with any pre-existing data — a process known as _hydration_.
+
+Queries that depend objects that are still hydrating will **block until
+hydration is complete**. To see whether an object is still hydrating, navigate
+to the [workflow graph](#detect) for the object in the Materialize console.
+
+Hydration time is proportional to data volume and query complexity. This means
+that you should expect objects with large volumes of data and/or complex
+queries to take longer to hydrate. You should also expect hydration to be
+triggered every time a cluster is restarted or sized up, including during
+[Materialize's routine maintenance window](/releases#schedule).
 
 ### Unhealthy cluster
 

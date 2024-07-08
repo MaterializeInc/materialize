@@ -232,7 +232,7 @@ rules_rust_dependencies()
 # Fetch and register the relevant Rust toolchains. We use a custom macro that
 # depends on `rules_rust` but cuts down on bloat from their defaults.
 
-RUST_VERSION = "1.78.0"
+RUST_VERSION = "1.79.0"
 
 load("//misc/bazel/toolchains:rust.bzl", "rust_toolchains")
 rust_toolchains(

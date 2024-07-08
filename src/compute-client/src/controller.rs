@@ -46,10 +46,9 @@ use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
-use mz_repr::global_id::TransientIdGen;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
-use mz_storage_client::controller::{IntrospectionType, StorageController};
+use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::{Deserialize, Serialize};
@@ -164,8 +163,6 @@ pub struct ComputeController<T> {
     stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
-    /// A generator for transient [`GlobalId`]s.
-    transient_id_gen: Arc<TransientIdGen>,
     /// The compute controller metrics.
     metrics: ComputeControllerMetrics,
     /// Dynamic system configuration.
@@ -197,7 +194,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         storage_collections: Arc<dyn StorageCollections<Timestamp = T>>,
         envd_epoch: NonZeroI64,
         read_only: bool,
-        transient_id_gen: Arc<TransientIdGen>,
         metrics_registry: MetricsRegistry,
     ) -> Self {
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
@@ -216,7 +212,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             arrangement_exert_proportionality: 16,
             stashed_replica_response: None,
             envd_epoch,
-            transient_id_gen,
             metrics: ComputeControllerMetrics::new(metrics_registry),
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
             response_rx,
@@ -336,7 +331,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             arrangement_exert_proportionality,
             stashed_replica_response,
             envd_epoch,
-            transient_id_gen: _,
             metrics: _,
             dyncfg: _,
             response_rx: _,
@@ -401,7 +395,6 @@ where
                 Arc::clone(&self.storage_collections),
                 arranged_logs,
                 self.envd_epoch,
-                Arc::clone(&self.transient_id_gen),
                 self.metrics.for_instance(id),
                 Arc::clone(&self.dyncfg),
                 self.response_tx.clone(),
@@ -687,9 +680,8 @@ where
 
         for (type_, updates) in updates_by_type {
             if !updates.is_empty() {
-                storage
-                    .update_introspection_collection(type_, updates)
-                    .await;
+                let op = StorageWriteOp::Append { updates };
+                storage.update_introspection_collection(type_, op).await;
             }
         }
     }

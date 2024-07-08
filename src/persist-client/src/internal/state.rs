@@ -21,6 +21,7 @@ use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_ore::vec::PartialOrdVecExt;
+use mz_persist::indexed::encoding::BatchColumnarFormat;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
@@ -318,6 +319,13 @@ pub struct HollowBatchPart<T> {
     /// we later decide that's of some benefit.
     #[serde(serialize_with = "serialize_diffs_sum")]
     pub diffs_sum: Option<[u8; 8]>,
+    /// Columnar format that this batch was written in.
+    ///
+    /// This is `None` if this part was written before we started writing structured
+    /// columnar data, or if the [`BATCH_RECORD_PART_FORMAT`] dyncfg is off.
+    ///
+    /// [`BATCH_RECORD_PART_FORMAT`]: crate::batch::BATCH_RECORD_PART_FORMAT
+    pub format: Option<BatchColumnarFormat>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -584,6 +592,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             stats: self_stats,
             ts_rewrite: self_ts_rewrite,
             diffs_sum: self_diffs_sum,
+            format: self_format,
         } = self;
         let HollowBatchPart {
             key: other_key,
@@ -592,6 +601,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             stats: other_stats,
             ts_rewrite: other_ts_rewrite,
             diffs_sum: other_diffs_sum,
+            format: other_format,
         } = other;
         (
             self_key,
@@ -600,6 +610,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             self_stats,
             self_ts_rewrite.as_ref().map(|x| x.elements()),
             self_diffs_sum,
+            self_format,
         )
             .cmp(&(
                 other_key,
@@ -608,6 +619,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
                 other_stats,
                 other_ts_rewrite.as_ref().map(|x| x.elements()),
                 other_diffs_sum,
+                other_format,
             ))
     }
 }
@@ -915,7 +927,10 @@ where
 
         // NB: we don't claim unclaimed compactions when the recording flag is off, even if we'd
         // otherwise be allowed to, to avoid triggering the same compactions in every writer.
-        if record_compactions && claim_unclaimed_compactions && merge_reqs.is_empty() {
+        let all_empty_reqs = merge_reqs
+            .iter()
+            .all(|req| req.inputs.iter().all(|b| b.batch.is_empty()));
+        if record_compactions && claim_unclaimed_compactions && all_empty_reqs {
             let threshold_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
             merge_reqs.extend(self.trace.fueled_merge_reqs_before_ms(threshold_ms).take(1))
         }
@@ -1926,14 +1941,18 @@ pub(crate) mod tests {
                 any_some_lazy_part_stats(),
                 any::<Option<T>>(),
                 any::<[u8; 8]>(),
+                any::<Option<BatchColumnarFormat>>(),
             ),
-            |(key, encoded_size_bytes, key_lower, stats, ts_rewrite, diffs_sum)| HollowBatchPart {
-                key,
-                encoded_size_bytes,
-                key_lower,
-                stats,
-                ts_rewrite: ts_rewrite.map(Antichain::from_elem),
-                diffs_sum: Some(diffs_sum),
+            |(key, encoded_size_bytes, key_lower, stats, ts_rewrite, diffs_sum, format)| {
+                HollowBatchPart {
+                    key,
+                    encoded_size_bytes,
+                    key_lower,
+                    stats,
+                    ts_rewrite: ts_rewrite.map(Antichain::from_elem),
+                    diffs_sum: Some(diffs_sum),
+                    format,
+                }
             },
         )
     }
@@ -2083,6 +2102,7 @@ pub(crate) mod tests {
                         stats: None,
                         ts_rewrite: None,
                         diffs_sum: None,
+                        format: None,
                     })
                 })
                 .collect(),

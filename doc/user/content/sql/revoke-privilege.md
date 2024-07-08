@@ -71,19 +71,19 @@ type for sources, views, and materialized views, or omit the object type.
 
 ## Examples
 
-```sql
+```mzsql
 REVOKE SELECT ON mv FROM joe, mike;
 ```
 
-```sql
+```mzsql
 REVOKE USAGE, CREATE ON DATABASE materialize FROM joe;
 ```
 
-```sql
+```mzsql
 REVOKE ALL ON CLUSTER dev FROM joe;
 ```
 
-```sql
+```mzsql
 REVOKE CREATEDB ON SYSTEM FROM joe;
 ```
 

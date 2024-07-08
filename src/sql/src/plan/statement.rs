@@ -14,6 +14,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_repr::namespaces::is_system_schema;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
@@ -134,6 +135,7 @@ pub fn describe(
         Statement::AlterSystemSet(stmt) => ddl::describe_alter_system_set(&scx, stmt)?,
         Statement::AlterSystemReset(stmt) => ddl::describe_alter_system_reset(&scx, stmt)?,
         Statement::AlterSystemResetAll(stmt) => ddl::describe_alter_system_reset_all(&scx, stmt)?,
+        Statement::AlterTableAddColumn(stmt) => ddl::describe_alter_table_add_column(&scx, stmt)?,
         Statement::Comment(stmt) => ddl::describe_comment(&scx, stmt)?,
         Statement::CreateCluster(stmt) => ddl::describe_create_cluster(&scx, stmt)?,
         Statement::CreateClusterReplica(stmt) => ddl::describe_create_cluster_replica(&scx, stmt)?,
@@ -173,6 +175,9 @@ pub fn describe(
         }
         Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
             show::describe_show_create_connection(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateCluster(stmt)) => {
+            show::describe_show_create_cluster(&scx, stmt)?
         }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
             show::describe_show_create_index(&scx, stmt)?
@@ -292,7 +297,7 @@ pub fn plan(
         .any(|item| {
             item.func().is_ok()
                 && item.name().qualifiers.schema_spec
-                    == SchemaSpecifier::Id(*catalog.get_mz_unsafe_schema_id())
+                    == SchemaSpecifier::Id(catalog.get_mz_unsafe_schema_id())
         })
     {
         scx.require_feature_flag(&vars::ENABLE_UNSAFE_FUNCTIONS)?;
@@ -314,6 +319,7 @@ pub fn plan(
         Statement::AlterSystemSet(stmt) => ddl::plan_alter_system_set(scx, stmt),
         Statement::AlterSystemReset(stmt) => ddl::plan_alter_system_reset(scx, stmt),
         Statement::AlterSystemResetAll(stmt) => ddl::plan_alter_system_reset_all(scx, stmt),
+        Statement::AlterTableAddColumn(stmt) => ddl::plan_alter_table_add_column(scx, stmt),
         Statement::Comment(stmt) => ddl::plan_comment(scx, stmt),
         Statement::CreateCluster(stmt) => ddl::plan_create_cluster(scx, stmt),
         Statement::CreateClusterReplica(stmt) => ddl::plan_create_cluster_replica(scx, stmt),
@@ -361,6 +367,9 @@ pub fn plan(
         Statement::Show(ShowStatement::ShowColumns(stmt)) => show::show_columns(scx, stmt)?.plan(),
         Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
             show::plan_show_create_connection(scx, stmt).map(Plan::ShowCreate)
+        }
+        Statement::Show(ShowStatement::ShowCreateCluster(stmt)) => {
+            show::plan_show_create_cluster(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
             show::plan_show_create_index(scx, stmt).map(Plan::ShowCreate)
@@ -519,7 +528,7 @@ impl<'a> StatementContext<'a> {
                 (database, schema.name().schema.clone())
             }
             (None, Some(schema)) => {
-                if self.catalog.is_system_schema(&schema) {
+                if is_system_schema(&schema) {
                     (RawDatabaseSpecifier::Ambient, schema)
                 } else {
                     match self.catalog.active_database_name() {
@@ -647,6 +656,10 @@ impl<'a> StatementContext<'a> {
             Some((_db, schema)) => Ok(schema),
             None => Err(PlanError::InvalidSchemaName),
         }
+    }
+
+    pub fn get_cluster(&self, id: &ClusterId) -> &dyn CatalogCluster {
+        self.catalog.get_cluster(*id)
     }
 
     pub fn resolve_database(
@@ -811,6 +824,12 @@ impl<'a> StatementContext<'a> {
     ) -> Result<(), PlanError> {
         flag.enabled(Some(self.catalog.system_vars()), Some(desc), Some(detail))?;
         Ok(())
+    }
+
+    /// Returns true if the named [`FeatureFlag`] is set to `on`, returns false otherwise.
+    pub fn is_feature_flag_enabled(&self, flag: &FeatureFlag) -> bool {
+        flag.enabled(Some(self.catalog.system_vars()), None, None)
+            .is_ok()
     }
 
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {

@@ -23,7 +23,7 @@ cluster, use [`ALTER ... RENAME`](/sql/alter-rename/).
 
 Alter cluster to two replicas:
 
-```sql
+```mzsql
 ALTER CLUSTER c1 SET (REPLICATION FACTOR 2);
 ```
 
@@ -31,7 +31,7 @@ ALTER CLUSTER c1 SET (REPLICATION FACTOR 2);
 
 Alter cluster to size `100cc`:
 
-```sql
+```mzsql
 ALTER CLUSTER c1 SET (SIZE '100cc');
 ```
 
@@ -47,7 +47,7 @@ by following the instructions below.
 
 Alter the `managed` status of a cluster to managed:
 
-```sql
+```mzsql
 ALTER CLUSTER c1 SET (MANAGED);
 ```
 

@@ -24,11 +24,11 @@ _new_role_ | The role name of the new owner of all the objects.
 
 ## Examples
 
-```sql
+```mzsql
 REASSIGN OWNED BY joe TO mike;
 ```
 
-```sql
+```mzsql
 REASSIGN OWNED BY joe, george TO mike;
 ```
 

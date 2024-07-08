@@ -88,13 +88,12 @@ CREATE MATERIALIZED VIEW mv AS SELECT x, sum(z) FROM t1 JOIN t2 USING(y) GROUP B
 materialize.public.mv:
   Reduce group_by=[#0] aggregates=[sum(#1)]
     Project (#0, #3)
-      Filter (#1) IS NOT NULL
-        Join on=(#1 = #2) type=differential
-          ArrangeBy keys=[[#1]]
-            ReadIndex on=t1 t1_y_idx=[differential join]
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
-              ReadStorage materialize.public.t2
+      Join on=(#1 = #2) type=differential
+        ArrangeBy keys=[[#1]]
+          ReadIndex on=t1 t1_y_idx=[differential join]
+        ArrangeBy keys=[[#0]]
+          Filter (#0) IS NOT NULL
+            ReadStorage materialize.public.t2
 
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
@@ -121,13 +120,12 @@ materialize.public.v_idx:
 materialize.public.v:
   Reduce group_by=[#0] aggregates=[sum(#1)]
     Project (#0, #3)
-      Filter (#1) IS NOT NULL
-        Join on=(#1 = #2) type=differential
-          ArrangeBy keys=[[#1]]
-            ReadIndex on=t1 t1_y_idx=[differential join]
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
-              ReadStorage materialize.public.t2
+      Join on=(#1 = #2) type=differential
+        ArrangeBy keys=[[#1]]
+          ReadIndex on=t1 t1_y_idx=[differential join]
+        ArrangeBy keys=[[#0]]
+          Filter (#0) IS NOT NULL
+            ReadStorage materialize.public.t2
 
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)
@@ -151,13 +149,12 @@ materialize.public.v_idx:
 materialize.public.v:
   Reduce group_by=[#0] aggregates=[sum(#1)]
     Project (#0, #3)
-      Filter (#1) IS NOT NULL
-        Join on=(#1 = #2) type=differential
-          ArrangeBy keys=[[#1]]
-            ReadIndex on=t1 t1_y_idx=[differential join]
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
-              ReadStorage materialize.public.t2
+      Join on=(#1 = #2) type=differential
+        ArrangeBy keys=[[#1]]
+          ReadIndex on=t1 t1_y_idx=[differential join]
+        ArrangeBy keys=[[#0]]
+          Filter (#0) IS NOT NULL
+            ReadStorage materialize.public.t2
 
 Source materialize.public.t2
   filter=((#0) IS NOT NULL)

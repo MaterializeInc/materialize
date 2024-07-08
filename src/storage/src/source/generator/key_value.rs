@@ -9,13 +9,15 @@
 
 use std::convert::Infallible;
 
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::AsCollection;
 use futures::stream::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row};
+use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::KeyValueLoadGenerator;
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::containers::stack::AccountedStackBuilder;
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
 use timely::container::CapacityContainerBuilder;
@@ -24,8 +26,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::ProgressStatisticsUpdate;
-use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+use crate::source::types::{ProgressStatisticsUpdate, StackedCollection};
+use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 pub fn render<G: Scope<Timestamp = MzOffset>>(
     key_value: KeyValueLoadGenerator,
@@ -34,7 +36,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Option<Stream<G, Infallible>>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
@@ -45,7 +47,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (mut data_output, stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
@@ -80,15 +82,13 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
         let stats_worker = config.responsible_for(0);
 
         if local_partitions.is_empty() {
-            stats_output
-                .give(
-                    &stats_cap,
-                    ProgressStatisticsUpdate::Snapshot {
-                        records_known: 0,
-                        records_staged: 0,
-                    },
-                )
-                .await;
+            stats_output.give(
+                &stats_cap,
+                ProgressStatisticsUpdate::Snapshot {
+                    records_known: 0,
+                    records_staged: 0,
+                },
+            );
             return;
         }
 
@@ -105,48 +105,41 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             let snapshot_rounds = key_value.transactional_snapshot_rounds();
 
             if stats_worker {
-                stats_output
-                    .give(
-                        &stats_cap,
-                        ProgressStatisticsUpdate::SteadyState {
-                            offset_known: snapshot_rounds,
-                            offset_committed: 0,
-                        },
-                    )
-                    .await;
+                stats_output.give(
+                    &stats_cap,
+                    ProgressStatisticsUpdate::SteadyState {
+                        offset_known: snapshot_rounds,
+                        offset_committed: 0,
+                    },
+                );
             };
 
             // Downgrade to the snapshot frontier.
             progress_cap.downgrade(&MzOffset::from(snapshot_rounds));
 
             let mut emitted = 0;
-            stats_output
-                .give(
-                    &stats_cap,
-                    ProgressStatisticsUpdate::Snapshot {
-                        records_known: local_snapshot_size,
-                        records_staged: emitted,
-                    },
-                )
-                .await;
+            stats_output.give(
+                &stats_cap,
+                ProgressStatisticsUpdate::Snapshot {
+                    records_known: local_snapshot_size,
+                    records_staged: emitted,
+                },
+            );
             while local_partitions.iter().any(|si| !si.finished()) {
                 for sp in local_partitions.iter_mut() {
                     for u in sp.produce_batch(&mut value_buffer) {
-                        data_output.give(&cap, u).await;
+                        data_output.give_fueled(&cap, u).await;
                         emitted += 1;
                     }
 
-                    stats_output
-                        .give(
-                            &stats_cap,
-                            ProgressStatisticsUpdate::Snapshot {
-                                records_known: local_snapshot_size,
-                                records_staged: emitted,
-                            },
-                        )
-                        .await;
+                    stats_output.give(
+                        &stats_cap,
+                        ProgressStatisticsUpdate::Snapshot {
+                            records_known: local_snapshot_size,
+                            records_staged: emitted,
+                        },
+                    );
                 }
-                tokio::task::yield_now().await;
             }
 
             cap.downgrade(&MzOffset::from(snapshot_rounds));
@@ -183,12 +176,11 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                     let (new_upper, iter) = up.produce_batch(&mut value_buffer);
                     upper_offset = new_upper;
                     for u in iter {
-                        data_output.give(&cap, u).await;
+                        data_output.give_fueled(&cap, u).await;
                     }
                 }
                 cap.downgrade(&MzOffset::from(upper_offset));
                 progress_cap.downgrade(&MzOffset::from(upper_offset));
-                tokio::task::yield_now().await;
             }
         }
 
@@ -323,7 +315,7 @@ impl TransactionalSnapshotProducer {
         value_buffer: &'a mut Vec<u8>,
     ) -> impl Iterator<
         Item = (
-            (usize, Result<SourceMessage, SourceReaderError>),
+            (usize, Result<SourceMessage, DataflowError>),
             MzOffset,
             Diff,
         ),
@@ -447,7 +439,7 @@ impl UpdateProducer {
         u64,
         impl Iterator<
                 Item = (
-                    (usize, Result<SourceMessage, SourceReaderError>),
+                    (usize, Result<SourceMessage, DataflowError>),
                     MzOffset,
                     Diff,
                 ),
@@ -505,15 +497,13 @@ pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
 
         if !offset_worker {
             // Emit 0, to mark this worker as having started up correctly.
-            stats_output
-                .give(
-                    &stats_cap,
-                    ProgressStatisticsUpdate::SteadyState {
-                        offset_known: 0,
-                        offset_committed: 0,
-                    },
-                )
-                .await;
+            stats_output.give(
+                &stats_cap,
+                ProgressStatisticsUpdate::SteadyState {
+                    offset_known: 0,
+                    offset_committed: 0,
+                },
+            );
             return;
         }
 
@@ -522,15 +512,13 @@ pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
             match committed_uppers.next().await {
                 Some(frontier) => {
                     if let Some(offset) = frontier.as_option() {
-                        stats_output
-                            .give(
-                                &stats_cap,
-                                ProgressStatisticsUpdate::SteadyState {
-                                    offset_known: offset.offset,
-                                    offset_committed: offset.offset,
-                                },
-                            )
-                            .await;
+                        stats_output.give(
+                            &stats_cap,
+                            ProgressStatisticsUpdate::SteadyState {
+                                offset_known: offset.offset,
+                                offset_committed: offset.offset,
+                            },
+                        );
                     }
                 }
                 None => return,

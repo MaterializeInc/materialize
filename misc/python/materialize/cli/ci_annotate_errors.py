@@ -28,9 +28,12 @@ from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
 )
-from materialize.buildkite_insights.steps.build_step import (
-    BuildStepMatcher,
-    BuildStepOutcome,
+from materialize.buildkite_insights.data.build_history import (
+    BuildHistory,
+    BuildHistoryEntry,
+)
+from materialize.buildkite_insights.data.build_step import BuildStepMatcher
+from materialize.buildkite_insights.util.build_step_utils import (
     extract_build_step_outcomes,
 )
 from materialize.github import (
@@ -57,7 +60,7 @@ ERROR_RE = re.compile(
     | has\ overflowed\ its\ stack
     | internal\ error:
     | \*\ FATAL:
-    | fatal: # used in frontegg-mock
+    | (^|\ )fatal: # used in frontegg-mock
     | [Oo]ut\ [Oo]f\ [Mm]emory
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
@@ -231,28 +234,11 @@ class FailureInCoverageRun(ObservedError):
 
 
 @dataclass
-class BuildHistoryOnMain:
-    pipeline_slug: str
-    last_build_step_outcomes: list[BuildStepOutcome]
-
-    def to_markdown(self) -> str:
-        return (
-            f'<a href="/materialize/{self.pipeline_slug}/builds?branch=main">main</a> history: '
-            + "".join(
-                [
-                    f"<a href=\"{outcome.web_url_to_job}\">{':bk-status-passed:' if outcome.passed else ':bk-status-failed:'}</a>"
-                    for outcome in self.last_build_step_outcomes
-                ]
-            )
-        )
-
-
-@dataclass
 class Annotation:
     suite_name: str
     buildkite_job_id: str
     is_failure: bool
-    build_history_on_main: BuildHistoryOnMain | None
+    build_history_on_main: BuildHistory
     unknown_errors: Sequence[ObservedBaseError] = field(default_factory=list)
     known_errors: Sequence[ObservedBaseError] = field(default_factory=list)
 
@@ -273,7 +259,7 @@ class Annotation:
             title = f"{title}, but no error in logs found"
 
         markdown = title
-        if self.build_history_on_main is not None:
+        if self.build_history_on_main.has_entries():
             markdown += ", " + self.build_history_on_main.to_markdown()
 
         if wrap_in_summary:
@@ -309,28 +295,32 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    test_analytics_db = None
+    test_analytics_config = create_test_analytics_config_with_hostname(
+        args.cloud_hostname
+    )
+    test_analytics = TestAnalyticsDb(test_analytics_config)
+
+    # always insert a build job regardless whether it has annotations or not
+    test_analytics.builds.add_build_job(
+        was_successful=has_successful_buildkite_status()
+    )
+
+    return_code = annotate_logged_errors(args.log_files, test_analytics)
 
     try:
-        test_analytics_config = create_test_analytics_config_with_hostname(
-            args.cloud_hostname
-        )
-        test_analytics_db = TestAnalyticsDb(test_analytics_config)
-
-        # always insert a build job regardless whether it has annotations or not
-        store_build_job_in_test_analytics(test_analytics_db)
+        test_analytics.submit_updates()
     except Exception as e:
         # An error during an upload must never cause the build to fail
         print(f"Uploading results failed! {e}")
 
-    return annotate_logged_errors(args.log_files, test_analytics_db)
+    return return_code
 
 
 def annotate_errors(
     unknown_errors: Sequence[ObservedBaseError],
     known_errors: Sequence[ObservedBaseError],
-    build_history_on_main: BuildHistoryOnMain | None,
-    test_analytics_db: TestAnalyticsDb | None,
+    build_history_on_main: BuildHistory,
+    test_analytics_db: TestAnalyticsDb,
 ) -> None:
     assert len(unknown_errors) > 0 or len(known_errors) > 0
     annotation_style = "info" if not unknown_errors else "error"
@@ -349,8 +339,7 @@ def annotate_errors(
 
     add_annotation_raw(style=annotation_style, markdown=annotation.to_markdown())
 
-    if test_analytics_db is not None:
-        store_annotation_in_test_analytics(test_analytics_db, annotation)
+    store_annotation_in_test_analytics(test_analytics_db, annotation)
 
 
 def group_identical_errors(
@@ -371,7 +360,7 @@ def group_identical_errors(
 
 
 def annotate_logged_errors(
-    log_files: list[str], test_analytics_db: TestAnalyticsDb | None
+    log_files: list[str], test_analytics: TestAnalyticsDb
 ) -> int:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
@@ -508,10 +497,8 @@ def annotate_logged_errors(
         else:
             raise RuntimeError(f"Unexpected error type: {type(error)}")
 
-    build_history_on_main = get_failures_on_main()
-    annotate_errors(
-        unknown_errors, known_errors, build_history_on_main, test_analytics_db
-    )
+    build_history_on_main = get_failures_on_main(test_analytics)
+    annotate_errors(unknown_errors, known_errors, build_history_on_main, test_analytics)
 
     if unknown_errors:
         print(f"+++ Failing test because of {len(unknown_errors)} unknown error(s)")
@@ -539,8 +526,7 @@ def annotate_logged_errors(
         )
         add_annotation_raw(style="error", markdown=annotation.to_markdown())
 
-        if test_analytics_db is not None:
-            store_annotation_in_test_analytics(test_analytics_db, annotation)
+        store_annotation_in_test_analytics(test_analytics, annotation)
 
     return len(unknown_errors)
 
@@ -657,16 +643,44 @@ def sanitize_text(text: str, max_length: int = 4_000) -> str:
     return text
 
 
-def get_failures_on_main() -> BuildHistoryOnMain | None:
+def get_failures_on_main(test_analytics: TestAnalyticsDb) -> BuildHistory:
     pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
     step_key = os.getenv("BUILDKITE_STEP_KEY")
-    step_name = os.getenv("BUILDKITE_LABEL") or step_key
     parallel_job = os.getenv("BUILDKITE_PARALLEL_JOB")
-    current_build_number = os.getenv("BUILDKITE_BUILD_NUMBER")
-    if parallel_job is not None:
-        parallel_job = int(parallel_job)
     assert pipeline_slug is not None
     assert step_key is not None
+
+    if parallel_job is not None:
+        parallel_job = int(parallel_job)
+
+    try:
+        build_history = test_analytics.build_history.get_recent_build_job_failures(
+            pipeline=pipeline_slug,
+            branch="main",
+            step_key=step_key,
+            parallel_job_index=parallel_job,
+        )
+
+        if len(build_history.last_build_step_outcomes) < 5:
+            print(
+                f"Loading build history from test analytics did not provide enough data ({len(build_history.last_build_step_outcomes)} entries)"
+            )
+        else:
+            return build_history
+    except Exception as e:
+        print(f"Loading build history from test analytics failed: {e}")
+
+    print("Loading build history from buildkite instead")
+    return _get_failures_on_main_from_buildkite(
+        pipeline_slug=pipeline_slug, step_key=step_key, parallel_job=parallel_job
+    )
+
+
+def _get_failures_on_main_from_buildkite(
+    pipeline_slug: str, step_key: str, parallel_job: int | None
+) -> BuildHistory:
+    step_name = os.getenv("BUILDKITE_LABEL") or step_key
+    current_build_number = os.getenv("BUILDKITE_BUILD_NUMBER")
     assert step_name is not None
     assert current_build_number is not None
 
@@ -681,9 +695,13 @@ def get_failures_on_main() -> BuildHistoryOnMain | None:
         items_per_page=5 + 1,
     )
 
+    no_entries_result = BuildHistory(
+        pipeline=pipeline_slug, branch="main", last_build_step_outcomes=[]
+    )
+
     if not builds_data:
         print(f"Got no finished builds of pipeline {pipeline_slug}")
-        return None
+        return no_entries_result
     else:
         print(f"Fetched {len(builds_data)} builds of pipeline {pipeline_slug}")
 
@@ -709,14 +727,15 @@ def get_failures_on_main() -> BuildHistoryOnMain | None:
         print(
             f"The {len(builds_data)} last fetched builds do not contain a completed build step matching {build_step_matcher}"
         )
-        return None
+        return no_entries_result
 
-    pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
-    assert pipeline_slug is not None
-
-    return BuildHistoryOnMain(
-        pipeline_slug,
-        last_build_step_outcomes,
+    return BuildHistory(
+        pipeline=pipeline_slug,
+        branch="main",
+        last_build_step_outcomes=[
+            BuildHistoryEntry(entry.web_url_to_job, entry.passed)
+            for entry in last_build_step_outcomes
+        ],
     )
 
 
@@ -759,51 +778,37 @@ def format_error_message(error_message: str | None, max_length: int = 10_000) ->
     return f"```\n{sanitize_text(error_message, max_length)}\n```"
 
 
-def store_build_job_in_test_analytics(test_analytics: TestAnalyticsDb) -> None:
-    try:
-        test_analytics.builds.insert_build_job(
-            was_successful=has_successful_buildkite_status()
-        )
-    except Exception as e:
-        # never cause the whole script to fail
-        print(e)
-
-
 def store_annotation_in_test_analytics(
     test_analytics: TestAnalyticsDb, annotation: Annotation
 ) -> None:
-    try:
-        # the build step was already inserted before
-        # the buildkite status may have been successful but the build may still fail due to unknown errors in the log
-        test_analytics.builds.update_build_job_success(
-            was_successful=not annotation.is_failure
-        )
+    # the build step was already inserted before
+    # the buildkite status may have been successful but the build may still fail due to unknown errors in the log
+    test_analytics.builds.update_build_job_success(
+        was_successful=not annotation.is_failure
+    )
 
-        error_entries = [
-            AnnotationErrorEntry(
-                error_type=error.internal_error_type,
-                message=error.to_text(),
-                issue=(
-                    f"materialize/{error.issue_number}"
-                    if isinstance(error, WithIssue)
-                    else None
-                ),
-                occurrence_count=error.occurrences,
-            )
-            for error in chain(annotation.known_errors, annotation.unknown_errors)
-        ]
-
-        test_analytics.build_annotations.insert_annotation(
-            build_annotation_storage.AnnotationEntry(
-                test_suite=get_suite_name(include_retry_info=False),
-                test_retry_count=get_retry_count(),
-                is_failure=annotation.is_failure,
-                errors=error_entries,
+    error_entries = [
+        AnnotationErrorEntry(
+            error_type=error.internal_error_type,
+            message=error.to_text(),
+            issue=(
+                f"materialize/{error.issue_number}"
+                if isinstance(error, WithIssue)
+                else None
             ),
+            occurrence_count=error.occurrences,
         )
-    except Exception as e:
-        # never cause the whole script to fail
-        print(e)
+        for error in chain(annotation.known_errors, annotation.unknown_errors)
+    ]
+
+    test_analytics.build_annotations.add_annotation(
+        build_annotation_storage.AnnotationEntry(
+            test_suite=get_suite_name(include_retry_info=False),
+            test_retry_count=get_retry_count(),
+            is_failure=annotation.is_failure,
+            errors=error_entries,
+        ),
+    )
 
 
 if __name__ == "__main__":

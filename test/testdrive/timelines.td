@@ -182,11 +182,11 @@ contains:multiple timelines within one dataflow are not supported
 # In case the environment has other replicas
 > SET cluster_replica = r1
 
-> SELECT count(*) FROM (SELECT count(*) FROM input_values_view, mz_internal.mz_dataflow_operators);
+> SELECT count(*) FROM (SELECT count(*) FROM input_values_view, mz_introspection.mz_dataflow_operators);
 1
 
 # System sources, tables, and logs should be joinable with eachother.
-> SELECT count(*) FROM (SELECT count(*) FROM mz_relations, mz_views, mz_internal.mz_dataflow_operators);
+> SELECT count(*) FROM (SELECT count(*) FROM mz_relations, mz_views, mz_introspection.mz_dataflow_operators);
 1
 
 # System things should be joinable only with system sources.

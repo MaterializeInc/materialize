@@ -1013,7 +1013,7 @@ where
             // Arrange the final result into (key, Row)
             let error_logger = self.error_logger();
             // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
-            // view mz_internal.mz_expected_group_size_advice.
+            // view mz_introspection.mz_expected_group_size_advice.
             let arranged = partial.mz_arrange::<RowRowSpine<_, _>>("Arrange ReduceMinsMaxes");
             // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
             // but we then wouldn't be able to do this error check conditionally.  See its documentation
@@ -1194,7 +1194,7 @@ where
     {
         let error_logger = self.error_logger();
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
-        // view mz_internal.mz_expected_group_size_advice.
+        // view mz_introspection.mz_expected_group_size_advice.
         let arranged_input =
             input.mz_arrange::<RowRowSpine<_, _>>("Arranged MinsMaxesHierarchical input");
 

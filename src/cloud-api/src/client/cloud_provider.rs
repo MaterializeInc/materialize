@@ -17,7 +17,7 @@
 //! Example:
 //! ```ignore
 //! // List all the available providers
-//! let cloud_providers = client.list_cloud_providers().await?;
+//! let cloud_providers = client.list_cloud_regions().await?;
 //!
 //! // Search the cloud provider
 //! let user_input = "aws/us-east-1";
@@ -125,10 +125,10 @@ impl FromStr for CloudProviderRegion {
 }
 
 impl Client {
-    /// List all the available cloud providers.
+    /// List all the available cloud regions.
     ///
     /// E.g.: [us-east-1, eu-west-1]
-    pub async fn list_cloud_providers(&self) -> Result<Vec<CloudProvider>, Error> {
+    pub async fn list_cloud_regions(&self) -> Result<Vec<CloudProvider>, Error> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct CloudProviderResponse {

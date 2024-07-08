@@ -53,15 +53,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             // Only run the replication reader on the worker responsible for it.
             if !config.responsible_for(STATISTICS) {
                 // Emit 0, to mark this worker as having started up correctly.
-                stats_output
-                    .give(
-                        &stats_cap[0],
-                        ProgressStatisticsUpdate::SteadyState {
-                            offset_known: 0,
-                            offset_committed: 0,
-                        },
-                    )
-                    .await;
+                stats_output.give(
+                    &stats_cap[0],
+                    ProgressStatisticsUpdate::SteadyState {
+                        offset_known: 0,
+                        offset_committed: 0,
+                    },
+                );
                 return Ok(());
             }
 
@@ -123,15 +121,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 if let (Some(offset_known), Some(offset_committed)) =
                     (offset_known, offset_committed)
                 {
-                    stats_output
-                        .give(
-                            &stats_cap[0],
-                            ProgressStatisticsUpdate::SteadyState {
-                                offset_known,
-                                offset_committed,
-                            },
-                        )
-                        .await;
+                    stats_output.give(
+                        &stats_cap[0],
+                        ProgressStatisticsUpdate::SteadyState {
+                            offset_known,
+                            offset_committed,
+                        },
+                    );
                 }
             }
 

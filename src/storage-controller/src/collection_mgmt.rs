@@ -43,6 +43,19 @@
 //!
 //! NOTE: As it is, we always keep all of desired in memory. Only when told to
 //! go out of read-only mode would we start attempting to write.
+//!
+//! ## Read-only mode
+//!
+//! When [`CollectionManager`] is in read-only mode it cannot write out to
+//! persist. It will, however, maintain the `desired` state of differential
+//! collections so that we can immediately start writing out updates when going
+//! out of read-only mode.
+//!
+//! For append-only collections we either panic, in the case of
+//! [`CollectionManager::blind_write`], or report back a
+//! [`StorageError::ReadOnly`] when trying to append through a
+//! [`MonotonicAppender`] returned from
+//! [`CollectionManager::monotonic_appender`].
 
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
@@ -55,20 +68,20 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 use futures::{Future, FutureExt};
-use itertools::Itertools;
 use mz_ore::channel::ReceiverExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
+use mz_ore::vec::VecExt;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::client::{TimestamplessUpdate, Update};
-use mz_storage_client::controller::MonotonicAppender;
+use mz_storage_client::controller::{MonotonicAppender, StorageWriteOp};
 use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
@@ -79,10 +92,16 @@ const CHANNEL_CAPACITY: usize = 4096;
 // Default rate at which we advance the uppers of managed collections.
 const DEFAULT_TICK_MS: u64 = 1_000;
 
-type WriteChannel<T> = mpsc::Sender<(
+/// A channel for sending writes to a differential collection.
+type DifferentialWriteChannel<T> =
+    mpsc::Sender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>;
+
+/// A channel for sending writes to an append-only collection.
+type AppendOnlyWriteChannel<T> = mpsc::Sender<(
     Vec<(Row, Diff)>,
     oneshot::Sender<Result<(), StorageError<T>>>,
 )>;
+
 type WriteTask = AbortOnDropHandle<()>;
 type ShutdownSender = oneshot::Sender<()>;
 
@@ -91,21 +110,33 @@ pub struct CollectionManager<T>
 where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
+    /// When a [`CollectionManager`] is in read-only mode it must not affect any
+    /// changes to external state.
+    ///
+    /// This is a watch to making sharing this bit with write tasks easier and
+    /// to allow write tasks to await changes.
+    pub read_only_rx: watch::Receiver<bool>,
+
+    /// Send-side for read-only bit.
+    pub read_only_tx: Arc<watch::Sender<bool>>,
+
     // WIP: Name TBD! I thought about `managed_collections`, `ivm_collections`,
     // `self_correcting_collections`.
     /// These are collections that we write to by adding/removing updates to an
     /// internal _desired_ collection. The `CollectionManager` continually makes
     /// sure that collection contents (in persist) match the desired state.
     differential_collections:
-        Arc<Mutex<BTreeMap<GlobalId, (WriteChannel<T>, WriteTask, ShutdownSender)>>>,
+        Arc<Mutex<BTreeMap<GlobalId, (DifferentialWriteChannel<T>, WriteTask, ShutdownSender)>>>,
 
     /// Collections that we only append to using blind-writes.
     ///
     /// Every write succeeds at _some_ timestamp, and we never check what the
     /// actual contents of the collection (in persist) are.
     append_only_collections:
-        Arc<Mutex<BTreeMap<GlobalId, (WriteChannel<T>, WriteTask, ShutdownSender)>>>,
+        Arc<Mutex<BTreeMap<GlobalId, (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender)>>>,
+
     write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+
     /// Amount of time we'll wait before sending a batch of inserts to Persist, for user
     /// collections.
     user_batch_duration_ms: Arc<AtomicU64>,
@@ -126,6 +157,7 @@ where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
     pub(super) fn new(
+        read_only: bool,
         write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
         now: NowFn,
     ) -> CollectionManager<T> {
@@ -133,13 +165,26 @@ where
             .as_millis()
             .try_into()
             .expect("known to fit");
+
+        let (read_only_tx, read_only_rx) = watch::channel(read_only);
+
         CollectionManager {
+            read_only_tx: Arc::new(read_only_tx),
+            read_only_rx,
             differential_collections: Arc::new(Mutex::new(BTreeMap::new())),
             append_only_collections: Arc::new(Mutex::new(BTreeMap::new())),
             write_handle,
             user_batch_duration_ms: Arc::new(AtomicU64::new(batch_duration_ms)),
             now,
         }
+    }
+
+    /// Allow this [`CollectionManager`] to write to external systems, from now
+    /// on. That is allow it to actually write to collections from now on.
+    pub fn allow_writes(&mut self) {
+        self.read_only_tx
+            .send(false)
+            .expect("we are holding on to at least one receiver");
     }
 
     /// Updates the duration we'll wait to batch events for user owned collections.
@@ -155,7 +200,7 @@ where
     /// registered collection every second.
     ///
     /// Update the `desired` state of a differential collection using
-    /// [Self::update_desired].
+    /// [Self::differential_write].
     pub(super) fn register_differential_collection<'a, R>(&self, id: GlobalId, read_handle_fn: R)
     where
         R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
@@ -182,6 +227,7 @@ where
             id,
             self.write_handle.clone(),
             read_handle_fn,
+            self.read_only_rx.clone(),
             self.now.clone(),
         );
         let prev = guard.insert(id, writer_and_handle);
@@ -221,6 +267,7 @@ where
             self.write_handle.clone(),
             Arc::clone(&self.user_batch_duration_ms),
             self.now.clone(),
+            self.read_only_rx.clone(),
         );
         let prev = guard.insert(id, writer_and_handle);
 
@@ -277,8 +324,13 @@ where
     ///
     /// # Panics
     /// - If `id` does not belong to an append-only collections.
+    /// - If this [`CollectionManager`] is in read-only mode.
     /// - If the collection closed.
     pub(super) async fn blind_write(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+        if *self.read_only_rx.borrow() {
+            panic!("attempting blind write to {} while in read-only mode", id);
+        }
+
         if !updates.is_empty() {
             // Get the update channel in a block to make sure the Mutex lock is scoped.
             let update_tx = {
@@ -296,15 +348,15 @@ where
         }
     }
 
-    /// Updates the desired collection state of the collection identified by
+    /// Updates the desired collection state of the differential collection identified by
     /// `id`. The underlying persist shard will reflect this change at
     /// _some_point. Does not wait for the change to complete.
     ///
     /// # Panics
     /// - If `id` does not belong to a differential collection.
     /// - If the collection closed.
-    pub(super) async fn update_desired(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        if !updates.is_empty() {
+    pub(super) async fn differential_write(&self, id: GlobalId, op: StorageWriteOp) {
+        if !op.is_empty_append() {
             // Get the update channel in a block to make sure the Mutex lock is scoped.
             let update_tx = {
                 let guard = self
@@ -317,8 +369,18 @@ where
 
             // Specifically _do not_ wait for the append to complete, just for it to be sent.
             let (tx, _rx) = oneshot::channel();
-            update_tx.send((updates, tx)).await.expect("rx hung up");
+            update_tx.send((op, tx)).await.expect("rx hung up");
         }
+    }
+
+    /// Appends the given `updates` to the differential collection identified by `id`.
+    ///
+    /// # Panics
+    /// - If `id` does not belong to a differential collection.
+    /// - If the collection closed.
+    pub(super) async fn differential_append(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+        self.differential_write(id, StorageWriteOp::Append { updates })
+            .await
     }
 
     /// Returns a [`MonotonicAppender`] that can be used to monotonically append updates to the
@@ -361,6 +423,12 @@ where
     /// For getting a [`ReadHandle`] to sync our state to persist contents.
     read_handle_fn: R,
 
+    read_only_watch: watch::Receiver<bool>,
+
+    // Keep track of the read-only bit in our own state. Also so that we can
+    // assert that we don't flip back from read-write to read-only.
+    read_only: bool,
+
     now: NowFn,
 
     /// In the absence of updates, we regularly bump the upper to "now", on this
@@ -369,10 +437,7 @@ where
     upper_tick_interval: tokio::time::Interval,
 
     /// Receiver for write commands. These change our desired state.
-    cmd_rx: mpsc::Receiver<(
-        Vec<(Row, i64)>,
-        oneshot::Sender<Result<(), StorageError<T>>>,
-    )>,
+    cmd_rx: mpsc::Receiver<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>,
 
     /// We have to shut down when receiving from this.
     shutdown_rx: oneshot::Receiver<()>,
@@ -414,8 +479,9 @@ where
         id: GlobalId,
         write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
         read_handle_fn: R,
+        read_only_watch: watch::Receiver<bool>,
         now: NowFn,
-    ) -> (WriteChannel<T>, WriteTask, ShutdownSender) {
+    ) -> (DifferentialWriteChannel<T>, WriteTask, ShutdownSender) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
@@ -423,10 +489,13 @@ where
 
         let current_upper = T::minimum();
 
+        let read_only = *read_only_watch.borrow();
         let task = Self {
             id,
             write_handle,
             read_handle_fn,
+            read_only_watch,
+            read_only,
             now,
             upper_tick_interval,
             cmd_rx: rx,
@@ -473,7 +542,7 @@ where
                 }
 
                 // Pull as many queued updates off the channel as possible.
-                cmd = self.cmd_rx.recv_many(CHANNEL_CAPACITY) => {
+                cmd = self.cmd_rx.mz_recv_many(CHANNEL_CAPACITY) => {
                     if let Some(batch) = cmd {
 
                         let _ = self.handle_updates(batch).await?;
@@ -486,8 +555,22 @@ where
                     }
                 }
 
+                _it_changed = self.read_only_watch.changed() => {
+                    assert!(!*self.read_only_watch.borrow(), "can only switch from read-only to read-write");
+                    self.read_only = false;
+
+                    // We can now write, attempt to do that right away, even if
+                    // our `to_write` is empty. This way, we might learn that
+                    // there is something in persist that we have to retract.
+                    let  _ = self.write_to_persist(vec![]).await?;
+                }
+
                 // If we haven't received any updates, then we'll move the upper forward.
                 _ = self.upper_tick_interval.tick() => {
+                    if self.read_only {
+                        // Not bumping uppers while in read-only mode.
+                        continue;
+                    }
                     let _ = self.tick_upper().await?;
                 },
             }
@@ -505,6 +588,7 @@ where
 
         let request = vec![(self.id, vec![], self.current_upper.clone(), now.clone())];
 
+        assert!(!self.read_only);
         match self.write_handle.compare_and_append(request).await {
             // All good!
             Ok(Ok(())) => {
@@ -555,15 +639,37 @@ where
     }
 
     fn handle_shutdown(&mut self) {
-        unreachable!("we are not currently unregistering differential storage-managed collections");
+        let mut senders = Vec::new();
+
+        // Prevent new messages from being sent.
+        self.cmd_rx.close();
+
+        // Get as many waiting senders as possible.
+        'collect: while let Ok((_batch, sender)) = self.cmd_rx.try_recv() {
+            senders.push(sender);
+
+            // Note: because we're shutting down the sending side of `rx` is no
+            // longer accessible, and thus we should no longer receive new
+            // requests. We add this check just as an extra guard.
+            if senders.len() > CHANNEL_CAPACITY {
+                // There's not a correctness issue if we receive new requests, just
+                // unexpected behavior.
+                tracing::error!("Write task channel should not be receiving new requests");
+                break 'collect;
+            }
+        }
+
+        // Notify them that this collection is closed.
+        //
+        // Note: if a task is shutting down, that indicates the source has been
+        // dropped, at which point the identifier is invalid. Returning this
+        // error provides a better user experience.
+        notify_listeners(senders, || Err(StorageError::IdentifierInvalid(self.id)));
     }
 
     async fn handle_updates(
         &mut self,
-        batch: Vec<(
-            Vec<(Row, i64)>,
-            oneshot::Sender<Result<(), StorageError<T>>>,
-        )>,
+        batch: Vec<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>,
     ) -> ControlFlow<String> {
         // Put in place _some_ rate limiting.
         let batch_duration_ms = STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
@@ -578,26 +684,27 @@ where
             "batch duration",
         );
 
-        // Reset the interval which is used to periodically bump the uppers
-        // because the uppers will get bumped with the following update. This
-        // makes it such that we will write at most once every `interval`.
-        //
-        // For example, let's say our `DEFAULT_TICK` interval is 10, so at `t +
-        // 10`, `t + 20`, ... we'll bump the uppers. If we receive an update at
-        // `t + 3` we want to shift this window so we bump the uppers at `t +
-        // 13`, `t + 23`, ... which resetting the interval accomplishes.
-        self.upper_tick_interval.reset();
-
-        let (rows, responders): (Vec<_>, Vec<_>) = batch.into_iter().unzip();
-
-        let rows = rows.into_iter().flatten().collect_vec();
-
-        self.to_write.extend(rows.iter().cloned());
-        self.desired.extend(rows.iter().cloned());
+        let mut responders = Vec::with_capacity(batch.len());
+        for (op, tx) in batch {
+            self.apply_write_op(op);
+            responders.push(tx);
+        }
 
         // TODO: Maybe don't do it every time?
         consolidation::consolidate(&mut self.desired);
         consolidation::consolidate(&mut self.to_write);
+
+        // Reset the interval which is used to periodically bump the uppers
+        // because the uppers will get bumped with the following update.
+        // This makes it such that we will write at most once every
+        // `interval`.
+        //
+        // For example, let's say our `DEFAULT_TICK` interval is 10, so at
+        // `t + 10`, `t + 20`, ... we'll bump the uppers. If we receive an
+        // update at `t + 3` we want to shift this window so we bump the
+        // uppers at `t + 13`, `t + 23`, ... which resetting the interval
+        // accomplishes.
+        self.upper_tick_interval.reset();
 
         self.write_to_persist(responders).await?;
 
@@ -610,6 +717,21 @@ where
         ControlFlow::Continue(())
     }
 
+    /// Apply the given write operation to the `desired`/`to_write` state.
+    fn apply_write_op(&mut self, op: StorageWriteOp) {
+        match op {
+            StorageWriteOp::Append { updates } => {
+                self.desired.extend_from_slice(&updates);
+                self.to_write.extend(updates);
+            }
+            StorageWriteOp::Delete { filter } => {
+                let to_delete = self.desired.drain_filter_swapping(|(row, _)| filter(row));
+                let retractions = to_delete.map(|(row, diff)| (row, -diff));
+                self.to_write.extend(retractions);
+            }
+        }
+    }
+
     /// Attempt to write what is currently in [Self::to_write] to persist,
     /// retrying and re-syncing to persist when necessary, that is when the
     /// upper was not what we expected.
@@ -617,6 +739,12 @@ where
         &mut self,
         responders: Vec<oneshot::Sender<Result<(), StorageError<T>>>>,
     ) -> ControlFlow<String> {
+        if self.read_only {
+            tracing::debug!(%self.id, "not writing to differential collection: read-only");
+            // Not attempting to write while in read-only mode.
+            return ControlFlow::Continue(());
+        }
+
         // We'll try really hard to succeed, but eventually stop.
         //
         // Note: it's very rare we should ever need to retry, and if we need to
@@ -656,6 +784,7 @@ where
                 new_upper.clone(),
             )];
 
+            assert!(!self.read_only);
             let append_result = match self.write_handle.compare_and_append(request.clone()).await {
                 // We got a response!
                 Ok(append_result) => append_result,
@@ -790,7 +919,8 @@ fn append_only_write_task<T>(
     write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
     user_batch_duration_ms: Arc<AtomicU64>,
     now: NowFn,
-) -> (WriteChannel<T>, WriteTask, ShutdownSender)
+    read_only: watch::Receiver<bool>,
+) -> (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender)
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
@@ -841,7 +971,7 @@ where
                     }
 
                     // Pull as many queued updates off the channel as possible.
-                    cmd = rx.recv_many(CHANNEL_CAPACITY) => {
+                    cmd = rx.mz_recv_many(CHANNEL_CAPACITY) => {
                         if let Some(batch) = cmd {
                             // To rate limit appends to persist we add artifical latency, and will
                             // finish no sooner than this instant.
@@ -873,6 +1003,12 @@ where
                             let (rows, responders): (Vec<_>, Vec<_>) = batch
                                 .into_iter()
                                 .unzip();
+
+                            if *read_only.borrow() {
+                                tracing::warn!(%id, ?rows, "append while in read-only mode");
+                                notify_listeners(responders, || Err(StorageError::ReadOnly));
+                                continue;
+                            }
 
                             // Append updates to persist!
                             let rows = rows
@@ -960,6 +1096,11 @@ where
 
                     // If we haven't received any updates, then we'll move the upper forward.
                     _ = interval.tick() => {
+                        if *read_only.borrow() {
+                            // Not bumping uppers while in read-only mode.
+                            continue;
+                        }
+
                         // Update our collection.
                         let now = T::from(now());
                         let updates = vec![(id, vec![], now.clone())];

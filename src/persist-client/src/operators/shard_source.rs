@@ -278,7 +278,7 @@ where
     }
     impl<H: FnOnce(String) -> Pin<Box<dyn Future<Output = ()>>> + 'static> ErrorHandler<H> {
         /// Report the error and enforce that we never return.
-        async fn report_and_stop(self, error: String) {
+        async fn report_and_stop(self, error: String) -> ! {
             (self.inner)(error).await;
 
             // We cannot continue, and we cannot shut down. Otherwise downstream
@@ -372,8 +372,7 @@ where
                         .report_and_stop(format!(
                             "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                         ))
-                        .await;
-                    unreachable!("error handler must diverge");
+                        .await
                 }
             },
             SnapshotMode::Exclude => vec![],
@@ -396,8 +395,7 @@ where
                     .report_and_stop(format!(
                         "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                     ))
-                    .await;
-                unreachable!("error handler must diverge");
+                    .await
             }
         };
 
@@ -502,7 +500,7 @@ where
                 if let Some(lease) = lease {
                     leases.borrow_mut().push_at(current_ts.clone(), lease);
                 }
-                descs_output.give(&session_cap, (worker_idx, part)).await;
+                descs_output.give(&session_cap, (worker_idx, part));
             }
 
             current_frontier.join_assign(&progress);
@@ -577,7 +575,7 @@ where
                         // outputs or sessions across await points, which
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
-                        fetched_output.give(&fetched_cap, fetched).await;
+                        fetched_output.give(&fetched_cap, fetched);
                     }
                 }
             }

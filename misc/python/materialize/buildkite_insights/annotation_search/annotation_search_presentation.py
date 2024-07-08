@@ -6,11 +6,10 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
-
-from materialize.buildkite_insights.annotation_search.annotation_match import (
-    AnnotationMatch,
+from materialize.buildkite_insights.annotation_search.buildkite_search_source import (
+    ANY_BRANCH_VALUE,
 )
+from materialize.buildkite_insights.data.build_annotation import BuildAnnotation
 from materialize.buildkite_insights.data.build_info import Build
 from materialize.buildkite_insights.util.search_utility import (
     highlight_match,
@@ -32,11 +31,8 @@ def print_before_search_results() -> None:
 
 
 def print_annotation_match(
-    build_number: str,
-    build_pipeline: str,
-    branch: str,
-    web_url: str,
-    annotation: AnnotationMatch,
+    build: Build,
+    annotation: BuildAnnotation,
     search_value: str,
     use_regex: bool,
     short_result_presentation: bool,
@@ -44,18 +40,18 @@ def print_annotation_match(
 ) -> None:
     print(
         with_formatting(
-            f"Match in build #{build_number} (pipeline {build_pipeline} on {branch}):",
+            f"Match in build #{build.number} (pipeline {build.pipeline} on {build.branch}):",
             STYLE_BOLD,
         )
     )
-    print(f"URL: {with_formatting(web_url, COLOR_CYAN)}")
+    print(f"URL: {with_formatting(build.web_url, COLOR_CYAN)}")
 
     if annotation.title is not None:
         print(f"Annotation: {with_formatting(annotation.title, COLOR_CYAN)}")
 
     if not short_result_presentation:
         matched_snippet = trim_match(
-            match_text=annotation.title_and_text,
+            match_text=annotation.content,
             search_value=search_value,
             use_regex=use_regex,
             one_line_match_presentation=one_line_match_presentation,
@@ -74,7 +70,7 @@ def print_annotation_match(
 
 def print_summary(
     pipeline_slug: str,
-    branch: str,
+    branch: str | None,
     builds: list[Build],
     count_matches: int,
     max_results: int,
@@ -89,6 +85,7 @@ def print_summary(
             if count_matches > max_results
             else ""
         )
+        branch = branch or ANY_BRANCH_VALUE
         print(
             f"{count_matches} match(es) in {len(builds)} searched builds of pipeline '{pipeline_slug}' and branch '{branch}'. "
             f"{suppressed_results_info}"

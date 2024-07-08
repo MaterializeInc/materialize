@@ -7,10 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from dataclasses import dataclass
+$ mysql-connect name=mysql url=mysql://root@${arg.mysql-source-host} password=${arg.mysql-root-password}
 
-
-@dataclass
-class AnnotationMatch:
-    title: str | None
-    title_and_text: str
+$ mysql-execute name=mysql
+USE public;
+SELECT * FROM t0;
+SELECT * FROM t1;
+SELECT * FROM t2;
+SELECT * FROM alter_fail_drop_constraint;
+SELECT * FROM alter_fail_drop_col;

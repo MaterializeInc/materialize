@@ -29,7 +29,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
 
-```sql
+```mzsql
 CREATE CLUSTER webhooks_cluster (SIZE = '25cc');
 
 SET CLUSTER = webhooks_cluster;
@@ -40,7 +40,7 @@ SET CLUSTER = webhooks_cluster;
 To validate requests between Amazon EventBridge and Materialize, you must create
 a [secret](/sql/create-secret/):
 
-```sql
+```mzsql
 CREATE SECRET eventbridge_webhook_secret AS '<secret_value>';
 ```
 
@@ -54,7 +54,7 @@ in Materialize to ingest data from Amazon EventBridge. By default, the source
 will be created in the active cluster; to use a different cluster, use the `IN
 CLUSTER` clause.
 
-```sql
+```mzsql
 CREATE SOURCE eventbridge_source
 FROM WEBHOOK
   BODY FORMAT JSON
@@ -121,7 +121,7 @@ Amazon EventBridge, you can now query the incoming data:
 
 1. Use SQL queries to inspect and analyze the incoming data:
 
-    ```sql
+    ```mzsql
     SELECT * FROM eventbridge_source LIMIT 10;
     ```
 

@@ -19,11 +19,24 @@ pub const ALLOW_USER_SESSIONS: Config<bool> = Config::new(
     "Whether to allow user roles to create new sessions. When false, only system roles will be permitted to create new sessions.",
 );
 
+pub const ENABLE_0DT_DEPLOYMENT: Config<bool> = Config::new(
+    "enable_0dt_deployment",
+    false,
+    "Whether to enable zero-downtime deployments (experimental).",
+);
+
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "enable_statement_lifecycle_logging",
     false,
     "Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.",
+);
+
+/// Enable installation of introspection subscribes.
+pub const ENABLE_INTROSPECTION_SUBSCRIBES: Config<bool> = Config::new(
+    "enable_introspection_subscribes",
+    true,
+    "Enable installation of introspection subscribes.",
 );
 
 /// The plan insights notice will not investigate fast path clusters if plan optimization took longer than this.
@@ -42,6 +55,8 @@ pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Dura
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
+        .add(&ENABLE_0DT_DEPLOYMENT)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
+        .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
 }

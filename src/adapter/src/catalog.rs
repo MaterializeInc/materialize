@@ -26,6 +26,8 @@ use mz_catalog::builtin::{
     MZ_CATALOG_SERVER_CLUSTER,
 };
 use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
+#[cfg(test)]
+use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{CatalogEntry, Cluster, ClusterReplica, Database, Role, Schema};
@@ -34,14 +36,13 @@ use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::option::FallibleMapExt;
 use mz_ore::result::ResultExt as _;
 use mz_ore::soft_panic_or_log;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::global_id::TransientIdGen;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, ScalarType};
@@ -63,10 +64,8 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_storage_client::controller::StorageController;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::TxnWalTablesImpl;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
@@ -149,93 +148,6 @@ pub struct CatalogPlans {
 }
 
 impl Catalog {
-    /// Initializes the `storage_controller` to understand all shards that
-    /// `self` expects to exist.
-    ///
-    /// Note that this must be done before creating/rendering collections
-    /// because the storage controller might not be aware of new system
-    /// collections created between versions.
-    async fn initialize_storage_controller_state(
-        &mut self,
-        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
-    ) -> Result<(), mz_catalog::durable::CatalogError> {
-        let collections = self
-            .entries()
-            .filter(|entry| entry.item().is_storage_collection())
-            .map(|entry| entry.id())
-            .collect();
-
-        // Clone the state so that any errors that occur do not leak any
-        // transformations on error.
-        let mut state = self.state.clone();
-
-        let mut storage = self.storage().await;
-        let mut txn = storage.transaction().await?;
-
-        storage_controller
-            .initialize_state(
-                &mut txn,
-                collections,
-                builtin_migration_metadata.previous_storage_collection_ids,
-            )
-            .await
-            .map_err(mz_catalog::durable::DurableCatalogError::from)?;
-
-        let updates = txn.get_op_updates().collect();
-        let builtin_updates = state.apply_updates(updates);
-        assert_eq!(builtin_updates, Vec::new());
-        txn.commit().await?;
-        drop(storage);
-
-        // Save updated state.
-        self.state = state;
-        Ok(())
-    }
-
-    /// [`mz_controller::Controller`] depends on durable catalog state to boot,
-    /// so make it available and initialize the controller.
-    pub async fn initialize_controller(
-        &mut self,
-        config: mz_controller::ControllerConfig,
-        envd_epoch: core::num::NonZeroI64,
-        read_only: bool,
-        transient_id_gen: Arc<TransientIdGen>,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
-        // Whether to use the new txn-wal tables implementation or the
-        // legacy one.
-        txn_wal_tables: TxnWalTablesImpl,
-    ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
-    {
-        let mut controller = {
-            let mut storage = self.storage().await;
-            let mut tx = storage.transaction().await?;
-            mz_controller::prepare_initialization(&mut tx)
-                .map_err(mz_catalog::durable::DurableCatalogError::from)?;
-            tx.commit().await?;
-
-            let read_only_tx = storage.transaction().await?;
-
-            mz_controller::Controller::new(
-                config,
-                envd_epoch,
-                read_only,
-                transient_id_gen,
-                txn_wal_tables,
-                &read_only_tx,
-            )
-            .await
-        };
-
-        self.initialize_storage_controller_state(
-            &mut *controller.storage,
-            builtin_migration_metadata,
-        )
-        .await?;
-
-        Ok(controller)
-    }
-
     /// Set the optimized plan for the item identified by `id`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_optimized_plan(
@@ -498,14 +410,14 @@ impl Catalog {
     /// This function must not be called in production contexts. Use
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
-    pub async fn with_debug<F, Fut, T>(now: NowFn, f: F) -> T
+    pub async fn with_debug<F, Fut, T>(f: F) -> T
     where
         F: FnOnce(Catalog) -> Fut,
         Fut: Future<Output = T>,
     {
         let persist_client = PersistClient::new_for_tests().await;
         let environmentd_id = Uuid::new_v4();
-        let catalog = match Self::open_debug_catalog(persist_client, environmentd_id, now).await {
+        let catalog = match Self::open_debug_catalog(persist_client, environmentd_id).await {
             Ok(catalog) => catalog,
             Err(err) => {
                 panic!("unable to open debug stash: {err}");
@@ -520,8 +432,8 @@ impl Catalog {
     pub async fn open_debug_catalog(
         persist_client: PersistClient,
         organization_id: Uuid,
-        now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
+        let now = SYSTEM_TIME.clone();
         let deploy_generation = 0;
         let epoch_lower_bound = None;
         let environment_id = None;
@@ -535,6 +447,27 @@ impl Catalog {
                 deploy_generation,
                 epoch_lower_bound,
             )
+            .await?;
+        let system_parameter_defaults = BTreeMap::default();
+        Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
+            .await
+    }
+
+    /// Opens a read only debug persist backed catalog defined by `persist_client` and
+    /// `organization_id`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_catalog(
+        persist_client: PersistClient,
+        organization_id: Uuid,
+    ) -> Result<Catalog, anyhow::Error> {
+        let now = SYSTEM_TIME.clone();
+        let environment_id = None;
+        let openable_storage =
+            mz_catalog::durable::test_persist_backed_catalog_state(persist_client, organization_id)
+                .await;
+        let storage = openable_storage
+            .open_read_only(&test_bootstrap_args())
             .await?;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
@@ -854,24 +787,32 @@ impl Catalog {
         self.state.get_schema(database_spec, schema_spec, conn_id)
     }
 
-    pub fn get_mz_catalog_schema_id(&self) -> &SchemaId {
+    pub fn get_mz_catalog_schema_id(&self) -> SchemaId {
         self.state.get_mz_catalog_schema_id()
     }
 
-    pub fn get_pg_catalog_schema_id(&self) -> &SchemaId {
+    pub fn get_pg_catalog_schema_id(&self) -> SchemaId {
         self.state.get_pg_catalog_schema_id()
     }
 
-    pub fn get_information_schema_id(&self) -> &SchemaId {
+    pub fn get_information_schema_id(&self) -> SchemaId {
         self.state.get_information_schema_id()
     }
 
-    pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
+    pub fn get_mz_internal_schema_id(&self) -> SchemaId {
         self.state.get_mz_internal_schema_id()
     }
 
-    pub fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
+    pub fn get_mz_introspection_schema_id(&self) -> SchemaId {
+        self.state.get_mz_introspection_schema_id()
+    }
+
+    pub fn get_mz_unsafe_schema_id(&self) -> SchemaId {
         self.state.get_mz_unsafe_schema_id()
+    }
+
+    pub fn system_schema_ids(&self) -> impl Iterator<Item = SchemaId> + '_ {
+        self.state.system_schema_ids()
     }
 
     pub fn get_database(&self, id: &DatabaseId) -> &Database {
@@ -1238,6 +1179,18 @@ impl Catalog {
         self.state
             .deserialize_plan_with_enable_for_item_parsing(create_sql, force_if_exists_skip)
     }
+
+    /// Listen for and apply all unconsumed updates to the durable catalog state.
+    // TODO(jkosh44) When this method is actually used outside of a test we can remove the
+    // `#[cfg(test)]` annotation.
+    #[cfg(test)]
+    async fn sync_to_current_updates(
+        &mut self,
+    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
+        let updates = self.storage().await.sync_to_current_updates().await?;
+        let builtin_table_updates = self.state.apply_updates(updates);
+        Ok(builtin_table_updates)
+    }
 }
 
 pub fn is_reserved_name(name: &str) -> bool {
@@ -1405,8 +1358,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
             UInt64 => "uint8".into(),
             ty => {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
-                let pg_catalog_schema =
-                    SchemaSpecifier::Id(self.state.get_pg_catalog_schema_id().clone());
+                let pg_catalog_schema = SchemaSpecifier::Id(self.state.get_pg_catalog_schema_id());
 
                 let res = if self
                     .effective_search_path(true)
@@ -1595,23 +1547,16 @@ impl SessionCatalog for ConnCatalog<'_> {
             .collect()
     }
 
-    fn get_mz_internal_schema_id(&self) -> &SchemaId {
+    fn get_mz_internal_schema_id(&self) -> SchemaId {
         self.state().get_mz_internal_schema_id()
     }
 
-    fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
+    fn get_mz_unsafe_schema_id(&self) -> SchemaId {
         self.state().get_mz_unsafe_schema_id()
     }
 
-    fn is_system_schema(&self, schema: &str) -> bool {
-        self.state.is_system_schema(schema)
-    }
-
-    fn is_system_schema_specifier(&self, schema: &SchemaSpecifier) -> bool {
-        match schema {
-            SchemaSpecifier::Temporary => false,
-            SchemaSpecifier::Id(id) => self.state.is_system_schema_id(id),
-        }
+    fn is_system_schema_specifier(&self, schema: SchemaSpecifier) -> bool {
+        self.state.is_system_schema_specifier(schema)
     }
 
     fn resolve_role(
@@ -1955,10 +1900,11 @@ mod tests {
         Builtin, BuiltinType, BUILTINS,
         REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE,
     };
+    use mz_catalog::durable::{CatalogError, DurableCatalogError};
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
-    use mz_ore::now::{to_datetime, NOW_ZERO, SYSTEM_TIME};
+    use mz_ore::now::{to_datetime, SYSTEM_TIME};
     use mz_ore::task;
     use mz_persist_client::PersistClient;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
@@ -1991,7 +1937,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_minimal_qualification() {
-        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             struct TestCase {
                 input: QualifiedItemName,
                 system_output: PartialItemName,
@@ -2003,9 +1949,7 @@ mod tests {
                     input: QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
-                            schema_spec: SchemaSpecifier::Id(
-                                catalog.get_pg_catalog_schema_id().clone(),
-                            ),
+                            schema_spec: SchemaSpecifier::Id(catalog.get_pg_catalog_schema_id()),
                         },
                         item: "numeric".to_string(),
                     },
@@ -2024,9 +1968,7 @@ mod tests {
                     input: QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
-                            schema_spec: SchemaSpecifier::Id(
-                                catalog.get_mz_catalog_schema_id().clone(),
-                            ),
+                            schema_spec: SchemaSpecifier::Id(catalog.get_mz_catalog_schema_id()),
                         },
                         item: "mz_array_types".to_string(),
                     },
@@ -2068,13 +2010,10 @@ mod tests {
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
         {
-            let mut catalog = Catalog::open_debug_catalog(
-                persist_client.clone(),
-                organization_id.clone(),
-                NOW_ZERO.clone(),
-            )
-            .await
-            .expect("unable to open debug catalog");
+            let mut catalog =
+                Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
+                    .await
+                    .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
             catalog
                 .transact(
@@ -2092,10 +2031,9 @@ mod tests {
             catalog.expire().await;
         }
         {
-            let catalog =
-                Catalog::open_debug_catalog(persist_client, organization_id, NOW_ZERO.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let catalog = Catalog::open_debug_catalog(persist_client, organization_id)
+                .await
+                .expect("unable to open debug catalog");
             // Re-opening the same catalog resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
@@ -2105,14 +2043,14 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_effective_search_path() {
-        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             let mz_catalog_schema = (
                 ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
+                SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id()),
             );
             let pg_catalog_schema = (
                 ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(catalog.state().get_pg_catalog_schema_id().clone()),
+                SchemaSpecifier::Id(catalog.state().get_pg_catalog_schema_id()),
             );
             let mz_temp_schema = (
                 ResolvedDatabaseSpecifier::Ambient,
@@ -2253,7 +2191,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_normalized_create() {
         use mz_ore::collections::CollectionExt;
-        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
             let scx = &mut StatementContext::new(None, &conn_catalog);
 
@@ -2296,13 +2234,10 @@ mod tests {
         let organization_id = Uuid::new_v4();
         let id = GlobalId::User(1);
         {
-            let mut catalog = Catalog::open_debug_catalog(
-                persist_client.clone(),
-                organization_id.clone(),
-                SYSTEM_TIME.clone(),
-            )
-            .await
-            .expect("unable to open debug catalog");
+            let mut catalog =
+                Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
+                    .await
+                    .expect("unable to open debug catalog");
             let item = catalog
                 .state()
                 .deserialize_item(&create_sql)
@@ -2330,10 +2265,9 @@ mod tests {
             catalog.expire().await;
         }
         {
-            let catalog =
-                Catalog::open_debug_catalog(persist_client, organization_id, SYSTEM_TIME.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let catalog = Catalog::open_debug_catalog(persist_client, organization_id)
+                .await
+                .expect("unable to open debug catalog");
             let view = catalog.get_entry(&id);
             assert_eq!("v", view.name.item);
             match &view.item {
@@ -2347,7 +2281,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_object_type() {
-        Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
 
             assert_eq!(
@@ -2369,7 +2303,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_get_privileges() {
-        Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
 
             assert_eq!(
@@ -2784,7 +2718,7 @@ mod tests {
             catalog.expire().await;
         }
 
-        Catalog::with_debug(NOW_ZERO.clone(), inner).await
+        Catalog::with_debug(inner).await
     }
 
     // Execute all builtin functions with all combinations of arguments from interesting datums.
@@ -2925,8 +2859,7 @@ mod tests {
             handles
         }
 
-        let handles =
-            Catalog::with_debug(NOW_ZERO.clone(), |catalog| async { inner(catalog) }).await;
+        let handles = Catalog::with_debug(|catalog| async { inner(catalog) }).await;
         for handle in handles {
             handle.await.expect("must succeed");
         }
@@ -3071,7 +3004,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_pg_views_forbidden_types() {
-        Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
+        Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
 
             for view in BUILTINS::views().filter(|view| {
@@ -3137,19 +3070,50 @@ mod tests {
         .await
     }
 
+    // Make sure objects reside in the `mz_introspection` schema iff they depend on per-replica
+    // introspection relations.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn test_mz_introspection_builtins() {
+        Catalog::with_debug(|catalog| async move {
+            let conn_catalog = catalog.for_system_session();
+
+            let introspection_schema_id = catalog.get_mz_introspection_schema_id();
+            let introspection_schema_spec = SchemaSpecifier::Id(introspection_schema_id);
+
+            for entry in catalog.entries() {
+                let schema_spec = entry.name().qualifiers.schema_spec;
+                let introspection_deps = catalog.introspection_dependencies(entry.id);
+                if introspection_deps.is_empty() {
+                    assert!(
+                        schema_spec != introspection_schema_spec,
+                        "entry does not depend on introspection sources but is in \
+                         `mz_introspection`: {}",
+                        conn_catalog.resolve_full_name(entry.name()),
+                    );
+                } else {
+                    assert!(
+                        schema_spec == introspection_schema_spec,
+                        "entry depends on introspection sources but is not in \
+                         `mz_introspection`: {}",
+                        conn_catalog.resolve_full_name(entry.name()),
+                    );
+                }
+            }
+        })
+        .await
+    }
+
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_builtin_migrations() {
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
         let id = {
-            let catalog = Catalog::open_debug_catalog(
-                persist_client.clone(),
-                organization_id.clone(),
-                NOW_ZERO.clone(),
-            )
-            .await
-            .expect("unable to open debug catalog");
+            let catalog =
+                Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
+                    .await
+                    .expect("unable to open debug catalog");
             let id = catalog
                 .entries()
                 .find(|entry| &entry.name.item == "mz_objects" && entry.is_view())
@@ -3167,10 +3131,9 @@ mod tests {
             *guard = Some("\n".to_string());
         }
         {
-            let catalog =
-                Catalog::open_debug_catalog(persist_client, organization_id, NOW_ZERO.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let catalog = Catalog::open_debug_catalog(persist_client, organization_id)
+                .await
+                .expect("unable to open debug catalog");
 
             let new_id = catalog
                 .entries()
@@ -3182,5 +3145,79 @@ mod tests {
 
             catalog.expire().await;
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_multi_subscriber_catalog() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let db_name = "DB";
+
+        let mut writer_catalog =
+            Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
+                .await
+                .expect("open_debug_catalog");
+        let mut read_only_catalog =
+            Catalog::open_debug_read_only_catalog(persist_client.clone(), organization_id.clone())
+                .await
+                .expect("open_debug_read_only_catalog");
+        assert!(writer_catalog.resolve_database(db_name).is_err());
+        assert!(read_only_catalog.resolve_database(db_name).is_err());
+
+        writer_catalog
+            .transact(
+                None,
+                SYSTEM_TIME().into(),
+                None,
+                vec![Op::CreateDatabase {
+                    name: db_name.to_string(),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                }],
+            )
+            .await
+            .expect("failed to transact");
+
+        let write_db = writer_catalog
+            .resolve_database(db_name)
+            .expect("resolve_database");
+        read_only_catalog
+            .sync_to_current_updates()
+            .await
+            .expect("sync_to_current_updates");
+        let read_db = read_only_catalog
+            .resolve_database(db_name)
+            .expect("resolve_database");
+
+        assert_eq!(write_db, read_db);
+
+        let writer_catalog_fencer = Catalog::open_debug_catalog(persist_client, organization_id)
+            .await
+            .expect("open_debug_catalog for fencer");
+        let fencer_db = writer_catalog_fencer
+            .resolve_database(db_name)
+            .expect("resolve_database for fencer");
+        assert_eq!(fencer_db, read_db);
+
+        let write_fence_err = writer_catalog
+            .sync_to_current_updates()
+            .await
+            .expect_err("sync_to_current_updates for fencer");
+        assert!(matches!(
+            write_fence_err,
+            CatalogError::Durable(DurableCatalogError::Fence(_))
+        ));
+        let read_fence_err = read_only_catalog
+            .sync_to_current_updates()
+            .await
+            .expect_err("sync_to_current_updates after fencer");
+        assert!(matches!(
+            read_fence_err,
+            CatalogError::Durable(DurableCatalogError::Fence(_))
+        ));
+
+        writer_catalog.expire().await;
+        read_only_catalog.expire().await;
+        writer_catalog_fencer.expire().await;
     }
 }

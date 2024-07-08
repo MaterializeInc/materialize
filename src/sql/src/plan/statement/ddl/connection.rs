@@ -13,6 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use array_concat::concat_arrays;
 use itertools::Itertools;
+use maplit::btreemap;
+use mz_ore::num::NonNeg;
 use mz_ore::str::StrExt;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ConnectionOptionName::*;
@@ -25,8 +27,9 @@ use mz_storage_types::connections::aws::{AwsAssumeRole, AwsAuth, AwsConnection, 
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
-    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, MySqlConnection, MySqlSslMode,
-    PostgresConnection, SshConnection, SshTunnel, StringOrSecret, TlsIdentity, Tunnel,
+    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection,
+    MySqlSslMode, PostgresConnection, SshConnection, SshTunnel, StringOrSecret, TlsIdentity,
+    Tunnel,
 };
 
 use crate::names::Aug;
@@ -50,6 +53,7 @@ generate_extracted_config!(
     (Password, with_options::Secret),
     (Port, u16),
     (ProgressTopic, String),
+    (ProgressTopicReplicationFactor, i32),
     (Region, String),
     (SaslMechanisms, String),
     (SaslPassword, with_options::Secret),
@@ -74,7 +78,8 @@ generate_extracted_config!(
 );
 
 /// Options which cannot be changed using ALTER CONNECTION.
-pub(crate) const INALTERABLE_OPTIONS: &[ConnectionOptionName] = &[ProgressTopic];
+pub(crate) const INALTERABLE_OPTIONS: &[ConnectionOptionName] =
+    &[ProgressTopic, ProgressTopicReplicationFactor];
 
 /// Options of which only one may be specified.
 pub(crate) const MUTUALLY_EXCLUSIVE_SETS: &[&[ConnectionOptionName]] = &[&[Broker, Brokers]];
@@ -111,6 +116,7 @@ pub(super) fn validate_options_per_connection_type(
             Broker,
             Brokers,
             ProgressTopic,
+            ProgressTopicReplicationFactor,
             AwsPrivatelink,
             SshTunnel,
             SslKey,
@@ -273,6 +279,21 @@ impl ConnectionOptionExtracted {
                     default_tunnel: scx
                         .build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?,
                     progress_topic: self.progress_topic,
+                    progress_topic_options: KafkaTopicOptions {
+                        // We only allow configuring the progress topic replication factor for now.
+                        // For correctness, the partition count MUST be one and for performance the compaction
+                        // policy MUST be enabled.
+                        partition_count: Some(NonNeg::try_from(1).expect("1 is positive")),
+                        replication_factor: self.progress_topic_replication_factor.map(|val| {
+                            if val <= 0 {
+                                Err(sql_err!("invalid CONNECTION: PROGRESS TOPIC REPLICATION FACTOR must be greater than 0"))?
+                            }
+                            NonNeg::try_from(val).map_err(|e| sql_err!("{e}"))
+                        }).transpose()?,
+                        topic_config: btreemap! {
+                            "cleanup.policy".to_string() => "compact".to_string(),
+                        },
+                    },
                     options: BTreeMap::new(),
                     tls,
                     sasl,
@@ -387,8 +408,6 @@ impl ConnectionOptionExtracted {
                 },
             }),
             CreateConnectionType::MySql => {
-                scx.require_feature_flag(&crate::session::vars::ENABLE_MYSQL_SOURCE)?;
-
                 let cert = self.ssl_certificate;
                 let key = self.ssl_key.map(|secret| secret.into());
                 let tls_identity = match (cert, key) {

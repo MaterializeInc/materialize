@@ -9,8 +9,6 @@
 
 //! Tracing utilities for explainable plans.
 
-#![cfg(feature = "tracing_")]
-
 use std::fmt::{Debug, Display};
 use std::sync::Mutex;
 

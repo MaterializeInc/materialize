@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
@@ -78,7 +79,7 @@ pub trait DurableType: Sized {
     fn key(&self) -> Self::Key;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Database {
     pub id: DatabaseId,
     pub oid: u32,
@@ -118,7 +119,7 @@ impl DurableType for Database {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Schema {
     pub id: SchemaId,
     pub oid: u32,
@@ -161,7 +162,7 @@ impl DurableType for Schema {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Role {
     pub id: RoleId,
     pub oid: u32,
@@ -204,7 +205,7 @@ impl DurableType for Role {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Cluster {
     pub id: ClusterId,
     pub name: String,
@@ -266,7 +267,7 @@ pub struct ClusterVariantManaged {
     pub schedule: ClusterSchedule,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Ord, PartialOrd, PartialEq, Eq)]
 pub struct IntrospectionSourceIndex {
     pub cluster_id: ClusterId,
     pub name: String,
@@ -320,7 +321,7 @@ impl DurableType for IntrospectionSourceIndex {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct ClusterReplica {
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
@@ -398,6 +399,7 @@ pub enum ReplicaLocation {
         disk: bool,
         internal: bool,
         billed_as: Option<String>,
+        pending: bool,
     },
 }
 
@@ -427,6 +429,7 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                     disk,
                     billed_as,
                     internal,
+                    pending,
                 },
             ) => ReplicaLocation::Managed {
                 size,
@@ -442,12 +445,13 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                 disk,
                 internal,
                 billed_as,
+                pending,
             },
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Item {
     pub id: GlobalId,
     pub oid: u32,
@@ -500,7 +504,7 @@ pub struct SystemObjectDescription {
     pub object_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SystemObjectUniqueIdentifier {
     pub id: GlobalId,
     pub fingerprint: String,
@@ -513,7 +517,7 @@ pub struct SystemObjectUniqueIdentifier {
 /// As such, system objects are keyed in the catalog storage by the
 /// tuple (schema_name, object_type, object_name), which is guaranteed
 /// to be unique.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SystemObjectMapping {
     pub description: SystemObjectDescription,
     pub unique_identifier: SystemObjectUniqueIdentifier,
@@ -565,7 +569,7 @@ impl DurableType for SystemObjectMapping {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct DefaultPrivilege {
     pub object: DefaultPrivilegeObject,
     pub acl_item: DefaultPrivilegeAclItem,
@@ -616,7 +620,7 @@ impl DurableType for DefaultPrivilege {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Comment {
     pub object_id: CommentObjectId,
     pub sub_component: Option<usize>,
@@ -750,7 +754,7 @@ impl DurableType for Setting {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SystemConfiguration {
     pub name: String,
     pub value: String,
@@ -813,7 +817,7 @@ impl DurableType for MzAclItem {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct AuditLog {
     pub event: VersionedEvent,
 }
@@ -837,7 +841,7 @@ impl DurableType for AuditLog {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct StorageUsage {
     pub metric: VersionedStorageUsage,
 }
@@ -866,10 +870,10 @@ impl DurableType for StorageUsage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct StorageCollectionMetadata {
     pub id: GlobalId,
-    pub shard: String,
+    pub shard: ShardId,
 }
 
 impl DurableType for StorageCollectionMetadata {
@@ -895,9 +899,9 @@ impl DurableType for StorageCollectionMetadata {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct UnfinalizedShard {
-    pub shard: String,
+    pub shard: ShardId,
 }
 
 impl DurableType for UnfinalizedShard {
@@ -1147,21 +1151,21 @@ pub struct StorageCollectionMetadataKey {
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct StorageCollectionMetadataValue {
-    pub(crate) shard: String,
+    pub(crate) shard: ShardId,
 }
 
 /// This value is stored transparently, however, it should only ever be
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct UnfinalizedShardKey {
-    pub(crate) shard: String,
+    pub(crate) shard: ShardId,
 }
 
 /// This value is stored transparently, however, it should only ever be
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct TxnWalShardValue {
-    pub(crate) shard: String,
+    pub(crate) shard: ShardId,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

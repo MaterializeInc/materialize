@@ -45,7 +45,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ConnectionOptionName, QualifiedReplica,
+    AlterSourceAddSubsourceOption, ConnectionOptionName, QualifiedReplica, SelectStatement,
     TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
@@ -63,8 +63,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
-    ResolvedIds, SchemaSpecifier, SystemObjectId,
+    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDataType,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -169,6 +169,7 @@ pub enum Plan {
     AlterSystemResetAll(AlterSystemResetAllPlan),
     AlterRole(AlterRolePlan),
     AlterOwner(AlterOwnerPlan),
+    AlterTableAddColumn(AlterTablePlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -225,6 +226,9 @@ impl Plan {
             }
             StatementKind::AlterSystemSet => &[PlanKind::AlterNoop, PlanKind::AlterSystemSet],
             StatementKind::AlterOwner => &[PlanKind::AlterNoop, PlanKind::AlterOwner],
+            StatementKind::AlterTableAddColumn => {
+                &[PlanKind::AlterNoop, PlanKind::AlterTableAddColumn]
+            }
             StatementKind::Close => &[PlanKind::Close],
             StatementKind::Comment => &[PlanKind::Comment],
             StatementKind::Commit => &[PlanKind::CommitTransaction],
@@ -402,6 +406,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
             },
+            Plan::AlterTableAddColumn(_) => "alter table add column",
             Plan::Declare(_) => "declare",
             Plan::Fetch(_) => "fetch",
             Plan::Close(_) => "close",
@@ -423,6 +428,39 @@ impl Plan {
             Plan::SideEffectingFunc(_) => "side effecting func",
             Plan::ValidateConnection(_) => "validate connection",
             Plan::AlterRetainHistory(_) => "alter retain history",
+        }
+    }
+
+    /// Returns `true` iff this `Plan` is allowed to be executed in read-only
+    /// mode.
+    ///
+    /// We use an explicit allow-list, to avoid future additions automatically
+    /// falling into the `true` category.
+    pub fn allowed_in_read_only(&self) -> bool {
+        match self {
+            // These two set non-durable session variables, so are okay in
+            // read-only mode.
+            Plan::SetVariable(_) => true,
+            Plan::ResetVariable(_) => true,
+            Plan::SetTransaction(_) => true,
+            Plan::StartTransaction(_) => true,
+            Plan::CommitTransaction(_) => true,
+            Plan::AbortTransaction(_) => true,
+            Plan::Select(_) => true,
+            Plan::EmptyQuery => true,
+            Plan::ShowAllVariables => true,
+            Plan::ShowCreate(_) => true,
+            Plan::ShowColumns(_) => true,
+            Plan::ShowVariable(_) => true,
+            Plan::InspectShard(_) => true,
+            Plan::Subscribe(_) => true,
+            Plan::CopyTo(_) => true,
+            Plan::ExplainPlan(_) => true,
+            Plan::ExplainPushdown(_) => true,
+            Plan::ExplainTimestamp(_) => true,
+            Plan::ExplainSinkSchema(_) => true,
+            Plan::ValidateConnection(_) => true,
+            _ => false,
         }
     }
 }
@@ -478,24 +516,24 @@ pub struct CreateRolePlan {
     pub attributes: RoleAttributes,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CreateClusterPlan {
     pub name: String,
     pub variant: CreateClusterVariant,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum CreateClusterVariant {
     Managed(CreateClusterManagedPlan),
     Unmanaged(CreateClusterUnmanagedPlan),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CreateClusterUnmanagedPlan {
     pub replicas: Vec<(String, ReplicaConfig)>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CreateClusterManagedPlan {
     pub replication_factor: u32,
     pub size: String,
@@ -522,12 +560,12 @@ pub struct ComputeReplicaIntrospectionConfig {
     pub interval: Duration,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ComputeReplicaConfig {
     pub introspection: Option<ComputeReplicaIntrospectionConfig>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ReplicaConfig {
     Unorchestrated {
         storagectl_addrs: Vec<String>,
@@ -721,6 +759,7 @@ pub struct SetTransactionPlan {
 
 #[derive(Clone, Debug)]
 pub struct SelectPlan {
+    pub select: Option<SelectStatement<Aug>>,
     pub source: HirRelationExpr,
     pub when: QueryWhen,
     pub finishing: RowSetFinishing,
@@ -782,7 +821,7 @@ impl SubscribeFrom {
 
 #[derive(Debug)]
 pub struct ShowCreatePlan {
-    pub id: GlobalId,
+    pub id: ObjectId,
     pub row: Row,
 }
 
@@ -1035,7 +1074,7 @@ pub struct AlterSinkPlan {
     pub in_cluster: ClusterId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AlterClusterPlan {
     pub id: ClusterId,
     pub name: String,
@@ -1130,6 +1169,13 @@ pub struct AlterOwnerPlan {
     pub id: ObjectId,
     pub object_type: ObjectType,
     pub new_owner: RoleId,
+}
+
+#[derive(Debug)]
+pub struct AlterTablePlan {
+    pub relation_id: GlobalId,
+    pub column_name: ColumnName,
+    pub column_type: ResolvedDataType,
 }
 
 #[derive(Debug)]

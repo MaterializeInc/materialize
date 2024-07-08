@@ -13,7 +13,7 @@ import argparse
 
 import pandas as pd
 
-from materialize.buildkite_insights.annotation_search.annotation_search_source import (
+from materialize.buildkite_insights.annotation_search.buildkite_search_source import (
     ANY_BRANCH_VALUE,
 )
 from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
@@ -28,9 +28,11 @@ from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_CHOICES,
     FetchMode,
 )
-from materialize.buildkite_insights.steps.build_step import (
+from materialize.buildkite_insights.data.build_step import (
     BuildJobOutcome,
     BuildStepMatcher,
+)
+from materialize.buildkite_insights.util.build_step_utils import (
     extract_build_step_outcomes,
     step_outcomes_to_job_outcomes,
 )

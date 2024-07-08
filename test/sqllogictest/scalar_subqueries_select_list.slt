@@ -123,15 +123,14 @@ Explained Query:
                 Get l1 // { arity: 1 }
     cte l1 =
       Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 2 }
-            implementation
-              %0:l0[#0]UKA » %1:t1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                ReadStorage materialize.public.t1 // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1:t1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
     cte l0 =
       Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t2 // { arity: 1 }
@@ -372,15 +371,14 @@ Explained Query:
               Get l1 // { arity: 1 }
     cte l1 =
       Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 2 }
-            implementation
-              %0:l0[#0]UKA » %1:t1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                ReadStorage materialize.public.t1 // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1:t1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
     cte l0 =
       Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t2 // { arity: 1 }
@@ -458,15 +456,14 @@ Explained Query:
         Get l1 // { arity: 1 }
     cte l1 =
       Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 2 }
-            implementation
-              %0:l0[#0]UKA » %1:t1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                ReadStorage materialize.public.t1 // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1:t1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
     cte l0 =
       Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t2 // { arity: 1 }
@@ -562,15 +559,14 @@ Explained Query:
         Get l1 // { arity: 1 }
     cte l1 =
       Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 2 }
-            implementation
-              %0:l0[#0]UKA » %1:t2[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                ReadStorage materialize.public.t2 // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1:t2[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t2 // { arity: 1 }
     cte l0 =
       Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t3 // { arity: 1 }
@@ -640,13 +636,12 @@ Explained Query:
                 Get l6 // { arity: 1 }
     cte l6 =
       Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 2 }
-            implementation
-              %0:l5[#0]UKA » %1:l1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l5 // { arity: 1 }
-            Get l1 // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l5[#0]UKA » %1:l1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l5 // { arity: 1 }
+          Get l1 // { arity: 1 }
     cte l5 =
       Distinct project=[#0] // { arity: 1 }
         Project (#0) // { arity: 1 }
@@ -679,13 +674,12 @@ Explained Query:
                 Get l2 // { arity: 1 }
     cte l2 =
       Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 2 }
-            implementation
-              %0:l0[#0]UKA » %1:l1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            Get l1 // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1:l1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          Get l1 // { arity: 1 }
     cte l1 =
       ArrangeBy keys=[[#0]] // { arity: 1 }
         Filter (#0) IS NOT NULL // { arity: 1 }
@@ -748,20 +742,19 @@ Explained Query:
                 Get l1 // { arity: 1 }
     cte l1 =
       Project (#0) // { arity: 1 }
-        Filter (#0) IS NOT NULL // { arity: 3 }
-          Join on=(#0 = #1 = #2) type=delta // { arity: 3 }
-            implementation
-              %0:l0 » %1:t1[#0]K » %2:t2[#0]K
-              %1:t1 » %0:l0[#0]UKA » %2:t2[#0]K
-              %2:t2 » %0:l0[#0]UKA » %1:t1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                ReadStorage materialize.public.t1 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Filter (#0) IS NOT NULL // { arity: 1 }
-                ReadStorage materialize.public.t2 // { arity: 1 }
+        Join on=(#0 = #1 = #2) type=delta // { arity: 3 }
+          implementation
+            %0:l0 » %1:t1[#0]K » %2:t2[#0]K
+            %1:t1 » %0:l0[#0]UKA » %2:t2[#0]K
+            %2:t2 » %0:l0[#0]UKA » %1:t1[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t2 // { arity: 1 }
     cte l0 =
       Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t3 // { arity: 1 }

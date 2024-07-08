@@ -198,7 +198,7 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
             dedent(
                 f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-                ALTER SYSTEM SET enable_mysql_source = true
+                ALTER SYSTEM SET max_mysql_connections = 100
 
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 

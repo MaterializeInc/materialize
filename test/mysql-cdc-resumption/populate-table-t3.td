@@ -7,8 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-sql-timeout duration=1s
-$ set-max-tries max-tries=20
+$ mysql-connect name=mysql url=mysql://root@${arg.mysql-host} password=${arg.mysql-root-password}
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_mysql_source = true
+$ mysql-execute name=mysql
+USE public;
+
+DROP TABLE IF EXISTS t3;
+CREATE TABLE t3 (f1 INTEGER NOT NULL);
+
+INSERT INTO t3 VALUES (1);

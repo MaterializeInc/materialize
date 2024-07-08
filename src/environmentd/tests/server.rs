@@ -26,9 +26,6 @@ use futures::FutureExt;
 use http::{Request, StatusCode};
 use itertools::Itertools;
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use mz_environmentd::http::{
-    BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
-};
 use mz_environmentd::test_util::{self, make_pg_tls, Ca, PostgresErrorExt, KAFKA_ADDRS};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
@@ -924,6 +921,13 @@ fn test_cancel_long_running_query() {
 }
 
 fn test_cancellation_cancels_dataflows(query: &str) {
+    // Query that returns how many dataflows are currently installed.
+    // Accounts for the presence of introspection subscribe dataflows by ignoring those.
+    const DATAFLOW_QUERY: &str = " \
+        SELECT count(*) \
+        FROM mz_introspection.mz_dataflows \
+        WHERE name NOT LIKE '%introspection-subscribe%'";
+
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
@@ -936,10 +940,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
     // No dataflows expected at startup.
     assert_eq!(
         client1
-            .query_one(
-                "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
-                &[]
-            )
+            .query_one(DATAFLOW_QUERY, &[])
             .unwrap()
             .get::<_, i64>(0),
         0
@@ -950,10 +951,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
         Retry::default()
             .retry(|_state| {
                 let count: i64 = client2
-                    .query_one(
-                        "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
-                        &[],
-                    )
+                    .query_one(DATAFLOW_QUERY, &[])
                     .map_err(|_| ())
                     .unwrap()
                     .get(0);
@@ -976,10 +974,7 @@ fn test_cancellation_cancels_dataflows(query: &str) {
     Retry::default()
         .retry(|_state| {
             let count: i64 = client1
-                .query_one(
-                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
-                    &[],
-                )
+                .query_one(DATAFLOW_QUERY, &[])
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
@@ -1009,6 +1004,13 @@ fn test_cancel_insert_select() {
 }
 
 fn test_closing_connection_cancels_dataflows(query: String) {
+    // Query that returns how many dataflows are currently installed.
+    // Accounts for the presence of introspection subscribe dataflows by ignoring those.
+    const DATAFLOW_QUERY: &str = " \
+        SELECT count(*) \
+        FROM mz_introspection.mz_dataflows \
+        WHERE name NOT LIKE '%introspection-subscribe%'";
+
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
@@ -1048,10 +1050,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
                 panic!("waited too long for psql to send the query");
             }
             let count: i64 = client
-                .query_one(
-                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
-                    &[],
-                )
+                .query_one(DATAFLOW_QUERY, &[])
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
@@ -1077,10 +1076,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
                 panic!("waited too long for dataflow cancellation");
             }
             let count: i64 = client
-                .query_one(
-                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
-                    &[],
-                )
+                .query_one(DATAFLOW_QUERY, &[])
                 .map_err(|_| ())
                 .unwrap()
                 .get(0);
@@ -2473,9 +2469,9 @@ async fn test_leader_promotion() {
                     .await
                     .unwrap();
                 assert_eq!(res.status(), StatusCode::OK);
-                let response: LeaderStatusResponse = res.json().await.unwrap();
-                assert_ne!(response.status, LeaderStatus::IsLeader);
-                if response.status == LeaderStatus::ReadyToPromote {
+                let response = res.text().await.unwrap();
+                assert_ne!(response, r#"{"status":"IsLeader"}"#);
+                if response == r#"{"status":"ReadyToPromote"}"# {
                     Ok(())
                 } else {
                     Err(())
@@ -2530,9 +2526,9 @@ async fn test_leader_promotion() {
                     .await
                     .unwrap();
                 assert_eq!(res.status(), StatusCode::OK);
-                let response: LeaderStatusResponse = res.json().await.unwrap();
-                assert_ne!(response.status, LeaderStatus::IsLeader);
-                if response.status == LeaderStatus::ReadyToPromote {
+                let response = res.text().await.unwrap();
+                assert_ne!(response, r#"{"status":"IsLeader"}"#);
+                if response == r#"{"status":"ReadyToPromote"}"# {
                     Ok(())
                 } else {
                     Err(())
@@ -2551,13 +2547,8 @@ async fn test_leader_promotion() {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: BecomeLeaderResponse = res.json().await.unwrap();
-        assert_eq!(
-            response,
-            BecomeLeaderResponse {
-                result: BecomeLeaderResult::Success
-            }
-        );
+        let response = res.text().await.unwrap();
+        assert_eq!(response, r#"{"result":"Success"}"#,);
 
         let server_3 = server_3.await.unwrap();
 
@@ -2571,8 +2562,8 @@ async fn test_leader_promotion() {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: LeaderStatusResponse = res.json().await.unwrap();
-        assert_eq!(response.status, LeaderStatus::IsLeader);
+        let response = res.text().await.unwrap();
+        assert_eq!(response, r#"{"status":"IsLeader"}"#);
 
         let res = reqwest::Client::new()
             .post(promote_http_url)
@@ -2580,13 +2571,8 @@ async fn test_leader_promotion() {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: BecomeLeaderResponse = res.json().await.unwrap();
-        assert_eq!(
-            response,
-            BecomeLeaderResponse {
-                result: BecomeLeaderResult::Success
-            }
-        );
+        let response = res.text().await.unwrap();
+        assert_eq!(response, r#"{"result":"Success"}"#);
     }
 }
 
@@ -2620,8 +2606,8 @@ async fn test_leader_promotion_always_using_deploy_generation() {
         .unwrap();
         let res = http_client.get(status_http_url).send().await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: LeaderStatusResponse = res.json().await.unwrap();
-        assert_eq!(response.status, LeaderStatus::IsLeader);
+        let response = res.text().await.unwrap();
+        assert_eq!(response, r#"{"status":"IsLeader"}"#);
 
         let promote_http_url = Url::parse(&format!(
             "http://{}/api/leader/promote",
@@ -2630,13 +2616,8 @@ async fn test_leader_promotion_always_using_deploy_generation() {
         .unwrap();
         let res = http_client.post(promote_http_url).send().await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: BecomeLeaderResponse = res.json().await.unwrap();
-        assert_eq!(
-            response,
-            BecomeLeaderResponse {
-                result: BecomeLeaderResult::Success
-            }
-        );
+        let response = res.text().await.unwrap();
+        assert_eq!(response, r#"{"result":"Success"}"#);
     }
 }
 
@@ -2684,10 +2665,10 @@ async fn test_leader_promotion_mixed_code_version() {
                 .unwrap();
             tracing::info!("{} response: {res:?}", next_version);
             assert_eq!(res.status(), StatusCode::OK);
-            let response: LeaderStatusResponse = res.json().await.unwrap();
+            let response = res.text().await.unwrap();
             tracing::info!("{} response body: {response:?}", next_version);
-            assert_ne!(response.status, LeaderStatus::IsLeader);
-            if response.status == LeaderStatus::ReadyToPromote {
+            assert_ne!(response, r#"{"status":"IsLeader"}"#);
+            if response == r#"{"status":"ReadyToPromote"}"# {
                 Ok(())
             } else {
                 Err(())
@@ -2715,7 +2696,7 @@ fn test_cancel_ws() {
             .retry(|_| {
                 let conn_id: String = client
                     .query_one(
-                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        "SELECT s.connection_id::text FROM mz_internal.mz_subscriptions b JOIN mz_internal.mz_sessions s ON s.id = b.session_id",
                         &[],
                     )?
                     .get(0);
@@ -2997,7 +2978,7 @@ fn test_github_20262() {
             .retry(|_| {
                 let conn_id: String = client
                     .query_one(
-                        "SELECT session_id::text FROM mz_internal.mz_subscriptions",
+                        "SELECT s.connection_id::text FROM mz_internal.mz_subscriptions b JOIN mz_internal.mz_sessions s ON s.id = b.session_id",
                         &[],
                     )?
                     .get(0);

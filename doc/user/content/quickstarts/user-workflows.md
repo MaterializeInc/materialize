@@ -43,7 +43,7 @@ Sources are the first step in most Materialize projects.
 
 1. In your `psql` terminal, create [a connection](/sql/create-connection/#confluent-schema-registry) to the Confluent Schema Registry:
 
-    ```sql
+    ```mzsql
     CREATE SECRET IF NOT EXISTS csr_username AS '<TBD>';
     CREATE SECRET IF NOT EXISTS csr_password AS '<TBD>';
 
@@ -56,7 +56,7 @@ Sources are the first step in most Materialize projects.
 
 1. Create [a connection](/sql/create-connection/#kafka) to the Kafka broker:
 
-    ```sql
+    ```mzsql
     CREATE SECRET kafka_password AS '<TBD>';
 
     CREATE CONNECTION ecommerce_kafka_connection TO KAFKA (
@@ -69,7 +69,7 @@ Sources are the first step in most Materialize projects.
 
 1. Create the sources:
 
-    ```sql
+    ```mzsql
     CREATE SOURCE purchases
         FROM KAFKA CONNECTION ecommerce_kafka_connection (TOPIC 'mysql.shop.purchases')
         FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
@@ -92,7 +92,7 @@ Sources are the first step in most Materialize projects.
 
     Now if you run `SHOW SOURCES;`, you should see the four sources we created:
 
-    ```sql
+    ```mzsql
     materialize=> SHOW SOURCES;
         name
     ----------------
@@ -109,7 +109,7 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
 
 1. Create a [view](/sql/create-view/) that casts the raw bytes into a JSON object:
 
-    ```sql
+    ```mzsql
     CREATE VIEW v_pageviews AS
         SELECT
             (data->'user_id')::int AS user_id,
@@ -123,7 +123,7 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
 
 1. Define a view containing the incomplete orders:
 
-    ```sql
+    ```mzsql
     CREATE VIEW incomplete_purchases AS
         SELECT
             users.id AS user_id,
@@ -143,7 +143,7 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
 
     A materialized view is persisted in durable storage and is incrementally updated as new data arrives.
 
-    ```sql
+    ```mzsql
     CREATE MATERIALIZED VIEW last_user_visit AS
         SELECT DISTINCT ON(user_id) user_id, received_at
         FROM v_pageviews
@@ -152,7 +152,7 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
 
 1. Create materialized view to get all the users that have been inactive for the last 3 minutes:
 
-    ```sql
+    ```mzsql
     CREATE MATERIALIZED VIEW inactive_users_last_3_mins AS
         SELECT
             user_id,
@@ -166,7 +166,7 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
 
 1. Create a materialized view to join the incomplete purchases with the inactive users to get the abandoned carts:
 
-    ```sql
+    ```mzsql
     CREATE MATERIALIZED VIEW abandoned_cart AS
         SELECT
             incomplete_purchases.user_id,
@@ -182,13 +182,13 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
 
 1. To see the changes in the `abandoned_cart` materialized view as new data arrives, you can use [`SUBSCRIBE`](/sql/subscribe):
 
-    ```sql
+    ```mzsql
     SELECT * FROM abandoned_cart LIMIT 10;
     ```
 
 1. To see the changes in the `abandoned_cart` materialized view as new data arrives, you can use [`SUBSCRIBE`](/sql/subscribe):
 
-    ```sql
+    ```mzsql
     COPY ( SUBSCRIBE ( SELECT * FROM abandoned_cart ) ) TO STDOUT;
     ```
 

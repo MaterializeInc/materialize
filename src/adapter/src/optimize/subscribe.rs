@@ -53,7 +53,7 @@ pub struct Optimizer {
     /// `SUBSCRIBE FROM <SELECT>` variants.
     view_id: GlobalId,
     /// The id of the session connection in which the optimizer will run.
-    conn_id: ConnectionId,
+    conn_id: Option<ConnectionId>,
     /// Should the plan produce an initial snapshot?
     with_snapshot: bool,
     /// Sink timestamp.
@@ -87,7 +87,7 @@ impl Optimizer {
         compute_instance: ComputeInstanceSnapshot,
         view_id: GlobalId,
         sink_id: GlobalId,
-        conn_id: ConnectionId,
+        conn_id: Option<ConnectionId>,
         with_snapshot: bool,
         up_to: Option<Timestamp>,
         debug_name: String,
@@ -199,7 +199,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
                         &self
                             .catalog
                             .state()
-                            .resolve_full_name(from.name(), Some(&self.conn_id)),
+                            .resolve_full_name(from.name(), self.conn_id.as_ref()),
                     )
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();

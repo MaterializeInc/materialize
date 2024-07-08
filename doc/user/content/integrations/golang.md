@@ -192,7 +192,7 @@ An `MzDiff` value of `-1` indicates that Materialize is deleting one row with th
 
 To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
 
-```sql
+```mzsql
 DROP MATERIALIZED VIEW IF EXISTS counter_sum;
 DROP SOURCE IF EXISTS counter;
 DROP TABLE IF EXISTS countries;

@@ -529,32 +529,18 @@ impl Coordinator {
         for id in uses_ids {
             let entry = self.catalog().get_entry(id);
             let name = entry.name();
-            schemas.insert((&name.qualifiers.database_spec, &name.qualifiers.schema_spec));
+            schemas.insert((name.qualifiers.database_spec, name.qualifiers.schema_spec));
         }
 
         let pg_catalog_schema = (
-            &ResolvedDatabaseSpecifier::Ambient,
-            &SchemaSpecifier::Id(self.catalog().get_pg_catalog_schema_id().clone()),
+            ResolvedDatabaseSpecifier::Ambient,
+            SchemaSpecifier::Id(self.catalog().get_pg_catalog_schema_id()),
         );
-        let system_schemas = [
-            (
-                &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_mz_catalog_schema_id().clone()),
-            ),
-            (
-                &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_mz_internal_schema_id().clone()),
-            ),
-            pg_catalog_schema.clone(),
-            (
-                &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_information_schema_id().clone()),
-            ),
-            (
-                &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_mz_unsafe_schema_id().clone()),
-            ),
-        ];
+        let system_schemas: Vec<_> = self
+            .catalog()
+            .system_schema_ids()
+            .map(|id| (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)))
+            .collect();
 
         if system_schemas.iter().any(|s| schemas.contains(s)) {
             // If any of the system schemas is specified, add the rest of the
@@ -569,7 +555,7 @@ impl Coordinator {
         // Gather the IDs of all items in all used schemas.
         let mut item_ids: BTreeSet<GlobalId> = BTreeSet::new();
         for (db, schema) in schemas {
-            let schema = self.catalog().get_schema(db, schema, conn_id);
+            let schema = self.catalog().get_schema(&db, &schema, conn_id);
             item_ids.extend(schema.items.values());
         }
 

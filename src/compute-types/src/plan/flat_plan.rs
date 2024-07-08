@@ -34,17 +34,9 @@ include!(concat!(
 /// A flat representation of LIR plans.
 ///
 /// In contrast to [`Plan`], which recursively contains its subplans, this type encodes references
-/// between nodes with their unique [`LirId`]. Doing so has some benefits:
-///
-///  * Operations that visit all nodes in a [`FlatPlan`] have natural iterative implementations,
-///    avoiding the risk of stack overflows.
-///  * Because nodes can be referenced multiple times, a [`FlatPlan`] can represent DAGs, not just
-///    trees. This better matches the structure of rendered dataflows and avoids the need for a
-///    `Let` construct.
-///
-/// Note that the `LetRec` operator is still present in [`FlatPlan`]s. While we could replace it
-/// with cyclic references between nodes, keeping it simplifies rendering as the sources of
-/// recursion are clearly marked.
+/// between nodes with their unique [`LirId`]. Doing so has the benefit that operations that visit
+/// all nodes in a [`FlatPlan`] have natural iterative implementations, avoiding the risk of stack
+/// overflows.
 ///
 /// A [`FlatPlan`] can be constructed from a [`Plan`] using the corresponding [`From`] impl.
 ///
@@ -57,17 +49,20 @@ include!(concat!(
 ///  (1) The `root` ID is contained in the `nodes` map.
 ///  (2) For each node in the `nodes` map, each [`LirId`] contained within the node is contained
 ///      in the `nodes` map.
-///  (3) Each [`LirId`] contained withing `topological_order` is contained in the `nodes` map.
+///  (3) Each [`LirId`] contained within `topological_order` is contained in the `nodes` map.
 ///
-/// Constrained recursive structure:
+/// Constrained graph structure:
 ///
 ///  (4) `LetRec` nodes only occur at the root or as inputs of other `LetRec` nodes.
 ///  (5) Only `LetRec` nodes may introduce cycles into the plan.
 ///  (6) Each input to a `LetRec` node is the root of an independent subplan.
+///  (7) `Let` nodes only occur at the root, as inputs of `LetRec` nodes, or as `body` inputs of
+///      other `Let` nodes.
+///  (8) Each input to a `Let` node is the root of an independent subplan.
 ///
 /// Topological order:
 ///
-///  (7) `topological_order` lists the nodes in a valid topological order.
+///  (9) `topological_order` lists the nodes in a valid topological order.
 ///
 /// The implementation of [`FlatPlan`] must ensure that all its methods uphold these invariants and
 /// that users are not able to break them.
@@ -87,7 +82,6 @@ pub struct FlatPlan<T = mz_repr::Timestamp> {
 ///
 ///  * Recursive references are replaced with [`LirId`]s.
 ///  * The `lir_id` fields are removed.
-///  * The `Let` variant is removed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum FlatPlanNode<T = mz_repr::Timestamp> {
     /// A collection containing a pre-determined collection.
@@ -109,6 +103,22 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
         keys: AvailableCollections,
         /// The actions to take when introducing the collection.
         plan: GetPlan,
+    },
+    /// Binds `value` to `id`, and then results in `body` with that binding.
+    ///
+    /// This stage has the effect of sharing `value` across multiple possible
+    /// uses in `body`, and is the only mechanism we have for sharing collection
+    /// information across parts of a dataflow.
+    ///
+    /// The binding is not available outside of `body`.
+    Let {
+        /// The local identifier to be used, available to `body` as `Id::Local(id)`.
+        id: LocalId,
+        /// The collection that should be bound to `id`.
+        value: LirId,
+        /// The collection that results, which is allowed to contain `Get` stages
+        /// that reference `Id::Local(id)`.
+        body: LirId,
     },
     /// Binds `values` to `ids`, evaluates them potentially recursively, and returns `body`.
     ///
@@ -267,45 +277,13 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
         // The strategy is to walk walk through the `Plan` in right-to-left pre-order and for each
         // node (a) produce a corresponding `FlatPlanNode` and (b) push the contained subplans onto
         // the work stack. We do this until no further subplans remain.
-        //
-        // Special cases exist for `Let`s and `Get`s: We want to always remove the former and
-        // remove the latter if it references a `Let` node. For example:
-        //
-        //         +-------+                             +-------+
-        //         | Root  |                             | Root  |
-        //         +-------+                             +-------+
-        //             |                                     |
-        //         +-------+                             +-------+
-        //         |  Let  |                             | Body  |
-        //         +-------+                             +-------+
-        //           /   \                 ===>            /   \
-        //       /---     ---\                            /     \
-        //  +-------+     +-------+                       \     /
-        //  | Value |     | Body  |                      +-------+
-        //  +-------+     +-------+                      | Value |
-        //                  /   \                        +-------+
-        //               /--     --\
-        //          +-------+   +-------+
-        //          |  Get  |   |  Get  |
-        //          +-------+   +-------+
-        //
-        // For this, whenever we encounter a `Let`, we insert a insert a binding for Value, instead
-        // of producing a new `FlatPlanNode`. We then flatten Value and Body as usual.
-        //
-        // When we encounter a `Get` that references a `LocalId`, and we find the `LocalId` in the
-        // current bindings, we replace the `Get` with an optional `Mfp` that references the
-        // binding value instead.
 
-        let mut root = plan.lir_id();
+        let root = plan.lir_id();
 
         // Stack of nodes to flatten.
         let mut todo: Vec<Plan<T>> = vec![plan];
         // Flat nodes produced so far.
         let mut nodes: BTreeMap<u64, FlatPlanNode<T>> = Default::default();
-        // Bindings resulting from `Plan::Let` nodes.
-        let mut bindings: BTreeMap<LocalId, LirId> = Default::default();
-        // Node references to replace at the end.
-        let mut replacements: BTreeMap<LirId, LirId> = Default::default();
         // A list remembering the order in which nodes were flattened.
         // Because nodes are flatten in right-to-left pre-order, reversing this list at the end
         // yields a valid topological order.
@@ -328,35 +306,6 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     plan,
                     lir_id,
                 } => {
-                    // If this `Get` references another node directly, remove it. If it contains an
-                    // MFP, leave an `Mfp` node in its place.
-                    if let Id::Local(local_id) = id {
-                        if let Some(input_id) = bindings.get(&local_id) {
-                            match plan {
-                                GetPlan::PassArrangements => {
-                                    replacements.insert(lir_id, *input_id);
-                                }
-                                GetPlan::Arrangement(keys, row, mfp) => {
-                                    let node = Mfp {
-                                        input: *input_id,
-                                        mfp,
-                                        input_key_val: Some((keys, row)),
-                                    };
-                                    insert_node(lir_id, node);
-                                }
-                                GetPlan::Collection(mfp) => {
-                                    let node = Mfp {
-                                        input: *input_id,
-                                        mfp,
-                                        input_key_val: None,
-                                    };
-                                    insert_node(lir_id, node);
-                                }
-                            }
-                            continue;
-                        }
-                    }
-
                     let node = Get { id, keys, plan };
                     insert_node(lir_id, node);
                 }
@@ -366,9 +315,12 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     body,
                     lir_id,
                 } => {
-                    // Insert a binding for the value and replace the `Let` node with the body.
-                    bindings.insert(id, value.lir_id());
-                    replacements.insert(lir_id, body.lir_id());
+                    let node = Let {
+                        id,
+                        value: value.lir_id(),
+                        body: body.lir_id(),
+                    };
+                    insert_node(lir_id, node);
 
                     todo.extend([*value, *body]);
                 }
@@ -523,21 +475,6 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
             };
         }
 
-        // Apply replacements.
-        let replace = |id: &mut LirId| {
-            // The replacement targets might have been replaced themselves, so iterate.
-            while let Some(target_id) = replacements.get(id) {
-                *id = *target_id;
-            }
-        };
-
-        for node in nodes.values_mut() {
-            for id in node.input_lir_ids_mut() {
-                replace(id);
-            }
-        }
-        replace(&mut root);
-
         flatten_order.reverse();
         let topological_order = flatten_order;
 
@@ -583,12 +520,7 @@ impl<T> FlatPlan<T> {
     /// # Panics
     ///
     /// Panics if this plan does not have a `LetRec` at the root.
-    pub fn split_recursive(
-        self,
-    ) -> (
-        Vec<(LocalId, FlatPlan<T>, Option<LetRecLimit>)>,
-        FlatPlan<T>,
-    ) {
+    pub fn split_recursive(self) -> (Vec<(LocalId, Self, Option<LetRecLimit>)>, Self) {
         let (mut nodes, root_id, mut topological_order) = self.destruct();
         let root = nodes.remove(&root_id).expect("invariant (1)");
         let FlatPlanNode::LetRec {
@@ -600,8 +532,6 @@ impl<T> FlatPlan<T> {
         else {
             panic!("attempt to split a non-recursive plan");
         };
-
-        topological_order.retain(|id| *id != root_id);
 
         // For each value and the body, find the (transitively) referenced nodes and split them out
         // into new plan. We know that nodes cannot be shared between these subplans because of
@@ -621,15 +551,11 @@ impl<T> FlatPlan<T> {
                     value_nodes.insert(lir_id, node);
                 }
 
-                let mut value_order = Vec::with_capacity(nodes.len());
-                topological_order.retain(|id| {
-                    let in_value = value_nodes.contains_key(id);
-                    if in_value {
-                        value_order.push(*id);
-                    }
-                    !in_value
-                });
-
+                let value_order = topological_order
+                    .iter()
+                    .filter(|id| value_nodes.contains_key(id))
+                    .copied()
+                    .collect();
                 let plan = FlatPlan {
                     nodes: value_nodes,
                     root: root_id,
@@ -639,9 +565,75 @@ impl<T> FlatPlan<T> {
             })
             .collect();
 
+        topological_order.retain(|id| nodes.contains_key(id));
+
         let body_plan = FlatPlan {
             nodes,
             root: body,
+            topological_order,
+        };
+
+        (value_plans, body_plan)
+    }
+
+    /// Split a non-recursive plan into its constituent let-free subplans.
+    ///
+    /// The returned value is a list of `value` plans, each with the `LocalId` it is referenced by,
+    /// as well as the let-free `body` plan. The `value` plans are in topological order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this plan is recursive.
+    pub fn split_lets(self) -> (Vec<(LocalId, Self)>, Self) {
+        assert!(!self.is_recursive());
+
+        let (mut nodes, mut root_id, mut topological_order) = self.destruct();
+
+        // Descend the chain of `Let` nodes and build for each one the subplan rooted in its
+        // `value`. We know that the subplans are let-free because of invariant (7). We know that
+        // nodes cannot be shared between the subplans because of invariant (8).
+        let mut value_plans = Vec::new();
+        loop {
+            let root = nodes.remove(&root_id).expect("FlatPlan invariants");
+            let FlatPlanNode::Let {
+                id: local_id,
+                value: value_id,
+                body: body_id,
+            } = root
+            else {
+                // Reached the end of the `Let` chain.
+                nodes.insert(root_id, root);
+                break;
+            };
+
+            let mut value_nodes = BTreeMap::new();
+            let mut todo = vec![value_id];
+            while let Some(lir_id) = todo.pop() {
+                let node = nodes.remove(&lir_id).expect("FlatPlan invariants");
+                todo.extend(node.input_lir_ids());
+                value_nodes.insert(lir_id, node);
+            }
+
+            let value_order = topological_order
+                .iter()
+                .filter(|id| value_nodes.contains_key(id))
+                .copied()
+                .collect();
+            let plan = FlatPlan {
+                nodes: value_nodes,
+                root: value_id,
+                topological_order: value_order,
+            };
+            value_plans.push((local_id, plan));
+
+            root_id = body_id;
+        }
+
+        topological_order.retain(|id| nodes.contains_key(id));
+
+        let body_plan = FlatPlan {
+            nodes,
+            root: root_id,
             topological_order,
         };
 
@@ -748,11 +740,16 @@ impl<T> FlatPlanNode<T> {
     fn input_lir_ids(&self) -> impl Iterator<Item = LirId> {
         use FlatPlanNode::*;
 
+        let mut first = None;
         let mut list = Vec::new();
         let mut last = None;
 
         match self {
             Constant { .. } | Get { .. } => (),
+            Let { value, body, .. } => {
+                first = Some(*value);
+                last = Some(*body);
+            }
             LetRec { values, body, .. } => {
                 list.clone_from(values);
                 last = Some(*body);
@@ -771,37 +768,7 @@ impl<T> FlatPlanNode<T> {
             }
         }
 
-        list.into_iter().chain(last)
-    }
-
-    /// Returns mutable references to the IDs of input nodes to this node.
-    fn input_lir_ids_mut(&mut self) -> impl Iterator<Item = &mut LirId> {
-        use FlatPlanNode::*;
-
-        let mut list = None;
-        let mut last = None;
-
-        match self {
-            Constant { .. } | Get { .. } => (),
-            LetRec { values, body, .. } => {
-                list = Some(values);
-                last = Some(body);
-            }
-            Mfp { input, .. }
-            | FlatMap { input, .. }
-            | Reduce { input, .. }
-            | TopK { input, .. }
-            | Negate { input, .. }
-            | Threshold { input, .. }
-            | ArrangeBy { input, .. } => {
-                last = Some(input);
-            }
-            Join { inputs, .. } | Union { inputs, .. } => {
-                list = Some(inputs);
-            }
-        }
-
-        list.into_iter().flatten().chain(last)
+        first.into_iter().chain(list).chain(last)
     }
 }
 
@@ -872,6 +839,11 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
                 id: Some(id.into_proto()),
                 keys: Some(keys.into_proto()),
                 plan: Some(plan.into_proto()),
+            }),
+            Self::Let { id, value, body } => Kind::Let(ProtoLet {
+                id: Some(id.into_proto()),
+                value: *value,
+                body: *body,
             }),
             Self::LetRec {
                 ids,
@@ -1017,6 +989,11 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
                 id: proto.id.into_rust_if_some("ProtoGet::id")?,
                 keys: proto.keys.into_rust_if_some("ProtoGet::keys")?,
                 plan: proto.plan.into_rust_if_some("ProtoGet::plan")?,
+            },
+            Kind::Let(proto) => Self::Let {
+                id: proto.id.into_rust_if_some("ProtoLet::id")?,
+                value: proto.value,
+                body: proto.body,
             },
             Kind::LetRec(proto) => {
                 let mut limits = Vec::with_capacity(proto.limits.len());

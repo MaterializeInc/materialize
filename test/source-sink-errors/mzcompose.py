@@ -15,7 +15,7 @@ from typing import Protocol
 
 from materialize import buildkite
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -24,6 +24,7 @@ from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import selected_by_name
 
 
 def schema() -> str:
@@ -540,12 +541,18 @@ disruptions: list[Disruption] = [
 ]
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test the detection and reporting of source/sink errors by
     introducing a Disruption and then checking the mz_internal.mz_*_statuses tables
     """
 
-    sharded_disruptions = buildkite.shard_list(disruptions, lambda s: s.name)
+    parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])
+
+    args = parser.parse_args()
+
+    sharded_disruptions = buildkite.shard_list(
+        list(selected_by_name(args.disruptions, disruptions)), lambda s: s.name
+    )
     print(
         f"Disruptions in shard with index {buildkite.get_parallelism_index()}: {[d.name for d in sharded_disruptions]}"
     )

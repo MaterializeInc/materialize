@@ -47,7 +47,7 @@ views may not depend on temporary objects.
 
 ### Creating a view
 
-```sql
+```mzsql
 CREATE VIEW purchase_sum_by_region
 AS
     SELECT sum(purchase.amount) AS region_sum,

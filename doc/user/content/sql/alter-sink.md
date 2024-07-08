@@ -94,7 +94,7 @@ keyspaces.
 To alter a sink originally created to use `matview_1` as the upstream relation,
 and start sinking the contents to `matview_2` instead:
 
-```sql
+```mzsql
 CREATE SINK avro_sink
   FROM matview_1
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
@@ -103,7 +103,7 @@ CREATE SINK avro_sink
   ENVELOPE UPSERT;
 ```
 
-```sql
+```mzsql
 ALTER SINK foo SET FROM matview_2;
 ```
 

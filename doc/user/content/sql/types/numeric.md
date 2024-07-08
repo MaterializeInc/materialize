@@ -72,7 +72,7 @@ For details on exceeding the `numeric` type's maximum precision, see
 By default, `numeric` values do not have a specified scale, so values can have
 anywhere between 0 and 39 digits after the decimal point. For example:
 
-```sql
+```mzsql
 CREATE TABLE unscaled (c NUMERIC);
 INSERT INTO unscaled VALUES
   (987654321098765432109876543210987654321),
@@ -92,7 +92,7 @@ However, if you specify a scale on a `numeric` value, values will be rescaled
 appropriately. If the resulting value exceeds the maximum precision for
 `numeric` types, you'll receive an error.
 
-```sql
+```mzsql
 CREATE TABLE scaled (c NUMERIC(39, 20));
 
 INSERT INTO scaled VALUES
@@ -101,7 +101,7 @@ INSERT INTO scaled VALUES
 ```
 ERROR:  numeric field overflow
 ```
-```sql
+```mzsql
 INSERT INTO scaled VALUES
   (9876543210987654321.09876543210987654321),
   (.987654321098765432109876543210987654321);
@@ -119,7 +119,7 @@ SELECT c FROM scaled;
 `numeric` operations will always round off fractional values to limit their
 values to 39 digits of precision.
 
-```sql
+```mzsql
 SELECT 2 * 9876543210987654321.09876543210987654321 AS rounded;
 
                  rounded
@@ -189,7 +189,7 @@ You can [cast](../../functions/cast) from the following types to `numeric`:
 
 ## Examples
 
-```sql
+```mzsql
 SELECT 1.23::numeric AS num_v;
 ```
 ```nofmt
@@ -199,7 +199,7 @@ SELECT 1.23::numeric AS num_v;
 ```
 <hr/>
 
-```sql
+```mzsql
 SELECT 1.23::numeric(38,3) AS num_38_3_v;
 ```
 ```nofmt
@@ -210,7 +210,7 @@ SELECT 1.23::numeric(38,3) AS num_38_3_v;
 
 <hr/>
 
-```sql
+```mzsql
 SELECT 1.23e4 AS num_w_exp;
 ```
 ```nofmt

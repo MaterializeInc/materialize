@@ -20,6 +20,7 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::now::EpochMillis;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_no_log, soft_assert_or_log};
+use mz_persist_types::ShardId;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -35,7 +36,7 @@ use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::{StorageError, TxnWalTablesImpl};
 
 use crate::builtin::BuiltinLog;
-use crate::durable::initialize::{SYSTEM_CONFIG_SYNCED_KEY, TXN_WAL_TABLES};
+use crate::durable::initialize::{ENABLE_0DT_DEPLOYMENT, SYSTEM_CONFIG_SYNCED_KEY, TXN_WAL_TABLES};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
@@ -265,6 +266,18 @@ impl<'a> Transaction<'a> {
             oid,
         )?;
         Ok((id, oid))
+    }
+
+    pub fn insert_system_schema(
+        &mut self,
+        schema_id: u64,
+        schema_name: &str,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+        oid: u32,
+    ) -> Result<(), CatalogError> {
+        let id = SchemaId::System(schema_id);
+        self.insert_schema(id, None, schema_name.to_string(), owner_id, privileges, oid)
     }
 
     pub(crate) fn insert_schema(
@@ -1579,6 +1592,15 @@ impl<'a> Transaction<'a> {
         self.set_config(TXN_WAL_TABLES.into(), Some(u64::from(value)))
     }
 
+    /// Updates the catalog `enable_0dt_deployment` "config" value to
+    /// match the `enable_0dt_deployment` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with Launch Darkly,
+    /// but use it in boot before Launch Darkly is available.
+    pub fn set_enable_0dt_deployment(&mut self, value: bool) -> Result<(), CatalogError> {
+        self.set_config(ENABLE_0DT_DEPLOYMENT.into(), Some(u64::from(value)))
+    }
+
     /// Removes the catalog `txn_wal_tables` "config" value to
     /// match the `txn_wal_tables` "system var" value.
     ///
@@ -1586,6 +1608,15 @@ impl<'a> Transaction<'a> {
     /// but use it in boot before Launch Darkly is available.
     pub fn reset_txn_wal_tables(&mut self) -> Result<(), CatalogError> {
         self.set_config(TXN_WAL_TABLES.into(), None)
+    }
+
+    /// Removes the catalog `enable_0dt_deployment` "config" value to
+    /// match the `enable_0dt_deployment` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with LaunchDarkly,
+    /// but use it in boot before LaunchDarkly is available.
+    pub fn reset_enable_0dt_deployment(&mut self) -> Result<(), CatalogError> {
+        self.set_config(ENABLE_0DT_DEPLOYMENT.into(), None)
     }
 
     /// Updates the catalog `system_config_synced` "config" value to true.
@@ -1692,6 +1723,14 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
+    pub fn get_schemas(&self) -> impl Iterator<Item = Schema> {
+        self.schemas
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
     pub fn get_introspection_source_indexes(
         &mut self,
         cluster_id: ClusterId,
@@ -1712,102 +1751,19 @@ impl<'a> Transaction<'a> {
             .map(|value| value.value)
     }
 
-    // TODO(jkosh44) This is a temporary placeholder so the in-memory catalog can pretend to be
-    // collecting updates from the durable catalog.
-    /// Returns the current value of all objects in the form of a positive [`StateUpdate`].
-    pub fn get_bootstrap_updates(&self) -> impl Iterator<Item = StateUpdate> + '_ {
-        fn get_collection_updates<T>(
-            table_txn: &TableTransaction<T::Key, T::Value>,
-            kind_fn: impl FnMut(T) -> StateUpdateKind,
-        ) -> impl Iterator<Item = StateUpdateKind>
-        where
-            T::Key: Ord + Eq + Clone + Debug,
-            T::Value: Ord + Clone + Debug,
-            T: DurableType,
-        {
-            table_txn
-                .items()
-                .into_iter()
-                .map(|(k, v)| DurableType::from_key_value(k, v))
-                .map(kind_fn)
-        }
-
-        let Transaction {
-            durable_catalog: _,
-            databases,
-            schemas,
-            items,
-            comments,
-            roles,
-            clusters,
-            cluster_replicas,
-            introspection_sources,
-            system_gid_mapping,
-            system_configurations,
-            default_privileges,
-            system_privileges,
-            // Handled separately during bootstrap.
-            audit_log_updates: _,
-            storage_usage_updates: _,
-            storage_collection_metadata,
-            unfinalized_shards,
-            // Not representable as a `StateUpdate`.
-            id_allocator: _,
-            configs: _,
-            settings: _,
-            txn_wal_shard: _,
-            op_id: _,
-            commit_ts,
-        } = &self;
-
-        std::iter::empty()
-            .chain(get_collection_updates(roles, StateUpdateKind::Role))
-            .chain(get_collection_updates(databases, StateUpdateKind::Database))
-            .chain(get_collection_updates(schemas, StateUpdateKind::Schema))
-            .chain(get_collection_updates(
-                default_privileges,
-                StateUpdateKind::DefaultPrivilege,
-            ))
-            .chain(get_collection_updates(
-                system_privileges,
-                StateUpdateKind::SystemPrivilege,
-            ))
-            .chain(get_collection_updates(
-                system_configurations,
-                StateUpdateKind::SystemConfiguration,
-            ))
-            .chain(get_collection_updates(clusters, StateUpdateKind::Cluster))
-            .chain(get_collection_updates(
-                introspection_sources,
-                StateUpdateKind::IntrospectionSourceIndex,
-            ))
-            .chain(get_collection_updates(
-                cluster_replicas,
-                StateUpdateKind::ClusterReplica,
-            ))
-            .chain(get_collection_updates(
-                system_gid_mapping,
-                StateUpdateKind::SystemObjectMapping,
-            ))
-            .chain(get_collection_updates(items, StateUpdateKind::Item))
-            .chain(get_collection_updates(comments, StateUpdateKind::Comment))
-            .chain(get_collection_updates(
-                storage_collection_metadata,
-                StateUpdateKind::StorageCollectionMetadata,
-            ))
-            .chain(get_collection_updates(
-                unfinalized_shards,
-                StateUpdateKind::UnfinalizedShard,
-            ))
-            .map(|kind| StateUpdate {
-                kind,
-                ts: commit_ts.clone(),
-                diff: StateDiff::Addition,
-            })
+    /// Commit the current operation within the transaction. This does not cause anything to be
+    /// written durably, but signals to the current transaction that we are moving on to the next
+    /// operation.
+    ///
+    /// Returns the updates of the committed operation.
+    #[must_use]
+    pub fn get_and_commit_op_updates(&mut self) -> Vec<StateUpdate> {
+        let updates = self.get_op_updates();
+        self.commit_op();
+        updates
     }
 
-    /// Returns the updates of the current op.
-    pub fn get_op_updates(&self) -> impl Iterator<Item = StateUpdate> + '_ {
+    fn get_op_updates(&self) -> Vec<StateUpdate> {
         fn get_collection_op_updates<'a, T>(
             table_txn: &'a TableTransaction<T::Key, T::Value>,
             kind_fn: impl Fn(T) -> StateUpdateKind + 'a,
@@ -1885,7 +1841,7 @@ impl<'a> Transaction<'a> {
             op_id: _,
         } = &self;
 
-        std::iter::empty()
+        let updates = std::iter::empty()
             .chain(get_collection_op_updates(
                 roles,
                 StateUpdateKind::Role,
@@ -1971,10 +1927,21 @@ impl<'a> Transaction<'a> {
                 ts: commit_ts.clone(),
                 diff,
             })
+            .collect();
+
+        updates
+    }
+
+    fn commit_op(&mut self) {
+        self.op_id += 1;
     }
 
     pub fn op_id(&self) -> Timestamp {
         self.op_id
+    }
+
+    pub fn commit_ts(&self) -> mz_repr::Timestamp {
+        self.commit_ts
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
@@ -2015,20 +1982,16 @@ impl<'a> Transaction<'a> {
         (txn_batch, self.durable_catalog)
     }
 
-    /// Commit the current operation within the transaction. This does not cause anything to be
-    /// written durably, but signals to the current transaction that we are moving on to the next
-    /// operation.
+    /// Commits the storage transaction to durable storage. Any error returned outside read-only
+    /// mode indicates the catalog may be in an indeterminate state and needs to be fully re-read
+    /// before proceeding. In general, this must be fatal to the calling process. We do not
+    /// panic/halt inside this function itself so that errors can bubble up during initialization.
+    ///
+    /// In read-only mode, this will return an error indicating that the catalog is not writeable.
     #[mz_ore::instrument(level = "debug")]
-    pub fn commit_op(&mut self) {
-        self.op_id += 1;
-    }
-
-    /// Commits the storage transaction to durable storage. Any error returned indicates the catalog may be
-    /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
-    /// must be fatal to the calling process. We do not panic/halt inside this function itself so
-    /// that errors can bubble up during initialization.
-    #[mz_ore::instrument(level = "debug")]
-    pub async fn commit(self) -> Result<(), CatalogError> {
+    pub(crate) async fn commit_internal(
+        self,
+    ) -> Result<&'a mut dyn DurableCatalogState, CatalogError> {
         let (mut txn_batch, durable_catalog) = self.into_parts();
         let TransactionBatch {
             databases,
@@ -2075,7 +2038,42 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
         differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
-        durable_catalog.commit_transaction(txn_batch).await
+
+        durable_catalog.commit_transaction(txn_batch).await?;
+        Ok(durable_catalog)
+    }
+
+    /// Commits the storage transaction to durable storage. Any error returned outside read-only
+    /// mode indicates the catalog may be in an indeterminate state and needs to be fully re-read
+    /// before proceeding. In general, this must be fatal to the calling process. We do not
+    /// panic/halt inside this function itself so that errors can bubble up during initialization.
+    ///
+    /// In read-only mode, this will return an error indicating that the catalog is not writeable.
+    ///
+    /// IMPORTANT: It is assumed that the committer of this transaction has already applied all
+    /// updates from this transaction. Therefore, updates from this transaction will not be returned
+    /// when calling [`crate::durable::ReadOnlyDurableCatalogState::sync_to_current_updates`] or
+    /// [`crate::durable::ReadOnlyDurableCatalogState::sync_updates`].
+    ///
+    /// An alternative implementation would be for the caller to explicitly consume their updates
+    /// after committing and only then apply the updates in-memory. While this removes assumptions
+    /// about the caller in this method, in practice it results in duplicate work on every commit.
+    #[mz_ore::instrument(level = "debug")]
+    pub async fn commit(self) -> Result<(), CatalogError> {
+        let op_updates = self.get_op_updates();
+        assert!(
+            op_updates.is_empty(),
+            "unconsumed transaction updates: {op_updates:?}"
+        );
+
+        let commit_ts = self.commit_ts();
+        let durable_storage = self.commit_internal().await?;
+        // Drain all the updates from the commit since it is assumed that they were already applied.
+        let updates = durable_storage.sync_updates(commit_ts).await?;
+        // This is bad because it means that we performed the transaction with an out of date state.
+        soft_assert_no_log!(updates.iter().all(|update| update.ts == commit_ts),
+            "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, updates:{updates:?}");
+        Ok(())
     }
 }
 
@@ -2083,7 +2081,7 @@ use crate::durable::async_trait;
 
 #[async_trait]
 impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
-    fn get_collection_metadata(&self) -> BTreeMap<GlobalId, String> {
+    fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId> {
         self.storage_collection_metadata
             .items()
             .into_iter()
@@ -2098,7 +2096,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
 
     fn insert_collection_metadata(
         &mut self,
-        metadata: BTreeMap<GlobalId, String>,
+        metadata: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError<mz_repr::Timestamp>> {
         for (id, shard) in metadata {
             self.storage_collection_metadata
@@ -2122,7 +2120,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
         Ok(())
     }
 
-    fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, String)> {
+    fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ShardId)> {
         self.storage_collection_metadata
             .delete(
                 |StorageCollectionMetadataKey { id }, _| ids.contains(id),
@@ -2138,7 +2136,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
             .collect()
     }
 
-    fn get_unfinalized_shards(&self) -> BTreeSet<String> {
+    fn get_unfinalized_shards(&self) -> BTreeSet<ShardId> {
         self.unfinalized_shards
             .items()
             .into_iter()
@@ -2148,7 +2146,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
 
     fn insert_unfinalized_shards(
         &mut self,
-        s: BTreeSet<String>,
+        s: BTreeSet<ShardId>,
     ) -> Result<(), StorageError<mz_repr::Timestamp>> {
         for shard in s {
             match self
@@ -2163,14 +2161,14 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
         Ok(())
     }
 
-    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<String>) {
+    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<ShardId>) {
         let _ = self.unfinalized_shards.delete(
-            |UnfinalizedShardKey { shard }, _| shards.contains(shard.as_str()),
+            |UnfinalizedShardKey { shard }, _| shards.contains(shard),
             self.op_id,
         );
     }
 
-    fn get_txn_wal_shard(&self) -> Option<String> {
+    fn get_txn_wal_shard(&self) -> Option<ShardId> {
         let items = self.txn_wal_shard.items();
         items
             .into_values()
@@ -2180,7 +2178,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
 
     fn write_txn_wal_shard(
         &mut self,
-        shard: String,
+        shard: ShardId,
     ) -> Result<(), StorageError<mz_repr::Timestamp>> {
         self.txn_wal_shard
             .insert((), TxnWalShardValue { shard }, self.op_id)
@@ -2648,287 +2646,293 @@ where
     }
 }
 
-#[mz_ore::test]
-fn test_table_transaction_simple() {
-    fn uniqueness_violation(a: &String, b: &String) -> bool {
-        a == b
-    }
-    let mut table = TableTransaction::new(
-        BTreeMap::from([(1i64.to_le_bytes().to_vec(), "a".to_string())]),
-        uniqueness_violation,
-    )
-    .unwrap();
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
 
-    table
-        .insert(2i64.to_le_bytes().to_vec(), "b".to_string(), 0)
+    #[mz_ore::test]
+    fn test_table_transaction_simple() {
+        fn uniqueness_violation(a: &String, b: &String) -> bool {
+            a == b
+        }
+        let mut table = TableTransaction::new(
+            BTreeMap::from([(1i64.to_le_bytes().to_vec(), "a".to_string())]),
+            uniqueness_violation,
+        )
         .unwrap();
-    table
-        .insert(3i64.to_le_bytes().to_vec(), "c".to_string(), 0)
-        .unwrap();
-}
 
-#[mz_ore::test]
-fn test_table_transaction() {
-    fn uniqueness_violation(a: &String, b: &String) -> bool {
-        a == b
+        table
+            .insert(2i64.to_le_bytes().to_vec(), "b".to_string(), 0)
+            .unwrap();
+        table
+            .insert(3i64.to_le_bytes().to_vec(), "c".to_string(), 0)
+            .unwrap();
     }
-    let mut table: BTreeMap<Vec<u8>, String> = BTreeMap::new();
 
-    fn commit(table: &mut BTreeMap<Vec<u8>, String>, mut pending: Vec<(Vec<u8>, String, i64)>) {
-        // Sort by diff so that we process retractions first.
-        pending.sort_by(|a, b| a.2.cmp(&b.2));
-        for (k, v, diff) in pending {
-            if diff == -1 {
-                let prev = table.remove(&k);
-                assert_eq!(prev, Some(v));
-            } else if diff == 1 {
-                let prev = table.insert(k, v);
-                assert_eq!(prev, None);
-            } else {
-                panic!("unexpected diff: {diff}");
+    #[mz_ore::test]
+    fn test_table_transaction() {
+        fn uniqueness_violation(a: &String, b: &String) -> bool {
+            a == b
+        }
+        let mut table: BTreeMap<Vec<u8>, String> = BTreeMap::new();
+
+        fn commit(table: &mut BTreeMap<Vec<u8>, String>, mut pending: Vec<(Vec<u8>, String, i64)>) {
+            // Sort by diff so that we process retractions first.
+            pending.sort_by(|a, b| a.2.cmp(&b.2));
+            for (k, v, diff) in pending {
+                if diff == -1 {
+                    let prev = table.remove(&k);
+                    assert_eq!(prev, Some(v));
+                } else if diff == 1 {
+                    let prev = table.insert(k, v);
+                    assert_eq!(prev, None);
+                } else {
+                    panic!("unexpected diff: {diff}");
+                }
             }
         }
-    }
 
-    table.insert(1i64.to_le_bytes().to_vec(), "v1".to_string());
-    table.insert(2i64.to_le_bytes().to_vec(), "v2".to_string());
-    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
-    assert_eq!(table_txn.items(), table);
-    assert_eq!(table_txn.delete(|_k, _v| false, 0).len(), 0);
-    assert_eq!(table_txn.delete(|_k, v| v == "v2", 1).len(), 1);
-    assert_eq!(
-        table_txn.items(),
-        BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string())])
-    );
-    assert_eq!(
+        table.insert(1i64.to_le_bytes().to_vec(), "v1".to_string());
+        table.insert(2i64.to_le_bytes().to_vec(), "v2".to_string());
+        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        assert_eq!(table_txn.items(), table);
+        assert_eq!(table_txn.delete(|_k, _v| false, 0).len(), 0);
+        assert_eq!(table_txn.delete(|_k, v| v == "v2", 1).len(), 1);
+        assert_eq!(
+            table_txn.items(),
+            BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string())])
+        );
+        assert_eq!(
+            table_txn
+                .update(|_k, _v| Some("v3".to_string()), 2)
+                .unwrap(),
+            1
+        );
+
+        // Uniqueness violation.
         table_txn
-            .update(|_k, _v| Some("v3".to_string()), 2)
-            .unwrap(),
-        1
-    );
+            .insert(3i64.to_le_bytes().to_vec(), "v3".to_string(), 3)
+            .unwrap_err();
 
-    // Uniqueness violation.
-    table_txn
-        .insert(3i64.to_le_bytes().to_vec(), "v3".to_string(), 3)
-        .unwrap_err();
-
-    table_txn
-        .insert(3i64.to_le_bytes().to_vec(), "v4".to_string(), 4)
-        .unwrap();
-    assert_eq!(
-        table_txn.items(),
-        BTreeMap::from([
-            (1i64.to_le_bytes().to_vec(), "v3".to_string()),
-            (3i64.to_le_bytes().to_vec(), "v4".to_string()),
-        ])
-    );
-    let err = table_txn
-        .update(|_k, _v| Some("v1".to_string()), 5)
-        .unwrap_err();
-    assert!(
-        matches!(err, DurableCatalogError::UniquenessViolation),
-        "unexpected err: {err:?}"
-    );
-    let pending = table_txn.pending();
-    assert_eq!(
-        pending,
-        vec![
-            (1i64.to_le_bytes().to_vec(), "v1".to_string(), -1),
-            (1i64.to_le_bytes().to_vec(), "v3".to_string(), 1),
-            (2i64.to_le_bytes().to_vec(), "v2".to_string(), -1),
-            (3i64.to_le_bytes().to_vec(), "v4".to_string(), 1),
-        ]
-    );
-    commit(&mut table, pending);
-    assert_eq!(
-        table,
-        BTreeMap::from([
-            (1i64.to_le_bytes().to_vec(), "v3".to_string()),
-            (3i64.to_le_bytes().to_vec(), "v4".to_string())
-        ])
-    );
-
-    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
-    // Deleting then creating an item that has a uniqueness violation should work.
-    assert_eq!(
-        table_txn.delete(|k, _v| k == &1i64.to_le_bytes(), 0).len(),
-        1
-    );
-    table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
-        .unwrap();
-    // Uniqueness violation in value.
-    table_txn
-        .insert(5i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
-        .unwrap_err();
-    // Key already exists, expect error.
-    table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string(), 0)
-        .unwrap_err();
-    assert_eq!(
-        table_txn.delete(|k, _v| k == &1i64.to_le_bytes(), 0).len(),
-        1
-    );
-    // Both the inserts work now because the key and uniqueness violation are gone.
-    table_txn
-        .insert(5i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
-        .unwrap();
-    table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string(), 0)
-        .unwrap();
-    let pending = table_txn.pending();
-    assert_eq!(
-        pending,
-        vec![
-            (1i64.to_le_bytes().to_vec(), "v3".to_string(), -1),
-            (1i64.to_le_bytes().to_vec(), "v5".to_string(), 1),
-            (5i64.to_le_bytes().to_vec(), "v3".to_string(), 1),
-        ]
-    );
-    commit(&mut table, pending);
-    assert_eq!(
-        table,
-        BTreeMap::from([
-            (1i64.to_le_bytes().to_vec(), "v5".to_string()),
-            (3i64.to_le_bytes().to_vec(), "v4".to_string()),
-            (5i64.to_le_bytes().to_vec(), "v3".to_string()),
-        ])
-    );
-
-    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
-    assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 3);
-    table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v1".to_string(), 0)
-        .unwrap();
-
-    commit(&mut table, table_txn.pending());
-    assert_eq!(
-        table,
-        BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string()),])
-    );
-
-    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
-    assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 1);
-    table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v2".to_string(), 0)
-        .unwrap();
-    commit(&mut table, table_txn.pending());
-    assert_eq!(
-        table,
-        BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v2".to_string()),])
-    );
-
-    // Verify we don't try to delete v3 or v4 during commit.
-    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
-    assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 1);
-    table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
-        .unwrap();
-    table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v4".to_string(), 1)
-        .unwrap_err();
-    assert_eq!(table_txn.delete(|_k, _v| true, 1).len(), 1);
-    table_txn
-        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string(), 1)
-        .unwrap();
-    commit(&mut table, table_txn.pending());
-    assert_eq!(
-        table.clone().into_iter().collect::<Vec<_>>(),
-        vec![(1i64.to_le_bytes().to_vec(), "v5".to_string())]
-    );
-
-    // Test `set`.
-    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
-    // Uniqueness violation.
-    table_txn
-        .set(2i64.to_le_bytes().to_vec(), Some("v5".to_string()), 0)
-        .unwrap_err();
-    table_txn
-        .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()), 1)
-        .unwrap();
-    table_txn.set(2i64.to_le_bytes().to_vec(), None, 2).unwrap();
-    table_txn.set(1i64.to_le_bytes().to_vec(), None, 2).unwrap();
-    let pending = table_txn.pending();
-    assert_eq!(
-        pending,
-        vec![
-            (1i64.to_le_bytes().to_vec(), "v5".to_string(), -1),
-            (3i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
-        ]
-    );
-    commit(&mut table, pending);
-    assert_eq!(
-        table,
-        BTreeMap::from([(3i64.to_le_bytes().to_vec(), "v6".to_string())])
-    );
-
-    // Duplicate `set`.
-    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
-    table_txn
-        .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()), 0)
-        .unwrap();
-    let pending = table_txn.pending::<Vec<u8>, String>();
-    assert!(pending.is_empty());
-
-    // Test `set_many`.
-    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
-    // Uniqueness violation.
-    table_txn
-        .set_many(
+        table_txn
+            .insert(3i64.to_le_bytes().to_vec(), "v4".to_string(), 4)
+            .unwrap();
+        assert_eq!(
+            table_txn.items(),
             BTreeMap::from([
-                (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
-                (42i64.to_le_bytes().to_vec(), Some("v1".to_string())),
-            ]),
-            0,
-        )
-        .unwrap_err();
-    table_txn
-        .set_many(
+                (1i64.to_le_bytes().to_vec(), "v3".to_string()),
+                (3i64.to_le_bytes().to_vec(), "v4".to_string()),
+            ])
+        );
+        let err = table_txn
+            .update(|_k, _v| Some("v1".to_string()), 5)
+            .unwrap_err();
+        assert!(
+            matches!(err, DurableCatalogError::UniquenessViolation),
+            "unexpected err: {err:?}"
+        );
+        let pending = table_txn.pending();
+        assert_eq!(
+            pending,
+            vec![
+                (1i64.to_le_bytes().to_vec(), "v1".to_string(), -1),
+                (1i64.to_le_bytes().to_vec(), "v3".to_string(), 1),
+                (2i64.to_le_bytes().to_vec(), "v2".to_string(), -1),
+                (3i64.to_le_bytes().to_vec(), "v4".to_string(), 1),
+            ]
+        );
+        commit(&mut table, pending);
+        assert_eq!(
+            table,
             BTreeMap::from([
-                (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
-                (3i64.to_le_bytes().to_vec(), Some("v1".to_string())),
-            ]),
-            1,
-        )
-        .unwrap();
-    table_txn
-        .set_many(
-            BTreeMap::from([
-                (42i64.to_le_bytes().to_vec(), Some("v7".to_string())),
-                (3i64.to_le_bytes().to_vec(), None),
-            ]),
-            2,
-        )
-        .unwrap();
-    let pending = table_txn.pending();
-    assert_eq!(
-        pending,
-        vec![
-            (1i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
-            (3i64.to_le_bytes().to_vec(), "v6".to_string(), -1),
-            (42i64.to_le_bytes().to_vec(), "v7".to_string(), 1),
-        ]
-    );
-    commit(&mut table, pending);
-    assert_eq!(
-        table,
-        BTreeMap::from([
-            (1i64.to_le_bytes().to_vec(), "v6".to_string()),
-            (42i64.to_le_bytes().to_vec(), "v7".to_string())
-        ])
-    );
+                (1i64.to_le_bytes().to_vec(), "v3".to_string()),
+                (3i64.to_le_bytes().to_vec(), "v4".to_string())
+            ])
+        );
 
-    // Duplicate `set_many`.
-    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
-    table_txn
-        .set_many(
+        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        // Deleting then creating an item that has a uniqueness violation should work.
+        assert_eq!(
+            table_txn.delete(|k, _v| k == &1i64.to_le_bytes(), 0).len(),
+            1
+        );
+        table_txn
+            .insert(1i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
+            .unwrap();
+        // Uniqueness violation in value.
+        table_txn
+            .insert(5i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
+            .unwrap_err();
+        // Key already exists, expect error.
+        table_txn
+            .insert(1i64.to_le_bytes().to_vec(), "v5".to_string(), 0)
+            .unwrap_err();
+        assert_eq!(
+            table_txn.delete(|k, _v| k == &1i64.to_le_bytes(), 0).len(),
+            1
+        );
+        // Both the inserts work now because the key and uniqueness violation are gone.
+        table_txn
+            .insert(5i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
+            .unwrap();
+        table_txn
+            .insert(1i64.to_le_bytes().to_vec(), "v5".to_string(), 0)
+            .unwrap();
+        let pending = table_txn.pending();
+        assert_eq!(
+            pending,
+            vec![
+                (1i64.to_le_bytes().to_vec(), "v3".to_string(), -1),
+                (1i64.to_le_bytes().to_vec(), "v5".to_string(), 1),
+                (5i64.to_le_bytes().to_vec(), "v3".to_string(), 1),
+            ]
+        );
+        commit(&mut table, pending);
+        assert_eq!(
+            table,
             BTreeMap::from([
-                (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
-                (42i64.to_le_bytes().to_vec(), Some("v7".to_string())),
-            ]),
-            0,
-        )
-        .unwrap();
-    let pending = table_txn.pending::<Vec<u8>, String>();
-    assert!(pending.is_empty());
+                (1i64.to_le_bytes().to_vec(), "v5".to_string()),
+                (3i64.to_le_bytes().to_vec(), "v4".to_string()),
+                (5i64.to_le_bytes().to_vec(), "v3".to_string()),
+            ])
+        );
+
+        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 3);
+        table_txn
+            .insert(1i64.to_le_bytes().to_vec(), "v1".to_string(), 0)
+            .unwrap();
+
+        commit(&mut table, table_txn.pending());
+        assert_eq!(
+            table,
+            BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string()),])
+        );
+
+        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 1);
+        table_txn
+            .insert(1i64.to_le_bytes().to_vec(), "v2".to_string(), 0)
+            .unwrap();
+        commit(&mut table, table_txn.pending());
+        assert_eq!(
+            table,
+            BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v2".to_string()),])
+        );
+
+        // Verify we don't try to delete v3 or v4 during commit.
+        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 1);
+        table_txn
+            .insert(1i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
+            .unwrap();
+        table_txn
+            .insert(1i64.to_le_bytes().to_vec(), "v4".to_string(), 1)
+            .unwrap_err();
+        assert_eq!(table_txn.delete(|_k, _v| true, 1).len(), 1);
+        table_txn
+            .insert(1i64.to_le_bytes().to_vec(), "v5".to_string(), 1)
+            .unwrap();
+        commit(&mut table, table_txn.pending());
+        assert_eq!(
+            table.clone().into_iter().collect::<Vec<_>>(),
+            vec![(1i64.to_le_bytes().to_vec(), "v5".to_string())]
+        );
+
+        // Test `set`.
+        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        // Uniqueness violation.
+        table_txn
+            .set(2i64.to_le_bytes().to_vec(), Some("v5".to_string()), 0)
+            .unwrap_err();
+        table_txn
+            .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()), 1)
+            .unwrap();
+        table_txn.set(2i64.to_le_bytes().to_vec(), None, 2).unwrap();
+        table_txn.set(1i64.to_le_bytes().to_vec(), None, 2).unwrap();
+        let pending = table_txn.pending();
+        assert_eq!(
+            pending,
+            vec![
+                (1i64.to_le_bytes().to_vec(), "v5".to_string(), -1),
+                (3i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
+            ]
+        );
+        commit(&mut table, pending);
+        assert_eq!(
+            table,
+            BTreeMap::from([(3i64.to_le_bytes().to_vec(), "v6".to_string())])
+        );
+
+        // Duplicate `set`.
+        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        table_txn
+            .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()), 0)
+            .unwrap();
+        let pending = table_txn.pending::<Vec<u8>, String>();
+        assert!(pending.is_empty());
+
+        // Test `set_many`.
+        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        // Uniqueness violation.
+        table_txn
+            .set_many(
+                BTreeMap::from([
+                    (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
+                    (42i64.to_le_bytes().to_vec(), Some("v1".to_string())),
+                ]),
+                0,
+            )
+            .unwrap_err();
+        table_txn
+            .set_many(
+                BTreeMap::from([
+                    (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
+                    (3i64.to_le_bytes().to_vec(), Some("v1".to_string())),
+                ]),
+                1,
+            )
+            .unwrap();
+        table_txn
+            .set_many(
+                BTreeMap::from([
+                    (42i64.to_le_bytes().to_vec(), Some("v7".to_string())),
+                    (3i64.to_le_bytes().to_vec(), None),
+                ]),
+                2,
+            )
+            .unwrap();
+        let pending = table_txn.pending();
+        assert_eq!(
+            pending,
+            vec![
+                (1i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
+                (3i64.to_le_bytes().to_vec(), "v6".to_string(), -1),
+                (42i64.to_le_bytes().to_vec(), "v7".to_string(), 1),
+            ]
+        );
+        commit(&mut table, pending);
+        assert_eq!(
+            table,
+            BTreeMap::from([
+                (1i64.to_le_bytes().to_vec(), "v6".to_string()),
+                (42i64.to_le_bytes().to_vec(), "v7".to_string())
+            ])
+        );
+
+        // Duplicate `set_many`.
+        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        table_txn
+            .set_many(
+                BTreeMap::from([
+                    (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
+                    (42i64.to_le_bytes().to_vec(), Some("v7".to_string())),
+                ]),
+                0,
+            )
+            .unwrap();
+        let pending = table_txn.pending::<Vec<u8>, String>();
+        assert!(pending.is_empty());
+    }
 }

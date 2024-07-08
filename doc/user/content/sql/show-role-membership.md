@@ -22,7 +22,7 @@ _role_name_                                         | Only shows role membership
 
 ## Examples
 
-```sql
+```mzsql
 SHOW ROLE MEMBERSHIP;
 ```
 
@@ -35,7 +35,7 @@ SHOW ROLE MEMBERSHIP;
  r6   | r5     | mz_system
 ```
 
-```sql
+```mzsql
 SHOW ROLE MEMBERSHIP FOR r2;
 ```
 

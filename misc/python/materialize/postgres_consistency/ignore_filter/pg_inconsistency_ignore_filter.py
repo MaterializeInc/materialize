@@ -168,6 +168,17 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#27253: bpchar and char trim newline")
 
+        if expression.matches(
+            partial(matches_fun_by_name, function_name_in_lower_case="array_agg"),
+            True,
+        ) and expression.matches(
+            partial(
+                involves_data_type_category, data_type_category=DataTypeCategory.RANGE
+            ),
+            True,
+        ):
+            return YesIgnore("#28007: different formatting of array_agg on range")
+
         return super()._matches_problematic_operation_or_function_invocation(
             expression, operation, all_involved_characteristics
         )
@@ -572,6 +583,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if "array_agg on character not yet supported" in mz_error_msg:
             return YesIgnore("#27252: array_agg on character")
+
+        if "array subscript does not support slices" in mz_error_msg:
+            return YesIgnore("array subscript does not support slices")
+
+        if "|| does not support implicitly casting" in mz_error_msg:
+            return YesIgnore("#28024: no implicit casting from ...[] to ...[]")
 
         return NoIgnore()
 

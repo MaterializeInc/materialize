@@ -10,10 +10,6 @@
 import re
 from typing import Any
 
-from materialize.buildkite_insights.annotation_search.annotation_search_source import (
-    ANY_PIPELINE_VALUE,
-    AnnotationSearchSource,
-)
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_COMPLETED_BUILD_STATES,
     BUILDKITE_FAILED_BUILD_STATES,
@@ -23,13 +19,16 @@ from materialize.buildkite_insights.cache import annotations_cache, builds_cache
 from materialize.buildkite_insights.cache.cache_constants import FetchMode
 from materialize.buildkite_insights.data.build_annotation import BuildAnnotation
 from materialize.buildkite_insights.data.build_info import Build
-from materialize.buildkite_insights.steps.build_step import (
-    BuildStepMatcher,
+from materialize.buildkite_insights.data.build_step import BuildStepMatcher
+from materialize.buildkite_insights.util.build_step_utils import (
     extract_build_step_outcomes,
 )
 
+ANY_PIPELINE_VALUE = "*"
+ANY_BRANCH_VALUE = "*"
 
-class BuildkiteDataSource(AnnotationSearchSource):
+
+class BuildkiteDataSource:
 
     def __init__(
         self,
@@ -47,9 +46,7 @@ class BuildkiteDataSource(AnnotationSearchSource):
         self.only_failed_builds = only_failed_builds
         self.only_failed_build_step_keys = only_failed_build_step_keys
 
-    def fetch_builds(
-        self, pipeline: str, branch: str, verbose: bool = False
-    ) -> list[Build]:
+    def fetch_builds(self, pipeline: str, branch: str | None) -> list[Build]:
         if self.only_failed_builds:
             build_states = BUILDKITE_FAILED_BUILD_STATES
         else:

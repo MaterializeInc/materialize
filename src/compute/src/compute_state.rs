@@ -80,7 +80,7 @@ pub struct ComputeState {
     ///  * Subscribes report their frontiers through the `subscribe_response_buffer`.
     pub collections: BTreeMap<GlobalId, CollectionState>,
     /// Collections that were recently dropped and whose removal needs to be reported.
-    pub dropped_collections: Vec<(GlobalId, CollectionState)>,
+    pub dropped_collections: Vec<(GlobalId, DroppedCollection)>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
@@ -278,7 +278,7 @@ impl ComputeState {
 
         let chunked_stack = ENABLE_CHUNKED_STACK.get(config);
         info!("using chunked stack: {chunked_stack}");
-        crate::containers::stack::use_chunked_stack(chunked_stack);
+        mz_timely_util::containers::stack::use_chunked_stack(chunked_stack);
     }
 
     /// Returns the cc or non-cc version of "dataflow_max_inflight_bytes", as
@@ -415,7 +415,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
-            let mut collection = CollectionState::new(is_subscribe_or_copy);
+            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of.clone());
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
                 let logging = CollectionLogging::new(
@@ -514,21 +514,20 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     ///
     /// Collection dropping occurs in three phases:
     ///
-    ///  1. This method removes the collection from the `ComputeState` and drops its dataflow
-    ///     tokens. It does _not_ yet drop the `CollectionState` but adds it to
-    ///     `dropped_collections`.
+    ///  1. This method removes the collection from the [`ComputeState`] and drops its
+    ///     [`CollectionState`], including its held dataflow tokens. It then adds the dropped
+    ///     collection to `dropped_collections`.
     ///  2. The next step of the Timely worker lets the source operators observe the token drops
     ///     and shut themselves down.
-    ///  3. `report_dropped_collections` removes the `CollectionState` from `dropped_collections`,
-    ///     emits any outstanding final responses required by the compute protocol, then drops the
-    ///     `CollectionState`.
+    ///  3. `report_dropped_collections` removes the entry from `dropped_collections` and emits any
+    ///     outstanding final responses required by the compute protocol.
     ///
     /// These steps ensure that we don't report a collection as dropped to the controller before it
     /// has stopped reading from its inputs. Doing so would allow the controller to release its
     /// read holds on the inputs, which could lead to panics from the replica trying to read
     /// already compacted times.
     fn drop_collection(&mut self, id: GlobalId) {
-        let mut collection = self
+        let collection = self
             .compute_state
             .collections
             .remove(&id)
@@ -536,16 +535,15 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // If this collection is an index, remove its trace.
         self.compute_state.traces.remove(&id);
-        // If this collection is a sink, drop its sink token.
-        collection.sink_token.take();
-
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
         // Remember the collection as dropped, for emission of outstanding final compute responses.
-        self.compute_state
-            .dropped_collections
-            .push((id, collection));
+        let dropped = DroppedCollection {
+            reported_frontiers: collection.reported_frontiers,
+            is_subscribe_or_copy: collection.is_subscribe_or_copy,
+        };
+        self.compute_state.dropped_collections.push((id, dropped));
     }
 
     /// Initializes timely dataflow logging and publishes as a view.
@@ -565,7 +563,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             self.compute_state.traces.set(id, trace);
 
             // Initialize compute and logging state for the logging index.
-            let mut collection = CollectionState::new(false);
+            let is_subscribe_or_copy = false;
+            let as_of = Antichain::from_elem(Timestamp::MIN);
+            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of);
 
             let logging =
                 CollectionLogging::new(id, logger.clone(), dataflow_index, std::iter::empty());
@@ -590,7 +590,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     /// Send progress information to the controller.
-    pub fn report_compute_frontiers(&mut self) {
+    pub fn report_frontiers(&mut self) {
         let mut responses = Vec::new();
 
         // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
@@ -624,6 +624,22 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 .allows_reporting(&new_frontier)
                 .then(|| new_frontier.clone());
 
+            // Collect the output frontier and check for progress.
+            //
+            // By default, the output frontier equals the write frontier (which is still stored in
+            // `new_frontier`). If the collection provides a compute frontier, we construct the
+            // output frontier by taking the meet of write and compute frontier, to avoid:
+            //  * reporting progress through times we have not yet written
+            //  * reporting progress through times we have not yet fully processed, for
+            //    collections that jump their write frontiers into the future
+            if let Some(probe) = &collection.compute_probe {
+                probe.with_frontier(|frontier| new_frontier.extend(frontier.iter().copied()));
+            }
+            let new_output_frontier = reported
+                .output_frontier
+                .allows_reporting(&new_frontier)
+                .then(|| new_frontier.clone());
+
             // Collect the input frontier and check for progress.
             new_frontier.clear();
             for probe in collection.input_probes.values() {
@@ -642,10 +658,15 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 collection
                     .set_reported_input_frontier(ReportedFrontier::Reported(frontier.clone()));
             }
+            if let Some(frontier) = &new_output_frontier {
+                collection
+                    .set_reported_output_frontier(ReportedFrontier::Reported(frontier.clone()));
+            }
 
             let response = FrontiersResponse {
                 write_frontier: new_write_frontier,
                 input_frontier: new_input_frontier,
+                output_frontier: new_output_frontier,
             };
             if response.has_updates() {
                 responses.push((id, response));
@@ -671,13 +692,15 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 continue;
             }
 
-            let reported = collection.reported_frontiers();
+            let reported = collection.reported_frontiers;
             let write_frontier = (!reported.write_frontier.is_empty()).then(Antichain::new);
             let input_frontier = (!reported.input_frontier.is_empty()).then(Antichain::new);
+            let output_frontier = (!reported.output_frontier.is_empty()).then(Antichain::new);
 
             let frontiers = FrontiersResponse {
                 write_frontier,
                 input_frontier,
+                output_frontier,
             };
             if frontiers.has_updates() {
                 self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
@@ -787,7 +810,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
                 collection
                     .set_reported_write_frontier(ReportedFrontier::Reported(new_frontier.clone()));
-                collection.set_reported_input_frontier(ReportedFrontier::Reported(new_frontier));
+                collection
+                    .set_reported_input_frontier(ReportedFrontier::Reported(new_frontier.clone()));
+                collection.set_reported_output_frontier(ReportedFrontier::Reported(new_frontier));
             } else {
                 // Presumably tracking state for this subscribe was already dropped by
                 // `drop_collection`. There is nothing left to do for logging.
@@ -1356,6 +1381,8 @@ struct ReportedFrontiers {
     write_frontier: ReportedFrontier,
     /// The reported input frontier.
     input_frontier: ReportedFrontier,
+    /// The reported output frontier.
+    output_frontier: ReportedFrontier,
 }
 
 impl ReportedFrontiers {
@@ -1364,12 +1391,15 @@ impl ReportedFrontiers {
         Self {
             write_frontier: ReportedFrontier::new(),
             input_frontier: ReportedFrontier::new(),
+            output_frontier: ReportedFrontier::new(),
         }
     }
 
     /// Returns whether all reported frontiers are empty.
     fn all_empty(&self) -> bool {
-        self.write_frontier.is_empty() && self.input_frontier.is_empty()
+        self.write_frontier.is_empty()
+            && self.input_frontier.is_empty()
+            && self.output_frontier.is_empty()
     }
 }
 
@@ -1423,6 +1453,10 @@ pub struct CollectionState {
     /// collections, so we need to be able to recognize them. This is something we would like to
     /// change in the future (#16274).
     pub is_subscribe_or_copy: bool,
+    /// The collection's initial as-of frontier.
+    ///
+    /// Used to determine hydration status.
+    as_of: Antichain<Timestamp>,
 
     /// A token that should be dropped when this collection is dropped to clean up associated
     /// sink state.
@@ -1435,18 +1469,25 @@ pub struct CollectionState {
     pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
     /// Frontier probes for every input to the collection.
     pub input_probes: BTreeMap<GlobalId, probe::Handle<Timestamp>>,
+    /// A probe reporting the frontier of times through which all collection outputs have been
+    /// computed (but not necessarily written).
+    ///
+    /// `None` for collections with compute frontiers equal to their write frontiers.
+    pub compute_probe: Option<probe::Handle<Timestamp>>,
     /// Logging state maintained for this collection.
     logging: Option<CollectionLogging>,
 }
 
 impl CollectionState {
-    fn new(is_subscribe_or_copy: bool) -> Self {
+    fn new(is_subscribe_or_copy: bool, as_of: Antichain<Timestamp>) -> Self {
         Self {
             reported_frontiers: ReportedFrontiers::new(),
             is_subscribe_or_copy,
+            as_of,
             sink_token: None,
             sink_write_frontier: None,
             input_probes: Default::default(),
+            compute_probe: None,
             logging: None,
         }
     }
@@ -1459,7 +1500,8 @@ impl CollectionState {
     /// Reset all reported frontiers to the given value.
     pub fn reset_reported_frontiers(&mut self, frontier: ReportedFrontier) {
         self.reported_frontiers.write_frontier = frontier.clone();
-        self.reported_frontiers.input_frontier = frontier;
+        self.reported_frontiers.input_frontier = frontier.clone();
+        self.reported_frontiers.output_frontier = frontier;
     }
 
     /// Set the write frontier that has been reported to the controller.
@@ -1487,6 +1529,43 @@ impl CollectionState {
 
         self.reported_frontiers.input_frontier = frontier;
     }
+
+    /// Set the output frontier that has been reported to the controller.
+    fn set_reported_output_frontier(&mut self, frontier: ReportedFrontier) {
+        let already_hydrated = self.hydrated();
+
+        self.reported_frontiers.output_frontier = frontier;
+
+        if !already_hydrated && self.hydrated() {
+            if let Some(logging) = &mut self.logging {
+                logging.set_hydrated();
+            }
+        }
+    }
+
+    /// Return whether this collection is hydrated.
+    fn hydrated(&self) -> bool {
+        match &self.reported_frontiers.output_frontier {
+            ReportedFrontier::Reported(frontier) => PartialOrder::less_than(&self.as_of, frontier),
+            ReportedFrontier::NotReported { .. } => false,
+        }
+    }
+}
+
+/// State remembered about a dropped compute collection.
+///
+/// This is the subset of the full [`CollectionState`] that survives the invocation of
+/// `drop_collection`, until it is finally dropped in `report_dropped_collections`. It includes any
+/// information required to report the dropping of a collection to the controller.
+///
+/// Note that this state must _not_ store any state (such as tokens) whose dropping releases
+/// resources elsewhere in the system. A `DroppedCollection` for a collection dropped during
+/// reconciliation might be alive at the same time as the [`CollectionState`] for the re-created
+/// collection, and if the dropped collection hasn't released all its held resources by the time
+/// the new one is created, conflicts can ensue.
+pub struct DroppedCollection {
+    reported_frontiers: ReportedFrontiers,
+    is_subscribe_or_copy: bool,
 }
 
 /// An event reporting the hydration status of an LIR node in a dataflow.

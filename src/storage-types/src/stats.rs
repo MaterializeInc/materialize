@@ -13,7 +13,7 @@ use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, ResultSpec, Unmaterial
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
 use mz_persist_types::stats::{
-    BytesStats, ColumnStats, DynStats, JsonStats, PartStats, PartStatsMetrics,
+    BytesStats, ColumnStats, ColumnarStats, DynStats, JsonStats, PartStats, PartStatsMetrics,
 };
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{
@@ -47,13 +47,13 @@ impl<'a> RelationPartStats<'a> {
     }
 }
 
-fn downcast_stats<'a, T: Data>(
+fn downcast_stats<T: Data>(
     metrics: &PartStatsMetrics,
     name: &str,
     col_name: &str,
-    stats: &'a dyn DynStats,
-) -> Option<&'a T::Stats> {
-    match stats.as_any().downcast_ref::<T::Stats>() {
+    stats: &ColumnarStats,
+) -> Option<T::Stats> {
+    match stats.downcast::<T>() {
         Some(x) => Some(x),
         None => {
             // TODO: There is a known instance of this #22680. While we look
@@ -92,15 +92,15 @@ impl RelationPartStats<'_> {
         result.may_contain(Datum::True) || result.may_fail()
     }
 
-    fn json_spec<'a>(len: usize, stats: &'a JsonStats, arena: &'a RowArena) -> ResultSpec<'a> {
+    fn json_spec<'a>(len: usize, stats: JsonStats, arena: &'a RowArena) -> ResultSpec<'a> {
         match stats {
             JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),
             JsonStats::Bools(bools) => {
                 ResultSpec::value_between(bools.lower.into(), bools.upper.into())
             }
             JsonStats::Strings(strings) => ResultSpec::value_between(
-                strings.lower.as_str().into(),
-                strings.upper.as_str().into(),
+                arena.make_datum(|r| r.push(Datum::String(strings.lower.as_str()))),
+                arena.make_datum(|r| r.push(Datum::String(strings.upper.as_str()))),
             ),
             JsonStats::Numerics(numerics) => ResultSpec::value_between(
                 arena.make_datum(|r| Jsonb::decode(&numerics.lower, r)),
@@ -110,13 +110,14 @@ impl RelationPartStats<'_> {
                 ResultSpec::map_spec(
                     maps.into_iter()
                         .map(|(k, v)| {
-                            let mut v_spec = Self::json_spec(v.len, &v.stats, arena);
+                            let mut v_spec = Self::json_spec(v.len, v.stats, arena);
                             if v.len != len {
                                 // This field is not always present, so assume
                                 // that accessing it might be null.
                                 v_spec = v_spec.union(ResultSpec::null());
                             }
-                            (k.as_str().into(), v_spec)
+                            let key = arena.make_datum(|r| r.push(Datum::String(k.as_str())));
+                            (key, v_spec)
                         })
                         .collect(),
                 )
@@ -150,12 +151,14 @@ impl RelationPartStats<'_> {
                 nullable: false,
             } => {
                 let byte_stats =
-                    downcast_stats::<Vec<u8>>(self.metrics, self.name, name.as_str(), &**stats)?;
+                    downcast_stats::<Vec<u8>>(self.metrics, self.name, name.as_str(), stats)?;
                 let value_range = match byte_stats {
                     BytesStats::Json(json_stats) => {
                         Self::json_spec(ok_stats.some.len, json_stats, arena)
                     }
-                    BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
+                    BytesStats::Primitive(_) | BytesStats::Atomic(_) | BytesStats::FixedSize(_) => {
+                        ResultSpec::anything()
+                    }
                 };
                 Some(value_range)
             }
@@ -167,17 +170,19 @@ impl RelationPartStats<'_> {
                     self.metrics,
                     self.name,
                     name.as_str(),
-                    &**stats,
+                    stats,
                 )?;
                 let null_range = match option_stats.none {
                     0 => ResultSpec::nothing(),
                     _ => ResultSpec::null(),
                 };
-                let value_range = match &option_stats.some {
+                let value_range = match option_stats.some {
                     BytesStats::Json(json_stats) => {
                         Self::json_spec(ok_stats.some.len, json_stats, arena)
                     }
-                    BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
+                    BytesStats::Primitive(_) | BytesStats::Atomic(_) | BytesStats::FixedSize(_) => {
+                        ResultSpec::anything()
+                    }
                 };
                 Some(null_range.union(value_range))
             }
@@ -209,15 +214,15 @@ impl RelationPartStats<'_> {
     }
 
     fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec> {
-        struct ColValues<'a>(
+        struct ColValues<'a, 's>(
             &'a PartStatsMetrics,
             &'a str,
             &'a str,
-            &'a dyn DynStats,
+            &'s ColumnarStats,
             &'a RowArena,
             Option<usize>,
         );
-        impl<'a> DatumToPersistFn<Option<ResultSpec<'a>>> for ColValues<'a> {
+        impl<'a, 's> DatumToPersistFn<Option<ResultSpec<'a>>> for ColValues<'a, 's> {
             fn call<T: DatumToPersist>(self) -> Option<ResultSpec<'a>> {
                 let ColValues(metrics, name, col_name, stats, arena, total_count) = self;
                 let stats = downcast_stats::<T::Data>(metrics, name, col_name, stats)?;
@@ -251,7 +256,7 @@ impl RelationPartStats<'_> {
             self.metrics,
             self.name,
             name.as_str(),
-            stats.as_ref(),
+            stats,
             arena,
             self.len(),
         ))?;
@@ -267,10 +272,7 @@ mod tests {
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::PartStats;
     use mz_repr::{arb_datum_for_column, RelationType};
-    use mz_repr::{
-        ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena,
-        ScalarType,
-    };
+    use mz_repr::{ColumnType, Datum, RelationDesc, Row, RowArena, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
@@ -278,16 +280,6 @@ mod tests {
     use crate::sources::SourceData;
 
     fn validate_stats(column_type: &ColumnType, datums: &[Datum<'_>]) -> Result<(), String> {
-        struct ValidateStats<'a>(&'a RelationPartStats<'a>, &'a RowArena, Datum<'a>);
-        impl<'a> DatumToPersistFn<()> for ValidateStats<'a> {
-            fn call<T: DatumToPersist>(self) -> () {
-                let ValidateStats(stats, arena, datum) = self;
-                if let Some(spec) = stats.col_values(0, arena) {
-                    assert!(spec.may_contain(datum));
-                }
-            }
-        }
-
         let schema = RelationDesc::empty().with_column("col", column_type.clone());
 
         let mut builder = PartBuilder::new(&schema, &UnitSchema).expect("success");
@@ -310,7 +302,9 @@ mod tests {
 
         // Validate that the stats would include all of the provided datums.
         for datum in datums {
-            column_type.to_persist(ValidateStats(&stats, &arena, *datum));
+            if let Some(spec) = stats.col_values(0, &arena) {
+                assert!(spec.may_contain(*datum));
+            }
         }
 
         Ok(())
@@ -395,7 +389,7 @@ mod tests {
                     .typ()
                     .columns()
                     .iter()
-                    .map(|ct| arb_datum_for_column(ct))
+                    .map(arb_datum_for_column)
                     .collect::<Vec<_>>()
                     .prop_map(|datums| Row::pack(datums.iter().map(Datum::from)));
                 proptest::collection::vec(rows, 1..max_rows)

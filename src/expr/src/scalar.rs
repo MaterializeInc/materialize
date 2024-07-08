@@ -744,11 +744,14 @@ impl MirScalarExpr {
                     match e {
                         MirScalarExpr::CallUnary { func, expr } => {
                             if *func == UnaryFunc::IsNull(func::IsNull) {
-                                // Decompose IsNull expressions into a disjunction
-                                // of simpler IsNull subexpressions
-
-                                if let Some(expr) = expr.decompose_is_null() {
-                                    *e = expr
+                                if !expr.typ(column_types).nullable && !expr.could_error() {
+                                    *e = MirScalarExpr::literal_false();
+                                } else {
+                                    // Try to at least decompose IsNull into a disjunction
+                                    // of simpler IsNull subexpressions.
+                                    if let Some(expr) = expr.decompose_is_null() {
+                                        *e = expr
+                                    }
                                 }
                             } else if *func == UnaryFunc::Not(func::Not) {
                                 // Push down not expressions

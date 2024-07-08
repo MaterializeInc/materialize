@@ -26,11 +26,11 @@ _role_name_   | The role name whose owned objects will be dropped.
 
 ## Examples
 
-```sql
+```mzsql
 DROP OWNED BY joe;
 ```
 
-```sql
+```mzsql
 DROP OWNED BY joe, george CASCADE;
 ```
 

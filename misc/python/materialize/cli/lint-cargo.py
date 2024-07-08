@@ -35,9 +35,38 @@ def check_rust_versions(workspace: Workspace) -> bool:
     return success
 
 
+def check_default_members(workspace: Workspace) -> bool:
+    """Checks that the default members for the workspace includes all crates
+    except those that are intentionally excluded."""
+
+    EXCLUDED = {
+        # This crate force enables jemalloc on Linux. We want it to be excluded
+        # by default, and only pulled in by feature flags for other crates. This
+        # ensures that `--no-default-features` properly disables jemalloc.
+        "src/alloc-default",
+        # This crate depends on the `fivetran-sdk` submodule. We don't want
+        # users building the main binaries to need to set up this submodule.
+        "src/fivetran-destination",
+    }
+
+    crates = set(str(c.path.relative_to(c.root)) for c in workspace.crates.values())
+    default_members = set(workspace.default_members)
+
+    missing = crates - EXCLUDED - default_members
+    success = len(missing) == 0
+    if not success:
+        print(
+            "Crates missing from workspace.default-members in root Cargo.toml:",
+            file=sys.stderr,
+        )
+        for crate in sorted(missing):
+            print(f'    "{crate}",', file=sys.stderr)
+    return success
+
+
 def main() -> None:
     workspace = Workspace(MZ_ROOT)
-    lints = [check_rust_versions]
+    lints = [check_rust_versions, check_default_members]
     success = True
     for lint in lints:
         success = success and lint(workspace)

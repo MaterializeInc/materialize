@@ -30,7 +30,6 @@ use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::global_id::TransientIdGen;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::IntrospectionType;
@@ -43,7 +42,7 @@ use timely::progress::{Antichain, ChangeBatch};
 use timely::{Container, PartialOrder};
 use uuid::Uuid;
 
-use crate::controller::error::CollectionMissing;
+use crate::controller::error::{CollectionMissing, ERROR_TARGET_REPLICA_FAILED};
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionState, ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates,
@@ -216,10 +215,6 @@ pub(super) struct Instance<T> {
     envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
     replica_epochs: BTreeMap<ReplicaId, u64>,
-    /// A generator for transient [`GlobalId`]s.
-    // TODO(#26730): use this to generate IDs for introspection subscribes
-    #[allow(dead_code)]
-    transient_id_gen: Arc<TransientIdGen>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
     /// Dynamic system configuration.
@@ -596,7 +591,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             introspection_tx: _,
             envd_epoch,
             replica_epochs,
-            transient_id_gen: _,
             metrics: _,
             dyncfg: _,
         } = self;
@@ -656,7 +650,6 @@ where
         storage: Arc<dyn StorageCollections<Timestamp = T>>,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
-        transient_id_gen: Arc<TransientIdGen>,
         metrics: InstanceMetrics,
         dyncfg: Arc<ConfigSet>,
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
@@ -688,7 +681,6 @@ where
             introspection_tx,
             envd_epoch,
             replica_epochs: Default::default(),
-            transient_id_gen,
             metrics,
             dyncfg,
         };
@@ -902,7 +894,7 @@ where
                 SubscribeBatch {
                     lower: subscribe.frontier.clone(),
                     upper: subscribe.frontier,
-                    updates: Err("target replica failed or was dropped".into()),
+                    updates: Err(ERROR_TARGET_REPLICA_FAILED.into()),
                 },
             );
             self.deliver_response(response);
@@ -917,7 +909,7 @@ where
         for (uuid, peek) in self.peeks_targeting(id) {
             peek_responses.push(ComputeControllerResponse::PeekResponse(
                 uuid,
-                PeekResponse::Error("target replica failed or was dropped".into()),
+                PeekResponse::Error(ERROR_TARGET_REPLICA_FAILED.into()),
                 peek.otel_ctx.clone(),
             ));
             to_drop.push(uuid);
@@ -1804,12 +1796,11 @@ where
 
             let old_global_frontier = coll.write_frontier.clone();
 
-            self.update_hydration_status(id, replica_id, &new_frontier);
             self.collection_mut(id)
                 .expect("we know about the collection")
                 .collection_introspection
                 .frontier_update(&new_frontier);
-            self.update_write_frontiers(replica_id, &[(id, new_frontier.clone())].into());
+            self.update_write_frontiers(replica_id, &[(id, new_frontier)].into());
 
             if let Ok(coll) = self.collection(id) {
                 if coll.write_frontier != old_global_frontier {
@@ -1823,7 +1814,12 @@ where
 
         // Apply an input frontier advancement.
         if let Some(new_frontier) = frontiers.input_frontier {
-            self.update_replica_input_frontiers(replica_id, &[(id, new_frontier.clone())].into());
+            self.update_replica_input_frontiers(replica_id, &[(id, new_frontier)].into());
+        }
+
+        // Apply an output frontier advancement.
+        if let Some(new_frontier) = frontiers.output_frontier {
+            self.update_hydration_status(id, replica_id, &new_frontier);
         }
     }
 
@@ -2265,7 +2261,7 @@ impl<T> ReplicaCollectionState<T> {
             metrics.initial_output_duration_seconds.set(duration);
         }
 
-        self.hydration_state.collection_hydrated();
+        self.hydration_state.hydrated = true;
     }
 }
 
@@ -2293,37 +2289,13 @@ impl HydrationState {
         collection_id: GlobalId,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
-        let self_ = Self {
+        Self {
             replica_id,
             collection_id,
             hydrated: false,
             operators: Default::default(),
             introspection_tx,
-        };
-
-        let insertion = self_.row_for_collection();
-        self_.send(
-            IntrospectionType::ComputeHydrationStatus,
-            vec![(insertion, 1)],
-        );
-
-        self_
-    }
-
-    /// Update the collection as hydrated.
-    fn collection_hydrated(&mut self) {
-        if self.hydrated {
-            return; // nothing to do
         }
-
-        let retraction = self.row_for_collection();
-        self.hydrated = true;
-        let insertion = self.row_for_collection();
-
-        self.send(
-            IntrospectionType::ComputeHydrationStatus,
-            vec![(retraction, -1), (insertion, 1)],
-        );
     }
 
     /// Update the given (lir_id, worker_id) pair as hydrated.
@@ -2342,15 +2314,6 @@ impl HydrationState {
             .chain(insertion.map(|r| (r, 1)))
             .collect();
         self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates);
-    }
-
-    /// Return a `Row` reflecting the current collection hydration status.
-    fn row_for_collection(&self) -> Row {
-        Row::pack_slice(&[
-            Datum::String(&self.collection_id.to_string()),
-            Datum::String(&self.replica_id.to_string()),
-            Datum::from(self.hydrated),
-        ])
     }
 
     /// Return a `Row` reflecting the current hydration status of the identified operator.
@@ -2385,13 +2348,6 @@ impl HydrationState {
 
 impl Drop for HydrationState {
     fn drop(&mut self) {
-        // Retract collection hydration status.
-        let retraction = self.row_for_collection();
-        self.send(
-            IntrospectionType::ComputeHydrationStatus,
-            vec![(retraction, -1)],
-        );
-
         // Retract operator-level hydration status.
         let operators: Vec<_> = self.operators.keys().collect();
         let updates: Vec<_> = operators

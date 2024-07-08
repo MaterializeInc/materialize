@@ -29,7 +29,7 @@ _view&lowbar;name_ | The view you want to drop. You can find available view name
 
 ## Examples
 
-```sql
+```mzsql
 SHOW VIEWS;
 ```
 ```nofmt
@@ -37,7 +37,7 @@ SHOW VIEWS;
 ---------
  my_view
 ```
-```sql
+```mzsql
 DROP VIEW my_view;
 ```
 ```nofmt

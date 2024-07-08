@@ -17,12 +17,13 @@ $ set-arg-default default-replica-size=1
 # Note that we count on the retry behavior of testdrive in this test
 # since introspection sources may take some time to catch up.
 
-# The contents of the introspection tables depend on the replica size
-$ skip-if
-SELECT '${arg.default-replica-size}' != '4-4'
+# Introspection subscribes add noise to the introspection sources, so disable them.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_introspection_subscribes = false
 
 # In case the environment has other replicas
-> SET cluster_replica = r1
+> CREATE CLUSTER test SIZE '4-4'
+> SET cluster = test
 
 > CREATE TABLE t (a int)
 
@@ -31,8 +32,8 @@ SELECT '${arg.default-replica-size}' != '4-4'
 > SELECT COUNT(*)
   FROM
     mz_materialized_views AS views,
-    mz_internal.mz_compute_exports AS compute_exports,
-    mz_internal.mz_compute_import_frontiers_per_worker AS import_frontiers
+    mz_introspection.mz_compute_exports AS compute_exports,
+    mz_introspection.mz_compute_import_frontiers_per_worker AS import_frontiers
   WHERE
     views.name = 'mv' AND
     views.id = compute_exports.export_id AND
@@ -45,7 +46,7 @@ SELECT '${arg.default-replica-size}' != '4-4'
 > SELECT COUNT(*)
   FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_compute_import_frontiers AS import_frontiers)
+            mz_introspection.mz_compute_import_frontiers AS import_frontiers)
 1
 
 > CREATE DEFAULT INDEX ON vv
@@ -53,15 +54,15 @@ SELECT '${arg.default-replica-size}' != '4-4'
 > SELECT COUNT(*)
   FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_compute_import_frontiers AS import_frontiers)
+            mz_introspection.mz_compute_import_frontiers AS import_frontiers)
 2
 
 > SELECT COUNT(*)
   FROM
     mz_views AS views,
     mz_indexes AS indexes,
-    mz_internal.mz_compute_exports compute_exports,
-    mz_internal.mz_compute_import_frontiers_per_worker AS import_frontiers
+    mz_introspection.mz_compute_exports compute_exports,
+    mz_introspection.mz_compute_import_frontiers_per_worker AS import_frontiers
   WHERE
     views.name = 'vv' AND
     views.id = indexes.on_id AND
@@ -75,7 +76,7 @@ SELECT '${arg.default-replica-size}' != '4-4'
 > SELECT COUNT(*)
   FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_compute_import_frontiers AS import_frontiers)
+            mz_introspection.mz_compute_import_frontiers AS import_frontiers)
 3
 
 > DROP MATERIALIZED VIEW mvv
@@ -83,7 +84,7 @@ SELECT '${arg.default-replica-size}' != '4-4'
 > SELECT COUNT(*)
   FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_compute_import_frontiers AS import_frontiers)
+            mz_introspection.mz_compute_import_frontiers AS import_frontiers)
 2
 
 > DROP INDEX vv_primary_idx
@@ -91,7 +92,7 @@ SELECT '${arg.default-replica-size}' != '4-4'
 > SELECT COUNT(*)
   FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_compute_import_frontiers AS import_frontiers)
+            mz_introspection.mz_compute_import_frontiers AS import_frontiers)
 1
 
 > DROP MATERIALIZED VIEW mv
@@ -99,12 +100,12 @@ SELECT '${arg.default-replica-size}' != '4-4'
 > SELECT COUNT(*)
   FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_compute_import_frontiers AS import_frontiers)
+            mz_introspection.mz_compute_import_frontiers AS import_frontiers)
 0
 
 # Test that frontiers of introspection sources advance at all.
 
-! SELECT * FROM mz_internal.mz_active_peeks AS OF 0
+! SELECT * FROM mz_introspection.mz_active_peeks AS OF 0
 contains: Timestamp (0) is not valid for all inputs
 
 # Test that logged subscribe frontiers advance beyond 0.
@@ -114,7 +115,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (
   SELECT true
-  FROM mz_internal.mz_compute_frontiers f, mz_internal.mz_subscriptions s
+  FROM mz_introspection.mz_compute_frontiers f, mz_internal.mz_subscriptions s
   WHERE f.export_id = s.id AND time > 0)
 > FETCH 1 c WITH (timeout='5s')
 <TIMESTAMP> 1 true
@@ -127,8 +128,8 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > SELECT count(*)
   FROM
     mz_materialized_views mv,
-    mz_internal.mz_compute_exports exp,
-    mz_internal.mz_dataflows df
+    mz_introspection.mz_compute_exports exp,
+    mz_introspection.mz_dataflows df
   WHERE
     mv.name = 'my_unique_mv_name' AND
     mv.id = exp.export_id AND
@@ -140,7 +141,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > SELECT max(count) FROM (
     SELECT count(*)
-    FROM mz_internal.mz_dataflow_operator_parents
+    FROM mz_introspection.mz_dataflow_operator_parents
     GROUP BY id) counts
 1
 
@@ -149,43 +150,43 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 # only the data from worker 0.
 
 > SELECT DISTINCT count(*)
-  FROM mz_internal.mz_dataflows_per_worker
+  FROM mz_introspection.mz_dataflows_per_worker
   GROUP BY id, name
 16
 
 > SELECT DISTINCT count(*)
-  FROM mz_internal.mz_dataflow_addresses_per_worker
+  FROM mz_introspection.mz_dataflow_addresses_per_worker
   GROUP BY id, address
 16
 
 > SELECT DISTINCT count(*)
-  FROM mz_internal.mz_dataflow_channels_per_worker
+  FROM mz_introspection.mz_dataflow_channels_per_worker
   GROUP BY id, from_index, from_port, to_index, to_port
 16
 
 > SELECT DISTINCT count(*)
-  FROM mz_internal.mz_dataflow_operators_per_worker
+  FROM mz_introspection.mz_dataflow_operators_per_worker
   GROUP BY id, name
 16
 
 > SELECT DISTINCT count(*)
-  FROM mz_internal.mz_dataflow_operator_dataflows_per_worker
+  FROM mz_introspection.mz_dataflow_operator_dataflows_per_worker
   GROUP BY id, name, dataflow_id, dataflow_name
 16
 
 > SELECT DISTINCT count(*)
-  FROM mz_internal.mz_dataflow_channel_operators_per_worker
+  FROM mz_introspection.mz_dataflow_channel_operators_per_worker
   GROUP BY id, from_operator_id, to_operator_id
 16
 
 > SELECT DISTINCT count(*)
-  FROM mz_internal.mz_compute_exports_per_worker
+  FROM mz_introspection.mz_compute_exports_per_worker
   GROUP BY export_id, dataflow_id
 16
 
 > CREATE DEFAULT INDEX ON t
 > SELECT DISTINCT count(*)
-  FROM mz_internal.mz_arrangement_sharing_per_worker
+  FROM mz_introspection.mz_arrangement_sharing_per_worker
   GROUP BY operator_id, count
 16
 
@@ -205,7 +206,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > CREATE DEFAULT INDEX ii_arr ON vv_arr
 
 # It's hard to come up with precise bounds because we might de-duplicate some data in arrangements.
-> SELECT records >= 300, size > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_arr' OR name LIKE '%mv_arr'
+> SELECT records >= 300, size > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_arr' OR name LIKE '%mv_arr'
 true true
 true true
 
@@ -215,7 +216,7 @@ true true
 
 > CREATE DEFAULT INDEX ii_empty ON t3
 
-> SELECT records, batches, size < 16 * 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
+> SELECT records, batches, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
 0 32 true true
 
 # Tests that arrangement sizes are approximate
@@ -226,23 +227,23 @@ true true
 
 # We have 16 workers, and only want to ensure that the sizes are not egregious.
 
-> SELECT records, batches, size < 16 * 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+> SELECT records, batches, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 0 32 true true
 
 > INSERT INTO t4 SELECT 1
 
-> SELECT records, batches, size < 16 * 1024, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+> SELECT records, batches, size < 16 * 1024, allocations > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 1 32 true true
 
 > INSERT INTO t4 SELECT generate_series(1, 1000)
 
 # Determining exact sizes is difficult because of deduplication in arrangements, so we just use safe values.
-> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 0 AND size < 4*30000, capacity > 0, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 0 AND size < 4*30000, capacity > 0, allocations > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 true true true true true
 
 > DROP INDEX ii_t4
 
-> SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+> SELECT records, batches, size, capacity, allocations FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 
 # Test arrangement size logging for error dataflows
 
@@ -254,7 +255,7 @@ true true true true true
 
 > CREATE INDEX vt5_idx ON vt5(a)
 
-> SELECT records, (size/1024/1024)::int FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%vt5_idx'
+> SELECT records, (size/1024/1024)::int FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%vt5_idx'
 10000 1
 
 > DROP TABLE t5 CASCADE
@@ -268,7 +269,7 @@ true true true true true
 > CREATE INDEX ii_t6_plus_1 ON t6_plus_1 (b)
 > DROP INDEX ii_t6
 
-> SELECT name, records > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t6%'
+> SELECT name, records > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t6%'
 "Dataflow: materialize.public.ii_t6"        true
 "Dataflow: materialize.public.ii_t6_plus_1" true
 
@@ -294,7 +295,7 @@ true true true true true
     size > 0,
     size < 4 * 130 * 1000,
     allocations < 2 * 2 * 1000
-  FROM mz_internal.mz_dataflow_arrangement_sizes
+  FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c1%';
 true true true true true
 
@@ -304,7 +305,7 @@ true true true true true
     size > 0,
     size < 4 * 100 * 1024,
     allocations < 2 * 1000
-  FROM mz_internal.mz_dataflow_arrangement_sizes
+  FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c2%';
 true true true true true
 
@@ -331,7 +332,7 @@ true true true true true
     size > 0,
     size < 4 * 1000 * 1000,
     allocations < 2 * 12 * 1000
-  FROM mz_internal.mz_dataflow_arrangement_sizes
+  FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%rec%';
 true true true true true
 
@@ -343,19 +344,22 @@ true true true true true
 > CREATE CLUSTER counter_cluster SIZE = '1';
 > CREATE SOURCE counter IN CLUSTER counter_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2ms');
 
-> CREATE MATERIALIZED VIEW input AS
+> CREATE VIEW input AS
   SELECT counter % 1000 + 1 AS f1, counter % 10 + 1 AS f2
   FROM counter;
+> CREATE DEFAULT INDEX ON input;
 
-> CREATE MATERIALIZED VIEW m_minmax AS
+> CREATE VIEW m_minmax AS
   SELECT f1, MIN(f2), MAX(f2)
   FROM input
   GROUP BY f1;
+> CREATE DEFAULT INDEX ON m_minmax;
 
-> CREATE MATERIALIZED VIEW m_top1 AS
+> CREATE VIEW m_top1 AS
   SELECT DISTINCT ON (f1) f1, f2
   FROM input
   ORDER BY f1, f2 DESC;
+> CREATE DEFAULT INDEX ON m_top1;
 
 > SELECT
     records >= 2 * 1000,
@@ -363,7 +367,7 @@ true true true true true
     size > 0,
     size < 4 * 200 * 1000,
     allocations < 2 * 2 * 1000
-  FROM mz_internal.mz_dataflow_arrangement_sizes
+  FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_minmax%';
 true true true true true
 
@@ -373,7 +377,7 @@ true true true true true
     size > 0,
     size < 4 * 172 * 1000,
     allocations < 2 * 2 * 1000
-  FROM mz_internal.mz_dataflow_arrangement_sizes
+  FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_top1%';
 true true true true true
 
@@ -388,14 +392,14 @@ true true true true true
 > CREATE INDEX idx2_div_by_zero ON mv_div_by_zero (x)
 
 > SELECT name, count
-  FROM mz_internal.mz_compute_error_counts c
+  FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 
 > INSERT INTO zeros VALUES (0)
 
 > SELECT name, count
-  FROM mz_internal.mz_compute_error_counts c
+  FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx1_div_by_zero 1
@@ -405,7 +409,7 @@ mv_div_by_zero   1
 > INSERT INTO zeros VALUES (0), (0)
 
 > SELECT name, count
-  FROM mz_internal.mz_compute_error_counts c
+  FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx1_div_by_zero 3
@@ -415,7 +419,7 @@ mv_div_by_zero   3
 > DELETE FROM zeros
 
 > SELECT name, count
-  FROM mz_internal.mz_compute_error_counts c
+  FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 
@@ -424,7 +428,7 @@ mv_div_by_zero   3
 > INSERT INTO zeros VALUES (0), (0)
 
 > SELECT name, count
-  FROM mz_internal.mz_compute_error_counts c
+  FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx1_div_by_zero 2
@@ -434,7 +438,7 @@ mv_div_by_zero   2
 > DROP INDEX idx1_div_by_zero
 
 > SELECT name, count
-  FROM mz_internal.mz_compute_error_counts c
+  FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx2_div_by_zero 2
@@ -443,7 +447,7 @@ mv_div_by_zero   2
 > DROP MATERIALIZED VIEW mv_div_by_zero
 
 > SELECT name, count
-  FROM mz_internal.mz_compute_error_counts c
+  FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 
@@ -458,7 +462,7 @@ mv_div_by_zero   2
 > CREATE INDEX idx_div_by_zero ON div_by_zero ()
 
 > SELECT name, count
-  FROM mz_internal.mz_compute_error_counts c
+  FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx_div_by_zero 1
@@ -472,7 +476,7 @@ idx_div_by_zero 1
 > CREATE INDEX idx3_div_by_zero ON v_div_by_zero (x)
 
 > SELECT name, count
-  FROM mz_internal.mz_compute_error_counts c
+  FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx1_div_by_zero 2
@@ -482,7 +486,7 @@ idx3_div_by_zero 2
 > INSERT INTO zeros VALUES (0)
 
 > SELECT name, count
-  FROM mz_internal.mz_compute_error_counts c
+  FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx1_div_by_zero 3
@@ -492,6 +496,9 @@ idx3_div_by_zero 3
 > DROP TABLE zeros CASCADE
 
 > SELECT name, count
-  FROM mz_internal.mz_compute_error_counts c
+  FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
+
+# Cleanup.
+> DROP CLUSTER test CASCADE

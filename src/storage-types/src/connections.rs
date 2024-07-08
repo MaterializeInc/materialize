@@ -20,11 +20,12 @@ use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{vpc_endpoint_host, AwsExternalIdPrefix, CloudResourceReader};
 use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
-    BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
+    BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
 };
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::netio::resolve_address;
+use mz_ore::num::NonNeg;
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -37,7 +38,6 @@ use mz_tls_util::Pkcs12Archive;
 use mz_tracing::CloneableEnvFilter;
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
-use rdkafka::client::BrokerAddr;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::ClientContext;
@@ -452,6 +452,36 @@ impl RustType<ProtoKafkaBroker> for KafkaBroker {
     }
 }
 
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
+pub struct KafkaTopicOptions {
+    /// The replication factor for the topic.
+    /// If `None`, the broker default will be used.
+    pub replication_factor: Option<NonNeg<i32>>,
+    /// The number of partitions to create.
+    /// If `None`, the broker default will be used.
+    pub partition_count: Option<NonNeg<i32>>,
+    /// The initial configuration parameters for the topic.
+    pub topic_config: BTreeMap<String, String>,
+}
+
+impl RustType<ProtoKafkaTopicOptions> for KafkaTopicOptions {
+    fn into_proto(&self) -> ProtoKafkaTopicOptions {
+        ProtoKafkaTopicOptions {
+            replication_factor: self.replication_factor.map(|f| *f),
+            partition_count: self.partition_count.map(|f| *f),
+            topic_config: self.topic_config.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaTopicOptions) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaTopicOptions {
+            replication_factor: proto.replication_factor.map(NonNeg::try_from).transpose()?,
+            partition_count: proto.partition_count.map(NonNeg::try_from).transpose()?,
+            topic_config: proto.topic_config,
+        })
+    }
+}
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection<C: ConnectionAccess = InlinedConnection> {
     pub brokers: Vec<KafkaBroker<C>>,
@@ -460,6 +490,7 @@ pub struct KafkaConnection<C: ConnectionAccess = InlinedConnection> {
     /// in `brokers`.
     pub default_tunnel: Tunnel<C>,
     pub progress_topic: Option<String>,
+    pub progress_topic_options: KafkaTopicOptions,
     pub options: BTreeMap<String, StringOrSecret>,
     pub tls: Option<KafkaTlsConfig>,
     pub sasl: Option<KafkaSaslConfig>,
@@ -472,6 +503,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
         let KafkaConnection {
             brokers,
             progress_topic,
+            progress_topic_options,
             default_tunnel,
             options,
             tls,
@@ -486,6 +518,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
         KafkaConnection {
             brokers,
             progress_topic,
+            progress_topic_options,
             default_tunnel: default_tunnel.into_inline_connection(&r),
             options,
             tls,
@@ -719,7 +752,11 @@ impl KafkaConnection {
                     .next()
                     .context("BROKER is not address:port")?
                     .into(),
-                port: addr_parts.next().unwrap_or("9092").into(),
+                port: addr_parts
+                    .next()
+                    .unwrap_or("9092")
+                    .parse()
+                    .context("parsing BROKER port")?,
             };
             match &broker.tunnel {
                 Tunnel::Direct => {
@@ -854,12 +891,19 @@ impl<C: ConnectionAccess> AlterCompatible for KafkaConnection<C> {
             brokers: _,
             default_tunnel: _,
             progress_topic,
+            progress_topic_options,
             options: _,
             tls: _,
             sasl: _,
         } = self;
 
-        let compatibility_checks = [(progress_topic == &other.progress_topic, "progress_topic")];
+        let compatibility_checks = [
+            (progress_topic == &other.progress_topic, "progress_topic"),
+            (
+                progress_topic_options == &other.progress_topic_options,
+                "progress_topic_options",
+            ),
+        ];
 
         for (compatible, field) in compatibility_checks {
             if !compatible {
@@ -921,6 +965,7 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
             brokers: self.brokers.into_proto(),
             default_tunnel: Some(self.default_tunnel.into_proto()),
             progress_topic: self.progress_topic.into_proto(),
+            progress_topic_options: Some(self.progress_topic_options.into_proto()),
             options: self
                 .options
                 .iter()
@@ -938,6 +983,10 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
                 .default_tunnel
                 .into_rust_if_some("ProtoKafkaConnection::default_tunnel")?,
             progress_topic: proto.progress_topic,
+            progress_topic_options: match proto.progress_topic_options {
+                Some(progress_topic_options) => progress_topic_options.into_rust()?,
+                None => Default::default(),
+            },
             options: proto
                 .options
                 .into_iter()

@@ -2200,13 +2200,39 @@ impl<'a> Parser<'a> {
         Ok(CsrConnectionProtobuf { connection, seed })
     }
 
+    fn parse_source_error_policy_option(&mut self) -> Result<SourceErrorPolicy, ParserError> {
+        match self.expect_one_of_keywords(&[INLINE])? {
+            INLINE => Ok(SourceErrorPolicy::Inline),
+            _ => unreachable!(),
+        }
+    }
+
     fn parse_source_envelope(&mut self) -> Result<SourceEnvelope, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
             SourceEnvelope::None
         } else if self.parse_keyword(DEBEZIUM) {
             SourceEnvelope::Debezium
         } else if self.parse_keyword(UPSERT) {
-            SourceEnvelope::Upsert
+            let value_decode_err_policy = if self.consume_token(&Token::LParen) {
+                // We only support the `VALUE DECODING ERRORS` option for now, but if we add another
+                // we should extract this into a helper function.
+                self.expect_keywords(&[VALUE, DECODING, ERRORS])?;
+                let _ = self.consume_token(&Token::Eq);
+                let open_inner = self.consume_token(&Token::LParen);
+                let value_decode_err_policy =
+                    self.parse_comma_separated(Parser::parse_source_error_policy_option)?;
+                if open_inner {
+                    self.expect_token(&Token::RParen)?;
+                }
+                self.expect_token(&Token::RParen)?;
+                value_decode_err_policy
+            } else {
+                vec![]
+            };
+
+            SourceEnvelope::Upsert {
+                value_decode_err_policy,
+            }
         } else if self.parse_keyword(MATERIALIZE) {
             SourceEnvelope::CdcV2
         } else {
@@ -2430,17 +2456,10 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(TYPE)?;
                 KafkaSinkConfigOptionName::CompressionType
             }
-            PROGRESS => match self.expect_one_of_keywords(&[GROUP, TOPIC])? {
-                GROUP => {
-                    self.expect_keywords(&[ID, PREFIX])?;
-                    KafkaSinkConfigOptionName::ProgressGroupIdPrefix
-                }
-                TOPIC => {
-                    self.expect_keywords(&[REPLICATION, FACTOR])?;
-                    KafkaSinkConfigOptionName::ProgressTopicReplicationFactor
-                }
-                _ => unreachable!(),
-            },
+            PROGRESS => {
+                self.expect_keywords(&[GROUP, ID, PREFIX])?;
+                KafkaSinkConfigOptionName::ProgressGroupIdPrefix
+            }
             TOPIC => match self.parse_one_of_keywords(&[PARTITION, REPLICATION, CONFIG]) {
                 None => KafkaSinkConfigOptionName::Topic,
                 Some(PARTITION) => {
@@ -2532,7 +2551,10 @@ impl<'a> Parser<'a> {
                 PORT => ConnectionOptionName::Port,
                 PROGRESS => {
                     self.expect_keyword(TOPIC)?;
-                    ConnectionOptionName::ProgressTopic
+                    match self.parse_keywords(&[REPLICATION, FACTOR]) {
+                        true => ConnectionOptionName::ProgressTopicReplicationFactor,
+                        false => ConnectionOptionName::ProgressTopic,
+                    }
                 }
                 SECURITY => {
                     self.expect_keyword(PROTOCOL)?;
@@ -5311,8 +5333,14 @@ impl<'a> Parser<'a> {
     ) -> Result<Statement<Raw>, ParserStatementError> {
         let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
         let name = self.parse_item_name().map_no_statement_parser_err()?;
+        let keywords = if object_type == ObjectType::Table {
+            [SET, RENAME, OWNER, RESET, ADD].as_slice()
+        } else {
+            [SET, RENAME, OWNER, RESET].as_slice()
+        };
+
         let action = self
-            .expect_one_of_keywords(&[SET, RENAME, OWNER, RESET])
+            .expect_one_of_keywords(keywords)
             .map_no_statement_parser_err()?;
         match action {
             RENAME => {
@@ -5373,6 +5401,31 @@ impl<'a> Parser<'a> {
                     name: UnresolvedObjectName::Item(name),
                     new_owner,
                 }))
+            }
+            ADD => {
+                assert_eq!(object_type, ObjectType::Table, "checked object_type above");
+
+                self.expect_keyword(COLUMN)
+                    .map_parser_err(StatementKind::AlterTableAddColumn)?;
+                let if_col_not_exist = self
+                    .parse_if_not_exists()
+                    .map_parser_err(StatementKind::AlterTableAddColumn)?;
+                let column_name = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterTableAddColumn)?;
+                let data_type = self
+                    .parse_data_type()
+                    .map_parser_err(StatementKind::AlterTableAddColumn)?;
+
+                Ok(Statement::AlterTableAddColumn(
+                    AlterTableAddColumnStatement {
+                        if_exists,
+                        name,
+                        if_col_not_exist,
+                        column_name,
+                        data_type,
+                    },
+                ))
             }
             _ => unreachable!(),
         }
@@ -6912,6 +6965,12 @@ impl<'a> Parser<'a> {
             Ok(ShowStatement::ShowCreateConnection(
                 ShowCreateConnectionStatement {
                     connection_name: self.parse_raw_name()?,
+                },
+            ))
+        } else if self.parse_keywords(&[CREATE, CLUSTER]) {
+            Ok(ShowStatement::ShowCreateCluster(
+                ShowCreateClusterStatement {
+                    cluster_name: RawClusterName::Unresolved(self.parse_identifier()?),
                 },
             ))
         } else {

@@ -236,7 +236,7 @@ class SmokeTest(unittest.TestCase):
                     # Subscribe to the list of active subscriptions in
                     # Materialize.
                     metadata = metadata_conn.cursor().stream(
-                        "SUBSCRIBE (SELECT session_id FROM mz_internal.mz_subscriptions)"
+                        "SUBSCRIBE (SELECT s.connection_id FROM mz_internal.mz_subscriptions b JOIN mz_internal.mz_sessions s ON s.id = b.session_id)"
                     )
 
                     # Ensure we see our own subscription in `mz_subscriptions`.

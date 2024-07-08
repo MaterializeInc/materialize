@@ -70,6 +70,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_eager_delta_joins": "true",
     "enable_envelope_debezium_in_subscribe": "true",
     "enable_expressions_in_limit_syntax": "true",
+    "enable_introspection_subscribes": "true",
     "enable_logical_compaction_window": "true",
     "enable_multi_worker_storage_persist_sink": "true",
     "enable_mysql_source": "true",
@@ -88,14 +89,14 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_inline_writes_total_max_bytes": "1048576",
     "persist_pubsub_client_enabled": "true",
     "persist_pubsub_push_diff_enabled": "true",
+    "persist_record_compactions": "true",
     "persist_roundtrip_spine": "true",
     "persist_sink_minimum_batch_updates": "128",
     "persist_stats_audit_percent": "100",
     "persist_txn_tables": "lazy",
     "persist_use_critical_since_catalog": "true",
     "persist_use_critical_since_snapshot": "true",
-    # TODO: change to true when #27219 is resolved
-    "persist_use_critical_since_source": "false",
+    "persist_use_critical_since_source": "true",
     "persist_part_decode_format": "row_with_validate",
     "statement_logging_default_sample_rate": "0.01",
     "statement_logging_max_sample_rate": "0.01",
@@ -103,6 +104,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "storage_source_decode_fuel": "100000",
     "timestamp_oracle": "postgres",
     "wait_catalog_consolidation_on_startup": "true",
+    "persist_batch_record_part_format": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

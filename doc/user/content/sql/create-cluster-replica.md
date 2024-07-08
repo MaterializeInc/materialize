@@ -92,7 +92,7 @@ machines had computed.
 
 ## Example
 
-```sql
+```mzsql
 CREATE CLUSTER REPLICA c1.r1 (SIZE = '400cc');
 ```
 

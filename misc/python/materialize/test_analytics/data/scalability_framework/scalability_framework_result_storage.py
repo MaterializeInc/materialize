@@ -25,7 +25,7 @@ class ScalabilityFrameworkResultEntry:
 
 class ScalabilityFrameworkResultStorage(BaseDataStorage):
 
-    def insert_result(
+    def add_result(
         self,
         framework_version: str,
         results: list[ScalabilityFrameworkResultEntry],
@@ -61,4 +61,4 @@ class ScalabilityFrameworkResultStorage(BaseDataStorage):
                     """
             )
 
-        self.database_connector.execute_updates(sql_statements)
+        self.database_connector.add_update_statements(sql_statements)

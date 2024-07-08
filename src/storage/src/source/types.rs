@@ -17,11 +17,12 @@ use std::fmt::Debug;
 
 use differential_dataflow::Collection;
 use mz_repr::{Diff, Row};
-use mz_storage_types::errors::{DecodeError, SourceErrorDetails};
+use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::containers::stack::StackWrapper;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
@@ -44,6 +45,9 @@ pub enum ProgressStatisticsUpdate {
         records_staged: u64,
     },
 }
+
+pub type StackedCollection<G, T> =
+    Collection<G, T, Diff, StackWrapper<(T, <G as ScopeParent>::Timestamp, Diff)>>;
 
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {
@@ -82,7 +86,7 @@ pub trait SourceRender {
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -100,6 +104,62 @@ pub struct SourceMessage {
     pub value: Row,
     /// Additional metadata columns requested by the user
     pub metadata: Row,
+}
+
+mod columnation {
+    use columnation::{Columnation, Region};
+    use mz_repr::Row;
+
+    use super::SourceMessage;
+
+    impl Columnation for SourceMessage {
+        type InnerRegion = SourceMessageRegion;
+    }
+
+    #[derive(Default)]
+    pub struct SourceMessageRegion {
+        inner: <Row as Columnation>::InnerRegion,
+    }
+
+    impl Region for SourceMessageRegion {
+        type Item = SourceMessage;
+
+        unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+            SourceMessage {
+                key: self.inner.copy(&item.key),
+                value: self.inner.copy(&item.value),
+                metadata: self.inner.copy(&item.metadata),
+            }
+        }
+
+        fn clear(&mut self) {
+            self.inner.clear()
+        }
+
+        fn reserve_items<'a, I>(&mut self, items: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            self.inner.reserve_items(
+                items
+                    .map(|item| [&item.key, &item.value, &item.metadata])
+                    .flatten(),
+            )
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            self.inner.reserve_regions(regions.map(|r| &r.inner))
+        }
+
+        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            self.inner.heap_size(callback)
+        }
+    }
 }
 
 /// A record produced by a source
@@ -128,21 +188,4 @@ pub struct DecodeResult<FromTime> {
     pub metadata: Row,
     /// The original timestamp of this message
     pub from_time: FromTime,
-}
-
-/// A structured error for `SourceReader::get_next_message` implementors.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceReaderError {
-    pub inner: SourceErrorDetails,
-}
-
-impl SourceReaderError {
-    /// This is an unclassified but definite error. This is typically only appropriate
-    /// when the error is permanently fatal for the source... some critical invariant
-    /// is violated or data is corrupted, for example.
-    pub fn other_definite(e: anyhow::Error) -> SourceReaderError {
-        SourceReaderError {
-            inner: SourceErrorDetails::Other(format!("{}", e)),
-        }
-    }
 }

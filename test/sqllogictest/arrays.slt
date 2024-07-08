@@ -1365,3 +1365,88 @@ SELECT '{{{{{{{7}}}}}}}'::int[];
 # We check max depth only after successfully parsing
 query error invalid input syntax for type array: Unexpected end of input\.: "\{\{\{\{\{\{\{7\}\}\}\}\}\}"
 SELECT '{{{{{{{7}}}}}}'::int[];
+
+
+query T
+SELECT ARRAY[1,4,3] @> ARRAY[3,1] AS contains
+----
+true
+
+query T
+SELECT ARRAY[1,4,3] <@ ARRAY[3,1] AS contains
+----
+false
+
+# array containment in Postgres does NOT account for duplicates
+query T
+SELECT ARRAY[1,4,3] @> ARRAY[3,1,1,1,1,1,1,1,1,1,1,1,3,3,1,3,3,3,3,3,1,1,3,3,3] AS contains
+----
+true
+
+query T
+SELECT ARRAY[2,7] <@ ARRAY[1,7,4,2,6] AS is_contained_by
+----
+true
+
+query T
+SELECT ARRAY[2,7] @> ARRAY[1,7,4,2,6] AS is_contained_by
+----
+false
+
+# verify fix for issue #28035
+query T
+SELECT '{}'::TEXT[][] @> '{{a, b}, {a, A}}'::TEXT[][];
+----
+false
+
+statement ok
+CREATE TABLE t5 (row_index int, multi_dim_text_array_empty TEXT[][], multi_dim_text_array_two_elem TEXT[][]);
+
+statement ok
+INSERT INTO t5 SELECT 0, '{{}}'::TEXT[][], '{{a, b}, {a, A}}'::TEXT[][];
+
+query T
+SELECT ((multi_dim_text_array_empty) @> (multi_dim_text_array_two_elem)) FROM t5;
+----
+false
+
+
+query T
+SELECT '{}'::numeric[] @> '{}'::numeric[];
+----
+true
+
+query T
+SELECT '{1,2}'::numeric[] @> '{}'::numeric[];
+----
+true
+
+query T
+SELECT '{}'::numeric[] @> '{1,2}'::numeric[];
+----
+false
+
+query T
+SELECT '{NULL}'::numeric[] @> '{NULL}'::numeric[];
+----
+false
+
+query T
+SELECT '{NULL, 1}'::numeric[] @> '{1}'::numeric[];
+----
+true
+
+query T
+SELECT '{1}'::numeric[] @> '{1, NULL}'::numeric[];
+----
+false
+
+query T
+SELECT '{1, 2, 3, NULL}'::numeric[] @> '{1, NULL}'::numeric[];
+----
+false
+
+query T
+SELECT ARRAY[1,3,7,NULL] @> ARRAY[1,3,7,NULL] AS contains;
+----
+false

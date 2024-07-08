@@ -13,7 +13,7 @@ use std::io;
 use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, RelationType, Row, RowArena, RowRef};
+use mz_repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, RowRef, ScalarType};
 use proptest::prelude::{any, Arbitrary, Just};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::Deserialize;
@@ -484,6 +484,14 @@ impl CopyFormatParams<'static> {
             &CopyFormatParams::Binary => "bin",
         }
     }
+
+    pub fn requires_header(&self) -> bool {
+        match self {
+            CopyFormatParams::Text(_) => false,
+            CopyFormatParams::Csv(params) => params.header,
+            CopyFormatParams::Binary => false,
+        }
+    }
 }
 
 /// Decodes the given bytes into `Row`-s based on the given `CopyFormatParams`.
@@ -513,6 +521,31 @@ pub fn encode_copy_format<'a>(
         CopyFormatParams::Text(params) => encode_copy_row_text(params, row, typ, out),
         CopyFormatParams::Csv(params) => encode_copy_row_csv(params, row, typ, out),
         CopyFormatParams::Binary => encode_copy_row_binary(row, typ, out),
+    }
+}
+
+pub fn encode_copy_format_header<'a>(
+    params: &CopyFormatParams<'a>,
+    desc: &RelationDesc,
+    out: &mut Vec<u8>,
+) -> Result<(), io::Error> {
+    match params {
+        CopyFormatParams::Text(_) => Ok(()),
+        CopyFormatParams::Binary => Ok(()),
+        CopyFormatParams::Csv(params) => {
+            let mut header_row = Row::with_capacity(desc.arity());
+            header_row
+                .packer()
+                .extend(desc.iter_names().map(|s| Datum::from(s.as_str())));
+            let typ = RelationType::new(vec![
+                ColumnType {
+                    scalar_type: ScalarType::String,
+                    nullable: false,
+                };
+                desc.arity()
+            ]);
+            encode_copy_row_csv(params, &header_row, &typ, out)
+        }
     }
 }
 

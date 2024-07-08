@@ -53,6 +53,8 @@ use crate::ReadHolds;
 use crate::{catalog, AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider};
 
 impl Staged for CreateMaterializedViewStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             Self::Optimize(stage) => &mut stage.validity,
@@ -354,13 +356,13 @@ impl Coordinator {
             });
         }
 
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: expr_depends_on.clone(),
-            cluster_id: Some(*cluster_id),
-            replica_id: None,
-            role_metadata: session.role_metadata().clone(),
-        };
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            expr_depends_on.clone(),
+            Some(*cluster_id),
+            None,
+            session.role_metadata().clone(),
+        );
 
         // Check whether we can read all inputs at all the REFRESH AT times.
         if let Some(refresh_schedule) = refresh_schedule {
@@ -873,7 +875,7 @@ impl Coordinator {
                 &features,
                 &expr_humanizer,
                 None,
-                Some(target_cluster.name.as_str()),
+                Some(target_cluster),
                 df_meta,
                 stage,
                 plan::ExplaineeStatementKind::CreateMaterializedView,

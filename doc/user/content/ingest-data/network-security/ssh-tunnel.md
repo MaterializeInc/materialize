@@ -19,7 +19,7 @@ In Materialize, create a source connection that uses the SSH tunnel connection y
 
 {{< tabs tabID="1" >}}
 {{< tab "Kafka">}}
-```sql
+```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
     BROKER 'broker1:9092',
     SSH TUNNEL ssh_connection
@@ -29,7 +29,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 You can reuse this Kafka connection across multiple [`CREATE SOURCE`](/sql/create-source/kafka/)
 statements:
 
-```sql
+```mzsql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT JSON;
@@ -37,7 +37,7 @@ CREATE SOURCE json_source
 
 {{< /tab >}}
 {{< tab "PostgreSQL">}}
-```sql
+```mzsql
 CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
 
 CREATE CONNECTION pg_connection TO POSTGRES (
@@ -54,7 +54,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 You can reuse this PostgreSQL connection across multiple [`CREATE SOURCE`](/sql/create-source/postgres/)
 statements:
 
-```sql
+```mzsql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR ALL TABLES;
@@ -62,7 +62,7 @@ CREATE SOURCE mz_source
 {{< /tab >}}
 
 {{< tab "MySQL">}}
-```sql
+```mzsql
 CREATE SECRET mysqlpass AS '<POSTGRES_PASSWORD>';
 
     CREATE CONNECTION mysql_connection TO MYSQL (
@@ -74,7 +74,7 @@ CREATE SECRET mysqlpass AS '<POSTGRES_PASSWORD>';
 You can reuse this MySQL connection across multiple [`CREATE SOURCE`](/sql/create-source/postgres/)
 statements:
 
-```sql
+```mzsql
     CREATE SOURCE mz_source
       FROM mysql CONNECTION mysql_connection
       FOR ALL TABLES;

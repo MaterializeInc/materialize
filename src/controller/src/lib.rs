@@ -48,7 +48,6 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
-use mz_repr::global_id::TransientIdGen;
 use mz_repr::{GlobalId, TimestampManipulation};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage_client::client::{
@@ -316,7 +315,17 @@ where
 
     /// Allow this controller and instances controlled by it to write to
     /// external systems.
-    pub fn allow_writes(&mut self) {
+    ///
+    /// If the controller has previously been told about tables (via
+    /// [StorageController::create_collections]), the caller must provide a
+    /// `register_ts`, the timestamp at which any tables that are known to the
+    /// controller should be registered in the txn system.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the controller knows about tables but not `register_ts` is
+    /// provided.
+    pub async fn allow_writes(&mut self, register_ts: Option<T>) {
         if !self.read_only {
             // Already transitioned out of read-only mode!
             return;
@@ -325,9 +334,7 @@ where
         self.read_only = false;
 
         self.compute.allow_writes();
-        // TODO: Storage does not yet understand the concept of read-only
-        // instances.
-
+        self.storage.allow_writes(register_ts).await;
         self.remove_past_generation_replicas_in_background();
     }
 
@@ -641,7 +648,6 @@ where
         config: ControllerConfig,
         envd_epoch: NonZeroI64,
         read_only: bool,
-        transient_id_gen: Arc<TransientIdGen>,
         // Whether to use the new txn-wal tables implementation or the
         // legacy one.
         txn_wal_tables: TxnWalTablesImpl,
@@ -658,6 +664,7 @@ where
             config.now.clone(),
             Arc::clone(&txns_metrics),
             envd_epoch,
+            read_only,
             txn_wal_tables,
             config.connection_context.clone(),
             storage_txn,
@@ -674,6 +681,7 @@ where
             config.now,
             Arc::clone(&txns_metrics),
             envd_epoch,
+            read_only,
             config.metrics_registry.clone(),
             txn_wal_tables,
             config.connection_context,
@@ -688,7 +696,6 @@ where
             storage_collections,
             envd_epoch,
             read_only,
-            transient_id_gen,
             config.metrics_registry.clone(),
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
@@ -726,7 +733,11 @@ where
         // `read_only = false` _and_ when later transitioning out of read-only
         // mode. This way we keep that logic in one place.
         if !read_only {
-            this.allow_writes();
+            // We did not yet tell the controller about any collections, so
+            // there are no tables to initialize yet. Hence we don't need a
+            // register_ts.
+            let register_ts = None;
+            this.allow_writes(register_ts).await;
         }
 
         this

@@ -47,10 +47,10 @@ COMPLETE 0
 # Verify that queries on introspection sources work.
 
 statement ok
-SELECT * FROM mz_internal.mz_compute_exports
+SELECT * FROM mz_introspection.mz_compute_exports
 
 simple
-DECLARE s CURSOR FOR SUBSCRIBE mz_internal.mz_compute_exports;
+DECLARE s CURSOR FOR SUBSCRIBE mz_introspection.mz_compute_exports;
 FETCH 0 s;
 ----
 COMPLETE 0
@@ -70,10 +70,10 @@ statement ok
 RESET cluster_replica
 
 query error log source reads must target a replica
-SELECT * FROM mz_internal.mz_compute_exports
+SELECT * FROM mz_introspection.mz_compute_exports
 
 statement error log source reads must target a replica
-SUBSCRIBE mz_internal.mz_compute_exports
+SUBSCRIBE mz_introspection.mz_compute_exports
 
 # Verify that untargeted introspection queries on unreplicated clusters are
 # allowed.
@@ -82,10 +82,10 @@ statement ok
 DROP CLUSTER REPLICA test.replica_b;
 
 statement ok
-SELECT * FROM mz_internal.mz_compute_exports
+SELECT * FROM mz_introspection.mz_compute_exports
 
 simple
-DECLARE s CURSOR FOR SUBSCRIBE mz_internal.mz_compute_exports;
+DECLARE s CURSOR FOR SUBSCRIBE mz_introspection.mz_compute_exports;
 FETCH 0 s;
 ----
 COMPLETE 0
@@ -109,19 +109,19 @@ statement ok
 SET cluster_replica = replica_a
 
 query error cannot read log sources of replica with disabled introspection
-SELECT * FROM mz_internal.mz_compute_exports
+SELECT * FROM mz_introspection.mz_compute_exports
 
 statement error cannot read log sources of replica with disabled introspection
-SUBSCRIBE mz_internal.mz_compute_exports
+SUBSCRIBE mz_introspection.mz_compute_exports
 
 statement ok
 SET cluster_replica = replica_b
 
 statement ok
-SELECT * FROM mz_internal.mz_compute_exports
+SELECT * FROM mz_introspection.mz_compute_exports
 
 simple
-DECLARE s CURSOR FOR SUBSCRIBE mz_internal.mz_compute_exports;
+DECLARE s CURSOR FOR SUBSCRIBE mz_introspection.mz_compute_exports;
 FETCH 0 s;
 ----
 COMPLETE 0

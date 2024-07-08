@@ -544,10 +544,28 @@ impl AstDisplay for SourceIncludeMetadata {
 impl_display!(SourceIncludeMetadata);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SourceErrorPolicy {
+    Inline,
+}
+
+impl AstDisplay for SourceErrorPolicy {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Inline => {
+                f.write_str("INLINE");
+            }
+        }
+    }
+}
+impl_display!(SourceErrorPolicy);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SourceEnvelope {
     None,
     Debezium,
-    Upsert,
+    Upsert {
+        value_decode_err_policy: Vec<SourceErrorPolicy>,
+    },
     CdcV2,
 }
 
@@ -558,7 +576,7 @@ impl SourceEnvelope {
         match self {
             SourceEnvelope::None => false,
             SourceEnvelope::Debezium => false,
-            SourceEnvelope::Upsert => false,
+            SourceEnvelope::Upsert { .. } => false,
             SourceEnvelope::CdcV2 => true,
         }
     }
@@ -574,8 +592,16 @@ impl AstDisplay for SourceEnvelope {
             Self::Debezium => {
                 f.write_str("DEBEZIUM");
             }
-            Self::Upsert => {
-                f.write_str("UPSERT");
+            Self::Upsert {
+                value_decode_err_policy,
+            } => {
+                if value_decode_err_policy.is_empty() {
+                    f.write_str("UPSERT");
+                } else {
+                    f.write_str("UPSERT (VALUE DECODING ERRORS = (");
+                    f.write_node(&display::comma_separated(value_decode_err_policy));
+                    f.write_str("))")
+                }
             }
             Self::CdcV2 => {
                 f.write_str("MATERIALIZE");
@@ -693,6 +719,7 @@ pub enum ConnectionOptionName {
     Password,
     Port,
     ProgressTopic,
+    ProgressTopicReplicationFactor,
     Region,
     SaslMechanisms,
     SaslPassword,
@@ -724,6 +751,9 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::Password => "PASSWORD",
             ConnectionOptionName::Port => "PORT",
             ConnectionOptionName::ProgressTopic => "PROGRESS TOPIC",
+            ConnectionOptionName::ProgressTopicReplicationFactor => {
+                "PROGRESS TOPIC REPLICATION FACTOR"
+            }
             ConnectionOptionName::Region => "REGION",
             ConnectionOptionName::AssumeRoleArn => "ASSUME ROLE ARN",
             ConnectionOptionName::AssumeRoleSessionName => "ASSUME ROLE SESSION NAME",
@@ -765,6 +795,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::Password
             | ConnectionOptionName::Port
             | ConnectionOptionName::ProgressTopic
+            | ConnectionOptionName::ProgressTopicReplicationFactor
             | ConnectionOptionName::Region
             | ConnectionOptionName::AssumeRoleArn
             | ConnectionOptionName::AssumeRoleSessionName
@@ -930,7 +961,6 @@ pub enum KafkaSinkConfigOptionName {
     TopicConfig,
     TopicPartitionCount,
     TopicReplicationFactor,
-    ProgressTopicReplicationFactor,
 }
 
 impl AstDisplay for KafkaSinkConfigOptionName {
@@ -944,9 +974,6 @@ impl AstDisplay for KafkaSinkConfigOptionName {
             KafkaSinkConfigOptionName::TopicConfig => "TOPIC CONFIG",
             KafkaSinkConfigOptionName::TopicPartitionCount => "TOPIC PARTITION COUNT",
             KafkaSinkConfigOptionName::TopicReplicationFactor => "TOPIC REPLICATION FACTOR",
-            KafkaSinkConfigOptionName::ProgressTopicReplicationFactor => {
-                "PROGRESS TOPIC REPLICATION FACTOR"
-            }
         })
     }
 }
@@ -967,8 +994,7 @@ impl WithOptionName for KafkaSinkConfigOptionName {
             | KafkaSinkConfigOptionName::LegacyIds
             | KafkaSinkConfigOptionName::TopicConfig
             | KafkaSinkConfigOptionName::TopicPartitionCount
-            | KafkaSinkConfigOptionName::TopicReplicationFactor
-            | KafkaSinkConfigOptionName::ProgressTopicReplicationFactor => false,
+            | KafkaSinkConfigOptionName::TopicReplicationFactor => false,
         }
     }
 }

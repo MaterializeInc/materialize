@@ -69,7 +69,7 @@ materialized would be resource prohibitive.
 It is common for real-time applications to be concerned with only a recent period of time.
 In this case, we will filter a table to only include records from the last 30 seconds.
 
-```sql
+```mzsql
 -- Create a table of timestamped events.
 CREATE TABLE events (
     content TEXT,
@@ -85,13 +85,13 @@ WHERE mz_now() <= event_ts + INTERVAL '30s';
 
 Next, subscribe to the results of the view.
 
-```sql
+```mzsql
 COPY (SUBSCRIBE (SELECT event_ts, content FROM last_30_sec)) TO STDOUT;
 ```
 
 In a separate session, insert a record.
 
-```sql
+```mzsql
 INSERT INTO events VALUES (
     'hello',
     now()
@@ -111,7 +111,7 @@ You can materialize the `last_30_sec` view by creating an index on it (results s
 
 If you haven't already done so in the previous example, create a table called `events` and add a few records.
 
-```sql
+```mzsql
 -- Create a table of timestamped events.
 CREATE TABLE events (
     content TEXT,
@@ -134,7 +134,7 @@ INSERT INTO events VALUES (
 
 Execute this ad hoc query that adds the current system timestamp and current logical timestamp to the events in the `events` table.
 
-```sql
+```mzsql
 SELECT now(), mz_now(), * FROM events
 ```
 
@@ -149,7 +149,7 @@ SELECT now(), mz_now(), * FROM events
 
 Notice when you try to materialize this query, you get errors:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW cant_materialize
     AS SELECT now(), mz_now(), * FROM events;
 ```

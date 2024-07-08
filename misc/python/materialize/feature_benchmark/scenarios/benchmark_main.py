@@ -1381,6 +1381,93 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
         )
 
 
+class ManyKafkaSourcesOnSameCluster(Scenario):
+    """Measure the time it takes to ingest data from many Kafka sources"""
+
+    SCALE = 2.5  # 316 sources
+    FIXED_SCALE = True
+
+    COUNT_SOURCE_ENTRIES = 100000
+
+    def shared(self) -> Action:
+        create_topics = "\n".join(
+            f"""
+$ kafka-create-topic topic=many-kafka-sources-{i}
+
+$ kafka-ingest format=avro topic=many-kafka-sources-{i} schema=${{schema}} repeat={self.COUNT_SOURCE_ENTRIES}
+{{"f2": ${{kafka-ingest.iteration}}}}
+"""
+            for i in range(0, self.n())
+        )
+
+        return TdAction(self.schema() + create_topics)
+
+    def init(self) -> Action:
+        return TdAction(
+            f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_sources = {self.n() * 2};
+
+> DROP OWNED BY materialize CASCADE;
+
+>[version<7800]  CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+
+> CREATE CONNECTION IF NOT EXISTS s1_csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${{testdrive.schema-registry-url}}';
+
+> DROP CLUSTER IF EXISTS kafka_source_cluster CASCADE;
+> CREATE CLUSTER kafka_source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+"""
+        )
+
+    def benchmark(self) -> BenchmarkingSequence:
+        drop_sources = "\n".join(
+            f"""
+> DROP SOURCE IF EXISTS kafka_source{i};
+"""
+            for i in range(0, self.n())
+        )
+
+        create_sources = "\n".join(
+            f"""
+> CREATE SOURCE kafka_source{i}
+  IN CLUSTER kafka_source_cluster
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-many-kafka-sources-{i}-${{testdrive.seed}}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
+  ENVELOPE NONE;
+"""
+            for i in range(0, self.n())
+        )
+
+        check_sources = "\n".join(
+            f"> SELECT COUNT(*) = {self.COUNT_SOURCE_ENTRIES} FROM kafka_source{i};\ntrue"
+            for i in range(0, self.n())
+        )
+
+        return [
+            Td(
+                self.schema()
+                + f"""
+{drop_sources}
+
+> SELECT 1;
+  /* A */
+1
+
+{create_sources}
+{check_sources}
+
+> SELECT 1;
+  /* B */
+1
+"""
+            ),
+        ]
+
+
 class PgCdc(Scenario):
     pass
 

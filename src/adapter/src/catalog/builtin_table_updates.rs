@@ -262,19 +262,25 @@ impl CatalogState {
         let cluster = &self.clusters_by_id[&id];
         let row = self.pack_privilege_array_row(cluster.privileges());
         let privileges = row.unpack_first();
-        let (size, disk, replication_factor, azs) = match &cluster.config.variant {
-            ClusterVariant::Managed(config) => (
-                Some(config.size.as_str()),
-                Some(config.disk),
-                Some(config.replication_factor),
-                if config.availability_zones.is_empty() {
-                    None
-                } else {
-                    Some(config.availability_zones.clone())
-                },
-            ),
-            ClusterVariant::Unmanaged => (None, None, None, None),
-        };
+        let (size, disk, replication_factor, azs, introspection_debugging, introspection_interval) =
+            match &cluster.config.variant {
+                ClusterVariant::Managed(config) => (
+                    Some(config.size.as_str()),
+                    Some(config.disk),
+                    Some(config.replication_factor),
+                    if config.availability_zones.is_empty() {
+                        None
+                    } else {
+                        Some(config.availability_zones.clone())
+                    },
+                    Some(config.logging.log_logging),
+                    config.logging.interval.map(|d| {
+                        Interval::from_duration(&d)
+                            .expect("planning ensured this convertible back to interval")
+                    }),
+                ),
+                ClusterVariant::Unmanaged => (None, None, None, None, None, None),
+            };
 
         let mut row = Row::default();
         let mut packer = row.packer();
@@ -293,6 +299,8 @@ impl CatalogState {
         } else {
             packer.push(Datum::Null);
         }
+        packer.push(Datum::from(introspection_debugging));
+        packer.push(Datum::from(introspection_interval));
 
         let mut updates = Vec::new();
 
@@ -350,6 +358,7 @@ impl CatalogState {
                 disk,
                 billed_as: _,
                 internal,
+                pending: _,
             }) => (Some(&**size), Some(*disk), Some(az.as_str()), *internal),
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
@@ -358,6 +367,7 @@ impl CatalogState {
                 disk,
                 billed_as: _,
                 internal,
+                pending: _,
             }) => (Some(&**size), Some(*disk), None, *internal),
             _ => (None, None, None, false),
         };
@@ -1777,7 +1787,7 @@ impl CatalogState {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer.push(Datum::String(&id.to_string()));
-        packer.push(Datum::UInt32(subscribe.conn_id.unhandled()));
+        packer.push(Datum::Uuid(subscribe.session_uuid));
         packer.push(Datum::String(&subscribe.cluster_id.to_string()));
 
         let start_dt = mz_ore::now::to_datetime(subscribe.start_time);
@@ -1806,6 +1816,7 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: &*MZ_SESSIONS,
             row: Row::pack_slice(&[
+                Datum::Uuid(conn.uuid()),
                 Datum::UInt32(conn.conn_id().unhandled()),
                 Datum::String(&conn.authenticated_role_id().to_string()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),

@@ -20,7 +20,7 @@ use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::{ColumnEncoder, PartEncoder, Schema, Schema2};
 use crate::dyn_col::DynColumnRef;
 use crate::dyn_struct::{ColumnsRef, DynStructCfg, DynStructCol, DynStructMut, ValidityRef};
-use crate::stats::StructStats;
+use crate::stats::{ColumnarStats, DynStats, StructStats};
 use crate::Codec64;
 
 /// A structured columnar representation of one blob's worth of data.
@@ -336,8 +336,12 @@ impl<K, KS: Schema<K>, V, VS: Schema<V>> PartBuilder<K, KS, V, VS> {
 pub struct Part2 {
     /// The 'k' values from a Part, generally `SourceData`.
     pub key: Arc<dyn Array>,
+    /// Statistics for the `key` values.
+    pub key_stats: ColumnarStats,
     /// The 'v' values from a Part, generally `()`.
     pub val: Arc<dyn Array>,
+    /// Statistics for the `val` values.
+    pub val_stats: ColumnarStats,
     /// The `ts` values from a Part.
     pub time: ScalarBuffer<i64>,
     /// The `diff` values from a Part.
@@ -385,14 +389,16 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
             diff,
         } = self;
 
-        let key: Arc<dyn Array> = Arc::new(key.finish());
-        let val: Arc<dyn Array> = Arc::new(val.finish());
+        let (key_col, key_stats) = key.finish();
+        let (val_col, val_stats) = val.finish();
         let time = ScalarBuffer::from(time);
         let diff = ScalarBuffer::from(diff);
 
         Part2 {
-            key,
-            val,
+            key: Arc::new(key_col),
+            key_stats: key_stats.into_columnar_stats(),
+            val: Arc::new(val_col),
+            val_stats: val_stats.into_columnar_stats(),
             time,
             diff,
         }

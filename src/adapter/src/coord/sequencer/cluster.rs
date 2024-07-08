@@ -15,15 +15,15 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    CreateReplicaConfig, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig,
-    ReplicaLocation, ReplicaLogging,
+    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
+    ReplicaLogging,
 };
-use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, ObjectType};
 use mz_sql::plan::{
-    AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterClusterSwapPlan,
+    AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterClusterSwapPlan,
     AlterOptionParameter, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
     CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     PlanClusterOption,
@@ -182,6 +182,7 @@ impl Coordinator {
             disk,
             internal: false,
             size: size.clone(),
+            pending: false,
         };
 
         let logging = if let Some(config) = compute.introspection {
@@ -309,6 +310,7 @@ impl Coordinator {
                         disk,
                         internal,
                         size: size.clone(),
+                        pending: false,
                     };
                     (compute, location)
                 }
@@ -373,11 +375,10 @@ impl Coordinator {
             )
             .expect("creating cluster must not fail");
 
-        let replicas: Vec<_> = cluster
-            .replicas()
-            .map(|r| (cluster_id, r.replica_id))
-            .collect();
-        self.create_cluster_replicas(&replicas).await;
+        let replica_ids: Vec<_> = cluster.replicas().map(|r| r.replica_id).collect();
+        for replica_id in replica_ids {
+            self.create_cluster_replica(cluster_id, replica_id).await;
+        }
 
         if !introspection_source_ids.is_empty() {
             self.initialize_compute_read_policies(
@@ -439,6 +440,7 @@ impl Coordinator {
                     disk,
                     internal,
                     size,
+                    pending: false,
                 };
                 (compute, location)
             }
@@ -503,190 +505,39 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), vec![op]).await?;
 
-        self.create_cluster_replicas(&[(cluster_id, id)]).await;
+        self.create_cluster_replica(cluster_id, id).await;
 
         Ok(ExecuteResponse::CreatedClusterReplica)
     }
 
-    pub(super) async fn create_cluster_replicas(&mut self, replicas: &[(ClusterId, ReplicaId)]) {
-        let mut replicas_to_start = Vec::new();
-
-        for (cluster_id, replica_id) in replicas.iter().copied() {
-            let cluster = self.catalog().get_cluster(cluster_id);
-            let role = cluster.role();
-            let replica_config = cluster
-                .replica(replica_id)
-                .expect("known to exist")
-                .config
-                .clone();
-
-            replicas_to_start.push(CreateReplicaConfig {
-                cluster_id,
-                replica_id,
-                role,
-                config: replica_config,
-            });
-        }
+    pub(super) async fn create_cluster_replica(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) {
+        let cluster = self.catalog().get_cluster(cluster_id);
+        let role = cluster.role();
+        let replica_config = cluster
+            .replica(replica_id)
+            .expect("known to exist")
+            .config
+            .clone();
 
         let enable_worker_core_affinity =
             self.catalog().system_config().enable_worker_core_affinity();
+
         self.controller
-            .create_replicas(replicas_to_start, enable_worker_core_affinity)
-            .await
+            .create_replica(
+                cluster_id,
+                replica_id,
+                role,
+                replica_config,
+                enable_worker_core_affinity,
+            )
             .expect("creating replicas must not fail");
-    }
 
-    pub(super) async fn sequence_alter_cluster(
-        &mut self,
-        session: &Session,
-        AlterClusterPlan {
-            id: cluster_id,
-            name: _,
-            options,
-        }: AlterClusterPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_catalog::memory::objects::ClusterVariant::*;
-
-        let config = self.catalog.get_cluster(cluster_id).config.clone();
-        let mut new_config = config.clone();
-
-        match (&new_config.variant, &options.managed) {
-            (Managed(_), AlterOptionParameter::Reset)
-            | (Managed(_), AlterOptionParameter::Unchanged)
-            | (Managed(_), AlterOptionParameter::Set(true)) => {}
-            (Managed(_), AlterOptionParameter::Set(false)) => new_config.variant = Unmanaged,
-            (Unmanaged, AlterOptionParameter::Unchanged)
-            | (Unmanaged, AlterOptionParameter::Set(false)) => {}
-            (Unmanaged, AlterOptionParameter::Reset)
-            | (Unmanaged, AlterOptionParameter::Set(true)) => {
-                // Generate a minimal correct configuration
-
-                // Size and disk adjusted later when sequencing the actual configuration change.
-                let size = "".to_string();
-                let disk = false;
-                let logging = ReplicaLogging {
-                    log_logging: false,
-                    interval: Some(DEFAULT_REPLICA_LOGGING_INTERVAL),
-                };
-                new_config.variant = Managed(ClusterVariantManaged {
-                    size,
-                    availability_zones: Default::default(),
-                    logging,
-                    replication_factor: 1,
-                    disk,
-                    optimizer_feature_overrides: Default::default(),
-                    schedule: Default::default(),
-                });
-            }
-        }
-
-        match &mut new_config.variant {
-            Managed(ClusterVariantManaged {
-                size,
-                availability_zones,
-                logging,
-                replication_factor,
-                disk,
-                optimizer_feature_overrides: _,
-                schedule,
-            }) => {
-                use AlterOptionParameter::*;
-                match &options.size {
-                    Set(s) => size.clone_from(s),
-                    Reset => coord_bail!("SIZE has no default value"),
-                    Unchanged => {}
-                }
-                match &options.disk {
-                    Set(d) => *disk = *d,
-                    Reset => *disk = self.catalog.system_config().disk_cluster_replicas_default(),
-                    Unchanged => {}
-                }
-                match &options.availability_zones {
-                    Set(az) => availability_zones.clone_from(az),
-                    Reset => *availability_zones = Default::default(),
-                    Unchanged => {}
-                }
-                match &options.introspection_debugging {
-                    Set(id) => logging.log_logging = *id,
-                    Reset => logging.log_logging = false,
-                    Unchanged => {}
-                }
-                match &options.introspection_interval {
-                    Set(ii) => logging.interval = ii.0,
-                    Reset => logging.interval = Some(DEFAULT_REPLICA_LOGGING_INTERVAL),
-                    Unchanged => {}
-                }
-                match &options.replication_factor {
-                    Set(rf) => *replication_factor = *rf,
-                    Reset => *replication_factor = 1,
-                    Unchanged => {}
-                }
-                match &options.schedule {
-                    Set(new_schedule) => {
-                        *schedule = new_schedule.clone();
-                    }
-                    Reset => *schedule = Default::default(),
-                    Unchanged => {}
-                }
-                if !matches!(options.replicas, Unchanged) {
-                    coord_bail!("Cannot change REPLICAS of managed clusters");
-                }
-            }
-            Unmanaged => {
-                use AlterOptionParameter::*;
-                if !matches!(options.size, Unchanged) {
-                    coord_bail!("Cannot change SIZE of unmanaged clusters");
-                }
-                if !matches!(options.availability_zones, Unchanged) {
-                    coord_bail!("Cannot change AVAILABILITY ZONES of unmanaged clusters");
-                }
-                if !matches!(options.introspection_debugging, Unchanged) {
-                    coord_bail!("Cannot change INTROSPECTION DEGUBBING of unmanaged clusters");
-                }
-                if !matches!(options.introspection_interval, Unchanged) {
-                    coord_bail!("Cannot change INTROSPECTION INTERVAL of unmanaged clusters");
-                }
-                if !matches!(options.replication_factor, Unchanged) {
-                    coord_bail!("Cannot change REPLICATION FACTOR of unmanaged clusters");
-                }
-            }
-        }
-
-        if new_config == config {
-            return Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster));
-        }
-
-        match (&config.variant, new_config.variant) {
-            (Managed(config), Managed(new_config)) => {
-                self.sequence_alter_cluster_managed_to_managed(
-                    Some(session),
-                    cluster_id,
-                    config,
-                    new_config,
-                    ReplicaCreateDropReason::Manual,
-                )
-                .await?;
-            }
-            (Unmanaged, Managed(new_config)) => {
-                self.sequence_alter_cluster_unmanaged_to_managed(
-                    session, cluster_id, new_config, options,
-                )
-                .await?;
-            }
-            (Managed(_), Unmanaged) => {
-                self.sequence_alter_cluster_managed_to_unmanaged(session, cluster_id)
-                    .await?;
-            }
-            (Unmanaged, Unmanaged) => {
-                self.sequence_alter_cluster_unmanaged_to_unmanaged(
-                    session,
-                    cluster_id,
-                    options.replicas,
-                )?;
-            }
-        }
-
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster))
+        self.install_introspection_subscribes(cluster_id, replica_id)
+            .await;
     }
 
     /// When this is called by the automated cluster scheduling, `scheduling_decision_reason` should
@@ -840,11 +691,13 @@ impl Coordinator {
         });
 
         self.catalog_transact(session, ops).await?;
-        self.create_cluster_replicas(&create_cluster_replicas).await;
+        for (cluster_id, replica_id) in create_cluster_replicas {
+            self.create_cluster_replica(cluster_id, replica_id).await;
+        }
         Ok(())
     }
 
-    async fn sequence_alter_cluster_unmanaged_to_managed(
+    pub(crate) async fn sequence_alter_cluster_unmanaged_to_managed(
         &mut self,
         session: &Session,
         cluster_id: ClusterId,
@@ -988,7 +841,7 @@ impl Coordinator {
         Ok(())
     }
 
-    async fn sequence_alter_cluster_managed_to_unmanaged(
+    pub(crate) async fn sequence_alter_cluster_managed_to_unmanaged(
         &mut self,
         session: &Session,
         cluster_id: ClusterId,
@@ -1007,7 +860,7 @@ impl Coordinator {
         Ok(())
     }
 
-    fn sequence_alter_cluster_unmanaged_to_unmanaged(
+    pub(crate) fn sequence_alter_cluster_unmanaged_to_unmanaged(
         &self,
         _session: &Session,
         _cluster_id: ClusterId,

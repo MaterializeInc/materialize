@@ -1626,6 +1626,20 @@ fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
+fn list_contains_list<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let a = a.unwrap_list();
+    let b = b.unwrap_list();
+
+    // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a, even if a contains NULL.
+    if b.iter().contains(&Datum::Null) {
+        Datum::False
+    } else {
+        b.iter()
+            .all(|item_b| a.iter().any(|item_a| item_a == item_b))
+            .into()
+    }
+}
+
 // TODO(jamii) nested loops are possibly not the fastest way to do this
 fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
@@ -2292,6 +2306,9 @@ pub enum BinaryFunc {
         max_layer: usize,
     },
     ArrayContains,
+    ArrayContainsArray {
+        rev: bool,
+    },
     ArrayLength,
     ArrayLower,
     ArrayRemove,
@@ -2301,6 +2318,9 @@ pub enum BinaryFunc {
     ListElementConcat,
     ElementListConcat,
     ListRemove,
+    ListContainsList {
+        rev: bool,
+    },
     DigestString,
     DigestBytes,
     MzRenderTypmod,
@@ -2552,6 +2572,8 @@ impl BinaryFunc {
             BinaryFunc::ListLengthMax { max_layer } => list_length_max(a, b, *max_layer),
             BinaryFunc::ArrayLength => array_length(a, b),
             BinaryFunc::ArrayContains => Ok(array_contains(a, b)),
+            BinaryFunc::ArrayContainsArray { rev: false } => Ok(array_contains_array(a, b)),
+            BinaryFunc::ArrayContainsArray { rev: true } => Ok(array_contains_array(b, a)),
             BinaryFunc::ArrayLower => Ok(array_lower(a, b)),
             BinaryFunc::ArrayRemove => array_remove(a, b, temp_storage),
             BinaryFunc::ArrayUpper => array_upper(a, b),
@@ -2560,6 +2582,8 @@ impl BinaryFunc {
             BinaryFunc::ListElementConcat => Ok(list_element_concat(a, b, temp_storage)),
             BinaryFunc::ElementListConcat => Ok(element_list_concat(a, b, temp_storage)),
             BinaryFunc::ListRemove => Ok(list_remove(a, b, temp_storage)),
+            BinaryFunc::ListContainsList { rev: false } => Ok(list_contains_list(a, b)),
+            BinaryFunc::ListContainsList { rev: true } => Ok(list_contains_list(b, a)),
             BinaryFunc::DigestString => digest_string(a, b, temp_storage),
             BinaryFunc::DigestBytes => digest_bytes(a, b, temp_storage),
             BinaryFunc::MzRenderTypmod => mz_render_typmod(a, b, temp_storage),
@@ -2615,6 +2639,7 @@ impl BinaryFunc {
             | Gt
             | Gte
             | ArrayContains
+            | ArrayContainsArray { .. }
             // like and regexp produce errors on invalid like-strings or regexes
             | IsLikeMatch { .. }
             | IsRegexpMatch { .. } => ScalarType::Bool.nullable(in_nullable),
@@ -2747,6 +2772,8 @@ impl BinaryFunc {
             }
 
             ElementListConcat => input2_type.scalar_type.without_modifiers().nullable(true),
+
+            ListContainsList { .. } =>  ScalarType::Bool.nullable(in_nullable),
 
             DigestString | DigestBytes => ScalarType::Bytes.nullable(in_nullable),
             Position => ScalarType::Int32.nullable(in_nullable),
@@ -2962,10 +2989,12 @@ impl BinaryFunc {
             | EncodedBytesCharLength
             | ArrayContains
             | ArrayRemove
+            | ArrayContainsArray { .. }
             | ArrayArrayConcat
             | ListListConcat
             | ListElementConcat
             | ElementListConcat
+            | ListContainsList { .. }
             | ListRemove
             | DigestString
             | DigestBytes
@@ -3125,6 +3154,7 @@ impl BinaryFunc {
             | IsLikeMatch { .. }
             | IsRegexpMatch { .. }
             | ArrayContains
+            | ArrayContainsArray { .. }
             | ArrayLength
             | ArrayLower
             | ArrayUpper
@@ -3132,6 +3162,7 @@ impl BinaryFunc {
             | ListListConcat
             | ListElementConcat
             | ElementListConcat
+            | ListContainsList { .. }
             | RangeContainsElem { .. }
             | RangeContainsRange { .. }
             | RangeOverlaps
@@ -3430,6 +3461,7 @@ impl BinaryFunc {
             | BinaryFunc::EncodedBytesCharLength
             | BinaryFunc::ListLengthMax { .. }
             | BinaryFunc::ArrayContains
+            | BinaryFunc::ArrayContainsArray { .. }
             | BinaryFunc::ArrayLength
             | BinaryFunc::ArrayLower
             | BinaryFunc::ArrayRemove
@@ -3438,6 +3470,7 @@ impl BinaryFunc {
             | BinaryFunc::ListListConcat
             | BinaryFunc::ListElementConcat
             | BinaryFunc::ElementListConcat
+            | BinaryFunc::ListContainsList { .. }
             | BinaryFunc::ListRemove
             | BinaryFunc::DigestString
             | BinaryFunc::DigestBytes
@@ -3632,6 +3665,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
             BinaryFunc::ArrayContains => f.write_str("array_contains"),
+            BinaryFunc::ArrayContainsArray { rev, .. } => {
+                f.write_str(if *rev { "<@" } else { "@>" })
+            }
             BinaryFunc::ArrayLength => f.write_str("array_length"),
             BinaryFunc::ArrayLower => f.write_str("array_lower"),
             BinaryFunc::ArrayRemove => f.write_str("array_remove"),
@@ -3641,6 +3677,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListElementConcat => f.write_str("||"),
             BinaryFunc::ElementListConcat => f.write_str("||"),
             BinaryFunc::ListRemove => f.write_str("list_remove"),
+            BinaryFunc::ListContainsList { rev, .. } => f.write_str(if *rev { "<@" } else { "@>" }),
             BinaryFunc::DigestString | BinaryFunc::DigestBytes => f.write_str("digest"),
             BinaryFunc::MzRenderTypmod => f.write_str("mz_render_typmod"),
             BinaryFunc::Encode => f.write_str("encode"),
@@ -4053,6 +4090,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::EncodedBytesCharLength => EncodedBytesCharLength(()),
             BinaryFunc::ListLengthMax { max_layer } => ListLengthMax(max_layer.into_proto()),
             BinaryFunc::ArrayContains => ArrayContains(()),
+            BinaryFunc::ArrayContainsArray { rev } => ArrayContainsArray(*rev),
             BinaryFunc::ArrayLength => ArrayLength(()),
             BinaryFunc::ArrayLower => ArrayLower(()),
             BinaryFunc::ArrayRemove => ArrayRemove(()),
@@ -4062,6 +4100,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::ListElementConcat => ListElementConcat(()),
             BinaryFunc::ElementListConcat => ElementListConcat(()),
             BinaryFunc::ListRemove => ListRemove(()),
+            BinaryFunc::ListContainsList { rev } => ListContainsList(*rev),
             BinaryFunc::DigestString => DigestString(()),
             BinaryFunc::DigestBytes => DigestBytes(()),
             BinaryFunc::MzRenderTypmod => MzRenderTypmod(()),
@@ -4270,6 +4309,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                     max_layer: max_layer.into_rust()?,
                 }),
                 ArrayContains(()) => Ok(BinaryFunc::ArrayContains),
+                ArrayContainsArray(rev) => Ok(BinaryFunc::ArrayContainsArray { rev }),
                 ArrayLength(()) => Ok(BinaryFunc::ArrayLength),
                 ArrayLower(()) => Ok(BinaryFunc::ArrayLower),
                 ArrayRemove(()) => Ok(BinaryFunc::ArrayRemove),
@@ -4279,6 +4319,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 ListElementConcat(()) => Ok(BinaryFunc::ListElementConcat),
                 ElementListConcat(()) => Ok(BinaryFunc::ElementListConcat),
                 ListRemove(()) => Ok(BinaryFunc::ListRemove),
+                ListContainsList(rev) => Ok(BinaryFunc::ListContainsList { rev }),
                 DigestString(()) => Ok(BinaryFunc::DigestString),
                 DigestBytes(()) => Ok(BinaryFunc::DigestBytes),
                 MzRenderTypmod(()) => Ok(BinaryFunc::MzRenderTypmod),
@@ -7262,6 +7303,20 @@ fn list_length_max<'a>(
 fn array_contains<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let array = Datum::unwrap_array(&b);
     Datum::from(array.elements().iter().any(|e| e == a))
+}
+
+fn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let a = a.unwrap_array().elements();
+    let b = b.unwrap_array().elements();
+
+    // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a, even if a contains NULL.
+    if b.iter().contains(&Datum::Null) {
+        Datum::False
+    } else {
+        b.iter()
+            .all(|item_b| a.iter().any(|item_a| item_a == item_b))
+            .into()
+    }
 }
 
 fn array_array_concat<'a>(

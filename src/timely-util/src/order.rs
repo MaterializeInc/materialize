@@ -21,6 +21,7 @@ use std::hash::Hash;
 
 use serde::{Deserialize, Serialize};
 use timely::communication::Data;
+use timely::container::columnation::CopyRegion;
 use timely::order::Product;
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::progress::Antichain;
@@ -46,7 +47,7 @@ use mz_ore::cast::CastFrom;
 /// partitions have gaps between them, the produced antichain has twice as many elements as
 /// partitions. This is because the "dead space" between the selected partitions must have a
 /// representative timestamp in order for that space to be useable in the future.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Partitioned<P, T>(Product<Interval<P>, T>);
 
 impl<P: Clone + PartialOrd, T> Partitioned<P, T> {
@@ -141,6 +142,10 @@ impl<P: Clone, T: Timestamp> PathSummary<Partitioned<P, T>> for () {
     }
 }
 
+impl<P: Copy, T: Copy> columnation::Columnation for Partitioned<P, T> {
+    type InnerRegion = CopyRegion<Partitioned<P, T>>;
+}
+
 /// A trait defining the minimum and maximum values of a type.
 pub trait Extrema {
     /// The minimum value of this type.
@@ -200,7 +205,7 @@ impl Step for Uuid {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 /// A type representing an inclusive interval of type `P`, ordered under the subset relation.
 pub struct Interval<P> {
     pub lower: P,

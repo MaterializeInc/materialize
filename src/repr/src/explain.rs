@@ -309,7 +309,7 @@ pub trait Explain<'a>: 'a {
     /// should return an [`ExplainError::UnsupportedFormat`].
     ///
     /// If an [`ExplainConfig`] parameter cannot be honored, the
-    /// implementation should silently ignore this paramter and
+    /// implementation should silently ignore this parameter and
     /// proceed without returning a [`Result::Err`].
     #[allow(unused_variables)]
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
@@ -325,7 +325,7 @@ pub trait Explain<'a>: 'a {
     /// should return an [`ExplainError::UnsupportedFormat`].
     ///
     /// If an [`ExplainConfig`] parameter cannot be honored, the
-    /// implementation should silently ignore this paramter and
+    /// implementation should silently ignore this parameter and
     /// proceed without returning a [`Result::Err`].
     #[allow(unused_variables)]
     fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Json, ExplainError> {
@@ -341,7 +341,7 @@ pub trait Explain<'a>: 'a {
     /// should return an [`ExplainError::UnsupportedFormat`].
     ///
     /// If an [`ExplainConfig`] parameter cannot be honored, the
-    /// implementation should silently ignore this paramter and
+    /// implementation should silently ignore this parameter and
     /// proceed without returning a [`Result::Err`].
     #[allow(unused_variables)]
     fn explain_dot(&'a mut self, context: &'a Self::Context) -> Result<Self::Dot, ExplainError> {
@@ -424,7 +424,7 @@ pub trait ExprHumanizer: fmt::Debug {
     /// Same as above, but without qualifications, e.g., only `foo` for `materialize.public.foo`.
     fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String>;
 
-    /// Like [`Self::humanize_id`], but returns the consituent parts of the
+    /// Like [`Self::humanize_id`], but returns the constituent parts of the
     /// name as individual elements.
     fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>>;
 

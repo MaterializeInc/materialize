@@ -36,7 +36,7 @@ Within a recursive CTEs block, any `cte_ident` alias can be referenced in all `r
 
 A `WITH MUTUALLY RECURSIVE` block with a general form
 
-```sql
+```mzsql
 WITH MUTUALLY RECURSIVE
   -- A sequence of bindings, all in scope for all definitions.
   $R_1(...) AS ( $sql_cte_1 ),
@@ -83,7 +83,7 @@ commands below.
 
 ### Example schema
 
-```sql
+```mzsql
 -- A hierarchy of geographical locations with various levels of granularity.
 CREATE TABLE areas(id int not null, parent int, name text);
 -- A collection of users.
@@ -94,7 +94,7 @@ CREATE TABLE transfers(src_id char(1), tgt_id char(1), amount numeric, ts timest
 
 ### Example data
 
-```sql
+```mzsql
 DELETE FROM areas;
 DELETE FROM users;
 DELETE FROM transfers;
@@ -126,7 +126,7 @@ The following view will compute `connected` as the transitive closure of a graph
 * each `user` is a graph vertex, and
 * a graph edge between users `x` and `y` exists only if a transfer from `x` to `y` was made recently (using the rather small `10 seconds` period here for the sake of illustration):
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW connected AS
 WITH MUTUALLY RECURSIVE
   connected(src_id char(1), dst_id char(1)) AS (
@@ -141,7 +141,7 @@ To see results change over time, you can [`SUBSCRIBE`](/sql/subscribe/) to the
 materialized view and then use a different SQL Shell session to insert
 some sample data into the base tables used in the view:
 
-```sql
+```mzsql
 SUBSCRIBE(SELECT * FROM connected) WITH (SNAPSHOT = FALSE);
 ```
 
@@ -164,7 +164,7 @@ Consequently, given the `connected` contents, we can:
 1. Restrict `connected` to the subset of `symmetric` connections that go in both directions.
 2. Identify the `scc` of each `users` entry with the lowest `dst_id` of all `symmetric` neighbors and its own `id`.
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW strongly_connected_components AS
   WITH
     symmetric(src_id, dst_id) AS (
@@ -181,7 +181,7 @@ CREATE MATERIALIZED VIEW strongly_connected_components AS
 Again, you can insert some sample data into the base tables and observe how the
 materialized view contents change over time using `SUBSCRIBE`:
 
-```sql
+```mzsql
 SUBSCRIBE(SELECT * FROM strongly_connected_components) WITH (SNAPSHOT = FALSE);
 ```
 
@@ -203,7 +203,7 @@ This can be achieved in three steps:
 
 A materialized view that does the above three steps in three CTEs (of which the last one is recursive) can be defined as follows:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW area_balances AS
   WITH MUTUALLY RECURSIVE
     user_balances(id char(1), balance numeric) AS (
@@ -259,7 +259,7 @@ CREATE MATERIALIZED VIEW area_balances AS
 
 As before, you can insert [the example data](#example-data) and observe how the materialized view contents change over time from the `psql` with the `\watch` command:
 
-```sql
+```mzsql
 SELECT id, name, balance FROM area_balances JOIN areas USING(id) ORDER BY id;
 \watch 1
 ```
@@ -273,7 +273,7 @@ Let's look at a slight variation of the [transitive closure example](#transitive
 3. The `WITH MUTUALLY RECURSIVE` clause has an optional `ERROR AT RECURSION LIMIT 100`.
 4. The final result in this example is ordered by `src_id, dst_id`.
 
-```sql
+```mzsql
 WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 100)
   connected(src_id char(1), dst_id char(1)) AS (
     SELECT DISTINCT src_id, tgt_id FROM transfers
@@ -294,13 +294,13 @@ ERROR:  Evaluation error: Recursive query exceeded the recursion limit 100. (Use
 The recursive CTE `connected` has not converged to a fixpoint within the first 100 iterations!
 To see why, you can run variants of the same query where the
 
-```sql
+```mzsql
 ERROR AT RECURSION LIMIT 100
 ```
 
 clause is replaced by
 
-```sql
+```mzsql
 RETURN AT RECURSION LIMIT $n -- where $n = 1, 2, 3, ...
 ```
 

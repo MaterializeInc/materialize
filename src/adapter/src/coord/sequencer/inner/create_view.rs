@@ -37,6 +37,8 @@ use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext};
 
 impl Staged for CreateViewStage {
+    type Ctx = ExecuteContext;
+
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             Self::Optimize(stage) => &mut stage.validity,
@@ -261,13 +263,13 @@ impl Coordinator {
         self.validate_timeline_context(expr_depends_on.iter().copied())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
 
-        let validity = PlanValidity {
-            transient_revision: self.catalog().transient_revision(),
-            dependency_ids: expr_depends_on.clone(),
-            cluster_id: None,
-            replica_id: None,
-            role_metadata: session.role_metadata().clone(),
-        };
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            expr_depends_on.clone(),
+            None,
+            None,
+            session.role_metadata().clone(),
+        );
 
         Ok(CreateViewStage::Optimize(CreateViewOptimize {
             validity,

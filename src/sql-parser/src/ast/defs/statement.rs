@@ -77,6 +77,7 @@ pub enum Statement<T: AstInfo> {
     AlterSystemResetAll(AlterSystemResetAllStatement),
     AlterConnection(AlterConnectionStatement<T>),
     AlterRole(AlterRoleStatement<T>),
+    AlterTableAddColumn(AlterTableAddColumnStatement<T>),
     Discard(DiscardStatement),
     DropObjects(DropObjectsStatement),
     DropOwned(DropOwnedStatement<T>),
@@ -148,6 +149,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterSystemResetAll(stmt) => f.write_node(stmt),
             Statement::AlterConnection(stmt) => f.write_node(stmt),
             Statement::AlterRole(stmt) => f.write_node(stmt),
+            Statement::AlterTableAddColumn(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
             Statement::DropOwned(stmt) => f.write_node(stmt),
@@ -222,6 +224,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::AlterSystemResetAll => "alter_system_reset_all",
         StatementKind::AlterOwner => "alter_owner",
         StatementKind::AlterConnection => "alter_connection",
+        StatementKind::AlterTableAddColumn => "alter_table",
         StatementKind::Discard => "discard",
         StatementKind::DropObjects => "drop_objects",
         StatementKind::DropOwned => "drop_owned",
@@ -1808,6 +1811,7 @@ pub enum ClusterFeatureName {
     EnableEagerDeltaJoins,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
+    EnableOuterJoinNullFilter,
 }
 
 impl WithOptionName for ClusterFeatureName {
@@ -1822,7 +1826,8 @@ impl WithOptionName for ClusterFeatureName {
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
             | Self::EnableVariadicLeftJoinLowering
-            | Self::EnableLetrecFixpointAnalysis => false,
+            | Self::EnableLetrecFixpointAnalysis
+            | Self::EnableOuterJoinNullFilter => false,
         }
     }
 }
@@ -2596,6 +2601,40 @@ impl AstDisplay for AlterRoleOption {
 }
 impl_display!(AlterRoleOption);
 
+/// `ALTER TABLE ... ADD COLUMN ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterTableAddColumnStatement<T: AstInfo> {
+    pub if_exists: bool,
+    pub name: UnresolvedItemName,
+    pub if_col_not_exist: bool,
+    pub column_name: Ident,
+    pub data_type: T::DataType,
+}
+
+impl<T: AstInfo> AstDisplay for AlterTableAddColumnStatement<T> {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_str("ALTER TABLE ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+
+        f.write_str(" ADD COLUMN ");
+        if self.if_col_not_exist {
+            f.write_str("IF NOT EXISTS ");
+        }
+
+        f.write_node(&self.column_name);
+        f.write_str(" ");
+        f.write_node(&self.data_type);
+    }
+}
+
+impl_display_t!(AlterTableAddColumnStatement);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
     pub target: DiscardTarget,
@@ -3060,6 +3099,18 @@ impl<T: AstInfo> AstDisplay for ShowCreateConnectionStatement<T> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShowCreateClusterStatement<T: AstInfo> {
+    pub cluster_name: T::ClusterName,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateClusterStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW CREATE CLUSTER ");
+        f.write_node(&self.cluster_name);
+    }
+}
+
 /// `{ BEGIN [ TRANSACTION | WORK ] | START TRANSACTION } ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct StartTransactionStatement {
@@ -3291,6 +3342,7 @@ pub enum ExplainPlanOptionName {
     EnableEagerDeltaJoins,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
+    EnableOuterJoinNullFilter,
 }
 
 impl WithOptionName for ExplainPlanOptionName {
@@ -3324,7 +3376,8 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
             | Self::EnableVariadicLeftJoinLowering
-            | Self::EnableLetrecFixpointAnalysis => false,
+            | Self::EnableLetrecFixpointAnalysis
+            | Self::EnableOuterJoinNullFilter => false,
         }
     }
 }
@@ -4310,6 +4363,7 @@ pub enum ShowStatement<T: AstInfo> {
     ShowCreateSink(ShowCreateSinkStatement<T>),
     ShowCreateIndex(ShowCreateIndexStatement<T>),
     ShowCreateConnection(ShowCreateConnectionStatement<T>),
+    ShowCreateCluster(ShowCreateClusterStatement<T>),
     ShowVariable(ShowVariableStatement),
     InspectShard(InspectShardStatement),
 }
@@ -4326,6 +4380,7 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowCreateSink(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateIndex(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateCluster(stmt) => f.write_node(stmt),
             ShowStatement::ShowVariable(stmt) => f.write_node(stmt),
             ShowStatement::InspectShard(stmt) => f.write_node(stmt),
         }

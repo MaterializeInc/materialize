@@ -739,9 +739,25 @@ where
 {
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///
+    /// The plan must _not_ contain any `LetRec` nodes. Recursive plans must be rendered using
+    /// `render_recursive_plan` instead.
+    ///
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(&mut self, plan: FlatPlan) -> CollectionBundle<G> {
+        let (values, body) = plan.split_lets();
+        for (id, value) in values {
+            let collection = self.render_letfree_plan(value);
+            self.insert_id(Id::Local(id), collection);
+        }
+
+        self.render_letfree_plan(body)
+    }
+
+    /// Renders a plan to a differential dataflow, producing the collection of results.
+    ///
+    /// The plan must _not_ contain any `Let` or `LetRec` nodes.
+    fn render_letfree_plan(&mut self, plan: FlatPlan) -> CollectionBundle<G> {
         let (mut nodes, root_id, topological_order) = plan.destruct();
 
         // Rendered collections by their `LirId`.
@@ -859,6 +875,9 @@ where
                         CollectionBundle::from_collections(oks, errs)
                     }
                 }
+            }
+            Let { .. } => {
+                unreachable!("Let should have been extracted and rendered");
             }
             LetRec { .. } => {
                 unreachable!("LetRec should have been extracted and rendered");

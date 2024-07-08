@@ -69,7 +69,7 @@ issue](https://github.com/MaterializeInc/materialize/issues/589).
 
 ## Examples
 
-```sql
+```mzsql
 SELECT length('你好') AS len;
 ```
 ```nofmt
@@ -80,7 +80,7 @@ SELECT length('你好') AS len;
 
 <hr/>
 
-```sql
+```mzsql
 SELECT length('你好', 'big5') AS len;
 ```
 ```nofmt

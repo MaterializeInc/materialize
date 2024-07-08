@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 import pymysql
+from pg8000 import Cursor
 
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition
@@ -24,6 +25,16 @@ SERVICES = [
     Alpine(),
     Materialized(),
     MySql(),
+    MySql(
+        name="mysql-replica-1",
+        version=MySql.DEFAULT_VERSION,
+        additional_args=create_mysql_server_args(server_id="2", is_master=False),
+    ),
+    MySql(
+        name="mysql-replica-2",
+        version=MySql.DEFAULT_VERSION,
+        additional_args=create_mysql_server_args(server_id="3", is_master=False),
+    ),
     Toxiproxy(),
     Testdrive(
         no_reset=True,
@@ -102,7 +113,11 @@ def workflow_bin_log_manipulations(c: Composition) -> None:
     with c.override(
         Materialized(sanity_restart=False),
     ):
-        scenarios = [reset_master_gtid, corrupt_bin_log]
+        scenarios = [
+            reset_master_gtid,
+            corrupt_bin_log_to_stall_source,
+            corrupt_bin_log_and_add_sub_source,
+        ]
         for scenario in scenarios:
             print(f"--- Running scenario {scenario.__name__}")
             initialize(c)
@@ -166,6 +181,13 @@ def workflow_master_changes(c: Composition) -> None:
             f"--var=mysql-replication-master-host={host_data_master}",
             "configure-replica.td",
             mysql_host="mysql-replica-2",
+        )
+        # wait for mysql-replica-2 to replicate the current state
+        time.sleep(15)
+        run_testdrive_files(
+            c,
+            f"--var=mysql-source-host={host_for_mz_source}",
+            "verify-mysql-source-select-all.td",
         )
         # create source pointing to mysql-replica-2
         run_testdrive_files(
@@ -277,7 +299,6 @@ def initialize(c: Composition, create_source: bool = True) -> None:
         "configure-toxiproxy.td",
         "configure-mysql.td",
         "populate-tables.td",
-        "configure-materialize.td",
     )
 
     if create_source:
@@ -416,11 +437,36 @@ def reset_master_gtid(c: Composition) -> None:
     )
 
 
-def corrupt_bin_log(c: Composition) -> None:
+def corrupt_bin_log_to_stall_source(c: Composition) -> None:
     """
     Switch off mz, modify data in mysql, and purge the bin-log so that mz hasn't seen all entries in the replication
     stream.
     """
+    _corrupt_bin_log(c)
+
+    run_testdrive_files(
+        c,
+        "verify-source-stalled.td",
+    )
+
+
+def corrupt_bin_log_and_add_sub_source(c: Composition) -> None:
+    """
+    Corrupt the bin log, add a sub source, and expect it to be working.
+    """
+
+    _corrupt_bin_log(c)
+
+    run_testdrive_files(
+        c,
+        "populate-table-t3.td",
+        "alter-source-add-subsource.td",
+        "verify-t3.td",
+    )
+
+
+def _corrupt_bin_log(c: Composition) -> None:
+    run_testdrive_files(c, "wait-for-snapshot.td")
 
     c.kill("materialized")
 
@@ -430,19 +476,18 @@ def corrupt_bin_log(c: Composition) -> None:
     with mysql_conn.cursor() as cur:
         cur.execute("INSERT INTO public.t1 VALUES (1, 'text')")
 
-        cur.execute("FLUSH BINARY LOGS")
-        time.sleep(2)
-        cur.execute("PURGE BINARY LOGS BEFORE now()")
-        cur.execute("FLUSH BINARY LOGS")
+        _purge_bin_logs(cur)
 
         cur.execute("INSERT INTO public.t1 VALUES (2, 'text')")
 
     c.up("materialized")
 
-    run_testdrive_files(
-        c,
-        "verify-source-stalled.td",
-    )
+
+def _purge_bin_logs(cur: Cursor) -> None:
+    cur.execute("FLUSH BINARY LOGS")
+    time.sleep(2)
+    cur.execute("PURGE BINARY LOGS BEFORE now()")
+    cur.execute("FLUSH BINARY LOGS")
 
 
 def transaction_with_rollback(c: Composition) -> None:

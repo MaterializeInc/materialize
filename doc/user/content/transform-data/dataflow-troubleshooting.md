@@ -100,7 +100,7 @@ just important to know than that they define a hierarchy on the operators.
 ## The system catalog and introspection relations
 
 Materialize collects a lot of useful information about the dataflows and
-operators in the system catalog in [introspection relations](/sql/system-catalog/mz_internal/#replica-introspection-relations).
+operators in the system catalog in [introspection relations](/sql/system-catalog/mz_introspection).
 The introspection relations are useful to troubleshoot and understand what is
 happening under the hood when Materialize is not behaving as expected. However,
 it is important to understand that most of the statistics we need for
@@ -141,9 +141,9 @@ SELECT
     mdo.id,
     mdo.name,
     mse.elapsed_ns / 1000 * '1 MICROSECONDS'::interval AS elapsed_time
-FROM mz_internal.mz_scheduling_elapsed AS mse,
-    mz_internal.mz_dataflow_operators AS mdo,
-    mz_internal.mz_dataflow_addresses AS mda
+FROM mz_introspection.mz_scheduling_elapsed AS mse,
+    mz_introspection.mz_dataflow_operators AS mdo,
+    mz_introspection.mz_dataflow_addresses AS mda
 WHERE mse.id = mdo.id AND mdo.id = mda.id AND list_length(address) = 1
 ORDER BY elapsed_ns DESC
 ```
@@ -183,15 +183,15 @@ SELECT
     mdod.name,
     mdod.dataflow_name,
     mse.elapsed_ns / 1000 * '1 MICROSECONDS'::interval AS elapsed_time
-FROM mz_internal.mz_scheduling_elapsed AS mse,
-    mz_internal.mz_dataflow_addresses AS mda,
-    mz_internal.mz_dataflow_operator_dataflows AS mdod
+FROM mz_introspection.mz_scheduling_elapsed AS mse,
+    mz_introspection.mz_dataflow_addresses AS mda,
+    mz_introspection.mz_dataflow_operator_dataflows AS mdod
 WHERE
     mse.id = mdod.id AND mdod.id = mda.id
     -- exclude regions and just return operators
     AND mda.address NOT IN (
         SELECT DISTINCT address[:list_length(address) - 1]
-        FROM mz_internal.mz_dataflow_addresses
+        FROM mz_introspection.mz_dataflow_addresses
     )
 ORDER BY elapsed_ns DESC
 ```
@@ -240,16 +240,16 @@ WITH histograms AS (
         mdod.dataflow_name,
         mcodh.count,
         mcodh.duration_ns / 1000 * '1 MICROSECONDS'::interval AS duration
-    FROM mz_internal.mz_compute_operator_durations_histogram AS mcodh,
-        mz_internal.mz_dataflow_addresses AS mda,
-        mz_internal.mz_dataflow_operator_dataflows AS mdod
+    FROM mz_introspection.mz_compute_operator_durations_histogram AS mcodh,
+        mz_introspection.mz_dataflow_addresses AS mda,
+        mz_introspection.mz_dataflow_operator_dataflows AS mdod
     WHERE
         mcodh.id = mdod.id
         AND mdod.id = mda.id
         -- exclude regions and just return operators
         AND mda.address NOT IN (
             SELECT DISTINCT address[:list_length(address) - 1]
-            FROM mz_internal.mz_dataflow_addresses
+            FROM mz_introspection.mz_dataflow_addresses
         )
 
 )
@@ -290,16 +290,16 @@ COPY(SUBSCRIBE(
             mdod.dataflow_name,
             mcodh.count,
             mcodh.duration_ns / 1000 * '1 MICROSECONDS'::interval AS duration
-        FROM mz_internal.mz_compute_operator_durations_histogram AS mcodh,
-            mz_internal.mz_dataflow_addresses AS mda,
-            mz_internal.mz_dataflow_operator_dataflows AS mdod
+        FROM mz_introspection.mz_compute_operator_durations_histogram AS mcodh,
+            mz_introspection.mz_dataflow_addresses AS mda,
+            mz_introspection.mz_dataflow_operator_dataflows AS mdod
         WHERE
             mcodh.id = mdod.id
             AND mdod.id = mda.id
             -- exclude regions and just return operators
             AND mda.address NOT IN (
                 SELECT DISTINCT address[:list_length(address) - 1]
-                FROM mz_internal.mz_dataflow_addresses
+                FROM mz_introspection.mz_dataflow_addresses
             )
 
     )
@@ -338,7 +338,7 @@ SELECT
     name,
     records,
     round(size / 1024 / 1024, 2) AS size_mb
-FROM mz_internal.mz_dataflow_arrangement_sizes
+FROM mz_introspection.mz_dataflow_arrangement_sizes
 ORDER BY size DESC
 ```
 ```
@@ -359,8 +359,8 @@ SELECT
     mdod.dataflow_name,
     mas.records,
     round(size / 1024 / 1024, 2) AS size_mb
-FROM mz_internal.mz_arrangement_sizes AS mas,
-    mz_internal.mz_dataflow_operator_dataflows AS mdod
+FROM mz_introspection.mz_arrangement_sizes AS mas,
+    mz_introspection.mz_dataflow_operator_dataflows AS mdod
 WHERE mas.operator_id = mdod.id
 ORDER BY mas.records DESC
 ```
@@ -413,17 +413,17 @@ SELECT
     avg_ns,
     elapsed_ns/avg_ns AS ratio
 FROM
-    mz_internal.mz_scheduling_elapsed_per_worker mse,
+    mz_introspection.mz_scheduling_elapsed_per_worker mse,
     (
         SELECT
             id,
             avg(elapsed_ns) AS avg_ns
         FROM
-            mz_internal.mz_scheduling_elapsed_per_worker
+            mz_introspection.mz_scheduling_elapsed_per_worker
         GROUP BY
             id
     ) aebi,
-    mz_internal.mz_dataflow_operator_dataflows dod
+    mz_introspection.mz_dataflow_operator_dataflows dod
 WHERE
     mse.id = aebi.id AND
     mse.elapsed_ns > 2 * aebi.avg_ns AND
@@ -439,7 +439,7 @@ positions `0..n-1`. The example SQL query and result below shows an operator
 whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow 21".
 
 ```mzsql
-SELECT * FROM mz_internal.mz_dataflow_addresses WHERE id=515;
+SELECT * FROM mz_introspection.mz_dataflow_addresses WHERE id=515;
 ```
 ```
  id  | worker_id | address
@@ -463,15 +463,15 @@ SELECT
     mdo.id AS id,
     mdo.name AS name
 FROM
-    mz_internal.mz_dataflow_addresses mda,
+    mz_introspection.mz_dataflow_addresses mda,
     -- source of operator names
-    mz_internal.mz_dataflow_operators mdo,
+    mz_introspection.mz_dataflow_operators mdo,
     -- view containing operators representing entire dataflows
     (SELECT
       mda.id AS dataflow_operator,
       mda.address[1] AS dataflow_address
     FROM
-      mz_internal.mz_dataflow_addresses mda
+      mz_introspection.mz_dataflow_addresses mda
     WHERE
       list_length(mda.address) = 1) dataflows
 WHERE

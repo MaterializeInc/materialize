@@ -55,7 +55,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     CollectionDescription, DataSource, DataSourceOther, ExportDescription, ExportState,
     IntrospectionType, MonotonicAppender, PersistEpoch, Response, SnapshotCursor,
-    StorageController, StorageMetadata, StorageTxn,
+    StorageController, StorageMetadata, StorageTxn, StorageWriteOp,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
@@ -80,7 +80,6 @@ use mz_storage_types::AlterCompatible;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::TxnsRead;
 use mz_txn_wal::txns::TxnsHandle;
-use mz_txn_wal::INIT_FORGET_ALL;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -91,6 +90,7 @@ use tokio_stream::StreamMap;
 use tracing::{debug, info, warn};
 
 use crate::rehydration::RehydratingStorageClient;
+use crate::statistics::StatsState;
 mod collection_mgmt;
 mod collection_status;
 mod persist_handles;
@@ -100,14 +100,8 @@ mod statistics;
 
 #[derive(Debug)]
 enum TxnsWal<T> {
-    EnabledEager {
-        txns_id: ShardId,
-        txns_client: PersistClient,
-    },
-    EnabledLazy {
-        txns_read: TxnsRead<T>,
-        txns_client: PersistClient,
-    },
+    EnabledEager,
+    EnabledLazy { txns_read: TxnsRead<T> },
 }
 
 impl<T: Timestamp + Lattice + Codec64> TxnsWal<T> {
@@ -147,6 +141,13 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
 
+    /// Whether or not this controller is in read-only mode.
+    ///
+    /// When in read-only mode, neither this controller nor the instances
+    /// controlled by it are allowed to affect changes to external systems
+    /// (largely persist).
+    read_only: bool,
+
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
@@ -162,9 +163,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Whether to use the new txn-wal tables implementation or the legacy
     /// one.
     txns: TxnsWal<T>,
-    /// Whether we have run `txns_init` yet (required before create_collections
-    /// and the various flavors of append).
-    txns_init_run: bool,
     txns_metrics: Arc<TxnMetrics>,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
@@ -197,7 +195,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    sink_statistics: Arc<Mutex<BTreeMap<GlobalId, Option<SinkStatisticsUpdate>>>>,
+    sink_statistics: Arc<Mutex<BTreeMap<GlobalId, statistics::StatsState<SinkStatisticsUpdate>>>>,
     /// A way to update the statistics interval in the statistics tasks.
     statistics_interval_sender: Sender<Duration>,
 
@@ -257,6 +255,92 @@ where
 
         for client in self.clients.values_mut() {
             client.send(StorageCommand::InitializationComplete);
+        }
+    }
+
+    async fn allow_writes(&mut self, register_ts: Option<Self::Timestamp>) {
+        if !self.read_only {
+            // Already done!
+            return;
+        }
+
+        self.read_only = false;
+
+        let persist_client = self
+            .persist
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
+
+        // While in read-only mode, we didn't run ingestions or write to
+        // introspection collections. Start doing that now!
+        let mut ingestions_to_run = Vec::new();
+        let mut introspections_to_run = Vec::new();
+        let mut tables_to_register = Vec::new();
+        for (id, collection) in self.collections.iter() {
+            match collection.data_source {
+                DataSource::Ingestion(_) => {
+                    ingestions_to_run.push(*id);
+                }
+                DataSource::IngestionExport { .. } => (),
+                DataSource::Introspection(i) => {
+                    introspections_to_run.push((*id, i));
+                }
+                DataSource::Webhook => (),
+                DataSource::Other(DataSourceOther::TableWrites) => {
+                    // We don't optimize allow_writes() for performance, so we
+                    // don't parallelize opening these write handles, for
+                    // example. For now it's meant as a tool during development
+                    // of zero-downtime upgrades. If it ever becomes
+                    // load-bearing, we can employ optimizations similar to what
+                    // we use in create_collections.
+                    let write_handle = self
+                        .open_data_handles(
+                            id,
+                            collection.collection_metadata.data_shard,
+                            collection.collection_metadata.relation_desc.clone(),
+                            &persist_client,
+                        )
+                        .await;
+
+                    tables_to_register.push((*id, write_handle));
+                }
+                DataSource::Progress | DataSource::Other(_) => {}
+            };
+        }
+
+        for (id, introspection_type) in introspections_to_run {
+            // Introspection collections are registered with the
+            // CollectionManager when they are created. We only bring ourselves
+            // up to date with collection contents or do any preparatory
+            // consolidation work when we actually start writing to them!
+            self.prepare_introspection_collection(id, introspection_type)
+                .await
+                .expect("cannot fail to prepare introspection collections now");
+        }
+
+        // We first do any cleanup/truncation work above and then allow the
+        // CollectionManager to do writes. This prevents it from advancing the
+        // upper while we are trying to apply truncations.
+        //
+        // TODO(aljoscha): We should make the truncation/cleanup work that
+        // happens when we take over instead be a periodic thing, and make it
+        // resilient to the upper moving concurrently.
+        self.collection_manager.allow_writes();
+
+        if !tables_to_register.is_empty() {
+            let register_ts = register_ts
+                .as_ref()
+                .expect("must provide a register_ts")
+                .clone();
+
+            self.persist_table_worker
+                .register(register_ts, tables_to_register);
+        }
+
+        for id in ingestions_to_run {
+            self.run_ingestion(id)
+                .expect("cannot fail to run ingestions now");
         }
     }
 
@@ -431,8 +515,6 @@ where
         self.storage_collections
             .create_collections(storage_metadata, register_ts.clone(), collections.clone())
             .await?;
-
-        assert!(self.txns_init_run);
 
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
@@ -753,7 +835,7 @@ where
                 source_statistics
                     .source_statistics
                     .entry(id)
-                    .or_insert(None);
+                    .or_insert(StatsState::new(SourceStatisticsUpdate::new(id)));
             }
             for id in new_webhook_statistic_entries {
                 source_statistics.webhook_statistics.entry(id).or_default();
@@ -761,7 +843,11 @@ where
         }
 
         // Register the tables all in one batch.
-        if !table_registers.is_empty() {
+        //
+        // We cannot register tables at the table worker when in read-only mode.
+        // When coming out of read-only mode (via `allow_writes()`), we will
+        // register all tables that are known by that point.
+        if !table_registers.is_empty() && !self.read_only {
             let register_ts = register_ts
                 .expect("caller should have provided a register_ts when creating a table");
             // This register call advances the logical upper of the table. The
@@ -781,233 +867,24 @@ where
         for id in to_execute {
             match &self.collection(id)?.data_source {
                 DataSource::Ingestion(_) => {
-                    self.run_ingestion(id)?;
+                    if !self.read_only {
+                        self.run_ingestion(id)?;
+                    }
                 }
                 DataSource::IngestionExport { .. } => unreachable!(
                     "ingestion exports do not execute directly, but instead schedule their source to be re-executed"
                 ),
                 DataSource::Introspection(i) => {
-                    let prev = self
-                        .introspection_ids
-                        .lock()
-                        .expect("poisoned lock")
-                        .insert(*i, id);
-                    assert!(
-                        prev.is_none(),
-                        "cannot have multiple IDs for introspection type"
-                    );
 
-                    let metadata = self.storage_collections.collection_metadata(id)?.clone();
-                    let persist_client = self
-                        .persist
-                        .open(metadata.persist_location.clone())
-                        .await
-                        .unwrap();
 
-                    let read_handle_fn = move || {
-                        let persist_client = persist_client.clone();
-                        let metadata = metadata.clone();
-
-                        let fut = async move {
-                            let read_handle = persist_client
-                                .open_leased_reader::<SourceData, (), T, Diff>(
-                                    metadata.data_shard,
-                                    Arc::new(metadata.relation_desc.clone()),
-                                    Arc::new(UnitSchema),
-                                    Diagnostics {
-                                        shard_name: id.to_string(),
-                                        handle_purpose: format!("snapshot {}", id),
-                                    },
-                                    USE_CRITICAL_SINCE_SNAPSHOT.get(persist_client.dyncfgs()),
-                                )
-                                .await
-                                .expect("invalid persist usage");
-                            read_handle
-                        };
-
-                        fut.boxed()
-                    };
-
-                    // Types of storage-managed/introspection collections:
+                    // We always register the collection with the collection manager,
+                    // regardless of read-only mode. The CollectionManager itself is
+                    // aware of read-only mode and will not attempt to write before told
+                    // to do so.
                     //
-                    // Append-only: Only accepts blind writes, writes that can
-                    // be applied at any timestamp and don’t depend on current
-                    // collection contents.
-                    //
-                    // Pseudo append-only: We treat them largely as append-only
-                    // collections but periodically (currently on bootstrap)
-                    // retract old updates from them.
-                    //
-                    // Differential: at any given time `t` , collection contents
-                    // mirrors some (small cardinality) state. The cardinality
-                    // of the collection stays constant if the thing that is
-                    // mirrored doesn’t change in cardinality. At steady state,
-                    // updates always come in pairs of retractions/additions.
+                    self.register_introspection_collection(id, *i)
+                        .await?;
 
-                    match i {
-                        IntrospectionType::ShardMapping => {
-                            self.collection_manager.register_differential_collection(id, read_handle_fn);
-                            self.initialize_shard_mapping().await;
-                        }
-                        IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
-                            self.collection_manager.register_differential_collection(id, read_handle_fn);
-                            // Differential collections start with an empty
-                            // desired state. No need to manually reset.
-                        }
-                        IntrospectionType::StorageSourceStatistics => {
-                            self.collection_manager.register_differential_collection(id, read_handle_fn);
-
-                            let prev = self.snapshot_statistics(id).await;
-
-                            let scraper_token = statistics::spawn_statistics_scraper::<
-                                statistics::SourceStatistics,
-                                SourceStatisticsUpdate,
-                                _,
-                            >(
-                                id.clone(),
-                                // These do a shallow copy.
-                                self.collection_manager.clone(),
-                                Arc::clone(&self.source_statistics),
-                                prev,
-                                self.config.parameters.statistics_interval,
-                                self.statistics_interval_sender.subscribe(),
-                                self.metrics.clone(),
-                            );
-                            let web_token = statistics::spawn_webhook_statistics_scraper(
-                                Arc::clone(&self.source_statistics),
-                                self.config.parameters.statistics_interval,
-                                self.statistics_interval_sender.subscribe(),
-                            );
-
-                            // Make sure these are dropped when the controller is
-                            // dropped, so that the internal task will stop.
-                            self.introspection_tokens
-                                .insert(id, Box::new((scraper_token, web_token)));
-                        }
-                        IntrospectionType::StorageSinkStatistics => {
-                            self.collection_manager.register_differential_collection(id, read_handle_fn);
-
-                            let prev = self.snapshot_statistics(id).await;
-
-                            let scraper_token =
-                                statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
-                                    id.clone(),
-                                    // These do a shallow copy.
-                                    self.collection_manager.clone(),
-                                    Arc::clone(&self.sink_statistics),
-                                    prev,
-                                    self.config.parameters.statistics_interval,
-                                    self.statistics_interval_sender.subscribe(),
-                                    self.metrics.clone(),
-                                );
-
-                            // Make sure this is dropped when the controller is
-                            // dropped, so that the internal task will stop.
-                            self.introspection_tokens.insert(id, scraper_token);
-                        }
-                        IntrospectionType::SourceStatusHistory => {
-                            let last_status_per_id = self
-                                .partially_truncate_status_history(
-                                    IntrospectionType::SourceStatusHistory,
-                                )
-                                .await;
-
-                            // Only register afterwards, so the collection
-                            // manager doesn't accidentally bump the upper,
-                            // which would mess with our cleaning up/partial
-                            // truncation above.
-                            self.collection_manager.register_append_only_collection(id);
-
-                            let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
-                                .get_by_name(&ColumnName::from("status"))
-                                .expect("schema has not changed")
-                                .0;
-
-                            self.collection_status_manager.extend_previous_statuses(
-                                last_status_per_id.into_iter().map(|(id, row)| {
-                                    (
-                                        id,
-                                        Status::from_str(
-                                            row.iter()
-                                                .nth(status_col)
-                                                .expect("schema has not changed")
-                                                .unwrap_str(),
-                                        )
-                                        .expect("statuses must be uncorrupted"),
-                                    )
-                                }),
-                            )
-                        }
-                        IntrospectionType::SinkStatusHistory => {
-                            let last_status_per_id = self
-                                .partially_truncate_status_history(
-                                    IntrospectionType::SinkStatusHistory,
-                                )
-                                .await;
-
-                            // Only register afterwards, so the collection
-                            // manager doesn't accidentally bump the upper,
-                            // which would mess with our cleaning up/partial
-                            // truncation above.
-                            self.collection_manager.register_append_only_collection(id);
-
-                            let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
-                                .get_by_name(&ColumnName::from("status"))
-                                .expect("schema has not changed")
-                                .0;
-
-                            self.collection_status_manager.extend_previous_statuses(
-                                last_status_per_id.into_iter().map(|(id, row)| {
-                                    (
-                                        id,
-                                        Status::from_str(
-                                            row.iter()
-                                                .nth(status_col)
-                                                .expect("schema has not changed")
-                                                .unwrap_str(),
-                                        )
-                                        .expect("statuses must be uncorrupted"),
-                                    )
-                                }),
-                            )
-                        }
-                        IntrospectionType::PrivatelinkConnectionStatusHistory => {
-                            self.partially_truncate_status_history(
-                                IntrospectionType::PrivatelinkConnectionStatusHistory,
-                            )
-                            .await;
-
-                            // Only register afterwards, so the collection
-                            // manager doesn't accidentally bump the upper,
-                            // which would mess with our cleaning up/partial
-                            // truncation above.
-                            self.collection_manager.register_append_only_collection(id);
-                        }
-
-                        // Truncate compute-maintained collections.
-                        IntrospectionType::ComputeDependencies
-                        | IntrospectionType::ComputeHydrationStatus
-                        | IntrospectionType::ComputeOperatorHydrationStatus
-                        | IntrospectionType::ComputeMaterializedViewRefreshes => {
-                            self.collection_manager.register_differential_collection(id, read_handle_fn);
-                            // Differential collections start with an empty
-                            // desired state. No need to manually reset.
-                        }
-
-                        // Note [btv] - we don't truncate these, because that uses
-                        // a huge amount of memory on environmentd startup.
-                        IntrospectionType::PreparedStatementHistory
-                        | IntrospectionType::StatementExecutionHistory
-                        | IntrospectionType::SessionHistory
-                        | IntrospectionType::StatementLifecycleHistory
-                        | IntrospectionType::SqlText => {
-                            // NOTE(aljoscha): We never remove from these
-                            // collections. Someone, at some point needs to
-                            // think about that! Issue:
-                            // https://github.com/MaterializeInc/materialize/issues/25696
-                            self.collection_manager.register_append_only_collection(id);
-                        }
-                    }
                 }
                 DataSource::Webhook => {
                     // Register the collection so our manager knows about it.
@@ -1276,7 +1153,7 @@ where
                 .lock()
                 .expect("poisoned")
                 .entry(id)
-                .or_insert(None);
+                .or_insert(StatsState::new(SinkStatisticsUpdate::new(id)));
 
             client.send(StorageCommand::RunSinks(vec![cmd]));
         }
@@ -1652,7 +1529,10 @@ where
         tokio::sync::oneshot::Receiver<Result<(), StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,
     > {
-        assert!(self.txns_init_run);
+        if self.read_only {
+            return Err(StorageError::ReadOnly);
+        }
+
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
         for (id, updates) in commands.iter() {
             if !updates.is_empty() {
@@ -1671,7 +1551,6 @@ where
         &self,
         id: GlobalId,
     ) -> Result<MonotonicAppender<Self::Timestamp>, StorageError<Self::Timestamp>> {
-        assert!(self.txns_init_run);
         self.collection_manager.monotonic_appender(id)
     }
 
@@ -1911,12 +1790,7 @@ where
                         shared_stats
                             .source_statistics
                             .entry(stat.id)
-                            .and_modify(|current| match current {
-                                Some(ref mut current) => current.incorporate(stat),
-                                None => {
-                                    *current = Some(stat.with_metrics(&self.metrics));
-                                }
-                            });
+                            .and_modify(|current| current.stat().incorporate(stat));
                     }
                 }
 
@@ -1926,10 +1800,7 @@ where
                         // Don't override it if its been removed.
                         shared_stats
                             .entry(stat.id)
-                            .and_modify(|current| match current {
-                                Some(ref mut current) => current.incorporate(stat),
-                                None => *current = Some(stat),
-                            });
+                            .and_modify(|current| current.stat().incorporate(stat));
                     }
                 }
             }
@@ -2079,9 +1950,11 @@ where
             dropped_sources.push(StatusUpdate::new(id, status_now, Status::Dropped));
         }
 
-        self.collection_status_manager
-            .append_updates(dropped_sources, IntrospectionType::SourceStatusHistory)
-            .await;
+        if !self.read_only {
+            self.collection_status_manager
+                .append_updates(dropped_sources, IntrospectionType::SourceStatusHistory)
+                .await;
+        }
 
         {
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
@@ -2100,9 +1973,12 @@ where
                 sink_statistics.remove(&id);
             }
         }
-        self.collection_status_manager
-            .append_updates(dropped_sinks, IntrospectionType::SinkStatusHistory)
-            .await;
+
+        if !self.read_only {
+            self.collection_status_manager
+                .append_updates(dropped_sinks, IntrospectionType::SinkStatusHistory)
+                .await;
+        }
 
         Ok(updated_frontiers)
     }
@@ -2180,7 +2056,9 @@ where
         }
 
         let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager
+            .differential_append(id, updates)
+            .await;
     }
 
     async fn record_replica_frontiers(
@@ -2254,7 +2132,9 @@ where
 
         let id =
             self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager
+            .differential_append(id, updates)
+            .await;
     }
 
     async fn append_introspection_updates(
@@ -2269,140 +2149,10 @@ where
     async fn update_introspection_collection(
         &mut self,
         type_: IntrospectionType,
-        updates: Vec<(Row, Diff)>,
+        op: StorageWriteOp,
     ) {
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
-        self.collection_manager.update_desired(id, updates).await;
-    }
-
-    /// With the CRDB based timestamp oracle, there is no longer write timestamp
-    /// fencing. As in, when a new Coordinator, `B`, starts up, there is nothing
-    /// that prevents an old Coordinator, `A`, from getting a new write
-    /// timestamp that is higher than `B`'s boot timestamp. Below is the
-    /// implications for all persist transaction scenarios, `on` means a
-    /// Coordinator turning the txn flag flag on, `off` means a Coordinator
-    /// turning the txn wal flag off.
-    ///
-    /// The following series of events is a concern:
-    ///   1. `A` writes at `t_0`, s.t. `t_0` > `B`'s boot timestamp.
-    ///   2. `B` writes at `t_1`, s.t. `t_1` > `t_0`.
-    ///   3. `A` writes at `t_2`, s.t. `t_2` > `t_1`.
-    ///   4. etc.
-    ///
-    /// - `off` -> `off`: If `B`` manages to append `t_1` before A appends `t_0`
-    ///    then the `t_0` append will panic and we won't acknowledge the write
-    ///   to the user (or similarly `t_2` and `t_1`). Before txn-wal,
-    ///   appends are not atomic, so we might get a partial append. This is fine
-    ///   because we only support single table transactions.
-    /// - `on` -> `on`: The txn-shard is meant to correctly handle two writers
-    ///   so this should be fine. Note it's possible that we have two
-    ///   Coordinators interleaving write transactions without the leadership
-    ///   check described below, but that should be fine.
-    /// - `off` -> `on`: If `A` gets a write timestamp higher than `B`'s boot
-    ///   timestamp, then `A` can write directly to a data shard after it's been
-    ///   registered with a txn-shard, breaking the invariant that no data shard
-    ///   is written to directly while it's registered to a transaction shard.
-    ///   To mitigate this, we must do a leadership check AFTER getting the
-    ///   write timestamp. In order for `B` to register a data shard in the txn
-    ///   shard, it must first become the leader then second get a register
-    ///   timestamp. So if `A` gets a write timestamp higher than `B`'s register
-    ///   timestamp, it will fail the leadership check before attempting the
-    ///   append.
-    /// - `on` -> `off`: If `A` tries to write to the txn-shard at a timestamp
-    ///   higher than `B`'s boot timestamp, it will fail because the shards have
-    ///   been forgotten. So everything should be ok.
-    ///
-    ///  In general, all transitions make the following steps:
-    ///   1. Get write timestamp, `ts`.
-    ///   2. Apply all transactions to all data shards up to `ts`.
-    ///   3. Register/forget all data shards. So if we crash at any point in
-    ///      these steps, for example after only applying some transactions,
-    ///      then the next Coordinator can pick up where we left off and finish
-    ///      whatever needs finishing.
-    ///
-    /// H/t jkosh44 for the above notes from the discussion in which we hashed
-    /// this all out.
-    async fn init_txns(&mut self, init_ts: T) -> Result<(), StorageError<Self::Timestamp>> {
-        assert_eq!(self.txns_init_run, false);
-        let (txns_id, txns_client) = match &self.txns {
-            TxnsWal::EnabledEager {
-                txns_id,
-                txns_client,
-            } => {
-                info!(
-                    "init_txns at {:?}: enabled lazy txns_id={}",
-                    init_ts, txns_id
-                );
-                (txns_id, txns_client)
-            }
-            TxnsWal::EnabledLazy {
-                txns_read,
-                txns_client,
-            } => {
-                info!(
-                    "init_txns at {:?}: enabled eager txns_id={}",
-                    init_ts,
-                    txns_read.txns_id()
-                );
-                (txns_read.txns_id(), txns_client)
-            }
-        };
-
-        let mut txns = TxnsHandle::<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>::open(
-            T::minimum(),
-            txns_client.clone(),
-            Arc::clone(&self.txns_metrics),
-            *txns_id,
-            Arc::new(RelationDesc::empty()),
-            Arc::new(UnitSchema),
-        )
-        .await;
-
-        // If successful, this forget_all call guarantees:
-        // - That we were able to write to the txns shard at `init_ts` (a
-        //   timestamp given to us by the coordinator).
-        // - That no data shards are registered at `init_ts` and thus every
-        //   table is now free to be written to directly at times greater than
-        //   that. This is not necessary if the txns feature is enabled, we
-        //   could instead commit an empty txn, but we need the apply guarantee
-        //   that it has and it doesn't hurt to start everything from a clean
-        //   slate on boot (register is idempotent and create_collections will
-        //   be called shortly).
-        // - That all txn writes through `init_ts` have been applied
-        //   (materialized physically in the data shards).
-        //
-        // We don't have an extra timestamp here for the tidy, so for now ignore it and let the
-        // next transaction perform any tidy needed.
-        if INIT_FORGET_ALL.get(txns_client.dyncfgs()) {
-            let (removed, _tidy) = txns
-                .forget_all(init_ts.clone())
-                .await
-                .map_err(|_| StorageError::InvalidUppers(vec![]))?;
-            info!("init_txns removed from txns shard: {:?}", removed);
-        } else {
-            // More limited version of the above to mitigate #25992. This is all
-            // that should be necessary (and probably more than we need,
-            // strictly) now that we've removed the old tables impl. Guarantees:
-            // - That we were able to write to the txns shard at `init_ts` (a
-            //   timestamp given to us by the coordinator).
-            // - That all txn writes through `init_ts` have been applied
-            //   (materialized physically in the data shards).
-            let mut empty_txn = txns.begin();
-            let apply = empty_txn
-                .commit_at(&mut txns, init_ts.clone())
-                .await
-                .map_err(|_| StorageError::InvalidUppers(vec![]))?;
-            let _tidy = apply.apply_eager(&mut txns).await;
-            info!("init_txns committed at and applied through {:?}", init_ts);
-        }
-
-        drop(txns);
-
-        self.txns_init_run = true;
-
-        self.storage_collections.init_txns(init_ts).await?;
-
-        Ok(())
+        self.collection_manager.differential_write(id, op).await;
     }
 
     async fn initialize_state(
@@ -2548,7 +2298,7 @@ where
 pub fn prepare_initialization<T>(txn: &mut dyn StorageTxn<T>) -> Result<(), StorageError<T>> {
     if txn.get_txn_wal_shard().is_none() {
         let txns_id = ShardId::new();
-        txn.write_txn_wal_shard(txns_id.to_string())?;
+        txn.write_txn_wal_shard(txns_id)?;
     }
 
     Ok(())
@@ -2576,6 +2326,7 @@ where
         now: NowFn,
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
+        read_only: bool,
         metrics_registry: MetricsRegistry,
         txn_wal_tables: TxnWalTablesImpl,
         connection_context: ConnectionContext,
@@ -2590,7 +2341,6 @@ where
         let txns_id = txn
             .get_txn_wal_shard()
             .expect("must call prepare initialization before creating storage controller");
-        let txns_id = ShardId::from_str(txns_id.as_str()).expect("shard ID must be valid");
 
         let txns_client = persist_clients
             .open(persist_location.clone())
@@ -2611,21 +2361,18 @@ where
         let txns = match txn_wal_tables {
             TxnWalTablesImpl::Lazy => {
                 let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
-                TxnsWal::EnabledLazy {
-                    txns_read,
-                    txns_client,
-                }
+                TxnsWal::EnabledLazy { txns_read }
             }
-            TxnWalTablesImpl::Eager => TxnsWal::EnabledEager {
-                txns_id,
-                txns_client,
-            },
+            TxnWalTablesImpl::Eager => TxnsWal::EnabledEager,
         };
         let persist_monotonic_worker = persist_handles::PersistMonotonicWriteWorker::new();
         let collection_manager_write_handle = persist_monotonic_worker.clone();
 
-        let collection_manager =
-            collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
+        let collection_manager = collection_mgmt::CollectionManager::new(
+            read_only,
+            collection_manager_write_handle,
+            now.clone(),
+        );
 
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
 
@@ -2647,7 +2394,6 @@ where
             persist_table_worker,
             persist_monotonic_worker,
             txns,
-            txns_init_run: false,
             txns_metrics,
             stashed_response: None,
             pending_compaction_commands: vec![],
@@ -2659,6 +2405,7 @@ where
             introspection_tokens: BTreeMap::new(),
             now,
             envd_epoch,
+            read_only,
             source_statistics: Arc::new(Mutex::new(statistics::SourceStatistics {
                 source_statistics: BTreeMap::new(),
                 webhook_statistics: BTreeMap::new(),
@@ -3017,6 +2764,297 @@ where
         write
     }
 
+    /// Registers the given introspection collection and does any preparatory
+    /// work that we have to to do before we start writing to it. This
+    /// preparatory work will include partial truncation or other cleanup
+    /// schemes, depending on introspection type.
+    async fn register_introspection_collection(
+        &mut self,
+        id: GlobalId,
+        introspection_type: IntrospectionType,
+    ) -> Result<(), StorageError<T>> {
+        tracing::info!(%id, ?introspection_type, "registering introspection collection");
+
+        let prev = self
+            .introspection_ids
+            .lock()
+            .expect("poisoned lock")
+            .insert(introspection_type, id);
+        assert!(
+            prev.is_none(),
+            "cannot have multiple IDs for introspection type"
+        );
+
+        let metadata = self.storage_collections.collection_metadata(id)?.clone();
+        let persist_client = self
+            .persist
+            .open(metadata.persist_location.clone())
+            .await
+            .unwrap();
+
+        let read_handle_fn = move || {
+            let persist_client = persist_client.clone();
+            let metadata = metadata.clone();
+
+            let fut = async move {
+                let read_handle = persist_client
+                    .open_leased_reader::<SourceData, (), T, Diff>(
+                        metadata.data_shard,
+                        Arc::new(metadata.relation_desc.clone()),
+                        Arc::new(UnitSchema),
+                        Diagnostics {
+                            shard_name: id.to_string(),
+                            handle_purpose: format!("snapshot {}", id),
+                        },
+                        USE_CRITICAL_SINCE_SNAPSHOT.get(persist_client.dyncfgs()),
+                    )
+                    .await
+                    .expect("invalid persist usage");
+                read_handle
+            };
+
+            fut.boxed()
+        };
+
+        // Types of storage-managed/introspection collections:
+        //
+        // Append-only: Only accepts blind writes, writes that can
+        // be applied at any timestamp and don’t depend on current
+        // collection contents.
+        //
+        // Pseudo append-only: We treat them largely as append-only
+        // collections but periodically (currently on bootstrap)
+        // retract old updates from them.
+        //
+        // Differential: at any given time `t` , collection contents
+        // mirrors some (small cardinality) state. The cardinality
+        // of the collection stays constant if the thing that is
+        // mirrored doesn’t change in cardinality. At steady state,
+        // updates always come in pairs of retractions/additions.
+
+        match introspection_type {
+            // For these, we first register the collection and then prepare it,
+            // because the code that prepares differential collection expects to
+            // be able to update desired state via the collection manager
+            // already.
+            IntrospectionType::ShardMapping
+            | IntrospectionType::Frontiers
+            | IntrospectionType::ReplicaFrontiers
+            | IntrospectionType::StorageSourceStatistics
+            | IntrospectionType::StorageSinkStatistics => {
+                self.collection_manager
+                    .register_differential_collection(id, read_handle_fn);
+
+                if !self.read_only {
+                    self.prepare_introspection_collection(id, introspection_type)
+                        .await?;
+                }
+            }
+
+            // For these, we first have to prepare and then register with
+            // collection manager, because the preparation logic wants to read
+            // the shard's contents and then do uncontested writes.
+            //
+            // TODO(aljoscha): We should make the truncation/cleanup work that
+            // happens when we take over instead be a periodic thing, and make
+            // it resilient to the upper moving concurrently.
+            IntrospectionType::SourceStatusHistory
+            | IntrospectionType::SinkStatusHistory
+            | IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                if !self.read_only {
+                    self.prepare_introspection_collection(id, introspection_type)
+                        .await?;
+                }
+
+                self.collection_manager.register_append_only_collection(id);
+            }
+
+            // Same as our other differential collections, but for these the
+            // preparation logic currently doesn't do anything.
+            IntrospectionType::ComputeDependencies
+            | IntrospectionType::ComputeOperatorHydrationStatus
+            | IntrospectionType::ComputeMaterializedViewRefreshes
+            | IntrospectionType::ComputeErrorCounts
+            | IntrospectionType::ComputeHydrationTimes => {
+                self.collection_manager
+                    .register_differential_collection(id, read_handle_fn);
+
+                if !self.read_only {
+                    self.prepare_introspection_collection(id, introspection_type)
+                        .await?;
+                }
+            }
+
+            // Note [btv] - we don't truncate these, because that uses
+            // a huge amount of memory on environmentd startup.
+            IntrospectionType::PreparedStatementHistory
+            | IntrospectionType::StatementExecutionHistory
+            | IntrospectionType::SessionHistory
+            | IntrospectionType::StatementLifecycleHistory
+            | IntrospectionType::SqlText => {
+                if !self.read_only {
+                    self.prepare_introspection_collection(id, introspection_type)
+                        .await?;
+                }
+
+                self.collection_manager.register_append_only_collection(id);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Does any work that is required before this controller instance starts
+    /// writing to the given introspection collection.
+    ///
+    /// This migh include consolidation, deleting older entries or seeding
+    /// in-memory state of, say, scrapers, with current collection contents.
+    async fn prepare_introspection_collection(
+        &mut self,
+        id: GlobalId,
+        introspection_type: IntrospectionType,
+    ) -> Result<(), StorageError<T>> {
+        tracing::info!(%id, ?introspection_type, "preparing introspection collection for writes");
+
+        match introspection_type {
+            IntrospectionType::ShardMapping => {
+                self.initialize_shard_mapping().await;
+            }
+            IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
+                // Differential collections start with an empty
+                // desired state. No need to manually reset.
+            }
+            IntrospectionType::StorageSourceStatistics => {
+                let prev = self.snapshot_statistics(id).await;
+
+                let scraper_token = statistics::spawn_statistics_scraper::<
+                    statistics::SourceStatistics,
+                    SourceStatisticsUpdate,
+                    _,
+                >(
+                    id.clone(),
+                    // These do a shallow copy.
+                    self.collection_manager.clone(),
+                    Arc::clone(&self.source_statistics),
+                    prev,
+                    self.config.parameters.statistics_interval,
+                    self.statistics_interval_sender.subscribe(),
+                    self.metrics.clone(),
+                );
+                let web_token = statistics::spawn_webhook_statistics_scraper(
+                    Arc::clone(&self.source_statistics),
+                    self.config.parameters.statistics_interval,
+                    self.statistics_interval_sender.subscribe(),
+                );
+
+                // Make sure these are dropped when the controller is
+                // dropped, so that the internal task will stop.
+                self.introspection_tokens
+                    .insert(id, Box::new((scraper_token, web_token)));
+            }
+            IntrospectionType::StorageSinkStatistics => {
+                let prev = self.snapshot_statistics(id).await;
+
+                let scraper_token =
+                    statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
+                        id.clone(),
+                        // These do a shallow copy.
+                        self.collection_manager.clone(),
+                        Arc::clone(&self.sink_statistics),
+                        prev,
+                        self.config.parameters.statistics_interval,
+                        self.statistics_interval_sender.subscribe(),
+                        self.metrics.clone(),
+                    );
+
+                // Make sure this is dropped when the controller is
+                // dropped, so that the internal task will stop.
+                self.introspection_tokens.insert(id, scraper_token);
+            }
+            IntrospectionType::SourceStatusHistory => {
+                let last_status_per_id = self
+                    .partially_truncate_status_history(IntrospectionType::SourceStatusHistory)
+                    .await;
+
+                let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("status"))
+                    .expect("schema has not changed")
+                    .0;
+
+                self.collection_status_manager.extend_previous_statuses(
+                    last_status_per_id.into_iter().map(|(id, row)| {
+                        (
+                            id,
+                            Status::from_str(
+                                row.iter()
+                                    .nth(status_col)
+                                    .expect("schema has not changed")
+                                    .unwrap_str(),
+                            )
+                            .expect("statuses must be uncorrupted"),
+                        )
+                    }),
+                )
+            }
+            IntrospectionType::SinkStatusHistory => {
+                let last_status_per_id = self
+                    .partially_truncate_status_history(IntrospectionType::SinkStatusHistory)
+                    .await;
+
+                let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("status"))
+                    .expect("schema has not changed")
+                    .0;
+
+                self.collection_status_manager.extend_previous_statuses(
+                    last_status_per_id.into_iter().map(|(id, row)| {
+                        (
+                            id,
+                            Status::from_str(
+                                row.iter()
+                                    .nth(status_col)
+                                    .expect("schema has not changed")
+                                    .unwrap_str(),
+                            )
+                            .expect("statuses must be uncorrupted"),
+                        )
+                    }),
+                )
+            }
+            IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                self.partially_truncate_status_history(
+                    IntrospectionType::PrivatelinkConnectionStatusHistory,
+                )
+                .await;
+            }
+
+            // Truncate compute-maintained collections.
+            IntrospectionType::ComputeDependencies
+            | IntrospectionType::ComputeOperatorHydrationStatus
+            | IntrospectionType::ComputeMaterializedViewRefreshes
+            | IntrospectionType::ComputeErrorCounts
+            | IntrospectionType::ComputeHydrationTimes => {
+                // Differential collections start with an empty
+                // desired state. No need to manually reset.
+            }
+
+            // Note [btv] - we don't truncate these, because that uses
+            // a huge amount of memory on environmentd startup.
+            IntrospectionType::PreparedStatementHistory
+            | IntrospectionType::StatementExecutionHistory
+            | IntrospectionType::SessionHistory
+            | IntrospectionType::StatementLifecycleHistory
+            | IntrospectionType::SqlText => {
+                // NOTE(aljoscha): We never remove from these
+                // collections. Someone, at some point needs to
+                // think about that! Issue:
+                // https://github.com/MaterializeInc/materialize/issues/25696
+            }
+        }
+
+        Ok(())
+    }
+
     /// Get the current rows in the given statistics table. This is used to bootstrap
     /// the statistics tasks.
     ///
@@ -3087,7 +3125,9 @@ where
             updates.push((row_buf.clone(), 1));
         }
 
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager
+            .differential_append(id, updates)
+            .await;
     }
 
     /// Effectively truncates the status history shard except for the most
@@ -3253,7 +3293,7 @@ where
             })
             .collect();
 
-        let command = (id, updates, expected_upper, new_upper);
+        let command = (id, updates, expected_upper.clone(), new_upper);
 
         let res = self
             .persist_monotonic_worker
@@ -3285,7 +3325,7 @@ where
                         // NOTE: We might want to attempt these partial
                         // retractions on an interval, instead of only when
                         // starting up!
-                        info!(%id, current_upper = ?failed_ids[0].current_upper, "failed to append partial truncation");
+                        info!(%id, ?expected_upper, current_upper = ?failed_ids[0].current_upper, "failed to append partial truncation");
                     }
                     // Uh-oh, something else went wrong!
                     other => {
@@ -3330,7 +3370,6 @@ where
     where
         I: Iterator<Item = GlobalId>,
     {
-        assert!(self.txns_init_run);
         mz_ore::soft_assert_or_log!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
 
         let id = match self
@@ -3360,7 +3399,9 @@ where
             updates.push((row_buf.clone(), diff));
         }
 
-        self.collection_manager.update_desired(id, updates).await;
+        self.collection_manager
+            .differential_append(id, updates)
+            .await;
     }
 
     /// Determines and returns this collection's dependencies, if any.
@@ -3492,6 +3533,10 @@ where
     /// Handles writing of status updates for sources/sinks to the appropriate
     /// status relation
     async fn record_status_updates(&mut self, updates: Vec<StatusUpdate>) {
+        if self.read_only {
+            return;
+        }
+
         let mut sink_status_updates = vec![];
         let mut source_status_updates = vec![];
 
@@ -3524,6 +3569,8 @@ where
     /// Runs the identified ingestion using the current definition of the
     /// ingestion in-memory.
     fn run_ingestion(&mut self, id: GlobalId) -> Result<(), StorageError<T>> {
+        tracing::info!(%id, "starting ingestion");
+
         let collection = self.collection(id)?;
         let ingestion_description = match &collection.data_source {
             DataSource::Ingestion(i) => i.clone(),

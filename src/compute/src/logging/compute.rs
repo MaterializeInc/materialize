@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Write};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor};
@@ -128,6 +128,8 @@ pub enum ComputeEvent {
         /// The change in error count.
         diff: i64,
     },
+    /// A dataflow export was hydrated.
+    Hydration { export_id: GlobalId },
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
@@ -172,7 +174,7 @@ impl Peek {
 pub(super) fn construct<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
-    event_queue: EventQueue<ComputeEvent>,
+    event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
@@ -181,12 +183,14 @@ pub(super) fn construct<A: Allocate + 'static>(
     let dataflow_index = worker.next_dataflow_index();
 
     worker.dataflow_named("Dataflow: compute logging", move |scope| {
-        let (mut logs, token) = Some(event_queue.link).mz_replay::<_, CapacityContainerBuilder<_>>(
-            scope,
-            "compute logs",
-            config.interval,
-            event_queue.activator,
-        );
+        let (mut logs, token) = Some(event_queue.link)
+            .mz_replay::<_, CapacityContainerBuilder<_>, _>(
+                scope,
+                "compute logs",
+                config.interval,
+                event_queue.activator,
+                |mut session, data| session.give_iterator(data.iter()),
+            );
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.
@@ -209,6 +213,7 @@ pub(super) fn construct<A: Allocate + 'static>(
         let (mut arrangement_heap_allocations_out, arrangement_heap_allocations) =
             demux.new_output();
         let (mut error_count_out, error_count) = demux.new_output();
+        let (mut hydration_time_out, hydration_time) = demux.new_output();
 
         let mut demux_state = DemuxState::new(worker2);
         let mut demux_buffer = Vec::new();
@@ -224,6 +229,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                 let mut arrangement_heap_capacity = arrangement_heap_capacity_out.activate();
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
                 let mut error_count = error_count_out.activate();
+                let mut hydration_time = hydration_time_out.activate();
 
                 input.for_each(|cap, data| {
                     data.swap(&mut demux_buffer);
@@ -239,6 +245,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                         arrangement_heap_capacity: arrangement_heap_capacity.session(&cap),
                         arrangement_heap_allocations: arrangement_heap_allocations.session(&cap),
                         error_count: error_count.session(&cap),
+                        hydration_time: hydration_time.session(&cap),
                     };
 
                     for (time, logger_id, event) in demux_buffer.drain(..) {
@@ -363,6 +370,18 @@ pub(super) fn construct<A: Allocate + 'static>(
             }
         });
 
+        let mut packer = PermutedRowPacker::new(ComputeLog::HydrationTime);
+        let hydration_time = hydration_time.as_collection().map({
+            let mut scratch = String::new();
+            move |datum| {
+                packer.pack_slice(&[
+                    make_string_datum(datum.export_id, &mut scratch),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    Datum::from(datum.time_ns),
+                ])
+            }
+        });
+
         use ComputeLog::*;
         let logs = [
             (DataflowCurrent, dataflow_current),
@@ -375,6 +394,7 @@ pub(super) fn construct<A: Allocate + 'static>(
             (ArrangementHeapCapacity, arrangement_heap_capacity),
             (ArrangementHeapAllocations, arrangement_heap_allocations),
             (ErrorCount, error_count),
+            (HydrationTime, hydration_time),
         ];
 
         // Build the output arrangements.
@@ -453,6 +473,10 @@ struct ExportState {
     /// This must be a signed integer, since per-worker error counts can be negative, only the
     /// cross-worker total has to sum up to a non-negative value.
     error_count: i64,
+    /// When this export was created.
+    created_at: Instant,
+    /// Whether the exported collection is hydrated.
+    hydration_time_ns: Option<u64>,
 }
 
 impl ExportState {
@@ -460,6 +484,8 @@ impl ExportState {
         Self {
             dataflow_id,
             error_count: 0,
+            created_at: Instant::now(),
+            hydration_time_ns: None,
         }
     }
 }
@@ -488,6 +514,7 @@ struct DemuxOutput<'a> {
     arrangement_heap_size: OutputSession<'a, ArrangementHeapDatum>,
     arrangement_heap_capacity: OutputSession<'a, ArrangementHeapDatum>,
     arrangement_heap_allocations: OutputSession<'a, ArrangementHeapDatum>,
+    hydration_time: OutputSession<'a, HydrationTimeDatum>,
     error_count: OutputSession<'a, ErrorCountDatum>,
 }
 
@@ -525,6 +552,12 @@ struct PeekDurationDatum {
 #[derive(Clone)]
 struct ArrangementHeapDatum {
     operator_id: usize,
+}
+
+#[derive(Clone)]
+struct HydrationTimeDatum {
+    export_id: GlobalId,
+    time_ns: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -604,6 +637,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             }
             DataflowShutdown { dataflow_index } => self.handle_dataflow_shutdown(dataflow_index),
             ErrorCount { export_id, diff } => self.handle_error_count(export_id, diff),
+            Hydration { export_id } => self.handle_hydration(export_id),
         }
     }
 
@@ -612,20 +646,28 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         let datum = ExportDatum { id, dataflow_id };
         self.output.export.give((datum, ts, 1));
 
-        self.state.exports.insert(id, ExportState::new(dataflow_id));
+        let existing = self.state.exports.insert(id, ExportState::new(dataflow_id));
+        if existing.is_some() {
+            error!(export = %id, "export already registered");
+        }
+
         *self
             .state
             .dataflow_export_counts
             .entry(dataflow_id)
             .or_default() += 1;
+
+        // Insert hydration time logging for this export.
+        let datum = HydrationTimeDatum {
+            export_id: id,
+            time_ns: None,
+        };
+        self.output.hydration_time.give((datum, ts, 1));
     }
 
     fn handle_export_dropped(&mut self, id: GlobalId) {
         let Some(export) = self.state.exports.remove(&id) else {
-            error!(
-                export = ?id,
-                "missing exports entry at time of export drop"
-            );
+            error!(export = %id, "missing exports entry at time of export drop");
             return;
         };
 
@@ -638,8 +680,8 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         match self.state.dataflow_export_counts.get_mut(&dataflow_id) {
             entry @ Some(0) | entry @ None => {
                 error!(
-                    export = ?id,
-                    dataflow = ?dataflow_id,
+                    export = %id,
+                    dataflow = %dataflow_id,
                     "invalid dataflow_export_counts entry at time of export drop: {entry:?}",
                 );
             }
@@ -655,6 +697,13 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             };
             self.output.error_count.give((datum, ts, -1));
         }
+
+        // Remove hydration time logging for this export.
+        let datum = HydrationTimeDatum {
+            export_id: id,
+            time_ns: export.hydration_time_ns,
+        };
+        self.output.hydration_time.give((datum, ts, -1));
     }
 
     fn handle_dataflow_dropped(&mut self, id: usize) {
@@ -667,7 +716,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             // Dataflow has not yet shut down.
             let existing = self.state.dataflow_drop_times.insert(id, self.time);
             if existing.is_some() {
-                error!(dataflow = ?id, "dataflow already dropped");
+                error!(dataflow = %id, "dataflow already dropped");
             }
         }
     }
@@ -684,7 +733,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             // Dataflow has not yet been dropped.
             let was_new = self.state.shutdown_dataflows.insert(id);
             if !was_new {
-                error!(dataflow = ?id, "dataflow already shutdown");
+                error!(dataflow = %id, "dataflow already shutdown");
             }
         }
     }
@@ -719,6 +768,36 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         export.error_count = new_count;
     }
 
+    fn handle_hydration(&mut self, export_id: GlobalId) {
+        let ts = self.ts();
+
+        let Some(export) = self.state.exports.get_mut(&export_id) else {
+            error!(export = %export_id, "hydration event for unknown export");
+            return;
+        };
+        if export.hydration_time_ns.is_some() {
+            // Hydration events for already hydrated dataflows can occur when a dataflow is reused
+            // after reconciliation. We can simply ignore these.
+            return;
+        }
+
+        let duration = export.created_at.elapsed();
+        let nanos = u64::try_from(duration.as_nanos()).expect("must fit");
+
+        let retraction = HydrationTimeDatum {
+            export_id,
+            time_ns: None,
+        };
+        let insertion = HydrationTimeDatum {
+            export_id,
+            time_ns: Some(nanos),
+        };
+        self.output.hydration_time.give((retraction, ts, -1));
+        self.output.hydration_time.give((insertion, ts, 1));
+
+        export.hydration_time_ns = Some(nanos);
+    }
+
     fn handle_peek_install(&mut self, peek: Peek, peek_type: PeekType) {
         let uuid = peek.uuid;
         let ts = self.ts();
@@ -729,7 +808,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         let existing = self.state.peek_stash.insert(uuid, self.time);
         if existing.is_some() {
             error!(
-                uuid = ?uuid,
+                uuid = %uuid,
                 "peek already registered",
             );
         }
@@ -750,7 +829,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                 .give((PeekDurationDatum { peek_type, bucket }, ts, 1));
         } else {
             error!(
-                uuid = ?uuid,
+                uuid = %uuid,
                 "peek not yet registered",
             );
         }
@@ -830,12 +909,20 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     /// Indicate that a new arrangement exists, start maintaining the heap size state.
     fn handle_arrangement_heap_size_operator(&mut self, operator_id: usize, address: Vec<usize>) {
         let activator = self.state.worker.activator_for(&address);
-        self.state
+        let existing = self
+            .state
             .arrangement_size
             .insert(operator_id, Default::default());
-        self.shared_state
+        if existing.is_some() {
+            error!(%operator_id, "arrangement size operator already registered");
+        }
+        let existing = self
+            .shared_state
             .arrangement_size_activators
             .insert(operator_id, activator);
+        if existing.is_some() {
+            error!(%operator_id, "arrangement size activator already registered");
+        }
     }
 
     /// Indicate that an arrangement has been dropped and we can cleanup the heap size state.
@@ -941,6 +1028,12 @@ impl CollectionLogging {
             let events = retraction.into_iter().chain(insertion);
             self.logger.log_many(events);
         }
+    }
+
+    /// Set the collection as hydrated.
+    pub fn set_hydrated(&self) {
+        self.logger
+            .log(ComputeEvent::Hydration { export_id: self.id });
     }
 }
 

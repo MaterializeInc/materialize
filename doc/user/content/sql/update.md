@@ -30,7 +30,7 @@ _alias_ | Only permit references to _table_name_ as _alias_.
 
 ## Examples
 
-```sql
+```mzsql
 CREATE TABLE update_me (a int, b text);
 INSERT INTO update_me VALUES (1, 'hello'), (2, 'goodbye');
 UPDATE update_me SET a = a + 2 WHERE b = 'hello';
@@ -42,7 +42,7 @@ SELECT * FROM update_me;
  3 | hello
  2 | goodbye
 ```
-```sql
+```mzsql
 UPDATE update_me SET b = 'aloha';
 SELECT * FROM update_me;
 ```

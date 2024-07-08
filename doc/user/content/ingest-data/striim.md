@@ -95,7 +95,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
    command to create connection objects with access and authentication details
    to your Kafka cluster and schema registry:
 
-   ```sql
+   ```mzsql
     CREATE SECRET kafka_password AS '<your-password>';
     CREATE SECRET csr_password AS '<your-password>';
 
@@ -119,7 +119,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
    Materialize to your Kafka broker and schema registry using the connections you
    created in the previous step.
 
-   ```sql
+   ```mzsql
    CREATE SOURCE src
      FROM KAFKA CONNECTION kafka_connection (TOPIC '<topic-name>')
      KEY FORMAT TEXT

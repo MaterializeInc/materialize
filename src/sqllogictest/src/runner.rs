@@ -47,6 +47,7 @@ use mz_environmentd::CatalogConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
+use mz_ore::channel::trigger;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -297,42 +298,46 @@ impl fmt::Display for Outcome<'_> {
     }
 }
 
-#[derive(Default, Debug, Eq, PartialEq)]
-pub struct Outcomes([usize; NUM_OUTCOMES]);
+#[derive(Default, Debug)]
+pub struct Outcomes {
+    stats: [usize; NUM_OUTCOMES],
+    details: Vec<String>,
+}
 
 impl ops::AddAssign<Outcomes> for Outcomes {
     fn add_assign(&mut self, rhs: Outcomes) {
-        for (lhs, rhs) in self.0.iter_mut().zip(rhs.0.iter()) {
+        for (lhs, rhs) in self.stats.iter_mut().zip(rhs.stats.iter()) {
             *lhs += rhs
         }
     }
 }
 impl Outcomes {
     pub fn any_failed(&self) -> bool {
-        self.0[SUCCESS_OUTCOME] + self.0[WARNING_OUTCOME] < self.0.iter().sum::<usize>()
+        self.stats[SUCCESS_OUTCOME] + self.stats[WARNING_OUTCOME] < self.stats.iter().sum::<usize>()
     }
 
     pub fn as_json(&self) -> serde_json::Value {
         serde_json::json!({
-            "unsupported": self.0[0],
-            "parse_failure": self.0[1],
-            "plan_failure": self.0[2],
-            "unexpected_plan_success": self.0[3],
-            "wrong_number_of_rows_affected": self.0[4],
-            "wrong_column_count": self.0[5],
-            "wrong_column_names": self.0[6],
-            "output_failure": self.0[7],
-            "inconsistent_view_outcome": self.0[8],
-            "bail": self.0[9],
-            "warning": self.0[10],
-            "success": self.0[11],
+            "unsupported": self.stats[0],
+            "parse_failure": self.stats[1],
+            "plan_failure": self.stats[2],
+            "unexpected_plan_success": self.stats[3],
+            "wrong_number_of_rows_affected": self.stats[4],
+            "wrong_column_count": self.stats[5],
+            "wrong_column_names": self.stats[6],
+            "output_failure": self.stats[7],
+            "inconsistent_view_outcome": self.stats[8],
+            "bail": self.stats[9],
+            "warning": self.stats[10],
+            "success": self.stats[11],
         })
     }
 
-    pub fn display(&self, no_fail: bool) -> OutcomesDisplay<'_> {
+    pub fn display(&self, no_fail: bool, failure_details: bool) -> OutcomesDisplay<'_> {
         OutcomesDisplay {
             inner: self,
             no_fail,
+            failure_details,
         }
     }
 }
@@ -340,45 +345,56 @@ impl Outcomes {
 pub struct OutcomesDisplay<'a> {
     inner: &'a Outcomes,
     no_fail: bool,
+    failure_details: bool,
 }
 
 impl<'a> fmt::Display for OutcomesDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let total: usize = self.inner.0.iter().sum();
-        write!(
-            f,
-            "{}:",
-            if self.inner.0[SUCCESS_OUTCOME] + self.inner.0[WARNING_OUTCOME] == total {
-                "PASS"
-            } else if self.no_fail {
-                "FAIL-IGNORE"
-            } else {
-                "FAIL"
+        let total: usize = self.inner.stats.iter().sum();
+        if self.failure_details
+            && (self.inner.stats[SUCCESS_OUTCOME] + self.inner.stats[WARNING_OUTCOME] != total
+                || self.no_fail)
+        {
+            for outcome in &self.inner.details {
+                writeln!(f, "{}", outcome)?;
             }
-        )?;
-        static NAMES: Lazy<Vec<&'static str>> = Lazy::new(|| {
-            vec![
-                "unsupported",
-                "parse-failure",
-                "plan-failure",
-                "unexpected-plan-success",
-                "wrong-number-of-rows-inserted",
-                "wrong-column-count",
-                "wrong-column-names",
-                "output-failure",
-                "inconsistent-view-outcome",
-                "bail",
-                "warning",
-                "success",
-                "total",
-            ]
-        });
-        for (i, n) in self.inner.0.iter().enumerate() {
-            if *n > 0 {
-                write!(f, " {}={}", NAMES[i], n)?;
+            Ok(())
+        } else {
+            write!(
+                f,
+                "{}:",
+                if self.inner.stats[SUCCESS_OUTCOME] + self.inner.stats[WARNING_OUTCOME] == total {
+                    "PASS"
+                } else if self.no_fail {
+                    "FAIL-IGNORE"
+                } else {
+                    "FAIL"
+                }
+            )?;
+            static NAMES: Lazy<Vec<&'static str>> = Lazy::new(|| {
+                vec![
+                    "unsupported",
+                    "parse-failure",
+                    "plan-failure",
+                    "unexpected-plan-success",
+                    "wrong-number-of-rows-inserted",
+                    "wrong-column-count",
+                    "wrong-column-names",
+                    "output-failure",
+                    "inconsistent-view-outcome",
+                    "bail",
+                    "warning",
+                    "success",
+                    "total",
+                ]
+            });
+            for (i, n) in self.inner.stats.iter().enumerate() {
+                if *n > 0 {
+                    write!(f, " {}={}", NAMES[i], n)?;
+                }
             }
+            write!(f, " total={}", total)
         }
-        write!(f, " total={}", total)
     }
 }
 
@@ -411,7 +427,7 @@ pub struct RunnerInner<'a> {
     enable_table_keys: bool,
     verbosity: usize,
     stdout: &'a dyn WriteFmt,
-    _shutdown_trigger: oneshot::Sender<()>,
+    _shutdown_trigger: trigger::Trigger,
     _server_thread: JoinOnDropHandle<()>,
     _temp_dir: TempDir,
 }
@@ -1079,7 +1095,6 @@ impl<'a> RunnerInner<'a> {
             internal_console_redirect_url: None,
             txn_wal_tables_cli: Some(TxnWalTablesImpl::Lazy),
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
-            read_only_controllers: false,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1089,7 +1104,7 @@ impl<'a> RunnerInner<'a> {
         let (server_addr_tx, server_addr_rx) = oneshot::channel();
         let (internal_server_addr_tx, internal_server_addr_rx) = oneshot::channel();
         let (internal_http_server_addr_tx, internal_http_server_addr_rx) = oneshot::channel();
-        let (shutdown_trigger, shutdown_tripwire) = oneshot::channel();
+        let (shutdown_trigger, shutdown_trigger_rx) = trigger::channel();
         let server_thread = thread::spawn(|| {
             let runtime = match Runtime::new() {
                 Ok(runtime) => runtime,
@@ -1118,7 +1133,7 @@ impl<'a> RunnerInner<'a> {
             internal_http_server_addr_tx
                 .send(server.internal_http_local_addr())
                 .expect("receiver should not drop first");
-            let _ = runtime.block_on(shutdown_tripwire);
+            let _ = runtime.block_on(shutdown_trigger_rx);
         });
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
@@ -1904,7 +1919,10 @@ pub async fn run_string(
             }
         }
 
-        outcomes.0[outcome.code()] += 1;
+        outcomes.stats[outcome.code()] += 1;
+        if outcome.failure() {
+            outcomes.details.push(format!("{}", outcome));
+        }
 
         if let Outcome::Bail { .. } = outcome {
             break;

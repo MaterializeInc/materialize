@@ -153,7 +153,7 @@ to hydrate before you can validate that it produces the expected results.
 1. As an example, imagine your dbt project includes the following models:
 
    **Filename:** _models/my_model_a.sql_
-   ```sql
+   ```mzsql
    SELECT
      1 AS a,
      1 AS id,
@@ -163,7 +163,7 @@ to hydrate before you can validate that it produces the expected results.
    ```
 
    **Filename:** _models/my_model_b.sql_
-   ```sql
+   ```mzsql
    SELECT
      2 as b,
      1 as id,
@@ -172,7 +172,7 @@ to hydrate before you can validate that it produces the expected results.
    ```
 
    **Filename:** models/my_model.sql
-   ```sql
+   ```mzsql
    SELECT
      a+b AS c,
      CONCAT(string_a, string_b) AS string_c,

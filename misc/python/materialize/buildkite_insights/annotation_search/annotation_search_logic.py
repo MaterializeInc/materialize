@@ -10,16 +10,14 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.buildkite_insights.annotation_search.annotation_match import (
-    AnnotationMatch,
-)
 from materialize.buildkite_insights.annotation_search.annotation_search_presentation import (
     print_annotation_match,
     print_before_search_results,
     print_summary,
 )
-from materialize.buildkite_insights.annotation_search.annotation_search_source import (
-    AnnotationSearchSource,
+from materialize.buildkite_insights.annotation_search.buildkite_search_source import (
+    ANY_BRANCH_VALUE,
+    BuildkiteDataSource,
 )
 from materialize.buildkite_insights.buildkite_api.generic_api import RateLimitExceeded
 from materialize.buildkite_insights.data.build_annotation import BuildAnnotation
@@ -31,7 +29,7 @@ from materialize.buildkite_insights.util.search_utility import (
 
 def search_build(
     build: Build,
-    search_source: AnnotationSearchSource,
+    search_source: BuildkiteDataSource,
     search_value: str,
     use_regex: bool,
     max_entries_to_print: int,
@@ -57,10 +55,7 @@ def search_build(
             break
 
         print_annotation_match(
-            build.number,
-            build.pipeline,
-            build.branch,
-            build.web_url,
+            build,
             annotation,
             search_value=search_value,
             use_regex=use_regex,
@@ -75,14 +70,14 @@ def search_annotations(
     annotations: list[BuildAnnotation],
     search_value: str,
     use_regex: bool,
-) -> list[AnnotationMatch]:
+) -> list[BuildAnnotation]:
     matched_annotations = []
 
     search_pattern = _search_value_to_pattern(search_value, use_regex)
     for annotation in annotations:
         if search_pattern.search(annotation.content) is not None:
             matched_annotations.append(
-                AnnotationMatch(annotation.title, annotation.content)
+                BuildAnnotation(title=annotation.title, content=annotation.content)
             )
 
     return matched_annotations
@@ -90,8 +85,8 @@ def search_annotations(
 
 def start_search(
     pipeline_slug: str,
-    branch: str,
-    search_source: AnnotationSearchSource,
+    branch: str | None,
+    search_source: BuildkiteDataSource,
     max_results: int,
     only_one_result_per_build: bool,
     pattern: str,
@@ -101,6 +96,9 @@ def start_search(
     verbose: bool,
 ) -> None:
     assert len(pattern) > 0, "pattern must not be empty"
+
+    if branch == ANY_BRANCH_VALUE:
+        branch = None
 
     builds = search_source.fetch_builds(pipeline=pipeline_slug, branch=branch)
 

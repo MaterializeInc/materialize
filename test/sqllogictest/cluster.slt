@@ -215,6 +215,8 @@ bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx
 bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_hydration_times_per_worker  mz_compute_hydration_times_per_worker_u7_primary_idx  1  export_id  NULL  false
+bar  mz_compute_hydration_times_per_worker  mz_compute_hydration_times_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  2  import_id  NULL  false
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  3  worker_id  NULL  false
@@ -404,7 +406,7 @@ DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 'u1';
 ----
-28
+29
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 'u1' AND cluster_id NOT LIKE 's%';
@@ -417,7 +419,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-217
+223
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -425,7 +427,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-189
+194
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER quickstart OWNER TO materialize
@@ -558,8 +560,23 @@ CREATE CLUSTER empty REPLICAS ()
 statement ok
 SET cluster = empty
 
-query error CLUSTER "empty" has no replicas available to service request
-SELECT generate_series(1, 1);
+simple
+SELECT generate_series(1, 1)
+----
+db error: ERROR: CLUSTER "empty" has no replicas available to service request
+HINT: Use CREATE CLUSTER REPLICA to attach cluster replicas to the cluster
+
+statement ok
+DROP CLUSTER empty
+
+statement ok
+CREATE CLUSTER empty (SIZE '1', REPLICATION FACTOR 0)
+
+simple
+SELECT generate_series(1, 1)
+----
+db error: ERROR: CLUSTER "empty" has no replicas available to service request
+HINT: Use ALTER CLUSTER to adjust the replication factor of the cluster. Example:`ALTER CLUSTER <cluster-name> SET (REPLICATION FACTOR 1)`
 
 
 # Phillip's tests
@@ -836,5 +853,57 @@ simple conn=mz_system,user=mz_system
 DROP CLUSTER t1
 ----
 COMPLETE 0
+
+# Test SHOW CREATE
+
+mode standard
+
+statement ok
+CREATE CLUSTER c1 (SIZE '1', REPLICATION FACTOR 2)
+
+query TT
+SHOW CREATE CLUSTER c1
+----
+c1
+CREATE CLUSTER "c1" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 2, SIZE = '1', SCHEDULE = MANUAL)
+
+statement ok
+ALTER CLUSTER c1 SET (SIZE = '2');
+
+query TT
+SHOW CREATE CLUSTER c1
+----
+c1
+CREATE CLUSTER "c1" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 2, SIZE = '2', SCHEDULE = MANUAL)
+
+statement ok
+DROP CLUSTER c1
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER c1 SIZE = '1' FEATURES (ENABLE EAGER DELTA JOINS = TRUE);
+----
+COMPLETE 0
+
+query TT
+SHOW CREATE CLUSTER c1
+----
+c1
+CREATE CLUSTER "c1" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '1', SCHEDULE = MANUAL) FEATURES (ENABLE EAGER DELTA JOINS = true)
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER c1;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER c1 REPLICAS ()
+
+query error SHOW CREATE for unmanaged clusters not yet supported
+SHOW CREATE CLUSTER c1
+
+statement ok
+DROP CLUSTER c1
+
+mode cockroach
 
 reset-server

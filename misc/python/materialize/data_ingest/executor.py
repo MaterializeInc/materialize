@@ -459,8 +459,8 @@ class PgExecutor(Executor):
                     ALTER TABLE {identifier(self.table)} REPLICA IDENTITY FULL;
                     CREATE USER postgres{self.num} WITH SUPERUSER PASSWORD 'postgres';
                     ALTER USER postgres{self.num} WITH replication;
-                    DROP PUBLICATION IF EXISTS postgres_source;
-                    CREATE PUBLICATION postgres_source FOR ALL TABLES;""",
+                    DROP PUBLICATION IF EXISTS {self.source};
+                    CREATE PUBLICATION {self.source} FOR ALL TABLES;""",
             )
         self.pg_conn.autocommit = False
 
@@ -479,7 +479,7 @@ class PgExecutor(Executor):
                 cur,
                 f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
-                    FROM POSTGRES CONNECTION pg{self.num} (PUBLICATION 'postgres_source')
+                    FROM POSTGRES CONNECTION pg{self.num} (PUBLICATION '{self.source}')
                     FOR TABLES ({identifier(self.table)} AS {identifier(self.table)})""",
             )
         self.mz_conn.autocommit = False

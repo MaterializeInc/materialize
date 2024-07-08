@@ -43,7 +43,7 @@ Target cluster: quickstart
 
 EOF
 
-# Propagating monotonicity analysis through materialized views
+# _No_ propagation of monotonicity through materialized views
 
 statement ok
 CREATE MATERIALIZED VIEW v1 AS SELECT DISTINCT counter % 3 as f1 FROM counter GROUP BY counter % 3;
@@ -55,7 +55,7 @@ query T multiline
 EXPLAIN SELECT * FROM v1 CROSS JOIN LATERAL (SELECT * FROM v2 WHERE counter < f1 ORDER BY counter DESC LIMIT 3);
 ----
 Explained Query:
-  TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=3 monotonic
+  TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=3
     Filter (#1 < #0)
       CrossJoin type=differential
         ArrangeBy keys=[[]]

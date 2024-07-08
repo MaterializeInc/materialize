@@ -17,9 +17,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{Array, BinaryArray, BinaryBuilder, StructArray};
+use arrow::array::{Array, BinaryArray, BinaryBuilder, NullArray, StructArray};
 use arrow::datatypes::{Field, Fields};
 use bytes::BufMut;
+use columnation::Columnation;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
@@ -30,12 +31,13 @@ use mz_persist_types::dyn_col::DynColumnMut;
 use mz_persist_types::dyn_struct::{
     DynStruct, DynStructCfg, DynStructMut, ValidityMut, ValidityRef,
 };
-use mz_persist_types::stats::StatsFn;
+use mz_persist_types::stats::{DynStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
+use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
-    ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow, RelationDesc, Row,
-    RowColumnarDecoder, RowColumnarEncoder, RowDecoder, RowEncoder,
+    arb_row_for_relation, ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow,
+    RelationDesc, Row, RowColumnarDecoder, RowColumnarEncoder, RowDecoder, RowEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
 use proptest::collection::vec;
@@ -420,7 +422,7 @@ impl ProtoMapEntry<GlobalId, SourceExport<Option<ExportReference>, CollectionMet
     }
 }
 
-pub trait SourceTimestamp: timely::progress::Timestamp + Refines<()> + std::fmt::Display {
+pub trait SourceTimestamp: Timestamp + Columnation + Refines<()> + std::fmt::Display {
     fn encode_row(&self) -> Row;
     fn decode_row(row: &Row) -> Self;
 }
@@ -486,6 +488,10 @@ impl mz_persist_types::Codec64 for MzOffset {
             offset: mz_persist_types::Codec64::decode(buf),
         }
     }
+}
+
+impl columnation::Columnation for MzOffset {
+    type InnerRegion = columnation::CopyRegion<MzOffset>;
 }
 
 impl RustType<ProtoMzOffset> for MzOffset {
@@ -1199,6 +1205,22 @@ impl Codec for SourceData {
     }
 }
 
+/// Given a [`RelationDesc`] returns an arbitrary [`SourceData`].
+pub fn arb_source_data_for_relation_desc(desc: &RelationDesc) -> impl Strategy<Value = SourceData> {
+    let row_strat = arb_row_for_relation(desc).no_shrink();
+
+    proptest::strategy::Union::new_weighted(vec![
+        (50, row_strat.prop_map(|row| SourceData(Ok(row))).boxed()),
+        (
+            1,
+            any::<DataflowError>()
+                .prop_map(|err| SourceData(Err(err)))
+                .no_shrink()
+                .boxed(),
+        ),
+    ])
+}
+
 /// An implementation of [PartEncoder] for [SourceData].
 ///
 /// This mostly delegates the encoding logic to [RowEncoder], but flatmaps in
@@ -1594,9 +1616,32 @@ impl<'a> SubsourceResolver {
     }
 }
 
+/// A decoder for [`Row`]s within [`SourceData`].
+///
+/// This type exists as a wrapper around [`RowColumnarDecoder`] to handle the
+/// case where the [`RelationDesc`] we're encoding with has no columns. See
+/// [`SourceDataRowColumnarEncoder`] for more details.
+#[derive(Debug)]
+pub enum SourceDataRowColumnarDecoder {
+    Row(RowColumnarDecoder),
+    EmptyRow,
+}
+
+impl SourceDataRowColumnarDecoder {
+    pub fn decode(&self, idx: usize, row: &mut Row) {
+        match self {
+            SourceDataRowColumnarDecoder::Row(decoder) => decoder.decode(idx, row),
+            SourceDataRowColumnarDecoder::EmptyRow => {
+                // Create a packer just to clear the Row.
+                row.packer();
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SourceDataColumnarDecoder {
-    row_decoder: RowColumnarDecoder,
+    row_decoder: SourceDataRowColumnarDecoder,
     err_decoder: BinaryArray,
 }
 
@@ -1612,16 +1657,25 @@ impl SourceDataColumnarDecoder {
             anyhow::bail!("SourceData should only have two fields, found {arrays:?}");
         }
 
-        let rows = arrays[0]
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .ok_or_else(|| anyhow::anyhow!("expected StructArray, found {:?}", arrays[0]))?;
         let errs = arrays[1]
             .as_any()
             .downcast_ref::<BinaryArray>()
             .ok_or_else(|| anyhow::anyhow!("expected BinaryArray, found {:?}", arrays[1]))?;
 
-        let row_decoder = RowColumnarDecoder::new(rows.clone(), desc)?;
+        let row_decoder = match arrays[0].data_type() {
+            arrow::datatypes::DataType::Struct(_) => {
+                let rows = arrays[0]
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("expected StructArray, found {:?}", arrays[0])
+                    })?;
+                let decoder = RowColumnarDecoder::new(rows.clone(), desc)?;
+                SourceDataRowColumnarDecoder::Row(decoder)
+            }
+            arrow::datatypes::DataType::Null => SourceDataRowColumnarDecoder::EmptyRow,
+            other => anyhow::bail!("expected Struct or Null Array, found {other:?}"),
+        };
 
         Ok(SourceDataColumnarDecoder {
             row_decoder,
@@ -1632,8 +1686,11 @@ impl SourceDataColumnarDecoder {
 
 impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
     fn decode(&self, idx: usize, val: &mut SourceData) {
-        let row_null = self.row_decoder.is_null(idx);
         let err_null = self.err_decoder.is_null(idx);
+        let row_null = match &self.row_decoder {
+            SourceDataRowColumnarDecoder::Row(decoder) => decoder.is_null(idx),
+            SourceDataRowColumnarDecoder::EmptyRow => !err_null,
+        };
 
         match (row_null, err_null) {
             (true, false) => {
@@ -1660,25 +1717,63 @@ impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
     }
 
     fn is_null(&self, idx: usize) -> bool {
-        let row_null = self.row_decoder.is_null(idx);
         let err_null = self.err_decoder.is_null(idx);
+        let row_null = match &self.row_decoder {
+            SourceDataRowColumnarDecoder::Row(decoder) => decoder.is_null(idx),
+            SourceDataRowColumnarDecoder::EmptyRow => !err_null,
+        };
+        assert!(!err_null || !row_null, "SourceData should never be null!");
 
-        let is_null = row_null && err_null;
-        debug_assert!(!is_null);
+        false
+    }
+}
 
-        is_null
+/// An encoder for [`Row`]s within [`SourceData`].
+///
+/// This type exists as a wrapper around [`RowColumnarEncoder`] to support
+/// encoding empty [`Row`]s. A [`RowColumnarEncoder`] finishes as a
+/// [`StructArray`] which is required to have at least one column, and thus
+/// cannot support empty [`Row`]s.
+#[derive(Debug)]
+pub enum SourceDataRowColumnarEncoder {
+    Row(RowColumnarEncoder),
+    EmptyRow,
+}
+
+impl SourceDataRowColumnarEncoder {
+    pub fn append(&mut self, row: &Row) {
+        match self {
+            SourceDataRowColumnarEncoder::Row(encoder) => encoder.append(row),
+            SourceDataRowColumnarEncoder::EmptyRow => assert_eq!(row.iter().count(), 0),
+        }
+    }
+
+    pub fn append_null(&mut self) {
+        match self {
+            SourceDataRowColumnarEncoder::Row(encoder) => encoder.append_null(),
+            SourceDataRowColumnarEncoder::EmptyRow => (),
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct SourceDataColumnarEncoder {
-    row_encoder: RowColumnarEncoder,
+    row_encoder: SourceDataRowColumnarEncoder,
     err_encoder: BinaryBuilder,
 }
 
 impl SourceDataColumnarEncoder {
+    const OK_COLUMN_NAME: &'static str = "ok";
+    const ERR_COLUMN_NAME: &'static str = "err";
+
     pub fn new(desc: &RelationDesc) -> Self {
-        let row_encoder = RowColumnarEncoder::new(desc);
+        let row_encoder = match RowColumnarEncoder::new(desc) {
+            Some(encoder) => SourceDataRowColumnarEncoder::Row(encoder),
+            None => {
+                assert!(desc.typ().columns().is_empty());
+                SourceDataRowColumnarEncoder::EmptyRow
+            }
+        };
         let err_encoder = BinaryBuilder::new();
 
         SourceDataColumnarEncoder {
@@ -1690,6 +1785,7 @@ impl SourceDataColumnarEncoder {
 
 impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
     type FinishedColumn = StructArray;
+    type FinishedStats = StructStats;
 
     #[inline]
     fn append(&mut self, val: &SourceData) {
@@ -1708,31 +1804,63 @@ impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
 
     #[inline]
     fn append_null(&mut self) {
-        self.row_encoder.append_null();
-        self.err_encoder.append_null();
+        panic!("appending a null into SourceDataColumnarEncoder is not supported");
     }
 
-    fn finish(self) -> Self::FinishedColumn {
+    fn finish(self) -> (Self::FinishedColumn, Self::FinishedStats) {
         let SourceDataColumnarEncoder {
             row_encoder,
             mut err_encoder,
         } = self;
 
-        let row_column = row_encoder.finish();
         let err_column = BinaryBuilder::finish(&mut err_encoder);
+        let err_stats = OptionStats::<PrimitiveStats<Vec<u8>>>::from_column(&err_column).finish();
+        let (row_column, row_stats): (Arc<dyn Array>, _) = match row_encoder {
+            SourceDataRowColumnarEncoder::Row(encoder) => {
+                let (column, stats) = encoder.finish();
+                (Arc::new(column), stats)
+            }
+            SourceDataRowColumnarEncoder::EmptyRow => {
+                let column = Arc::new(NullArray::new(err_column.len()));
+                let stats = OptionStats {
+                    none: err_column.len() - err_column.null_count(),
+                    some: StructStats {
+                        len: err_column.len(),
+                        cols: BTreeMap::default(),
+                    },
+                };
+                (column, stats)
+            }
+        };
+
+        let stats = [
+            (
+                Self::OK_COLUMN_NAME.to_string(),
+                row_stats.into_columnar_stats(),
+            ),
+            (Self::ERR_COLUMN_NAME.to_string(), err_stats),
+        ];
+        let stats = StructStats {
+            len: row_column.len(),
+            cols: stats.into_iter().map(|(name, s)| (name, s)).collect(),
+        };
+
+        assert_eq!(row_column.len(), err_column.len());
 
         let fields = vec![
-            Field::new("ok", row_column.data_type().clone(), true),
-            Field::new("err", err_column.data_type().clone(), true),
+            Field::new(Self::OK_COLUMN_NAME, row_column.data_type().clone(), true),
+            Field::new(Self::ERR_COLUMN_NAME, err_column.data_type().clone(), true),
         ];
-        let arrays: Vec<Arc<dyn Array>> = vec![Arc::new(row_column), Arc::new(err_column)];
+        let arrays: Vec<Arc<dyn Array>> = vec![row_column, Arc::new(err_column)];
+        let array = StructArray::new(Fields::from(fields), arrays, None);
 
-        StructArray::new(Fields::from(fields), arrays, None)
+        (array, stats)
     }
 }
 
 impl Schema2<SourceData> for RelationDesc {
     type ArrowColumn = StructArray;
+    type Statistics = StructStats;
 
     type Decoder = SourceDataColumnarDecoder;
     type Encoder = SourceDataColumnarEncoder;
@@ -1748,9 +1876,10 @@ impl Schema2<SourceData> for RelationDesc {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use mz_repr::{arb_datum_for_scalar, ScalarType};
     use proptest::prelude::*;
-    use proptest::strategy::ValueTree;
+    use proptest::strategy::{Union, ValueTree};
 
     use crate::errors::EnvelopeError;
 
@@ -1814,6 +1943,88 @@ mod tests {
             // The proptest! macro interferes with rustfmt.
             let datums = datums.iter().map(Datum::from);
             scalar_type_parquet_roundtrip(ty, datums);
+        });
+    }
+
+    #[track_caller]
+    fn roundtrip_source_data(desc: RelationDesc, datas: Vec<SourceData>) {
+        let mut encoder = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
+        for data in &datas {
+            encoder.append(data);
+        }
+        let (col, _stats) = encoder.finish();
+
+        // Encode to Parquet.
+        let mut buf = Vec::new();
+        let fields = Fields::from(vec![Field::new("k", col.data_type().clone(), false)]);
+        let arrays: Vec<Arc<dyn Array>> = vec![Arc::new(col)];
+        mz_persist_types::parquet::encode_arrays(&mut buf, fields, arrays).unwrap();
+
+        // Decode from Parquet.
+        let buf = Bytes::from(buf);
+        let mut reader = mz_persist_types::parquet::decode_arrays(buf).unwrap();
+        let maybe_batch = reader.next();
+
+        // If we didn't encode any data then our record_batch will be empty.
+        let Some(record_batch) = maybe_batch else {
+            assert!(datas.is_empty());
+            return;
+        };
+        let record_batch = record_batch.unwrap();
+
+        assert_eq!(record_batch.columns().len(), 1);
+        let rnd_col = &record_batch.columns()[0];
+        let rnd_col = rnd_col
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap()
+            .clone();
+
+        // Read back all of our data and assert it roundtrips.
+        let mut rnd_data = SourceData(Ok(Row::default()));
+        let decoder = <RelationDesc as Schema2<SourceData>>::decoder(&desc, rnd_col).unwrap();
+        for (idx, og_data) in datas.into_iter().enumerate() {
+            decoder.decode(idx, &mut rnd_data);
+            assert_eq!(og_data, rnd_data);
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn all_source_data_roundtrips() {
+        let num_rows = Union::new_weighted(vec![
+            (500, Just(0..8)),
+            (50, Just(8..32)),
+            (10, Just(32..128)),
+            (5, Just(128..512)),
+            (3, Just(512..2048)),
+            (1, Just(2048..8192)),
+        ]);
+
+        let strat = (any::<RelationDesc>(), num_rows).prop_flat_map(|(desc, num_rows)| {
+            proptest::collection::vec(arb_source_data_for_relation_desc(&desc), num_rows)
+                .prop_map(move |datas| (desc.clone(), datas))
+        });
+
+        proptest!(
+            ProptestConfig::with_cases(100),
+            |((desc, source_datas) in strat)| {
+                roundtrip_source_data(desc, source_datas);
+            }
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn empty_relation_desc_roundtrips() {
+        let empty = RelationDesc::empty();
+        let strat = proptest::collection::vec(arb_source_data_for_relation_desc(&empty), 0..8)
+            .prop_map(move |datas| (empty.clone(), datas));
+
+        // Note: This case should be covered by the `all_source_data_roundtrips` test above, but
+        // it's a special case that we explicitly want to exercise.
+        proptest!(|((desc, source_datas) in strat)| {
+            roundtrip_source_data(desc, source_datas);
         });
     }
 

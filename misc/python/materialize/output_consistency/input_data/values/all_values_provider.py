@@ -35,6 +35,9 @@ from materialize.output_consistency.input_data.values.map_values_provider import
 from materialize.output_consistency.input_data.values.number_values_provider import (
     VALUES_PER_NUMERIC_DATA_TYPE,
 )
+from materialize.output_consistency.input_data.values.range_values_provider import (
+    VALUES_PER_RANGE_DATA_TYPE,
+)
 from materialize.output_consistency.input_data.values.string_values_provider import (
     VALUES_PER_STRING_DATA_TYPE,
 )
@@ -53,6 +56,7 @@ ALL_DATA_TYPES_WITH_VALUES: list[DataTypeWithValues] = list(
         list(VALUES_PER_MAP_DATA_TYPE.values()),
         list(VALUES_PER_LIST_DATA_TYPE.values()),
         list(VALUES_PER_ARRAY_DATA_TYPE.values()),
+        list(VALUES_PER_RANGE_DATA_TYPE.values()),
         [UUID_DATA_TYPE_WITH_VALUES],
     )
 )

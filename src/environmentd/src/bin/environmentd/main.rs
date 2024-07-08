@@ -556,13 +556,6 @@ pub struct Args {
     // === Tracing options. ===
     #[clap(flatten)]
     tracing: TracingCliArgs,
-
-    // === Testing options. ===
-    /// Whether or not to start controllers in read-only mode. This is only
-    /// meant for use during development of read-only clusters and 0dt upgrades
-    /// and should go away once we have proper orchestration during upgrades.
-    #[clap(long)]
-    read_only_controllers: bool,
 }
 
 #[derive(ArgEnum, Debug, Clone)]
@@ -978,7 +971,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 tracing_handle,
                 // Testing options.
                 now,
-                read_only_controllers: args.read_only_controllers,
             })
             .await
     })?;

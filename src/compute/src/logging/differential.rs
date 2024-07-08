@@ -29,6 +29,7 @@ use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Filter;
 use timely::dataflow::Stream;
+use timely::logging::WorkerIdentifier;
 
 use crate::extensions::arrange::{MzArrange, MzArrangeCore};
 use crate::logging::compute::ComputeEvent;
@@ -46,7 +47,7 @@ use crate::typedefs::{KeyValSpine, RowRowSpine};
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
-    event_queue: EventQueue<DifferentialEvent>,
+    event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, DifferentialEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
@@ -54,12 +55,14 @@ pub(super) fn construct<A: Allocate>(
     let dataflow_index = worker.next_dataflow_index();
 
     worker.dataflow_named("Dataflow: differential logging", move |scope| {
-        let (mut logs, token) = Some(event_queue.link).mz_replay::<_, CapacityContainerBuilder<_>>(
-            scope,
-            "differential logs",
-            config.interval,
-            event_queue.activator,
-        );
+        let (mut logs, token) = Some(event_queue.link)
+            .mz_replay::<_, CapacityContainerBuilder<_>, _>(
+                scope,
+                "differential logs",
+                config.interval,
+                event_queue.activator,
+                |mut session, data| session.give_iterator(data.iter()),
+            );
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.

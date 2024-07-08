@@ -97,7 +97,7 @@ policy, by querying the
 [`mz_internal.mz_aws_connections`](/sql/system-catalog/mz_internal/#mz_aws_connections)
 table:
 
-```sql
+```mzsql
 SELECT id, external_id, example_trust_policy FROM mz_internal.mz_aws_connections;
 ```
 
@@ -145,7 +145,7 @@ assume:
 
 To create an AWS connection that will assume the `WarehouseExport` role:
 
-```sql
+```mzsql
 CREATE CONNECTION aws_role_assumption TO AWS (
     ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/WarehouseExport',
 );
@@ -160,7 +160,7 @@ the use of role assumption-based authentication instead.
 
 To create an AWS connection that uses static access key credentials:
 
-```sql
+```mzsql
 CREATE SECRET aws_secret_access_key = '...';
 CREATE CONNECTION aws_credentials TO AWS (
     ACCESS KEY ID = 'ASIAV2KIV5LPTG6HGXG6',
@@ -196,6 +196,7 @@ connections to create [sources](/sql/create-source/kafka) and [sinks](/sql/creat
 | `SSH TUNNEL`                              | object name      | The name of an [SSH tunnel connection](#ssh-tunnel) to route network traffic through by default.
 | `AWS PRIVATELINK`                         | object name      | The name of an [AWS PrivateLink connection](#aws-privatelink) to route network traffic through. <br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
 | `PROGRESS TOPIC`                          | `text`           | The name of a topic that Kafka sinks can use to track internal consistency metadata. Default: `_materialize-progress-{REGION ID}-{CONNECTION ID}`.
+| `PROGRESS TOPIC REPLICATION FACTOR`       | `int`            | {{< warn-if-unreleased-inline "v0.106" >}} The partition count to use when creating the progress topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
 
 #### `WITH` options {#kafka-with-options}
 
@@ -206,7 +207,7 @@ Field         | Value     | Description
 To connect to a Kafka cluster with multiple bootstrap servers, use the `BROKERS`
 option:
 
-```sql
+```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
     BROKERS ('broker1:9092', 'broker2:9092')
 );
@@ -221,7 +222,7 @@ It is insecure to use the `PLAINTEXT` security protocol unless
 you are using a [network security connection](#network-security-connections)
 to tunnel into a private network, as shown below.
 {{< /warning >}}
-```sql
+```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
     BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
     SECURITY PROTOCOL = 'PLAINTEXT',
@@ -232,7 +233,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 {{< tab "SSL">}}
 With both TLS encryption and TLS client authentication:
-```sql
+```mzsql
 CREATE SECRET kafka_ssl_cert AS '-----BEGIN CERTIFICATE----- ...';
 CREATE SECRET kafka_ssl_key AS '-----BEGIN PRIVATE KEY----- ...';
 CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
@@ -254,7 +255,7 @@ It is insecure to use TLS encryption with no authentication unless
 you are using a [network security connection](#network-security-connections)
 to tunnel into a private network as shown below.
 {{< /warning >}}
-```sql
+```mzsql
 CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
@@ -275,7 +276,7 @@ you are using a [network security connection](#network-security-connections)
 to tunnel into a private network, as shown below.
 {{< /warning >}}
 
-```sql
+```mzsql
 CREATE SECRET kafka_password AS '...';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
@@ -290,7 +291,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 
 {{< tab "SASL_SSL">}}
-```sql
+```mzsql
 CREATE SECRET kafka_password AS '...';
 CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
 
@@ -365,7 +366,7 @@ Suppose you have the following infrastructure:
 
 You can create a connection to this Kafka broker in Materialize like so:
 
-```sql
+```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')
@@ -398,7 +399,7 @@ Field                                   | Value            | Required | Descript
 
 ##### Example {#kafka-privatelink-default-example}
 
-```sql
+```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1')
@@ -450,7 +451,7 @@ Field           | Value            | Required | Description
 
 Using a default SSH tunnel:
 
-```sql
+```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST '<SSH_BASTION_HOST>',
     USER '<SSH_BASTION_USER>',
@@ -466,7 +467,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 Using different SSH tunnels for each broker, with a default for brokers that are
 not listed:
 
-```sql
+```mzsql
 CREATE CONNECTION ssh1 TO SSH TUNNEL (HOST 'ssh1', ...);
 CREATE CONNECTION ssh2 TO SSH TUNNEL (HOST 'ssh2', ...);
 
@@ -516,7 +517,7 @@ Field         | Value     | Description
 
 Using username and password authentication with TLS encryption:
 
-```sql
+```mzsql
 CREATE SECRET csr_password AS '...';
 CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
 
@@ -532,7 +533,7 @@ CREATE CONNECTION csr_basic TO CONFLUENT SCHEMA REGISTRY (
 
 Using TLS for encryption and authentication:
 
-```sql
+```mzsql
 CREATE SECRET csr_ssl_cert AS '-----BEGIN CERTIFICATE----- ...';
 CREATE SECRET csr_ssl_key AS '-----BEGIN PRIVATE KEY----- ...';
 CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
@@ -564,7 +565,7 @@ Field                       | Value            | Required | Description
 
 ##### Example {#csr-privatelink-example}
 
-```sql
+```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')
@@ -587,7 +588,7 @@ Field                       | Value            | Required | Description
 
 ##### Example {#csr-ssh-example}
 
-```sql
+```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST '<SSH_BASTION_HOST>',
     USER '<SSH_BASTION_USER>',
@@ -635,7 +636,7 @@ Field         | Value     | Description
 
 #### Example {#mysql-example}
 
-```sql
+```mzsql
 CREATE SECRET mysqlpass AS '<POSTGRES_PASSWORD>';
 
 CREATE CONNECTION mysql_connection TO MYSQL (
@@ -662,7 +663,7 @@ Field                       | Value            | Required | Description
 
 ##### Example {#mysql-ssh-example}
 
-```sql
+```mzsql
 CREATE CONNECTION tunnel TO SSH TUNNEL (
     HOST 'bastion-host',
     PORT 22,
@@ -712,7 +713,7 @@ Field         | Value     | Description
 
 #### Example {#postgres-example}
 
-```sql
+```mzsql
 CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
 
 CREATE CONNECTION pg_connection TO POSTGRES (
@@ -741,7 +742,7 @@ Field                       | Value            | Required | Description
 
 ##### Example {#postgres-privatelink-example}
 
-```sql
+```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
@@ -772,7 +773,7 @@ Field                       | Value            | Required | Description
 
 ##### Example {#postgres-ssh-example}
 
-```sql
+```mzsql
 CREATE CONNECTION tunnel TO SSH TUNNEL (
     HOST 'bastion-host',
     PORT 22,
@@ -828,7 +829,7 @@ principals for AWS PrivateLink connections in your region are stored in
 the [`mz_aws_privatelink_connections`](/sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections)
 system table.
 
-```sql
+```mzsql
 SELECT * FROM mz_aws_privatelink_connections;
 ```
 ```
@@ -856,7 +857,7 @@ accepting connection requests, see the [AWS PrivateLink documentation](https://d
 
 #### Example {#aws-privatelink-example}
 
-```sql
+```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')
@@ -908,7 +909,7 @@ generation algorithm as security best practices evolve.
 
 Create an SSH tunnel connection:
 
-```sql
+```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST 'bastion-host',
     PORT 22,
@@ -918,7 +919,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 
 Retrieve the public keys for the SSH tunnel connection you just created:
 
-```sql
+```mzsql
 SELECT
     mz_connections.name,
     mz_ssh_tunnel_connections.*

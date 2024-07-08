@@ -628,7 +628,7 @@ Explained Query:
     Return // { arity: 4 }
       Reduce group_by=[#0, substr(char_to_text(#3), 1, 1), extract_year_d(#2)] aggregates=[sum(#1)] // { arity: 4 }
         Project (#1, #13, #19, #23) // { arity: 4 }
-          Filter (#29 <= 2012-01-02 00:00:00) AND (#29 >= 2007-01-02 00:00:00) AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (((#26 = "GERMANY") AND (#28 = "CAMBODIA")) OR ((#26 = "CAMBODIA") AND (#28 = "GERMANY"))) // { arity: 30 }
+          Filter (#29 <= 2012-01-02 00:00:00) AND (#29 >= 2007-01-02 00:00:00) AND (((#26 = "GERMANY") AND (#28 = "CAMBODIA")) OR ((#26 = "CAMBODIA") AND (#28 = "GERMANY"))) // { arity: 30 }
             Map (date_to_timestamp(#11)) // { arity: 30 }
               Join on=(#0 = #4 AND #1 = #25 AND #2 = #9 AND #3 = #10 AND #5 = #15 AND #6 = #16 = #21 AND #7 = #17 = #22 AND #18 = #20 AND #24 = #27) type=delta // { arity: 29 }
                 implementation
@@ -711,7 +711,7 @@ Explained Query:
       Map ((#1 / case when (#2 = 0) then 1 else #2 end)) // { arity: 4 }
         Reduce group_by=[extract_year_d(#1)] aggregates=[sum(case when (#2 = "GERMANY") then #0 else 0 end), sum(#0)] // { arity: 3 }
           Project (#14, #20, #28) // { arity: 3 }
-            Filter (#0 < 1000) AND (#4) IS NOT NULL // { arity: 30 }
+            Filter (#0 < 1000) // { arity: 30 }
               Join on=(#0 = #3 = #10 AND #1 = #5 AND #2 = #27 AND #4 = #11 AND #6 = #16 AND #7 = #17 = #22 AND #8 = #18 = #23 AND #19 = #21 AND #24 = #25 AND #26 = #29) type=delta // { arity: 30 }
                 implementation
                   %0:item » %2:stock[#0]KAif » %1:supplier[#0]UK » %7:nation[#0]UK » %3:orderline[#5, #4]KKAif » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKef
@@ -797,33 +797,32 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 desc nulls_first] output=[#0..=#2]
     Reduce group_by=[#2, extract_year_d(#1)] aggregates=[sum(#0)] // { arity: 3 }
       Project (#14, #19, #21) // { arity: 3 }
-        Filter (#0) IS NOT NULL AND (#2) IS NOT NULL // { arity: 22 }
-          Join on=(#0 = #1 = #10 AND #2 = #11 AND #3 = #4 AND #5 = #20 AND #6 = #16 AND #7 = #17 AND #8 = #18) type=delta // { arity: 22 }
-            implementation
-              %0:item » %1:stock[#0]KA » %2:supplier[#0]UK » %5:nation[#0]UK » %3:orderline[#5, #4]KKA » %4:order[#0..=#2]UKKK
-              %1:stock » %0:item[#0]UKlf » %2:supplier[#0]UK » %5:nation[#0]UK » %3:orderline[#5, #4]KKA » %4:order[#0..=#2]UKKK
-              %2:supplier » %5:nation[#0]UK » %1:stock[#2]KA » %0:item[#0]UKlf » %3:orderline[#5, #4]KKA » %4:order[#0..=#2]UKKK
-              %3:orderline » %4:order[#0..=#2]UKKK » %1:stock[#0, #1]UKK » %0:item[#0]UKlf » %2:supplier[#0]UK » %5:nation[#0]UK
-              %4:order » %3:orderline[#2, #1, #0]KKKA » %1:stock[#0, #1]UKK » %0:item[#0]UKlf » %2:supplier[#0]UK » %5:nation[#0]UK
-              %5:nation » %2:supplier[#1]KA » %1:stock[#2]KA » %0:item[#0]UKlf » %3:orderline[#5, #4]KKA » %4:order[#0..=#2]UKKK
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Filter like["%BB"](padchar(#4)) // { arity: 5 }
-                  ReadStorage materialize.public.item // { arity: 5 }
-            ArrangeBy keys=[[#0], [#0, #1], [#2]] // { arity: 3 }
-              Project (#0, #1, #17) // { arity: 3 }
-                ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
-            ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
-              Project (#0, #3) // { arity: 2 }
-                ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
-            ArrangeBy keys=[[#2, #1, #0], [#5, #4]] // { arity: 10 }
-              ReadIndex on=orderline fk_orderline_order=[delta join lookup] fk_orderline_stock=[delta join lookup] // { arity: 10 }
-            ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
-              Project (#0..=#2, #4) // { arity: 4 }
-                ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
-            ArrangeBy keys=[[#0]] // { arity: 2 }
-              Project (#0, #1) // { arity: 2 }
-                ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
+        Join on=(#0 = #1 = #10 AND #2 = #11 AND #3 = #4 AND #5 = #20 AND #6 = #16 AND #7 = #17 AND #8 = #18) type=delta // { arity: 22 }
+          implementation
+            %0:item » %1:stock[#0]KA » %2:supplier[#0]UK » %5:nation[#0]UK » %3:orderline[#5, #4]KKA » %4:order[#0..=#2]UKKK
+            %1:stock » %0:item[#0]UKlf » %2:supplier[#0]UK » %5:nation[#0]UK » %3:orderline[#5, #4]KKA » %4:order[#0..=#2]UKKK
+            %2:supplier » %5:nation[#0]UK » %1:stock[#2]KA » %0:item[#0]UKlf » %3:orderline[#5, #4]KKA » %4:order[#0..=#2]UKKK
+            %3:orderline » %4:order[#0..=#2]UKKK » %1:stock[#0, #1]UKK » %0:item[#0]UKlf » %2:supplier[#0]UK » %5:nation[#0]UK
+            %4:order » %3:orderline[#2, #1, #0]KKKA » %1:stock[#0, #1]UKK » %0:item[#0]UKlf » %2:supplier[#0]UK » %5:nation[#0]UK
+            %5:nation » %2:supplier[#1]KA » %1:stock[#2]KA » %0:item[#0]UKlf » %3:orderline[#5, #4]KKA » %4:order[#0..=#2]UKKK
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Project (#0) // { arity: 1 }
+              Filter like["%BB"](padchar(#4)) // { arity: 5 }
+                ReadStorage materialize.public.item // { arity: 5 }
+          ArrangeBy keys=[[#0], [#0, #1], [#2]] // { arity: 3 }
+            Project (#0, #1, #17) // { arity: 3 }
+              ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
+          ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
+            Project (#0, #3) // { arity: 2 }
+              ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
+          ArrangeBy keys=[[#2, #1, #0], [#5, #4]] // { arity: 10 }
+            ReadIndex on=orderline fk_orderline_order=[delta join lookup] fk_orderline_stock=[delta join lookup] // { arity: 10 }
+          ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
+            Project (#0..=#2, #4) // { arity: 4 }
+              ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Project (#0, #1) // { arity: 2 }
+              ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
 
 Source materialize.public.item
   filter=(like["%BB"](padchar(#4)))
@@ -1030,7 +1029,7 @@ Explained Query:
     With
       cte l0 =
         Project (#0..=#3) // { arity: 4 }
-          Filter (#8 > 8) AND (#0) IS NOT NULL // { arity: 11 }
+          Filter (#8 > 8) // { arity: 11 }
             Join on=(#0 = #6 AND #1 = #4 AND #2 = #5) type=differential // { arity: 11 }
               implementation
                 %0:customer[#2, #1, #0]UKKK » %1:order[#2, #1, #3]KKKAif
@@ -1075,7 +1074,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[sum(case when like["PR%"](padchar(#1)) then #0 else 0 end), sum(#0)] // { arity: 2 }
         Project (#8, #11) // { arity: 2 }
-          Filter (#12 < 2020-01-02 00:00:00) AND (#12 >= 2007-01-02 00:00:00) AND (#4) IS NOT NULL // { arity: 13 }
+          Filter (#12 < 2020-01-02 00:00:00) AND (#12 >= 2007-01-02 00:00:00) // { arity: 13 }
             Map (date_to_timestamp(#6)) // { arity: 13 }
               Join on=(#4 = #10) type=differential // { arity: 12 }
                 implementation
@@ -1151,7 +1150,7 @@ Explained Query:
       cte l0 =
         Reduce group_by=[#1] aggregates=[sum(#0)] // { arity: 2 }
           Project (#8, #12) // { arity: 2 }
-            Filter (#4) IS NOT NULL AND (#5) IS NOT NULL AND (date_to_timestamp(#6) >= 2007-01-02 00:00:00) // { arity: 13 }
+            Filter (date_to_timestamp(#6) >= 2007-01-02 00:00:00) // { arity: 13 }
               Join on=(#4 = #10 AND #5 = #11) type=differential // { arity: 13 }
                 implementation
                   %1:stock[#1, #0]UKK » %0:orderline[#5, #4]KKAif
@@ -1272,7 +1271,7 @@ Explained Query:
     cte l1 =
       Reduce aggregates=[sum(#0)] // { arity: 1 }
         Project (#8) // { arity: 1 }
-          Filter (#4) IS NOT NULL AND (integer_to_numeric(#7) < (bigint_to_numeric(#11) / bigint_to_numeric(case when (#12 = 0) then null else #12 end))) // { arity: 13 }
+          Filter (integer_to_numeric(#7) < (bigint_to_numeric(#11) / bigint_to_numeric(case when (#12 = 0) then null else #12 end))) // { arity: 13 }
             Join on=(#4 = #10) type=differential // { arity: 13 }
               implementation
                 %1[#0]UKA » %0:l0[#4]KA
@@ -1280,15 +1279,14 @@ Explained Query:
               ArrangeBy keys=[[#0]] // { arity: 3 }
                 Reduce group_by=[#0] aggregates=[sum(#1), count(#1)] // { arity: 3 }
                   Project (#0, #8) // { arity: 2 }
-                    Filter (#0) IS NOT NULL // { arity: 11 }
-                      Join on=(#0 = #5) type=differential // { arity: 11 }
-                        implementation
-                          %0:item[#0]UKlf » %1:l0[#4]KAlf
-                        ArrangeBy keys=[[#0]] // { arity: 1 }
-                          Project (#0) // { arity: 1 }
-                            Filter like["%b"](padchar(#4)) // { arity: 5 }
-                              ReadStorage materialize.public.item // { arity: 5 }
-                        Get l0 // { arity: 10 }
+                    Join on=(#0 = #5) type=differential // { arity: 11 }
+                      implementation
+                        %0:item[#0]UKlf » %1:l0[#4]KAlf
+                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                        Project (#0) // { arity: 1 }
+                          Filter like["%b"](padchar(#4)) // { arity: 5 }
+                            ReadStorage materialize.public.item // { arity: 5 }
+                      Get l0 // { arity: 10 }
     cte l0 =
       ArrangeBy keys=[[#4]] // { arity: 10 }
         ReadIndex on=orderline fk_orderline_item=[differential join] // { arity: 10 }
@@ -1391,7 +1389,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[sum(#0)] // { arity: 1 }
         Project (#8) // { arity: 1 }
-          Filter (#7 <= 10) AND (#7 >= 1) AND (#4) IS NOT NULL AND (#12 OR #13 OR #14 OR #15 OR #16) AND ((like["%a"](#17) AND (#12 OR #13 OR #14)) OR (like["%b"](#17) AND (#12 OR #13 OR #15)) OR (like["%c"](#17) AND (#12 OR #14 OR #16))) // { arity: 18 }
+          Filter (#7 <= 10) AND (#7 >= 1) AND (#12 OR #13 OR #14 OR #15 OR #16) AND ((like["%a"](#17) AND (#12 OR #13 OR #14)) OR (like["%b"](#17) AND (#12 OR #13 OR #15)) OR (like["%c"](#17) AND (#12 OR #14 OR #16))) // { arity: 18 }
             Map ((#2 = 1), (#2 = 2), (#2 = 3), (#2 = 4), (#2 = 5), padchar(#11)) // { arity: 18 }
               Join on=(#4 = #10) type=differential // { arity: 12 }
                 implementation
@@ -1453,7 +1451,7 @@ Explained Query:
                 Filter (integer_to_bigint((2 * #3)) > #4) // { arity: 5 }
                   Reduce group_by=[#0..=#3] aggregates=[sum(#4)] // { arity: 5 }
                     Project (#0..=#3, #11) // { arity: 5 }
-                      Filter (#1) IS NOT NULL AND (date_to_timestamp(#10) > 2010-05-23 12:00:00) // { arity: 15 }
+                      Filter (date_to_timestamp(#10) > 2010-05-23 12:00:00) // { arity: 15 }
                         Join on=(#0 = ((#1 * #2) % 10000) AND #1 = #8 = #14) type=delta // { arity: 15 }
                           implementation
                             %0:l0 » %1:stock[((#0 * #1) % 10000)]K » %3:item[#0]UKlf » %2:orderline[#4]KAif

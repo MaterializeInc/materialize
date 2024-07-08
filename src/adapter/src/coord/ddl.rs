@@ -42,8 +42,9 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
     self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
-    MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
-    MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
+    MAX_MYSQL_CONNECTIONS, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
+    MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
+    MAX_SOURCES, MAX_TABLES,
 };
 use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -184,6 +185,10 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<BuiltinTableAppendNotify, AdapterError> {
+        if self.controller.read_only() {
+            return Err(AdapterError::ReadOnly);
+        }
+
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut sources_to_drop = vec![];
@@ -793,9 +798,11 @@ impl Coordinator {
             }
             self.builtin_table_update().background(updates);
         }
+
+        self.drop_introspection_subscribes(replica_id).await;
+
         self.controller
             .drop_replica(cluster_id, replica_id)
-            .await
             .expect("dropping replica must not fail");
     }
 
@@ -1221,6 +1228,7 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let mut new_kafka_connections = 0;
         let mut new_postgres_connections = 0;
+        let mut new_mysql_connections = 0;
         let mut new_aws_privatelink_connections = 0;
         let mut new_tables = 0;
         let mut new_sources = 0;
@@ -1280,14 +1288,11 @@ impl Coordinator {
                             match connection.connection {
                                 Connection::Kafka(_) => new_kafka_connections += 1,
                                 Connection::Postgres(_) => new_postgres_connections += 1,
+                                Connection::MySql(_) => new_mysql_connections += 1,
                                 Connection::AwsPrivatelink(_) => {
                                     new_aws_privatelink_connections += 1
                                 }
-                                // TODO(roshan): Implement limits for MySQL
-                                Connection::Csr(_)
-                                | Connection::Ssh(_)
-                                | Connection::Aws(_)
-                                | Connection::MySql(_) => {}
+                                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
                             }
                         }
                         CatalogItem::Table(_) => {
@@ -1433,6 +1438,7 @@ impl Coordinator {
 
         let mut current_aws_privatelink_connections = 0;
         let mut current_postgres_connections = 0;
+        let mut current_mysql_connections = 0;
         let mut current_kafka_connections = 0;
         for c in self.catalog().user_connections() {
             let connection = c
@@ -1443,12 +1449,9 @@ impl Coordinator {
             match connection.connection {
                 Connection::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
                 Connection::Postgres(_) => current_postgres_connections += 1,
+                Connection::MySql(_) => current_mysql_connections += 1,
                 Connection::Kafka(_) => current_kafka_connections += 1,
-                // TODO(roshan): Implement limits for MySQL
-                Connection::Csr(_)
-                | Connection::Ssh(_)
-                | Connection::Aws(_)
-                | Connection::MySql(_) => {}
+                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
             }
         }
         self.validate_resource_limit(
@@ -1464,6 +1467,13 @@ impl Coordinator {
             SystemVars::max_postgres_connections,
             "PostgreSQL Connection",
             MAX_POSTGRES_CONNECTIONS.name(),
+        )?;
+        self.validate_resource_limit(
+            current_mysql_connections,
+            new_mysql_connections,
+            SystemVars::max_mysql_connections,
+            "MySQL Connection",
+            MAX_MYSQL_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
             current_aws_privatelink_connections,

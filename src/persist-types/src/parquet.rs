@@ -17,9 +17,9 @@ use std::io::Write;
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use arrow::array::RecordBatch;
-use arrow::datatypes::Schema as ArrowSchema;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use arrow::array::{Array, RecordBatch};
+use arrow::datatypes::{Fields, Schema as ArrowSchema};
+use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, Encoding};
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
@@ -35,7 +35,15 @@ use crate::part::{Part, PartBuilder};
 /// blob, and it's simpler to only have one, so do that.
 pub fn encode_part<W: Write + Send>(w: &mut W, part: &Part) -> Result<(), anyhow::Error> {
     let (fields, arrays) = part.to_arrow();
+    encode_arrays(w, Fields::from(fields), arrays)
+}
 
+/// Encodes a set of [`Array`]s into Parquet.
+pub fn encode_arrays<W: Write + Send>(
+    w: &mut W,
+    fields: Fields,
+    arrays: Vec<Arc<dyn Array>>,
+) -> Result<(), anyhow::Error> {
     let schema = Arc::new(ArrowSchema::new(fields));
     let props = WriterProperties::builder()
         .set_dictionary_enabled(false)
@@ -64,7 +72,7 @@ pub fn decode_part<R: ChunkReader + 'static, K, KS: Schema<K>, V, VS: Schema<V>>
     key_schema: &KS,
     val_schema: &VS,
 ) -> Result<Part, anyhow::Error> {
-    let mut reader = ParquetRecordBatchReaderBuilder::try_new(r)?.build()?;
+    let mut reader = decode_arrays(r)?;
 
     // encode_part documents that there is exactly one chunk in every blob.
     // Verify that here by ensuring the first call to `next` is Some and the
@@ -81,6 +89,29 @@ pub fn decode_part<R: ChunkReader + 'static, K, KS: Schema<K>, V, VS: Schema<V>>
     }
 
     Ok(part)
+}
+
+/// Decodes a [`RecordBatch`] from the provided reader.
+pub fn decode_arrays<R: ChunkReader + 'static>(
+    r: R,
+) -> Result<ParquetRecordBatchReader, anyhow::Error> {
+    let builder = ParquetRecordBatchReaderBuilder::try_new(r)?;
+
+    // To match arrow2, we default the batch size to the number of rows in the RowGroup.
+    let row_groups = builder.metadata().row_groups();
+    if row_groups.len() > 1 {
+        anyhow::bail!("found more than 1 RowGroup")
+    }
+    let num_rows = row_groups
+        .get(0)
+        .map(|g| g.num_rows())
+        .unwrap_or(1024)
+        .try_into()
+        .unwrap();
+    let builder = builder.with_batch_size(num_rows);
+
+    let reader = builder.build()?;
+    Ok(reader)
 }
 
 /// A helper for writing tests that validate that a piece of data roundtrips

@@ -33,7 +33,7 @@ configuration parameters.
 
 ### Show active cluster
 
-```sql
+```mzsql
 SHOW cluster;
 ```
 ```
@@ -44,7 +44,7 @@ SHOW cluster;
 
 ### Show transaction isolation level
 
-```sql
+```mzsql
 SHOW transaction_isolation;
 ```
 ```

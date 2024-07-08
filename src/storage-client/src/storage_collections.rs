@@ -12,8 +12,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
-use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,6 +27,7 @@ use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -55,10 +54,12 @@ use mz_storage_types::sources::{
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::{DataSnapshot, TxnsRead};
 use mz_txn_wal::txns::TxnsHandle;
+use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
 
 use crate::controller::{
@@ -96,22 +97,6 @@ pub trait StorageCollections: Debug {
         txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         init_ids: BTreeSet<GlobalId>,
         drop_ids: BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Resets the txns system to a set of invariants necessary for correctness.
-    ///
-    /// Must be called on boot before create_collections or the various appends.
-    /// This is true _regardless_ of whether the txn-wal feature is on or
-    /// not. See the big comment in the impl of the method for details. Ideally,
-    /// this would have just been folded into `Controller::new`, but it needs
-    /// the timestamp and there are boot dependency issues.
-    ///
-    /// TODO: This can be removed once we've flipped to the new txns system for
-    /// good and there is no possibility of the old code running concurrently
-    /// with the new code.
-    async fn init_txns(
-        &self,
-        init_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Update storage configuration with new parameters.
@@ -344,6 +329,13 @@ pub struct StorageCollectionsImpl<
     /// all of the controllers and Coordinator.
     envd_epoch: NonZeroI64,
 
+    /// Whether or not this [StorageCollections] is in read-only mode.
+    ///
+    /// When in read-only mode, we are not allowed to affect changes to external
+    /// systems, including, for example, acquiring and downgrading critical
+    /// [SinceHandles](SinceHandle)
+    read_only: bool,
+
     /// The set of [ShardIds](ShardId) that we have to finalize. These will have
     /// been persisted by the caller of [StorageCollections::prepare_state].
     finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
@@ -359,9 +351,6 @@ pub struct StorageCollectionsImpl<
 
     /// Whether to use the new txn-wal tables implementation or the legacy one.
     txns: TxnsWal<T>,
-    /// Whether we have run `txns_init` yet (required before create_collections
-    /// and the various flavors of append).
-    txns_init_run: Arc<AtomicBool>,
 
     /// Storage configuration parameters.
     config: Arc<Mutex<StorageConfiguration>>,
@@ -380,6 +369,7 @@ pub struct StorageCollectionsImpl<
 
     /// Handles to tasks we own, making sure they're dropped when we are.
     _background_task: Arc<AbortOnDropHandle<()>>,
+    _finalize_shards_task: Arc<AbortOnDropHandle<()>>,
 }
 
 // Supporting methods for implementing [StorageCollections].
@@ -413,6 +403,7 @@ where
         _now: NowFn,
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
+        read_only: bool,
         txn_wal_tables: TxnWalTablesImpl,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
@@ -423,7 +414,6 @@ where
         let txns_id = txn
             .get_txn_wal_shard()
             .expect("must call prepare initialization before creating StorageCollections");
-        let txns_id = ShardId::from_str(txns_id.as_str()).expect("shard ID must be valid");
 
         let txns_client = persist_clients
             .open(persist_location.clone())
@@ -477,16 +467,12 @@ where
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (holds_tx, holds_rx) = mpsc::unbounded_channel();
         let mut background_task = BackgroundTask {
-            envd_epoch: envd_epoch.clone(),
-            persist_location: persist_location.clone(),
-            persist: Arc::clone(&persist_clients),
             config: Arc::clone(&config),
             cmds_tx: cmd_tx.clone(),
             cmds_rx: cmd_rx,
             holds_rx,
             collections: Arc::clone(&collections),
             finalizable_shards: Arc::clone(&finalizable_shards),
-            finalized_shards: Arc::clone(&finalized_shards),
             shard_by_id: BTreeMap::new(),
             since_handles: BTreeMap::new(),
             txns_handle: Some(txns_write),
@@ -498,23 +484,36 @@ where
                 background_task.run().await
             });
 
+        let finalize_shards_task = mz_ore::task::spawn(
+            || "storage_collections::finalize_shards_task",
+            finalize_shards_task::<T>(FinalizeShardsTaskConfig {
+                envd_epoch: envd_epoch.clone(),
+                config: Arc::clone(&config),
+                finalizable_shards: Arc::clone(&finalizable_shards),
+                finalized_shards: Arc::clone(&finalized_shards),
+                persist_location: persist_location.clone(),
+                persist: Arc::clone(&persist_clients),
+            }),
+        );
+
         Self {
             finalizable_shards,
             finalized_shards,
             collections,
             txns,
-            txns_init_run: Arc::new(AtomicBool::new(false)),
             envd_epoch,
+            read_only,
             config,
             persist_location,
             persist: persist_clients,
             cmd_tx,
             holds_tx,
             _background_task: Arc::new(background_task.abort_on_drop()),
+            _finalize_shards_task: Arc::new(finalize_shards_task.abort_on_drop()),
         }
     }
 
-    /// Opens a write and critical since handles for the given `shard`.
+    /// Opens a [WriteHandle] and a [SinceHandleWrapper], for holding back the since.
     ///
     /// `since` is an optional since that the read handle will be forwarded to
     /// if it is less than its current since.
@@ -528,10 +527,86 @@ where
         since: Option<&Antichain<T>>,
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
-    ) -> (
-        WriteHandle<SourceData, (), T, Diff>,
-        SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
-    ) {
+    ) -> (WriteHandle<SourceData, (), T, Diff>, SinceHandleWrapper<T>) {
+        let since_handle = if self.read_only {
+            let read_handle = self
+                .open_leased_handle(id, shard, relation_desc.clone(), since, persist_client)
+                .await;
+            SinceHandleWrapper::Leased(read_handle)
+        } else {
+            let since_handle = self
+                .open_critical_handle(id, shard, since, persist_client)
+                .await;
+
+            SinceHandleWrapper::Critical(since_handle)
+        };
+
+        let mut write_handle = self
+            .open_write_handle(id, shard, relation_desc, persist_client)
+            .await;
+
+        // N.B.
+        // Fetch the most recent upper for the write handle. Otherwise, this may
+        // be behind the since of the since handle. Its vital this happens AFTER
+        // we create the since handle as it needs to be linearized with that
+        // operation. It may be true that creating the write handle after the
+        // since handle already ensures this, but we do this out of an abundance
+        // of caution.
+        //
+        // Note that this returns the upper, but also sets it on the handle to
+        // be fetched later.
+        write_handle.fetch_recent_upper().await;
+
+        (write_handle, since_handle)
+    }
+
+    /// Opens a write handle for the given `shard`.
+    async fn open_write_handle(
+        &self,
+        id: &GlobalId,
+        shard: ShardId,
+        relation_desc: RelationDesc,
+        persist_client: &PersistClient,
+    ) -> WriteHandle<SourceData, (), T, Diff> {
+        let diagnostics = Diagnostics {
+            shard_name: id.to_string(),
+            handle_purpose: format!("controller data for {}", id),
+        };
+
+        let write = persist_client
+            .open_writer(
+                shard,
+                Arc::new(relation_desc),
+                Arc::new(UnitSchema),
+                diagnostics.clone(),
+            )
+            .await
+            .expect("invalid persist usage");
+
+        write
+    }
+
+    /// Opens a critical since handle for the given `shard`.
+    ///
+    /// `since` is an optional since that the read handle will be forwarded to
+    /// if it is less than its current since.
+    ///
+    /// This will `halt!` the process if we cannot successfully acquire a
+    /// critical handle with our current epoch.
+    async fn open_critical_handle(
+        &self,
+        id: &GlobalId,
+        shard: ShardId,
+        since: Option<&Antichain<T>>,
+        persist_client: &PersistClient,
+    ) -> SinceHandle<SourceData, (), T, Diff, PersistEpoch> {
+        tracing::debug!(%id, ?since, "opening critical handle");
+
+        assert!(
+            !self.read_only,
+            "attempting to open critical SinceHandle in read-only mode"
+        );
+
         let diagnostics = Diagnostics {
             shard_name: id.to_string(),
             handle_purpose: format!("controller data for {}", id),
@@ -585,36 +660,58 @@ where
             }
         };
 
-        let mut write = persist_client
-            .open_writer(
+        since_handle
+    }
+
+    /// Opens a leased [ReadHandle], for the purpose of holding back a since,
+    /// for the given `shard`.
+    ///
+    /// `since` is an optional since that the read handle will be forwarded to
+    /// if it is less than its current since.
+    async fn open_leased_handle(
+        &self,
+        id: &GlobalId,
+        shard: ShardId,
+        relation_desc: RelationDesc,
+        since: Option<&Antichain<T>>,
+        persist_client: &PersistClient,
+    ) -> ReadHandle<SourceData, (), T, Diff> {
+        tracing::debug!(%id, ?since, "opening leased handle");
+
+        let diagnostics = Diagnostics {
+            shard_name: id.to_string(),
+            handle_purpose: format!("controller data for {}", id),
+        };
+
+        let use_critical_since = false;
+        let mut handle: ReadHandle<_, _, _, _> = persist_client
+            .open_leased_reader(
                 shard,
                 Arc::new(relation_desc),
                 Arc::new(UnitSchema),
                 diagnostics.clone(),
+                use_critical_since,
             )
             .await
             .expect("invalid persist usage");
 
-        // N.B.
-        // Fetch the most recent upper for the write handle. Otherwise, this may
-        // be behind the since of the since handle. Its vital this happens AFTER
-        // we create the since handle as it needs to be linearized with that
-        // operation. It may be true that creating the write handle after the
-        // since handle already ensures this, but we do this out of an abundance
-        // of caution.
-        //
-        // Note that this returns the upper, but also sets it on the handle to
-        // be fetched later.
-        write.fetch_recent_upper().await;
+        // Take the join of the handle's since and the provided `since`;
+        // this lets materialized views express the since at which their
+        // read handles "start."
+        let since = handle
+            .since()
+            .join(since.unwrap_or(&Antichain::from_elem(T::minimum())));
 
-        (write, since_handle)
+        handle.downgrade_since(&since).await;
+
+        handle
     }
 
     fn register_handles(
         &self,
         id: GlobalId,
         is_in_txns: bool,
-        since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
+        since_handle: SinceHandleWrapper<T>,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
     ) {
         self.send(BackgroundCmd::Register {
@@ -674,7 +771,9 @@ where
                     &dep_collection.implied_capability,
                     collection_implied_capability
                 ),
-                "dependency since cannot be in advance of dependent's since"
+                "dependency since ({dep}@{:?}) cannot be in advance of dependent's since ({id}@{:?})",
+                dep_collection.implied_capability,
+                collection_implied_capability,
             );
         }
 
@@ -693,7 +792,7 @@ where
     /// Currently, collections have either 0 or 1 dependencies.
     fn determine_collection_dependencies(
         &self,
-        self_collections: &mut BTreeMap<GlobalId, CollectionState<T>>,
+        self_collections: &BTreeMap<GlobalId, CollectionState<T>>,
         data_source: &DataSource,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
         let dependencies = match &data_source {
@@ -798,7 +897,7 @@ where
 
         // We create a new read handle every time someone requests a snapshot
         // and then immediately expire it instead of keeping a read handle
-        // permanently in our state to avoid having it heartbeat continously.
+        // permanently in our state to avoid having it heartbeat continually.
         // The assumption is that calls to snapshot are rare and therefore worth
         // it to always create a new handle.
         let read_handle = persist_client
@@ -810,7 +909,7 @@ where
                     shard_name: id.to_string(),
                     handle_purpose: format!("snapshot {}", id),
                 },
-                false,
+                USE_CRITICAL_SINCE_SNAPSHOT.get(&self.persist.cfg),
             )
             .await
             .expect("invalid persist usage");
@@ -975,11 +1074,7 @@ where
         self.finalized_shards
             .lock()
             .expect("lock poisoned")
-            .retain(|shard| {
-                storage_metadata
-                    .unfinalized_shards
-                    .contains(shard.to_string().as_str())
-            });
+            .retain(|shard| storage_metadata.unfinalized_shards.contains(shard));
     }
 }
 
@@ -1003,13 +1098,6 @@ where
         drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
         let metadata = txn.get_collection_metadata();
-
-        let processed_metadata: Result<Vec<_>, _> = metadata
-            .into_iter()
-            .map(|(id, shard)| ShardId::from_str(&shard).map(|shard| (id, shard)))
-            .collect();
-
-        let metadata = processed_metadata.map_err(|e| StorageError::Generic(anyhow::anyhow!(e)))?;
         let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
 
         // Determine which collections we do not yet have metadata for.
@@ -1035,11 +1123,7 @@ where
         // dropped from the catalog, but the dataflow is still running on a
         // worker, assuming the shard is safe to finalize on reboot may cause
         // the cluster to panic.
-        let unfinalized_shards = txn
-            .get_unfinalized_shards()
-            .into_iter()
-            .map(|shard| ShardId::from_str(&shard).expect("deserialization corrupted"))
-            .collect_vec();
+        let unfinalized_shards = txn.get_unfinalized_shards().into_iter().collect_vec();
 
         info!(?unfinalized_shards, "initializing finalizable_shards");
 
@@ -1048,24 +1132,6 @@ where
             .expect("lock poisoned")
             .extend(unfinalized_shards.into_iter());
 
-        Ok(())
-    }
-
-    /// See [crate::controller::StorageController::init_txns] and its
-    /// implementation.
-    async fn init_txns(
-        &self,
-        _init_ts: Self::Timestamp,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
-        assert_eq!(
-            self.txns_init_run.load(std::sync::atomic::Ordering::SeqCst),
-            false
-        );
-
-        // We don't initialize the txns system, the `StorageController` does
-        // that. All we care about is that initialization has been run.
-        self.txns_init_run
-            .store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -1239,7 +1305,7 @@ where
         txn.insert_collection_metadata(
             ids_to_add
                 .into_iter()
-                .map(|id| (id, ShardId::new().to_string()))
+                .map(|id| (id, ShardId::new()))
                 .collect(),
         )?;
 
@@ -1260,7 +1326,7 @@ where
             .lock()
             .expect("lock poisoned")
             .iter()
-            .map(|v| v.to_string())
+            .copied()
             .collect();
         txn.mark_shards_as_finalized(finalized_shards);
 
@@ -1276,8 +1342,6 @@ where
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        assert!(self.txns_init_run.load(std::sync::atomic::Ordering::SeqCst));
-
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
         // 2. create an existing identifier with a new description.
@@ -1423,7 +1487,7 @@ where
                         let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
                         if since_handle.since().elements() == &[T::minimum()] {
                             debug!("advancing {} to initial since of {:?}", id, register_ts);
-                            let token = since_handle.opaque().clone();
+                            let token = since_handle.opaque();
                             let _ = since_handle.compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(register_ts.clone()))).await;
                         }
                     }
@@ -1452,16 +1516,11 @@ where
         // Reorder in dependency order.
         to_register.sort_by_key(|(id, ..)| *id);
 
-        // New collections that are being created.
-        let mut new_collections = BTreeSet::new();
-
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
         for (id, mut description, write_handle, since_handle, metadata) in to_register {
-            new_collections.insert(id);
-
             // Ensure that the ingestion has an export for its primary source.
             // This is done in an akward spot to appease the borrow checker.
             if let DataSource::Ingestion(ingestion) = &mut description.data_source {
@@ -1478,10 +1537,8 @@ where
             let data_shard_since = since_handle.since().clone();
 
             // Determine if this collection has any dependencies.
-            let storage_dependencies = self.determine_collection_dependencies(
-                &mut *self_collections,
-                &description.data_source,
-            )?;
+            let storage_dependencies = self
+                .determine_collection_dependencies(&*self_collections, &description.data_source)?;
 
             // Determine the intial since of the collection.
             let initial_since = match storage_dependencies
@@ -1852,6 +1909,126 @@ where
     }
 }
 
+/// Wraps either a "critical" [SinceHandle] or a leased [ReadHandle].
+///
+/// When a [StorageCollections] is in read-only mode, we will only ever acquire
+/// [ReadHandle], because acquiring the [SinceHandle] and driving forward its
+/// since is considered a write. Conversely, when in read-write mode, we acquire
+/// [SinceHandle].
+#[derive(Debug)]
+enum SinceHandleWrapper<T>
+where
+    T: TimelyTimestamp + Lattice + Codec64,
+{
+    Critical(SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
+    Leased(ReadHandle<SourceData, (), T, Diff>),
+}
+
+impl<T> SinceHandleWrapper<T>
+where
+    T: TimelyTimestamp + Lattice + Codec64 + TotalOrder,
+{
+    pub fn since(&self) -> &Antichain<T> {
+        match self {
+            Self::Critical(handle) => handle.since(),
+            Self::Leased(handle) => handle.since(),
+        }
+    }
+
+    pub fn opaque(&self) -> PersistEpoch {
+        match self {
+            Self::Critical(handle) => handle.opaque().clone(),
+            Self::Leased(_handle) => {
+                // The opaque is expected to be used with
+                // `compare_and_downgrade_since`, and the leased handle doesn't
+                // have a notion of an opaque. We pretend here and in
+                // `compare_and_downgrade_since`.
+                PersistEpoch(None)
+            }
+        }
+    }
+
+    pub async fn compare_and_downgrade_since(
+        &mut self,
+        expected: &PersistEpoch,
+        new: (&PersistEpoch, &Antichain<T>),
+    ) -> Result<Antichain<T>, PersistEpoch> {
+        match self {
+            Self::Critical(handle) => handle.compare_and_downgrade_since(expected, new).await,
+            Self::Leased(handle) => {
+                let (opaque, since) = new;
+                assert!(opaque.0.is_none());
+
+                handle.downgrade_since(since).await;
+
+                Ok(since.clone())
+            }
+        }
+    }
+
+    pub async fn maybe_compare_and_downgrade_since(
+        &mut self,
+        expected: &PersistEpoch,
+        new: (&PersistEpoch, &Antichain<T>),
+    ) -> Option<Result<Antichain<T>, PersistEpoch>> {
+        match self {
+            Self::Critical(handle) => {
+                handle
+                    .maybe_compare_and_downgrade_since(expected, new)
+                    .await
+            }
+            Self::Leased(handle) => {
+                let (opaque, since) = new;
+                assert!(opaque.0.is_none());
+
+                handle.maybe_downgrade_since(since).await;
+
+                Some(Ok(since.clone()))
+            }
+        }
+    }
+
+    pub fn snapshot_stats(
+        &self,
+        id: GlobalId,
+        as_of: Option<Antichain<T>>,
+    ) -> BoxFuture<'static, Result<SnapshotStats, StorageError<T>>> {
+        match self {
+            Self::Critical(handle) => {
+                let res = handle
+                    .snapshot_stats(as_of)
+                    .map(move |x| x.map_err(|_| StorageError::ReadBeforeSince(id)));
+                Box::pin(res)
+            }
+            Self::Leased(handle) => {
+                let res = handle
+                    .snapshot_stats(as_of)
+                    .map(move |x| x.map_err(|_| StorageError::ReadBeforeSince(id)));
+                Box::pin(res)
+            }
+        }
+    }
+
+    pub fn snapshot_stats_from_txn(
+        &self,
+        id: GlobalId,
+        data_snapshot: DataSnapshot<T>,
+    ) -> BoxFuture<'static, Result<SnapshotStats, StorageError<T>>> {
+        match self {
+            Self::Critical(handle) => Box::pin(
+                data_snapshot
+                    .snapshot_stats_from_critical(handle)
+                    .map(move |x| x.map_err(|_| StorageError::ReadBeforeSince(id))),
+            ),
+            Self::Leased(handle) => Box::pin(
+                data_snapshot
+                    .snapshot_stats_from_leased(handle)
+                    .map(move |x| x.map_err(|_| StorageError::ReadBeforeSince(id))),
+            ),
+        }
+    }
+}
+
 /// State maintained about individual collections.
 #[derive(Debug)]
 struct CollectionState<T> {
@@ -1920,22 +2097,18 @@ impl<T: TimelyTimestamp> CollectionState<T> {
 /// This shares state with [StorageCollectionsImpl] via `Arcs` and channels.
 #[derive(Debug)]
 struct BackgroundTask<T: TimelyTimestamp + Lattice + Codec64> {
-    envd_epoch: NonZeroI64,
     config: Arc<Mutex<StorageConfiguration>>,
     cmds_tx: mpsc::UnboundedSender<BackgroundCmd<T>>,
     cmds_rx: mpsc::UnboundedReceiver<BackgroundCmd<T>>,
     holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
     finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
-    finalized_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState<T>>>>,
     // So we know what shard ID corresponds to what global ID, which we need
     // when re-enqueing futures for determining the next upper update.
     shard_by_id: BTreeMap<GlobalId, ShardId>,
-    since_handles: BTreeMap<GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>>,
+    since_handles: BTreeMap<GlobalId, SinceHandleWrapper<T>>,
     txns_handle: Option<WriteHandle<SourceData, (), T, Diff>>,
     txns_shards: BTreeSet<GlobalId>,
-    persist_location: PersistLocation,
-    persist: Arc<PersistClientCache>,
 }
 
 #[derive(Debug)]
@@ -1944,16 +2117,7 @@ enum BackgroundCmd<T: TimelyTimestamp + Lattice + Codec64> {
         id: GlobalId,
         is_in_txns: bool,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
-        since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
-    },
-    // This was also dead code in the StorageController. I think we keep around
-    // these code paths for when we need to do migrations in the future.
-    #[allow(dead_code)]
-    Update {
-        id: GlobalId,
-        is_in_txns: bool,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
-        since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
+        since_handle: SinceHandleWrapper<T>,
     },
     DowngradeSince(Vec<(GlobalId, Antichain<T>)>),
     SnapshotStats(
@@ -2011,11 +2175,6 @@ where
             }
             None => async { std::future::pending().await }.boxed(),
         };
-
-        // We check periodically if there's any shards that we need to finalize
-        // and do so if yes.
-        let mut finalization_interval = tokio::time::interval(Duration::from_secs(5));
-        finalization_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -2083,23 +2242,6 @@ where
                         BackgroundCmd::DowngradeSince(cmds) => {
                             self.downgrade_sinces(cmds).await;
                         }
-                        BackgroundCmd::Update { id, is_in_txns, write_handle, since_handle } => {
-                            self.shard_by_id.insert(id, write_handle.shard_id()).expect(
-                                "BackgroundCmd::Update only valid for updating extant write handles",
-                            );
-
-                            self.since_handles.insert(id, since_handle).expect(
-                                "BackgroundCmd::Update only valid for updating extant since handles",
-                            );
-
-                            if is_in_txns {
-                                self.txns_shards.insert(id);
-                            } else {
-                                let fut = gen_upper_future(id, write_handle);
-                                upper_futures.push(fut.boxed());
-                            }
-
-                        }
                         BackgroundCmd::SnapshotStats(id, as_of, tx) => {
                             // NB: The requested as_of could be arbitrarily far
                             // in the future. So, in order to avoid blocking
@@ -2113,15 +2255,11 @@ where
                                         Result<SnapshotStats, StorageError<T>>,
                                     > = match as_of {
                                         SnapshotStatsAsOf::Direct(as_of) => {
-                                            Box::pin(x.snapshot_stats(Some(as_of)).map(move |x| {
-                                                x.map_err(|_| StorageError::ReadBeforeSince(id))
-                                            }))
+                                            x.snapshot_stats(id, Some(as_of))
                                         }
-                                        SnapshotStatsAsOf::Txns(data_snapshot) => Box::pin(
-                                            data_snapshot.snapshot_stats(x).map(move |x| {
-                                                x.map_err(|_| StorageError::ReadBeforeSince(id))
-                                            }),
-                                        ),
+                                        SnapshotStatsAsOf::Txns(data_snapshot) => {
+                                            x.snapshot_stats_from_txn(id, data_snapshot)
+                                        }
                                     };
                                     SnapshotStatsRes(fut)
                                 }
@@ -2164,9 +2302,6 @@ where
                         &mut collections,
                         &mut batched_changes,
                     );
-                }
-                _time = finalization_interval.tick() => {
-                    self.finalize_shards().await;
                 }
             }
         }
@@ -2297,52 +2432,70 @@ where
             }
         }
     }
+}
 
-    /// Attempts to close all shards marked for finalization.
-    #[instrument(level = "debug")]
-    async fn finalize_shards(&mut self) {
-        if !self
-            .config
+struct FinalizeShardsTaskConfig {
+    envd_epoch: NonZeroI64,
+    config: Arc<Mutex<StorageConfiguration>>,
+    finalizable_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
+    finalized_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
+    persist_location: PersistLocation,
+    persist: Arc<PersistClientCache>,
+}
+
+async fn finalize_shards_task<T>(
+    FinalizeShardsTaskConfig {
+        envd_epoch,
+        config,
+        finalizable_shards,
+        finalized_shards,
+        persist_location,
+        persist,
+    }: FinalizeShardsTaskConfig,
+) where
+    T: TimelyTimestamp + Lattice + Codec64,
+{
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+
+        if !config
             .lock()
             .expect("lock poisoned")
             .parameters
             .finalize_shards
         {
             debug!("not triggering shard finalization due to dropped storage object because enable_storage_shard_finalization parameter is false");
-            return;
+            continue;
         }
 
-        let finalizable_shards = {
+        let current_finalizable_shards = {
             // We hold the lock for as short as possible and pull our cloned set
             // of shards.
-            let shared_shards = self.finalizable_shards.lock().expect("lock poisoned");
+            let shared_shards = finalizable_shards.lock().expect("lock poisoned");
             shared_shards.iter().cloned().collect_vec()
         };
 
-        if finalizable_shards.is_empty() {
+        if current_finalizable_shards.is_empty() {
             debug!("no shards to finalize");
-            return;
+            continue;
         }
 
-        debug!(?finalizable_shards, "attempting to finalize shards");
+        debug!(?current_finalizable_shards, "attempting to finalize shards");
 
         // Open a persist client to delete unused shards.
-        let persist_client = self
-            .persist
-            .open(self.persist_location.clone())
-            .await
-            .unwrap();
+        let persist_client = persist.open(persist_location.clone()).await.unwrap();
 
         let persist_client = &persist_client;
         let diagnostics = &Diagnostics::from_purpose("finalizing shards");
 
         let force_downgrade_since = STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION
-            .get(self.config.lock().expect("lock poisoned").config_set());
+            .get(config.lock().expect("lock poisoned").config_set());
 
-        let epoch = &PersistEpoch::from(self.envd_epoch);
+        let epoch = &PersistEpoch::from(envd_epoch);
 
-        use futures::stream::StreamExt;
-        let finalized_shards: BTreeSet<ShardId> = futures::stream::iter(finalizable_shards.clone())
+        let current_finalized_shards: BTreeSet<ShardId> = futures::stream::iter(current_finalizable_shards.clone())
             .map(|shard_id| async move {
                 let persist_client = persist_client.clone();
                 let diagnostics = diagnostics.clone();
@@ -2357,109 +2510,103 @@ where
                     debug!(%shard_id, "shard is already finalized!");
                     Some(shard_id)
                 } else {
-                    debug!(%shard_id, "spawning new finalization task");
-                    // Finalizing a shard can take a long time cleaning up
-                    // existing data. Spawning a task means that we can't
-                    // proactively remove this shard from the finalization
-                    // register, unfortunately... but a future run of
-                    // `finalize_shards` should notice the shard has been
-                    // finalized and tidy up.
-                    mz_ore::task::spawn(|| format!("finalize_shard({shard_id})"), async move {
+                    debug!(%shard_id, "finalizing shard");
                         let finalize = || async move {
-                            let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
-                            let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
-                                persist_client
-                                    .open_writer(
-                                        shard_id,
-                                        Arc::new(RelationDesc::empty()),
-                                        Arc::new(UnitSchema),
-                                        // TODO: thread the global ID into the shard finalization WAL
-                                        Diagnostics::from_purpose("finalizing shards"),
-                                    )
-                                    .await
-                                    .expect("invalid persist usage");
-
-                            let upper = write_handle.upper();
-
-                            if !upper.is_empty() {
-                                let append = write_handle
-                                    .append(empty_batch, upper.clone(), Antichain::new())
-                                    .await?;
-
-                                if let Err(e) = append {
-                                    warn!(%shard_id, "tried to finalize a shard with an advancing upper: {e:?}");
-                                    return Ok(());
-                                }
-                            }
-                            write_handle.expire().await;
-
-                            if force_downgrade_since {
-                                let mut since_handle: SinceHandle<
-                                    SourceData,
-                                    (),
-                                    T,
-                                    Diff,
-                                    PersistEpoch,
-                                > = persist_client
-                                    .open_critical_since(
-                                        shard_id,
-                                        PersistClient::CONTROLLER_CRITICAL_SINCE,
-                                        Diagnostics::from_purpose("finalizing shards"),
-                                    )
-                                    .await
-                                    .expect("invalid persist usage");
-                                let handle_epoch = since_handle.opaque().clone();
-                                let our_epoch = epoch.clone();
-                                let epoch = if our_epoch.0 > handle_epoch.0 {
-                                    // We're newer, but it's fine to use the
-                                    // handle's old epoch to try and downgrade.
-                                    handle_epoch
-                                } else {
-                                    // Good luck, buddy! The downgrade below
-                                    // will not succeed. There's a process with
-                                    // a newer epoch out there and someone at
-                                    // some juncture will fence out this
-                                    // process.
-                                    our_epoch
-                                };
-                                let new_since = Antichain::new();
-                                let downgrade = since_handle
-                                    .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
-                                    .await;
-                                if let Err(e) = downgrade {
-                                    warn!(
-                                        "tried to finalize a shard with an advancing epoch: {e:?}"
-                                    );
-                                    return Ok(());
-                                }
-                                // Not available now, so finalization is broken.
-                                // since_handle.expire().await;
-                            }
-
+                        let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
+                        let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
                             persist_client
-                                .finalize_shard::<SourceData, (), T, Diff>(
+                                .open_writer(
                                     shard_id,
+                                    Arc::new(RelationDesc::empty()),
+                                    Arc::new(UnitSchema),
+                                    // TODO: thread the global ID into the shard finalization WAL
                                     Diagnostics::from_purpose("finalizing shards"),
                                 )
                                 .await
-                        };
+                                .expect("invalid persist usage");
 
-                        match finalize().await {
-                            Err(e) => {
-                                // Rather than error, just leave this shard as
-                                // one to finalize later.
-                                warn!("error during background finalization of shard {shard_id}: {e:?}");
-                            }
-                            Ok(()) => {
-                                debug!(%shard_id, "finalize success!");
+                        let upper = write_handle.upper();
+
+                        if !upper.is_empty() {
+                            let append = write_handle
+                                .append(empty_batch, upper.clone(), Antichain::new())
+                                .await?;
+
+                            if let Err(e) = append {
+                                warn!(%shard_id, "tried to finalize a shard with an advancing upper: {e:?}");
+                                return Ok(());
                             }
                         }
-                    });
-                    None
+                        write_handle.expire().await;
+
+                        if force_downgrade_since {
+                            let mut since_handle: SinceHandle<
+                                SourceData,
+                                (),
+                                T,
+                                Diff,
+                                PersistEpoch,
+                            > = persist_client
+                                .open_critical_since(
+                                    shard_id,
+                                    PersistClient::CONTROLLER_CRITICAL_SINCE,
+                                    Diagnostics::from_purpose("finalizing shards"),
+                                )
+                                .await
+                                .expect("invalid persist usage");
+                            let handle_epoch = since_handle.opaque().clone();
+                            let our_epoch = epoch.clone();
+                            let epoch = if our_epoch.0 > handle_epoch.0 {
+                                // We're newer, but it's fine to use the
+                                // handle's old epoch to try and downgrade.
+                                handle_epoch
+                            } else {
+                                // Good luck, buddy! The downgrade below will
+                                // not succeed. There's a process with a newer
+                                // epoch out there and someone at some juncture
+                                // will fence out this process.
+                                our_epoch
+                            };
+                            let new_since = Antichain::new();
+                            let downgrade = since_handle
+                                .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+                                .await;
+                            if let Err(e) = downgrade {
+                                warn!(
+                                    "tried to finalize a shard with an advancing epoch: {e:?}"
+                                );
+                                return Ok(());
+                            }
+                            // Not available now, so finalization is broken.
+                            // since_handle.expire().await;
+                        }
+
+                        persist_client
+                            .finalize_shard::<SourceData, (), T, Diff>(
+                                shard_id,
+                                Diagnostics::from_purpose("finalizing shards"),
+                            )
+                            .await
+                    };
+
+                    match finalize().await {
+                        Err(e) => {
+                            // Rather than error, just leave this shard as
+                            // one to finalize later.
+                            warn!("error during finalization of shard {shard_id}: {e:?}");
+                            None
+                        }
+                        Ok(()) => {
+                            debug!(%shard_id, "finalize success!");
+                            Some(shard_id)
+                        }
+                    }
                 }
             })
             // Poll each future for each collection concurrently, maximum of 10
             // at a time.
+            // TODO(benesch): the concurrency here should be configurable
+            // via LaunchDarkly.
             .buffer_unordered(10)
             // HERE BE DRAGONS: see warning on other uses of buffer_unordered
             // before any changes to `collect`
@@ -2469,17 +2616,17 @@ where
             .filter_map(|shard| shard)
             .collect();
 
-        let mut shared_finalizable_shards = self.finalizable_shards.lock().expect("lock poisoned");
-        let mut shared_finalized_shards = self.finalized_shards.lock().expect("lock poisoned");
+        let mut shared_finalizable_shards = finalizable_shards.lock().expect("lock poisoned");
+        let mut shared_finalized_shards = finalized_shards.lock().expect("lock poisoned");
 
-        for id in finalized_shards.iter() {
+        for id in current_finalized_shards.iter() {
             shared_finalizable_shards.remove(id);
             shared_finalized_shards.insert(*id);
         }
 
         debug!(
-            ?finalizable_shards,
-            ?finalized_shards,
+            ?current_finalizable_shards,
+            ?current_finalized_shards,
             ?shared_finalizable_shards,
             ?shared_finalized_shards,
             "done finalizing shards"
@@ -2561,7 +2708,7 @@ mod tests {
             .send(BackgroundCmd::Register {
                 id: GlobalId::User(1),
                 is_in_txns: false,
-                since_handle,
+                since_handle: SinceHandleWrapper::Critical(since_handle),
                 write_handle,
             })
             .unwrap();
@@ -2654,8 +2801,8 @@ mod tests {
 
     impl<T: TimelyTimestamp + Lattice + Codec64> BackgroundTask<T> {
         fn new_for_test(
-            persist_location: PersistLocation,
-            persist_client: Arc<PersistClientCache>,
+            _persist_location: PersistLocation,
+            _persist_client: Arc<PersistClientCache>,
         ) -> (mpsc::UnboundedSender<BackgroundCmd<T>>, Self) {
             let (cmds_tx, cmds_rx) = mpsc::unbounded_channel();
             let (_holds_tx, holds_rx) = mpsc::unbounded_channel();
@@ -2663,7 +2810,6 @@ mod tests {
                 ConnectionContext::for_tests(Arc::new(InMemorySecretsController::new()));
 
             let task = Self {
-                envd_epoch: NonZeroI64::new(1).unwrap(),
                 config: Arc::new(Mutex::new(StorageConfiguration::new(
                     connection_context,
                     ConfigSet::default(),
@@ -2672,14 +2818,11 @@ mod tests {
                 cmds_rx,
                 holds_rx,
                 finalizable_shards: Arc::new(Mutex::new(BTreeSet::new())),
-                finalized_shards: Arc::new(Mutex::new(BTreeSet::new())),
                 collections: Arc::new(Mutex::new(BTreeMap::new())),
                 shard_by_id: BTreeMap::new(),
                 since_handles: BTreeMap::new(),
                 txns_handle: None,
                 txns_shards: BTreeSet::new(),
-                persist_location,
-                persist: persist_client,
             };
 
             (cmds_tx, task)

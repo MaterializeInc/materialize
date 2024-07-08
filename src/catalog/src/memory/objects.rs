@@ -41,14 +41,15 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ClusterSchedule, CreateSourcePlan, HirRelationExpr, Ingestion as PlanIngestion,
-    WebhookBodyFormat, WebhookHeaders, WebhookValidation,
+    ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterVariant, CreateSourcePlan,
+    HirRelationExpr, Ingestion as PlanIngestion, PlanError, WebhookBodyFormat, WebhookHeaders,
+    WebhookValidation,
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, Timeline,
@@ -346,6 +347,54 @@ impl Cluster {
             ClusterVariant::Unmanaged => None,
         }
     }
+
+    pub fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
+        let name = self.name.clone();
+        let variant = match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged {
+                size,
+                availability_zones,
+                logging,
+                replication_factor,
+                disk,
+                optimizer_feature_overrides,
+                schedule,
+            }) => {
+                let introspection = match logging {
+                    ReplicaLogging {
+                        log_logging,
+                        interval: Some(interval),
+                    } => Some(ComputeReplicaIntrospectionConfig {
+                        debugging: *log_logging,
+                        interval: interval.clone(),
+                    }),
+                    ReplicaLogging {
+                        log_logging: _,
+                        interval: None,
+                    } => None,
+                };
+                let compute = ComputeReplicaConfig { introspection };
+                CreateClusterVariant::Managed(CreateClusterManagedPlan {
+                    replication_factor: replication_factor.clone(),
+                    size: size.clone(),
+                    availability_zones: availability_zones.clone(),
+                    compute,
+                    disk: disk.clone(),
+                    optimizer_feature_overrides: optimizer_feature_overrides.clone(),
+                    schedule: schedule.clone(),
+                })
+            }
+            ClusterVariant::Unmanaged => {
+                // Unmanaged clusters are deprecated, so hopefully we can remove
+                // them before we have to implement this.
+                return Err(PlanError::Unsupported {
+                    feature: "SHOW CREATE for unmanaged clusters".to_string(),
+                    issue_no: Some(15435),
+                });
+            }
+        };
+        Ok(CreateClusterPlan { name, variant })
+    }
 }
 
 impl From<Cluster> for durable::Cluster {
@@ -497,17 +546,6 @@ impl Table {
     pub fn timeline(&self) -> Timeline {
         Timeline::EpochMilliseconds
     }
-}
-
-/// A description of a source ingestion
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct Ingestion {
-    /// The source description.
-    pub desc: SourceDesc<ReferencedConnection>,
-    /// The ID of the instance in which to install the source.
-    pub instance_id: StorageInstanceId,
-    /// The ID of this ingestion's remap/progress collection.
-    pub remap_collection_id: GlobalId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -681,6 +719,9 @@ impl Source {
                             // DEBEZIUM.
                             Some("debezium")
                         }
+                        mz_storage_types::sources::envelope::UpsertStyle::ValueErrInline {
+                            ..
+                        } => Some("upsert-value-err-inline"),
                     },
                     SourceEnvelope::CdcV2 => {
                         // TODO(aljoscha): Should we even report this? It's
@@ -2213,6 +2254,10 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
             _ => None,
         }
     }
+
+    fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
+        self.try_to_plan()
+    }
 }
 
 impl mz_sql::catalog::CatalogClusterReplica<'_> for ClusterReplica {
@@ -2396,7 +2441,7 @@ pub enum StateUpdateKind {
 }
 
 /// Valid diffs for catalog state updates.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum StateDiff {
     Retraction,
     Addition,
@@ -2442,6 +2487,107 @@ impl From<CatalogEntry> for TemporaryItem {
             item: entry.item,
             owner_id: entry.owner_id,
             privileges: entry.privileges,
+        }
+    }
+}
+
+/// The same as [`StateUpdateKind`], but without `TemporaryItem` so we can derive [`Ord`].
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
+pub enum BootstrapStateUpdateKind {
+    Role(durable::objects::Role),
+    Database(durable::objects::Database),
+    Schema(durable::objects::Schema),
+    DefaultPrivilege(durable::objects::DefaultPrivilege),
+    SystemPrivilege(MzAclItem),
+    SystemConfiguration(durable::objects::SystemConfiguration),
+    Cluster(durable::objects::Cluster),
+    IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
+    ClusterReplica(durable::objects::ClusterReplica),
+    SystemObjectMapping(durable::objects::SystemObjectMapping),
+    Item(durable::objects::Item),
+    Comment(durable::objects::Comment),
+    AuditLog(durable::objects::AuditLog),
+    StorageUsage(durable::objects::StorageUsage),
+    // Storage updates.
+    StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
+    UnfinalizedShard(durable::objects::UnfinalizedShard),
+}
+
+impl From<BootstrapStateUpdateKind> for StateUpdateKind {
+    fn from(value: BootstrapStateUpdateKind) -> Self {
+        match value {
+            BootstrapStateUpdateKind::Role(kind) => StateUpdateKind::Role(kind),
+            BootstrapStateUpdateKind::Database(kind) => StateUpdateKind::Database(kind),
+            BootstrapStateUpdateKind::Schema(kind) => StateUpdateKind::Schema(kind),
+            BootstrapStateUpdateKind::DefaultPrivilege(kind) => {
+                StateUpdateKind::DefaultPrivilege(kind)
+            }
+            BootstrapStateUpdateKind::SystemPrivilege(kind) => {
+                StateUpdateKind::SystemPrivilege(kind)
+            }
+            BootstrapStateUpdateKind::SystemConfiguration(kind) => {
+                StateUpdateKind::SystemConfiguration(kind)
+            }
+            BootstrapStateUpdateKind::Cluster(kind) => StateUpdateKind::Cluster(kind),
+            BootstrapStateUpdateKind::IntrospectionSourceIndex(kind) => {
+                StateUpdateKind::IntrospectionSourceIndex(kind)
+            }
+            BootstrapStateUpdateKind::ClusterReplica(kind) => StateUpdateKind::ClusterReplica(kind),
+            BootstrapStateUpdateKind::SystemObjectMapping(kind) => {
+                StateUpdateKind::SystemObjectMapping(kind)
+            }
+            BootstrapStateUpdateKind::Item(kind) => StateUpdateKind::Item(kind),
+            BootstrapStateUpdateKind::Comment(kind) => StateUpdateKind::Comment(kind),
+            BootstrapStateUpdateKind::AuditLog(kind) => StateUpdateKind::AuditLog(kind),
+            BootstrapStateUpdateKind::StorageUsage(kind) => StateUpdateKind::StorageUsage(kind),
+            BootstrapStateUpdateKind::StorageCollectionMetadata(kind) => {
+                StateUpdateKind::StorageCollectionMetadata(kind)
+            }
+            BootstrapStateUpdateKind::UnfinalizedShard(kind) => {
+                StateUpdateKind::UnfinalizedShard(kind)
+            }
+        }
+    }
+}
+
+impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
+    type Error = TemporaryItem;
+
+    fn try_from(value: StateUpdateKind) -> Result<Self, Self::Error> {
+        match value {
+            StateUpdateKind::Role(kind) => Ok(BootstrapStateUpdateKind::Role(kind)),
+            StateUpdateKind::Database(kind) => Ok(BootstrapStateUpdateKind::Database(kind)),
+            StateUpdateKind::Schema(kind) => Ok(BootstrapStateUpdateKind::Schema(kind)),
+            StateUpdateKind::DefaultPrivilege(kind) => {
+                Ok(BootstrapStateUpdateKind::DefaultPrivilege(kind))
+            }
+            StateUpdateKind::SystemPrivilege(kind) => {
+                Ok(BootstrapStateUpdateKind::SystemPrivilege(kind))
+            }
+            StateUpdateKind::SystemConfiguration(kind) => {
+                Ok(BootstrapStateUpdateKind::SystemConfiguration(kind))
+            }
+            StateUpdateKind::Cluster(kind) => Ok(BootstrapStateUpdateKind::Cluster(kind)),
+            StateUpdateKind::IntrospectionSourceIndex(kind) => {
+                Ok(BootstrapStateUpdateKind::IntrospectionSourceIndex(kind))
+            }
+            StateUpdateKind::ClusterReplica(kind) => {
+                Ok(BootstrapStateUpdateKind::ClusterReplica(kind))
+            }
+            StateUpdateKind::SystemObjectMapping(kind) => {
+                Ok(BootstrapStateUpdateKind::SystemObjectMapping(kind))
+            }
+            StateUpdateKind::TemporaryItem(kind) => Err(kind),
+            StateUpdateKind::Item(kind) => Ok(BootstrapStateUpdateKind::Item(kind)),
+            StateUpdateKind::Comment(kind) => Ok(BootstrapStateUpdateKind::Comment(kind)),
+            StateUpdateKind::AuditLog(kind) => Ok(BootstrapStateUpdateKind::AuditLog(kind)),
+            StateUpdateKind::StorageUsage(kind) => Ok(BootstrapStateUpdateKind::StorageUsage(kind)),
+            StateUpdateKind::StorageCollectionMetadata(kind) => {
+                Ok(BootstrapStateUpdateKind::StorageCollectionMetadata(kind))
+            }
+            StateUpdateKind::UnfinalizedShard(kind) => {
+                Ok(BootstrapStateUpdateKind::UnfinalizedShard(kind))
+            }
         }
     }
 }

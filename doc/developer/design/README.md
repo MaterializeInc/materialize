@@ -124,7 +124,7 @@ your thinking and inform the writing process.
    remember that this process is not intended to design by committee.
    Use your judgment in engaging with feedback from outside of your group
    of stakeholders. Note that we have a bot that automatically posts
-   notifications about new design documents in #epd-design-docs.
+   notifications about new design documents in #rnd-design-docs.
 
 ### Iteration
 

@@ -43,7 +43,7 @@ You can [cast](../../functions/cast) the following types to `boolean`:
 
 ## Examples
 
-```sql
+```mzsql
 SELECT TRUE AS t_val;
 ```
 ```nofmt
@@ -52,7 +52,7 @@ SELECT TRUE AS t_val;
  t
 ```
 
-```sql
+```mzsql
 SELECT FALSE AS f_val;
  f_val
 -------

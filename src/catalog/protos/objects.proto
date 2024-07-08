@@ -378,6 +378,7 @@ message ReplicaConfig {
     bool disk = 4;
     bool internal = 5;
     optional string billed_as = 6;
+    bool pending = 7;
   }
 
   oneof location {

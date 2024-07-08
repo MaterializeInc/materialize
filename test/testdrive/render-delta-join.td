@@ -66,16 +66,16 @@ count
 > SELECT
     sent
   FROM
-    mz_internal.mz_dataflow_channels AS channels
-    LEFT JOIN mz_internal.mz_message_counts AS counts
+    mz_introspection.mz_dataflow_channels AS channels
+    LEFT JOIN mz_introspection.mz_message_counts AS counts
         ON channels.id = counts.channel_id
   WHERE
     id IN
         (SELECT id
-         FROM mz_internal.mz_dataflow_addresses
+         FROM mz_introspection.mz_dataflow_addresses
          WHERE address[1] =
              (SELECT id
-              FROM mz_internal.mz_dataflows
+              FROM mz_introspection.mz_dataflows
               WHERE name LIKE '%.delta_join%'))
     AND sent > 100
   ORDER BY sent;

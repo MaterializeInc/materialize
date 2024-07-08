@@ -7,6 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// BE CAREFUL! Unlike other Materialize Protos, Persist's messages need to
+// be forward-compatible and roundtrip losslessly between versions. Consider
+// making your Proto changes in a release before you populate non-default values,
+// or guard the code changes behind a feature flag.
+
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
@@ -103,10 +108,23 @@ message ProtoBytesStats {
         ProtoPrimitiveBytesStats primitive = 1;
         ProtoJsonStats json = 2;
         ProtoAtomicBytesStats atomic = 3;
+        ProtoFixedSizeBytesStats fixed_size = 4;
     }
 }
 
 message ProtoAtomicBytesStats {
     bytes lower = 1;
     bytes upper = 2;
+}
+
+message ProtoFixedSizeBytesStats {
+    bytes lower = 1;
+    bytes upper = 2;
+
+    oneof kind {
+        google.protobuf.Empty packed_time = 3;
+        google.protobuf.Empty packed_interval = 4;
+        google.protobuf.Empty packed_numeric = 5;
+        google.protobuf.Empty uuid = 6;
+    }
 }

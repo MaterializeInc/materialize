@@ -9,8 +9,11 @@
 
 //! Logic related to executing catalog transactions.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::ENABLE_0DT_DEPLOYMENT;
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, ObjectType,
     SchedulingDecisionsWithReasonsV1, VersionedEvent,
@@ -28,7 +31,7 @@ use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{strconv, GlobalId};
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
     CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, RoleAttributes, RoleMembership,
@@ -45,7 +48,6 @@ use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::controller::TxnWalTablesImpl;
-use std::collections::{BTreeMap, BTreeSet};
 use tracing::{info, trace};
 
 use crate::catalog::{
@@ -491,22 +493,22 @@ impl Catalog {
             // separately for updating state and builtin tables.
             // TODO(jkosh44) Some more thought needs to be given as to how temporary tables work
             // in a multi-subscriber catalog world.
+            let op_id = tx.op_id().into();
             let temporary_item_updates =
                 temporary_item_updates
                     .into_iter()
                     .map(|(item, diff)| StateUpdate {
                         kind: StateUpdateKind::TemporaryItem(item),
-                        ts: tx.op_id().into(),
+                        ts: op_id,
                         diff,
                     });
 
-            let mut updates: Vec<_> = tx.get_op_updates().collect();
+            let mut updates: Vec<_> = tx.get_and_commit_op_updates();
             updates.extend(temporary_item_updates);
             let op_builtin_table_updates = state.apply_updates(updates);
             let op_builtin_table_updates =
                 state.resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
-            tx.commit_op();
         }
 
         if dry_run_ops.is_empty() {
@@ -520,12 +522,11 @@ impl Catalog {
                 .await?;
             }
 
-            let updates = tx.get_op_updates().collect();
+            let updates = tx.get_and_commit_op_updates();
             let op_builtin_table_updates = state.apply_updates(updates);
             let op_builtin_table_updates =
                 state.resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
-            tx.commit_op();
 
             Ok(())
         } else {
@@ -1894,7 +1895,7 @@ impl Catalog {
             }
             Op::UpdateSystemConfiguration { name, value } => {
                 let parsed_value = state.parse_system_configuration(&name, value.borrow())?;
-                tx.upsert_system_config(&name, parsed_value)?;
+                tx.upsert_system_config(&name, parsed_value.clone())?;
                 // This mirrors the `txn_wal_tables` "system var" into the catalog
                 // storage "config" collection so that we can toggle the flag with
                 // Launch Darkly, but use it in boot before Launch Darkly is available.
@@ -1902,6 +1903,10 @@ impl Catalog {
                     let txn_wal_tables =
                         TxnWalTablesImpl::parse(value.borrow()).expect("parsing succeeded above");
                     tx.set_txn_wal_tables(txn_wal_tables)?;
+                } else if name == ENABLE_0DT_DEPLOYMENT.name() {
+                    let enable_0dt_deployment =
+                        strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
+                    tx.set_enable_0dt_deployment(enable_0dt_deployment)?;
                 }
             }
             Op::ResetSystemConfiguration { name } => {
@@ -1911,11 +1916,14 @@ impl Catalog {
                 // Launch Darkly, but use it in boot before Launch Darkly is available.
                 if name == TXN_WAL_TABLES.name() {
                     tx.reset_txn_wal_tables()?;
+                } else if name == ENABLE_0DT_DEPLOYMENT.name() {
+                    tx.reset_enable_0dt_deployment()?;
                 }
             }
             Op::ResetAllSystemConfiguration => {
                 tx.clear_system_configs();
                 tx.reset_txn_wal_tables()?;
+                tx.reset_enable_0dt_deployment()?;
             }
             Op::WeirdBuiltinTableUpdates {
                 builtin_table_update,

@@ -13,6 +13,9 @@ from materialize.test_analytics.connector.test_analytics_connector import (
     DatabaseConnector,
 )
 from materialize.test_analytics.data.build.build_data_storage import BuildDataStorage
+from materialize.test_analytics.data.build.build_history_analysis import (
+    BuildHistoryAnalysis,
+)
 from materialize.test_analytics.data.build_annotation.build_annotation_storage import (
     BuildAnnotationStorage,
 )
@@ -23,31 +26,30 @@ from materialize.test_analytics.data.scalability_framework.scalability_framework
     ScalabilityFrameworkResultStorage,
 )
 
-TEST_ANALYTICS_DATA_VERSION: int = 6
+TEST_ANALYTICS_DATA_VERSION: int = 8
 
 
 class TestAnalyticsDb:
 
     def __init__(self, config: MzDbConfig):
         self.config = config
-        database_connector = DatabaseConnector(config, log_sql=True)
-        self._disable_writer_if_on_unsupported_version(database_connector)
-
-        self.builds = BuildDataStorage(database_connector, TEST_ANALYTICS_DATA_VERSION)
-        self.scalability_results = ScalabilityFrameworkResultStorage(database_connector)
-        self.benchmark_results = FeatureBenchmarkResultStorage(database_connector)
-        self.build_annotations = BuildAnnotationStorage(database_connector)
-
-    def _disable_writer_if_on_unsupported_version(
-        self, database_connector: DatabaseConnector
-    ) -> None:
-        min_required_data_version = database_connector.query_min_required_data_version()
-        print(
-            f"Current data version is {TEST_ANALYTICS_DATA_VERSION}, min required version is {min_required_data_version}"
+        self.database_connector = DatabaseConnector(
+            config, current_data_version=TEST_ANALYTICS_DATA_VERSION, log_sql=True
         )
 
-        if TEST_ANALYTICS_DATA_VERSION < min_required_data_version:
-            print(
-                f"Uploading test_analytics data is not supported from this data version ({TEST_ANALYTICS_DATA_VERSION})"
-            )
-            database_connector.set_read_only()
+        self.builds = BuildDataStorage(
+            self.database_connector, TEST_ANALYTICS_DATA_VERSION
+        )
+        self.scalability_results = ScalabilityFrameworkResultStorage(
+            self.database_connector
+        )
+        self.benchmark_results = FeatureBenchmarkResultStorage(self.database_connector)
+        self.build_annotations = BuildAnnotationStorage(self.database_connector)
+        self.build_history = BuildHistoryAnalysis(self.database_connector)
+
+    def submit_updates(self) -> None:
+        """
+        This will open a connection to the test-analytics database and submit the SQL statements.
+        Make sure that this method is always invoked within a try-catch block.
+        """
+        self.database_connector.submit_update_statements()

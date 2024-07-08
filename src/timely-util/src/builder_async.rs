@@ -20,10 +20,9 @@ use std::task::{Context, Poll, Waker};
 
 use futures_util::task::ArcWake;
 use timely::communication::{Message, Pull, Push};
-use timely::container::{CapacityContainerBuilder, ContainerBuilder};
+use timely::container::columnation::Columnation;
+use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::ParallelizationContract;
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::counter::Counter as PushCounter;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
@@ -34,7 +33,9 @@ use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
-use timely::{Container, Data, PartialOrder};
+use timely::{Container, PartialOrder};
+
+use crate::containers::stack::{AccountedStackBuilder, StackWrapper};
 
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<G: Scope> {
@@ -190,45 +191,6 @@ pub enum Event<T: Timestamp, C, D> {
     Progress(Antichain<T>),
 }
 
-// TODO: delete and use CapabilityTrait instead once TimelyDataflow/timely-dataflow#512 gets merged
-pub trait CapabilityTrait<T: Timestamp> {
-    fn session<'a, CB, P>(
-        &'a self,
-        handle: &'a mut OutputHandleCore<'_, T, CB, P>,
-    ) -> Session<'a, T, CB, PushCounter<T, CB::Container, P>>
-    where
-        CB: ContainerBuilder,
-        P: Push<Bundle<T, CB::Container>>;
-}
-
-impl<T: Timestamp> CapabilityTrait<T> for InputCapability<T> {
-    #[inline]
-    fn session<'a, CB, P>(
-        &'a self,
-        handle: &'a mut OutputHandleCore<'_, T, CB, P>,
-    ) -> Session<'a, T, CB, PushCounter<T, CB::Container, P>>
-    where
-        CB: ContainerBuilder,
-        P: Push<Bundle<T, CB::Container>>,
-    {
-        handle.session_with_builder(self)
-    }
-}
-
-impl<T: Timestamp> CapabilityTrait<T> for Capability<T> {
-    #[inline]
-    fn session<'a, CB, P>(
-        &'a self,
-        handle: &'a mut OutputHandleCore<'_, T, CB, P>,
-    ) -> Session<'a, T, CB, PushCounter<T, CB::Container, P>>
-    where
-        CB: ContainerBuilder,
-        P: Push<Bundle<T, CB::Container>>,
-    {
-        handle.session_with_builder(self)
-    }
-}
-
 pub struct AsyncOutputHandle<
     T: Timestamp,
     CB: ContainerBuilder,
@@ -247,14 +209,10 @@ where
     C: Container,
     P: Push<Bundle<T, C>> + 'static,
 {
-    #[allow(clippy::unused_async)]
     #[inline]
-    pub async fn give_container<Cap>(&mut self, cap: &Cap, container: &mut C)
-    where
-        Cap: CapabilityTrait<T>,
-    {
+    pub fn give_container(&mut self, cap: &Capability<T>, container: &mut C) {
         let mut handle = self.handle.borrow_mut();
-        cap.session(&mut handle).give_container(container);
+        handle.session_with_builder(cap).give_container(container);
     }
 }
 
@@ -295,16 +253,49 @@ where
     }
 }
 
-impl<'a, T, D, P> AsyncOutputHandle<T, CapacityContainerBuilder<Vec<D>>, P>
+impl<'a, T, C, P> AsyncOutputHandle<T, CapacityContainerBuilder<C>, P>
 where
     T: Timestamp,
-    D: Data,
-    P: Push<Bundle<T, Vec<D>>> + 'static,
+    C: Container,
+    P: Push<Bundle<T, C>> + 'static,
 {
-    #[allow(clippy::unused_async)]
-    pub async fn give<C: CapabilityTrait<T>>(&mut self, cap: &C, data: D) {
+    pub fn give<D>(&mut self, cap: &Capability<T>, data: D)
+    where
+        CapacityContainerBuilder<C>: PushInto<D>,
+    {
         let mut handle = self.handle.borrow_mut();
-        cap.session(&mut handle).give(data);
+        handle.session_with_builder(cap).give(data);
+    }
+}
+
+impl<T, D, P>
+    AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<StackWrapper<D>>>, P>
+where
+    D: timely::Data + Columnation,
+    T: Timestamp,
+    P: Push<Bundle<T, StackWrapper<D>>>,
+{
+    pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
+
+    /// Provides one record at the time specified by the capability. This method will automatically
+    /// yield back to timely after [Self::MAX_OUTSTANDING_BYTES] have been produced.
+    pub async fn give_fueled<D2>(&mut self, cap: &Capability<T>, data: D2)
+    where
+        StackWrapper<D>: PushInto<D2>,
+    {
+        let should_yield = {
+            let mut handle = self.handle.borrow_mut();
+            let mut session = handle.session_with_builder(cap);
+            session.push_into(data);
+            let should_yield = session.builder().bytes.get() > Self::MAX_OUTSTANDING_BYTES;
+            if should_yield {
+                session.builder().bytes.set(0);
+            }
+            should_yield
+        };
+        if should_yield {
+            tokio::task::yield_now().await;
+        }
     }
 }
 
@@ -665,7 +656,7 @@ impl<G: Scope> OperatorBuilder<G> {
                 .map(CapabilitySet::from_elem)
                 .collect::<Vec<_>>();
             if let Err(err) = constructor(&mut *caps).await {
-                error_output.give(&error_cap, Rc::new(err)).await;
+                error_output.give(&error_cap, Rc::new(err));
                 drop(error_cap);
                 // IMPORTANT: wedge this operator until the button is pressed. Returning would drop
                 // the capabilities and could produce incorrect progress statements.
@@ -786,7 +777,7 @@ mod test {
                         Event::Data(cap, data) => {
                             for item in data.iter().copied() {
                                 tokio::task::yield_now().await;
-                                output.give(&cap, item).await;
+                                output.give(&cap, item);
                             }
                         }
                         Event::Progress(_frontier) => {}

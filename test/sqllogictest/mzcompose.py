@@ -590,17 +590,33 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/web-console.slt",
         "test/sqllogictest/show_clusters.slt",
     }
+    tests_no_auto_index_selects = {
+        # pg_typeof contains public schema name in views
+        "test/sqllogictest/cast.slt",
+        "test/sqllogictest/map.slt",
+        # pg_typeof contains public schema name in views
+        "test/sqllogictest/typeof.slt",
+    }
 
     tests = file_util.resolve_paths_with_wildcard(tests)
     tests_without_views_and_replica = file_util.resolve_paths_with_wildcard(
         tests_without_views_and_replica
     )
-    tests_with_views_or_replica = tests - tests_without_views_and_replica
+    tests_no_auto_index_selects = file_util.resolve_paths_with_wildcard(
+        tests_no_auto_index_selects
+    )
+    tests_with_views_or_replica = (
+        tests - tests_without_views_and_replica - tests_no_auto_index_selects
+    )
 
     config.steps.append(
         SltRunStepConfig(tests_with_views_or_replica, ["--auto-index-selects"])
     )
-    config.steps.append(SltRunStepConfig(tests_without_views_and_replica, []))
+    config.steps.append(
+        SltRunStepConfig(
+            (tests_without_views_and_replica | tests_no_auto_index_selects), []
+        )
+    )
 
     # Due to performance issues (see below), we pick two selected SLTs from
     # the SQLite corpus that we can reasonably run with --auto-index-selects

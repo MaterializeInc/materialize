@@ -21,6 +21,14 @@ slow-timeout = { period = "120s", terminate-after = 2 }
 filter = "package(mz-storage-types) and test(all_datums_parquet_roundtrip)"
 slow-timeout = { period = "120s", terminate-after = 2 }
 
+[[profile.default.overrides]]
+filter = "package(mz-storage-types) and test(all_source_data_roundtrips)"
+slow-timeout = { period = "300s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = "package(mz-adapter) and test(test_smoketest_all_builtins)"
+slow-timeout = { period = "300s", terminate-after = 2 }
+
 [profile.ci]
 junit = { path = "junit_cargo-test.xml" }
 fail-fast = false

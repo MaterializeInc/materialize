@@ -42,26 +42,34 @@ Indexes:
 public
 information_schema
 mz_catalog
+mz_catalog_unstable
 mz_unsafe
 mz_internal
+mz_introspection
 pg_catalog
+
 > SHOW SCHEMAS
 name
 ------------------
 information_schema
 public
 mz_catalog
+mz_catalog_unstable
 mz_unsafe
 mz_internal
+mz_introspection
 pg_catalog
+
 $ psql-execute command=\dn
-\     List of schemas
-    Name     |   Owner
--------------+-----------
- mz_catalog  | mz_system
- mz_internal | mz_system
- mz_unsafe   | mz_system
- public      | mz_system
+\         List of schemas
+        Name         |   Owner
+---------------------+-----------
+ mz_catalog          | mz_system
+ mz_catalog_unstable | mz_system
+ mz_internal         | mz_system
+ mz_introspection    | mz_system
+ mz_unsafe           | mz_system
+ public              | mz_system
 
 
 $ psql-execute command="\dn mz_catalog"
@@ -72,12 +80,14 @@ $ psql-execute command="\dn mz_catalog"
 
 
 $ psql-execute command="\dn mz_*"
-\     List of schemas
-    Name     |   Owner
--------------+-----------
- mz_catalog  | mz_system
- mz_internal | mz_system
- mz_unsafe   | mz_system
+\         List of schemas
+        Name         |   Owner
+---------------------+-----------
+ mz_catalog          | mz_system
+ mz_catalog_unstable | mz_system
+ mz_internal         | mz_system
+ mz_introspection    | mz_system
+ mz_unsafe           | mz_system
 
 # What objects do we have by default?
 > SHOW OBJECTS
@@ -93,7 +103,9 @@ public
 s
 information_schema
 mz_catalog
+mz_catalog_unstable
 mz_internal
+mz_introspection
 mz_unsafe
 pg_catalog
 
@@ -182,7 +194,9 @@ name
 public
 information_schema
 mz_catalog
+mz_catalog_unstable
 mz_internal
+mz_introspection
 mz_unsafe
 pg_catalog
 
@@ -195,7 +209,9 @@ public
 s
 information_schema
 mz_catalog
+mz_catalog_unstable
 mz_internal
+mz_introspection
 mz_unsafe
 pg_catalog
 
@@ -223,7 +239,9 @@ public
 s
 information_schema
 mz_catalog
+mz_catalog_unstable
 mz_internal
+mz_introspection
 mz_unsafe
 pg_catalog
 > CREATE VIEW v2 AS SELECT 2
@@ -531,47 +549,28 @@ mz_storage_usage
 mz_timezone_abbreviations
 mz_timezone_names
 
+# Check default sources, tables, and views in mz_catalog_unstable.
+
+> SHOW SOURCES FROM mz_catalog_unstable
+
+> SHOW TABLES FROM mz_catalog_unstable
+
+> SHOW VIEWS FROM mz_catalog_unstable
+
 # Check default sources, tables, and views in mz_internal.
 
 > SHOW SOURCES FROM mz_internal
 name                                           type   size  cluster
 ------------------------------------------------------------------
-mz_active_peeks_per_worker                   log   <null>   <null>
-mz_arrangement_batcher_allocations_raw       log   <null>   <null>
-mz_arrangement_batcher_capacity_raw          log   <null>   <null>
-mz_arrangement_batcher_records_raw           log   <null>   <null>
-mz_arrangement_batcher_size_raw              log   <null>   <null>
-mz_arrangement_batches_raw                   log   <null>   <null>
-mz_arrangement_heap_allocations_raw          log   <null>   <null>
-mz_arrangement_heap_capacity_raw             log   <null>   <null>
-mz_arrangement_heap_size_raw                 log   <null>   <null>
-mz_arrangement_records_raw                   log   <null>   <null>
-mz_arrangement_sharing_raw                   log   <null>   <null>
 mz_aws_privatelink_connection_status_history source <null>  <null>
 mz_cluster_replica_frontiers                 source <null>  <null>
 mz_compute_dependencies                      source <null>  <null>
-mz_compute_error_counts_raw                  log   <null>   <null>
-mz_compute_exports_per_worker                log   <null>   <null>
-mz_compute_frontiers_per_worker              log   <null>   <null>
-mz_compute_hydration_statuses                source <null>  <null>
-mz_compute_import_frontiers_per_worker       log   <null>   <null>
-mz_compute_operator_durations_histogram_raw  log   <null>   <null>
+mz_compute_error_counts_raw_unified          source <null>   <null>
+mz_compute_hydration_times                   source <null>  <null>
 mz_compute_operator_hydration_statuses_per_worker source <null> <null>
-mz_dataflow_addresses_per_worker             log   <null>   <null>
-mz_dataflow_channels_per_worker              log   <null>   <null>
-mz_dataflow_operator_reachability_raw        log   <null>   <null>
-mz_dataflow_operators_per_worker             log   <null>   <null>
-mz_dataflow_shutdown_durations_histogram_raw log   <null>   <null>
 mz_frontiers                                 source <null>  <null>
 mz_materialized_view_refreshes               source <null>  <null>
-mz_message_counts_received_raw               log   <null>   <null>
-mz_message_counts_sent_raw                   log   <null>   <null>
-mz_message_batch_counts_received_raw         log   <null>   <null>
-mz_message_batch_counts_sent_raw             log   <null>   <null>
-mz_peek_durations_histogram_raw              log   <null>   <null>
 mz_prepared_statement_history                source <null>  <null>
-mz_scheduling_elapsed_raw                    log   <null>   <null>
-mz_scheduling_parks_histogram_raw            log   <null>   <null>
 mz_session_history                           source <null>  <null>
 mz_sink_statistics_raw                       source <null>  <null>
 mz_sink_status_history                       source <null>  <null>
@@ -609,65 +608,25 @@ mz_webhook_sources
 > SHOW VIEWS FROM mz_internal
 name
 -------------------------------------
-mz_active_peeks
 mz_activity_log_thinned
-mz_arrangement_sharing
-mz_arrangement_sharing_per_worker
-mz_arrangement_sizes
-mz_arrangement_sizes_per_worker
 mz_cluster_replica_history
 mz_cluster_replica_utilization
-mz_compute_error_counts
-mz_compute_error_counts_per_worker
-mz_compute_exports
-mz_compute_frontiers
-mz_compute_import_frontiers
-mz_compute_operator_durations_histogram
-mz_compute_operator_durations_histogram_per_worker
+mz_compute_hydration_statuses
 mz_compute_operator_hydration_statuses
-mz_dataflow_addresses
-mz_dataflow_arrangement_sizes
-mz_dataflow_channel_operators
-mz_dataflow_channel_operators_per_worker
-mz_dataflow_channels
-mz_dataflow_operator_dataflows
-mz_dataflow_operator_dataflows_per_worker
-mz_dataflow_operator_parents
-mz_dataflow_operator_parents_per_worker
-mz_dataflow_operator_reachability
-mz_dataflow_operator_reachability_per_worker
-mz_dataflow_operators
-mz_dataflow_shutdown_durations_histogram
-mz_dataflow_shutdown_durations_histogram_per_worker
-mz_dataflows
-mz_dataflows_per_worker
-mz_expected_group_size_advice
 mz_global_frontiers
 mz_hydration_statuses
 mz_materialization_lag
-mz_message_counts
-mz_message_counts_per_worker
 mz_notices
 mz_notices_redacted
 mz_object_fully_qualified_names
 mz_object_lifetimes
 mz_object_oid_alias
 mz_object_transitive_dependencies
-mz_peek_durations_histogram
-mz_peek_durations_histogram_per_worker
 mz_recent_activity_log
 mz_recent_activity_log_thinned
 mz_recent_activity_log_redacted
 mz_recent_sql_text
 mz_recent_sql_text_redacted
-mz_records_per_dataflow
-mz_records_per_dataflow_operator
-mz_records_per_dataflow_operator_per_worker
-mz_records_per_dataflow_per_worker
-mz_scheduling_elapsed
-mz_scheduling_elapsed_per_worker
-mz_scheduling_parks_histogram
-mz_scheduling_parks_histogram_per_worker
 mz_show_all_my_privileges
 mz_show_all_privileges
 mz_show_cluster_privileges
@@ -704,6 +663,84 @@ pg_description_all_databases
 pg_attrdef_all_databases
 pg_attribute_all_databases
 
+# Check default sources, tables, and views in mz_introspection.
+
+> SHOW SOURCES FROM mz_introspection
+mz_active_peeks_per_worker                   log   <null>   <null>
+mz_arrangement_batcher_allocations_raw       log   <null>   <null>
+mz_arrangement_batcher_capacity_raw          log   <null>   <null>
+mz_arrangement_batcher_records_raw           log   <null>   <null>
+mz_arrangement_batcher_size_raw              log   <null>   <null>
+mz_arrangement_batches_raw                   log   <null>   <null>
+mz_arrangement_heap_allocations_raw          log   <null>   <null>
+mz_arrangement_heap_capacity_raw             log   <null>   <null>
+mz_arrangement_heap_size_raw                 log   <null>   <null>
+mz_arrangement_records_raw                   log   <null>   <null>
+mz_arrangement_sharing_raw                   log   <null>   <null>
+mz_compute_error_counts_raw                  log   <null>   <null>
+mz_compute_exports_per_worker                log   <null>   <null>
+mz_compute_frontiers_per_worker              log   <null>   <null>
+mz_compute_hydration_times_per_worker        log   <null>   <null>
+mz_compute_import_frontiers_per_worker       log   <null>   <null>
+mz_compute_operator_durations_histogram_raw  log   <null>   <null>
+mz_dataflow_addresses_per_worker             log   <null>   <null>
+mz_dataflow_channels_per_worker              log   <null>   <null>
+mz_dataflow_operator_reachability_raw        log   <null>   <null>
+mz_dataflow_operators_per_worker             log   <null>   <null>
+mz_dataflow_shutdown_durations_histogram_raw log   <null>   <null>
+mz_message_counts_received_raw               log   <null>   <null>
+mz_message_counts_sent_raw                   log   <null>   <null>
+mz_message_batch_counts_received_raw         log   <null>   <null>
+mz_message_batch_counts_sent_raw             log   <null>   <null>
+mz_peek_durations_histogram_raw              log   <null>   <null>
+mz_scheduling_elapsed_raw                    log   <null>   <null>
+mz_scheduling_parks_histogram_raw            log   <null>   <null>
+
+> SHOW TABLES FROM mz_introspection
+
+> SHOW VIEWS FROM mz_introspection
+mz_active_peeks
+mz_arrangement_sharing
+mz_arrangement_sharing_per_worker
+mz_arrangement_sizes
+mz_arrangement_sizes_per_worker
+mz_compute_error_counts
+mz_compute_error_counts_per_worker
+mz_compute_exports
+mz_compute_frontiers
+mz_compute_import_frontiers
+mz_compute_operator_durations_histogram
+mz_compute_operator_durations_histogram_per_worker
+mz_dataflow_addresses
+mz_dataflow_arrangement_sizes
+mz_dataflow_channel_operators
+mz_dataflow_channel_operators_per_worker
+mz_dataflow_channels
+mz_dataflow_operator_dataflows
+mz_dataflow_operator_dataflows_per_worker
+mz_dataflow_operator_parents
+mz_dataflow_operator_parents_per_worker
+mz_dataflow_operator_reachability
+mz_dataflow_operator_reachability_per_worker
+mz_dataflow_operators
+mz_dataflow_shutdown_durations_histogram
+mz_dataflow_shutdown_durations_histogram_per_worker
+mz_dataflows
+mz_dataflows_per_worker
+mz_expected_group_size_advice
+mz_message_counts
+mz_message_counts_per_worker
+mz_peek_durations_histogram
+mz_peek_durations_histogram_per_worker
+mz_records_per_dataflow
+mz_records_per_dataflow_operator
+mz_records_per_dataflow_operator_per_worker
+mz_records_per_dataflow_per_worker
+mz_scheduling_elapsed
+mz_scheduling_elapsed_per_worker
+mz_scheduling_parks_histogram
+mz_scheduling_parks_histogram_per_worker
+
 > SET database = materialize
 
 > CREATE SCHEMA tester
@@ -721,7 +758,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-189
+194
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

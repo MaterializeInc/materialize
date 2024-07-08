@@ -23,6 +23,12 @@ from materialize.output_consistency.input_data.params.list_operation_param impor
     ListOfOtherElementOperationParam,
     ListOperationParam,
 )
+from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
+    BooleanReturnTypeSpec,
+)
+from materialize.output_consistency.input_data.return_specs.collection_entry_return_spec import (
+    CollectionEntryReturnTypeSpec,
+)
 from materialize.output_consistency.input_data.return_specs.list_return_spec import (
     ListReturnTypeSpec,
 )
@@ -75,6 +81,18 @@ LIST_OPERATION_TYPES.append(
 )
 
 LIST_OPERATION_TYPES.append(
+    DbOperation(
+        "$ @> $",
+        [
+            ListOperationParam(),
+            ElementOfOtherCollectionOperationParam(index_of_previous_param=0),
+        ],
+        BooleanReturnTypeSpec(),
+        comment="contains",
+    )
+)
+
+LIST_OPERATION_TYPES.append(
     DbFunction(
         "list_agg",
         [
@@ -99,7 +117,7 @@ LIST_OPERATION_TYPES.append(
     DbOperation(
         "$[$]",
         [ListOperationParam(), COLLECTION_INDEX_PARAM],
-        ListReturnTypeSpec(),
+        CollectionEntryReturnTypeSpec(param_index_to_take_type=0),
         comment="access list element",
     )
 )

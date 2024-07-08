@@ -47,7 +47,7 @@ Instead, we recommend that you materialize all components required for the
 `jsonb_object_agg` on top of that. That pattern is illustrated in the following
 statements:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT key_col, val_col FROM foo;
 CREATE VIEW bar AS SELECT jsonb_object_agg(key_col, val_col) FROM foo_view;
 ```
@@ -55,7 +55,7 @@ CREATE VIEW bar AS SELECT jsonb_object_agg(key_col, val_col) FROM foo_view;
 ## Examples
 
 Consider this query:
-```sql
+```mzsql
 SELECT
   jsonb_object_agg(
     t.col1,

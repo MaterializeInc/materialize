@@ -98,7 +98,7 @@ Operation | Computes
 
 ### Return timestamp
 
-```sql
+```mzsql
 SELECT TIMESTAMP '2007-02-01 15:04:05' AS ts_v;
 ```
 ```nofmt
@@ -109,7 +109,7 @@ SELECT TIMESTAMP '2007-02-01 15:04:05' AS ts_v;
 
 ### Return timestamp with time zone
 
-```sql
+```mzsql
 SELECT TIMESTAMPTZ '2007-02-01 15:04:05+06' AS tstz_v;
 ```
 ```nofmt

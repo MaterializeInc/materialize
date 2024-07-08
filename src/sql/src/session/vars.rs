@@ -1159,6 +1159,7 @@ impl SystemVars {
         let system_vars = vec![
             &MAX_KAFKA_CONNECTIONS,
             &MAX_POSTGRES_CONNECTIONS,
+            &MAX_MYSQL_CONNECTIONS,
             &MAX_AWS_PRIVATELINK_CONNECTIONS,
             &MAX_TABLES,
             &MAX_SOURCES,
@@ -1610,6 +1611,11 @@ impl SystemVars {
     /// Returns the value of the `max_postgres_connections` configuration parameter.
     pub fn max_postgres_connections(&self) -> u32 {
         *self.expect_value(&MAX_POSTGRES_CONNECTIONS)
+    }
+
+    /// Returns the value of the `max_mysql_connections` configuration parameter.
+    pub fn max_mysql_connections(&self) -> u32 {
+        *self.expect_value(&MAX_MYSQL_CONNECTIONS)
     }
 
     /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.

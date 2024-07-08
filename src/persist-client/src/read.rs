@@ -12,6 +12,7 @@
 use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,9 +22,9 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
 use mz_dyncfg::Config;
+use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
-use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
@@ -42,7 +43,7 @@ use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
 use crate::iter::{Consolidator, SPLIT_OLD_RUNS};
-use crate::stats::{SnapshotPartStats, SnapshotPartsStats};
+use crate::stats::{SnapshotPartStats, SnapshotPartsStats, SnapshotStats};
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
 pub use crate::internal::encoding::LazyPartStats;
@@ -686,13 +687,9 @@ where
     ) -> Result<Vec<LeasedBatchPart<T>>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
-        soft_assert_or_log!(
-            PartialOrder::less_equal(self.since(), &as_of),
-            "ReadHandle::snapshot called with as_of {:?} not past the handle's since {:?}, \
-            though the read has succeeded. This implies the since is not being held back correctly.",
-            &as_of,
-            self.since()
-        );
+        if !PartialOrder::less_equal(self.since(), &as_of) {
+            return Err(Since(self.since().clone()));
+        }
 
         let filter = FetchBatchFilter::Snapshot { as_of };
         let mut leased_parts = Vec::new();
@@ -1021,6 +1018,35 @@ where
             _lease: lease,
             _schemas: self.schemas.clone(),
         })
+    }
+
+    /// Returns aggregate statistics about the contents of the shard TVC at the
+    /// given frontier.
+    ///
+    /// This command returns the contents of this shard as of `as_of` once they
+    /// are known. This may "block" (in an async-friendly way) if `as_of` is
+    /// greater or equal to the current `upper` of the shard. If `None` is given
+    /// for `as_of`, then the latest stats known by this process are used.
+    ///
+    /// The `Since` error indicates that the requested `as_of` cannot be served
+    /// (the caller has out of date information) and includes the smallest
+    /// `as_of` that would have been accepted.
+    pub fn snapshot_stats(
+        &self,
+        as_of: Option<Antichain<T>>,
+    ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static {
+        let mut machine = self.machine.clone();
+        async move {
+            let batches = match as_of {
+                Some(as_of) => machine.snapshot(&as_of).await?,
+                None => machine.applier.all_batches(),
+            };
+            let num_updates = batches.iter().map(|b| b.len).sum();
+            Ok(SnapshotStats {
+                shard_id: machine.shard_id(),
+                num_updates,
+            })
+        }
     }
 
     /// Returns aggregate statistics about the contents of the shard TVC at the

@@ -355,6 +355,7 @@ impl<T> ShouldHalt for StorageError<T> {
             | StorageError::IngestionInstanceMissing { .. }
             | StorageError::ExportInstanceMissing { .. }
             | StorageError::Generic(_)
+            | StorageError::ReadOnly
             | StorageError::DataflowError(_)
             | StorageError::InvalidAlter { .. }
             | StorageError::ShuttingDown(_)

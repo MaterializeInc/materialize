@@ -12,7 +12,7 @@ your MySQL database.
    client connected to Materialize, use the [`CREATE CLUSTER`](/sql/create-cluster/)
    command to create the new cluster:
 
-    ```sql
+    ```mzsql
     CREATE CLUSTER ingest_mysql (SIZE = '200cc');
 
     SET CLUSTER = ingest_mysql;
