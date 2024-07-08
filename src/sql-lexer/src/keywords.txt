@@ -333,6 +333,7 @@ Range
 Rate
 Raw
 Read
+Ready
 Real
 Reassign
 Recursion
@@ -447,6 +448,7 @@ Uncommitted
 Union
 Unique
 Unknown
+Until
 Up
 Update
 Upsert

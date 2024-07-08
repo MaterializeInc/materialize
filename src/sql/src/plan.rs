@@ -87,6 +87,7 @@ pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
 use crate::plan;
+use crate::plan::statement::ddl::ClusterAlterUntilReadyOptionExtracted;
 use crate::plan::with_options::OptionalDuration;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
@@ -1651,6 +1652,35 @@ impl Default for PlanClusterOption {
 pub enum AlterClusterPlanStrategy {
     None,
     For(Duration),
+    UntilReady {
+        on_timeout: OnTimeoutAction,
+        timeout: Duration,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OnTimeoutAction {
+    Commit,
+    Rollback,
+}
+
+impl Default for OnTimeoutAction {
+    fn default() -> Self {
+        Self::Rollback
+    }
+}
+
+impl TryFrom<&str> for OnTimeoutAction {
+    type Error = PlanError;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_uppercase().as_str() {
+            "COMMIT" => Ok(Self::Commit),
+            "ROLLBACK" => Ok(Self::Rollback),
+            _ => Err(PlanError::Unstructured(
+                "Valid options are COMMIT, ROLLBACK".into(),
+            )),
+        }
+    }
 }
 
 impl AlterClusterPlanStrategy {
@@ -1665,6 +1695,24 @@ impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
     fn try_from(value: ClusterAlterOptionExtracted) -> Result<Self, Self::Error> {
         Ok(match value.wait {
             Some(ClusterAlterOptionValue::For(d)) => Self::For(Duration::try_from_value(d)?),
+            Some(ClusterAlterOptionValue::UntilReady(options)) => {
+                let extracted = ClusterAlterUntilReadyOptionExtracted::try_from(options)?;
+                Self::UntilReady {
+                    timeout: match extracted.timeout {
+                        Some(d) => d,
+                        None => Err(PlanError::UntilReadyTimeoutRequired)?,
+                    },
+                    on_timeout: match extracted.on_timeout {
+                        Some(v) => OnTimeoutAction::try_from(v.as_str()).map_err(|e| {
+                            PlanError::InvalidOptionValue {
+                                option_name: "ON TIMEOUT".into(),
+                                err: Box::new(e),
+                            }
+                        })?,
+                        None => OnTimeoutAction::default(),
+                    },
+                }
+            }
             None => Self::None,
         })
     }
