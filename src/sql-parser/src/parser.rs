@@ -5333,8 +5333,14 @@ impl<'a> Parser<'a> {
     ) -> Result<Statement<Raw>, ParserStatementError> {
         let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
         let name = self.parse_item_name().map_no_statement_parser_err()?;
+        let keywords = if object_type == ObjectType::Table {
+            [SET, RENAME, OWNER, RESET, ADD].as_slice()
+        } else {
+            [SET, RENAME, OWNER, RESET].as_slice()
+        };
+
         let action = self
-            .expect_one_of_keywords(&[SET, RENAME, OWNER, RESET])
+            .expect_one_of_keywords(keywords)
             .map_no_statement_parser_err()?;
         match action {
             RENAME => {
@@ -5395,6 +5401,31 @@ impl<'a> Parser<'a> {
                     name: UnresolvedObjectName::Item(name),
                     new_owner,
                 }))
+            }
+            ADD => {
+                assert_eq!(object_type, ObjectType::Table, "checked object_type above");
+
+                self.expect_keyword(COLUMN)
+                    .map_parser_err(StatementKind::AlterTableAddColumn)?;
+                let if_col_not_exist = self
+                    .parse_if_not_exists()
+                    .map_parser_err(StatementKind::AlterTableAddColumn)?;
+                let column_name = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterTableAddColumn)?;
+                let data_type = self
+                    .parse_data_type()
+                    .map_parser_err(StatementKind::AlterTableAddColumn)?;
+
+                Ok(Statement::AlterTableAddColumn(
+                    AlterTableAddColumnStatement {
+                        if_exists,
+                        name,
+                        if_col_not_exist,
+                        column_name,
+                        data_type,
+                    },
+                ))
             }
             _ => unreachable!(),
         }

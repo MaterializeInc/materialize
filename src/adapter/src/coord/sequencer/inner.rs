@@ -4470,6 +4470,20 @@ impl Coordinator {
             .await
             .map(|_| ExecuteResponse::ReassignOwned)
     }
+
+    #[instrument]
+    // TODO(parkmycar): Remove this once we have an actual implementation.
+    #[allow(clippy::unused_async)]
+    pub(super) async fn sequence_alter_table(
+        &mut self,
+        _session: &Session,
+        _plan: plan::AlterTablePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        Err(AdapterError::PlanError(plan::PlanError::Unsupported {
+            feature: "ALTER TABLE ... ADD COLUMN ...".to_string(),
+            issue_no: Some(28082),
+        }))
+    }
 }
 
 #[derive(Debug)]

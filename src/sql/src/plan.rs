@@ -63,8 +63,7 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
-    ResolvedIds, SchemaSpecifier, SystemObjectId,
+    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId
 };
 
 pub(crate) mod error;
@@ -169,6 +168,7 @@ pub enum Plan {
     AlterSystemResetAll(AlterSystemResetAllPlan),
     AlterRole(AlterRolePlan),
     AlterOwner(AlterOwnerPlan),
+    AlterTableAddColumn(AlterTablePlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -225,6 +225,9 @@ impl Plan {
             }
             StatementKind::AlterSystemSet => &[PlanKind::AlterNoop, PlanKind::AlterSystemSet],
             StatementKind::AlterOwner => &[PlanKind::AlterNoop, PlanKind::AlterOwner],
+            StatementKind::AlterTableAddColumn => {
+                &[PlanKind::AlterNoop, PlanKind::AlterTableAddColumn]
+            }
             StatementKind::Close => &[PlanKind::Close],
             StatementKind::Comment => &[PlanKind::Comment],
             StatementKind::Commit => &[PlanKind::CommitTransaction],
@@ -402,6 +405,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
             },
+            Plan::AlterTableAddColumn(_) => "alter table add column",
             Plan::Declare(_) => "declare",
             Plan::Fetch(_) => "fetch",
             Plan::Close(_) => "close",
@@ -1164,6 +1168,13 @@ pub struct AlterOwnerPlan {
     pub id: ObjectId,
     pub object_type: ObjectType,
     pub new_owner: RoleId,
+}
+
+#[derive(Debug)]
+pub struct AlterTablePlan {
+    pub relation_id: GlobalId,
+    pub column_name: ColumnName,
+    pub column_type: ResolvedDataType,
 }
 
 #[derive(Debug)]

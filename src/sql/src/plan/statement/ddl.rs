@@ -48,25 +48,25 @@ use mz_sql_parser::ast::{
     AlterRoleOption, AlterRoleStatement, AlterSecretStatement, AlterSetClusterStatement,
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
     AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, AvroSchema, AvroSchemaOption,
-    AvroSchemaOptionName, ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
-    ClusterScheduleOptionValue, ColumnOption, CommentObjectType, CommentStatement,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
-    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
-    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
-    CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
+    AlterSystemResetStatement, AlterSystemSetStatement, AlterTableAddColumnStatement, AvroSchema,
+    AvroSchemaOption, AvroSchemaOptionName, ClusterFeature, ClusterFeatureName, ClusterOption,
+    ClusterOptionName, ClusterScheduleOptionValue, ColumnOption, CommentObjectType,
+    CommentStatement, CreateClusterReplicaStatement, CreateClusterStatement,
+    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
+    CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
+    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
+    DropOwnedStatement, Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName,
+    KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
+    MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
     RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
     ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
     Statement, TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName,
@@ -129,15 +129,16 @@ use crate::plan::{
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan,
     AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ClusterSchedule,
-    CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan,
+    ClusterSchedule, CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr,
+    Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext,
+    ReplicaConfig, Secret, Sink, Source, Table, Type, VariableValue, View, WebhookBodyFormat,
+    WebhookHeaderFilters, WebhookHeaders,
 };
 use crate::plan::{AlterSinkPlan, WebhookValidation};
 use crate::session::vars;
@@ -6040,6 +6041,67 @@ pub fn plan_alter_role(
         id: name.id,
         name: name.name,
         option,
+    }))
+}
+
+pub fn describe_alter_table_add_column(
+    _: &StatementContext,
+    _: AlterTableAddColumnStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_table_add_column(
+    scx: &StatementContext,
+    stmt: AlterTableAddColumnStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let AlterTableAddColumnStatement {
+        if_exists,
+        name,
+        if_col_not_exist,
+        column_name,
+        data_type,
+    } = stmt;
+    let object_type = ObjectType::Table;
+
+    scx.require_feature_flag(&vars::ENABLE_ALTER_TABLE_ADD_COLUMN)?;
+
+    let (relation_id, item_name, desc) =
+        match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
+            Some(item) => {
+                let item_name = scx.catalog.resolve_full_name(item.name());
+                let desc = item.desc(&item_name)?;
+                (item.id(), item_name, desc)
+            }
+            None => {
+                scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                    name: name.to_ast_string(),
+                    object_type,
+                });
+                return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+            }
+        };
+
+    let column_name = ColumnName::from(column_name.as_str());
+    if desc.get_by_name(&column_name).is_some() {
+        if if_col_not_exist {
+            scx.catalog.add_notice(PlanNotice::ColumnAlreadyExists {
+                column_name: column_name.to_string(),
+                object_name: item_name.item,
+            });
+            return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+        } else {
+            return Err(PlanError::ColumnAlreadyExists {
+                column_name,
+                object_name: item_name.item,
+            });
+        }
+    }
+
+    Ok(Plan::AlterTableAddColumn(AlterTablePlan {
+        relation_id,
+        column_name,
+        column_type: data_type,
     }))
 }
 

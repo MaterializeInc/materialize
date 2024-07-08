@@ -439,6 +439,10 @@ impl Coordinator {
                         .await;
                     ctx.retire(result);
                 }
+                Plan::AlterTableAddColumn(plan) => {
+                    let result = self.sequence_alter_table(ctx.session(), plan).await;
+                    ctx.retire(result);
+                }
                 Plan::DiscardTemp => {
                     self.drop_temp_items(ctx.session().conn_id()).await;
                     ctx.retire(Ok(ExecuteResponse::DiscardedTemp));

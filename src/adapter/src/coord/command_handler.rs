@@ -607,6 +607,7 @@ impl Coordinator {
                     | Statement::AlterSystemReset(_)
                     | Statement::AlterSystemResetAll(_)
                     | Statement::AlterSystemSet(_)
+                    | Statement::AlterTableAddColumn(_)
                     | Statement::CreateCluster(_)
                     | Statement::CreateClusterReplica(_)
                     | Statement::CreateConnection(_)
