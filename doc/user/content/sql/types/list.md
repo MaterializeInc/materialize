@@ -553,3 +553,13 @@ SELECT LIST[7,3,1] @> LIST[1,3,3,3,3,7] AS contains;
 ----------
  t
 ```
+
+```mzsql
+SELECT LIST[1,3,7,NULL] @> LIST[1,3,7,NULL] AS contains;
+```
+```nofmt
+ contains
+----------
+ f
+```
+
