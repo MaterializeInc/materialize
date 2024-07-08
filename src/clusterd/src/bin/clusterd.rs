@@ -151,6 +151,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    std::thread::sleep_ms(1000);
+
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),
         enable_version_flag: true,
