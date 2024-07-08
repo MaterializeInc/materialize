@@ -115,7 +115,7 @@ const CATALOG_SEED: usize = 1;
 const UPGRADE_SEED: usize = 2;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Mode {
     /// Mutable operations are prohibited.
     Readonly,
@@ -203,6 +203,8 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindRaw> {
 /// A handle for interacting with the persist catalog shard.
 #[derive(Debug)]
 pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
+    /// The [`Mode`] that this catalog was opened in.
+    mode: Mode,
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
@@ -374,6 +376,14 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     #[mz_ore::instrument(level = "debug")]
     async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), DurableCatalogError> {
         self.epoch.validate()?;
+
+        // Savepoint catalogs do not yet know how to update themselves in response to concurrent
+        // writes from writer catalogs.
+        if self.mode == Mode::Savepoint {
+            self.upper = target_upper;
+            return Ok(());
+        }
+
         let mut updates = Vec::new();
 
         while self.upper < target_upper {
@@ -799,6 +809,8 @@ impl UnopenedPersistCatalogState {
         let epoch = FenceableEpoch::Unfenced(epoch);
 
         let mut handle = UnopenedPersistCatalogState {
+            // Unopened catalogs are always writeable until they're opened in an explicit mode.
+            mode: Mode::Writable,
             since_handle,
             write_handle,
             listen,
@@ -883,6 +895,7 @@ impl UnopenedPersistCatalogState {
             "initializing catalog state"
         );
         let mut catalog = PersistCatalogState {
+            mode: mode.clone(),
             since_handle: self.since_handle,
             write_handle: self.write_handle,
             listen: self.listen,
@@ -892,7 +905,7 @@ impl UnopenedPersistCatalogState {
             epoch: self.epoch,
             // Initialize empty in-memory state.
             snapshot: Vec::new(),
-            update_applier: CatalogStateInner::new(mode.clone()),
+            update_applier: CatalogStateInner::new(),
             metrics: self.metrics,
         };
         catalog.metrics.collection_entries.reset();
@@ -1153,8 +1166,6 @@ impl<T: Ord> LargeCollectionStartupCache<T> {
 
 #[derive(Debug)]
 struct CatalogStateInner {
-    /// The [`Mode`] that this catalog was opened in.
-    mode: Mode,
     /// A cache of storage usage events that is only populated during startup.
     storage_usage_events: LargeCollectionStartupCache<proto::StorageUsageKey>,
     /// A trace of all catalog updates that can be consumed by some higher layer.
@@ -1162,9 +1173,8 @@ struct CatalogStateInner {
 }
 
 impl CatalogStateInner {
-    fn new(mode: Mode) -> CatalogStateInner {
+    fn new() -> CatalogStateInner {
         CatalogStateInner {
-            mode,
             storage_usage_events: LargeCollectionStartupCache::new_open(),
             updates: VecDeque::new(),
         }
@@ -1359,7 +1369,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 #[async_trait]
 impl DurableCatalogState for PersistCatalogState {
     fn is_read_only(&self) -> bool {
-        matches!(self.update_applier.mode, Mode::Readonly)
+        matches!(self.mode, Mode::Readonly)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1400,9 +1410,9 @@ impl DurableCatalogState for PersistCatalogState {
             let updates = StateUpdate::from_txn_batch(txn_batch).collect();
             debug!("committing updates: {updates:?}");
 
-            if matches!(catalog.update_applier.mode, Mode::Writable) {
+            if matches!(catalog.mode, Mode::Writable) {
                 catalog.compare_and_append(updates).await?;
-            } else if matches!(catalog.update_applier.mode, Mode::Savepoint) {
+            } else if matches!(catalog.mode, Mode::Savepoint) {
                 let ts = catalog.upper;
                 let updates =
                     updates
