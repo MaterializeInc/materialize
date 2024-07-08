@@ -165,6 +165,30 @@ class ObservedError(ObservedBaseError):
     max_error_length: int = 10000
     max_details_length: int = 10000
 
+    def error_message_as_markdown(self) -> str:
+        return format_message_as_code_block(self.error_message, self.max_error_length)
+
+    def error_details_as_markdown(self) -> str:
+        if self.error_details is None:
+            return ""
+
+        return f"\n{format_message_as_code_block(self.error_details, self.max_details_length)}"
+
+    def error_message_as_text(self) -> str:
+        return crop_text(self.error_message, self.max_error_length)
+
+    def error_details_as_text(self) -> str:
+        if self.error_details is None:
+            return ""
+
+        return f"\n{crop_text(self.error_details, self.max_details_length)}"
+
+    def location_as_markdown(self) -> str:
+        if self.location_url is None:
+            return self.location
+        else:
+            return f'<a href="{self.location_url}">{self.location}</a>'
+
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ObservedErrorWithIssue(ObservedError, WithIssue):
@@ -178,59 +202,29 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
         return issue_presentation
 
     def to_text(self) -> str:
-        result = f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {crop_text(self.error_message, self.max_error_length)}"
-        if self.error_details is not None:
-            result += f"\n{crop_text(self.error_details, self.max_details_length)}"
-        return result
+        return f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        if self.location_url is None:
-            location_markdown = self.location
-        else:
-            location_markdown = f'<a href="{self.location_url}">{self.location}</a>'
-
-        result = f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {location_markdown}:\n{format_error_message(self.error_message, self.max_error_length)}'
-        if self.error_details is not None:
-            result += (
-                f"\n{format_error_message(self.error_details, self.max_details_length)}"
-            )
-        return result
+        return f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}'
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ObservedErrorWithLocation(ObservedError):
     def to_text(self) -> str:
-        if self.error_details:
-            error_details = f" {crop_text(self.error_details, self.max_details_length)}"
-        else:
-            error_details = ""
-
-        return f"{self.error_type} in {self.location}: {crop_text(self.error_message, self.max_error_length)}{error_details}"
+        return f"{self.error_type} in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        if self.error_details:
-            formatted_error_details = (
-                f"\n{format_error_message(self.error_details, self.max_details_length)}"
-            )
-        else:
-            formatted_error_details = ""
-
-        if self.location_url is None:
-            location_markdown = self.location
-        else:
-            location_markdown = f'<a href="{self.location_url}">{self.location}</a>'
-
-        return f"{self.error_type} in {location_markdown}:\n{format_error_message(self.error_message, self.max_error_length)}{formatted_error_details}"
+        return f"{self.error_type} in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}"
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class FailureInCoverageRun(ObservedError):
 
     def to_text(self) -> str:
-        return f"{self.location}: {crop_text(self.error_message)}"
+        return f"{self.location}: {self.error_message_as_text()}"
 
     def to_markdown(self) -> str:
-        return f"{self.location}:\n{format_error_message(self.error_message)}"
+        return f"{self.location}:\n{self.error_message_as_markdown()}"
 
 
 @dataclass
@@ -784,7 +778,9 @@ def has_successful_buildkite_status() -> bool:
     return os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") == "0"
 
 
-def format_error_message(error_message: str | None, max_length: int = 10_000) -> str:
+def format_message_as_code_block(
+    error_message: str | None, max_length: int = 10_000
+) -> str:
     if not error_message:
         return ""
 
