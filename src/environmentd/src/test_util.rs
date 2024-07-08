@@ -444,7 +444,6 @@ impl Listeners {
                     batch_scheduled_delay: Duration::from_millis(5000),
                     max_export_timeout: Duration::from_secs(30),
                 }),
-                #[cfg(feature = "tokio-console")]
                 tokio_console: None,
                 sentry: None,
                 build_version: crate::BUILD_INFO.version,
