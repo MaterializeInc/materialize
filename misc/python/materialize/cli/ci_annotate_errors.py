@@ -18,6 +18,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from itertools import chain
+from textwrap import dedent
 from typing import Any
 
 from junitparser.junitparser import Error, Failure, JUnitXml
@@ -36,6 +37,7 @@ from materialize.buildkite_insights.data.build_step import BuildStepMatcher
 from materialize.buildkite_insights.util.build_step_utils import (
     extract_build_step_outcomes,
 )
+from materialize.cli.mzcompose import JUNIT_ERROR_DETAILS_SEPARATOR
 from materialize.github import (
     for_github_re,
     get_known_issues_from_github,
@@ -159,6 +161,8 @@ class ObservedError(ObservedBaseError):
     # abstract class, do not instantiate
     error_message: str
     error_details: str | None = None
+    additional_collapsed_error_details_header: str | None = None
+    additional_collapsed_error_details: str | None = None
     error_type: str
     location: str
     location_url: str | None = None
@@ -189,6 +193,25 @@ class ObservedError(ObservedBaseError):
         else:
             return f'<a href="{self.location_url}">{self.location}</a>'
 
+    def additional_collapsed_error_details_as_markdown(self) -> str:
+        if self.additional_collapsed_error_details is None:
+            return ""
+
+        assert self.additional_collapsed_error_details_header is not None
+
+        return (
+            "\n"
+            + dedent(
+                f"""
+                <details>
+                    <summary>{self.additional_collapsed_error_details_header}</summary>
+                    <pre>{self.additional_collapsed_error_details}</pre>
+                </details>
+            """
+            ).strip()
+            + "\n\n"
+        )
+
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ObservedErrorWithIssue(ObservedError, WithIssue):
@@ -205,7 +228,7 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
         return f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        return f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}'
+        return f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -214,7 +237,7 @@ class ObservedErrorWithLocation(ObservedError):
         return f"{self.error_type} in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        return f"{self.error_type} in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}"
+        return f"{self.error_type} in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}"
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -224,7 +247,7 @@ class FailureInCoverageRun(ObservedError):
         return f"{self.location}: {self.error_message_as_text()}"
 
     def to_markdown(self) -> str:
-        return f"{self.location}:\n{self.error_message_as_markdown()}"
+        return f"{self.location}:\n{self.error_message_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}"
 
 
 @dataclass
@@ -401,6 +424,8 @@ def annotate_logged_errors(
         error_details: str | None,
         location: str,
         location_url: str | None,
+        additional_collapsed_error_details_header: str | None = None,
+        additional_collapsed_error_details: str | None = None,
     ):
         search_string = error_message.encode("utf-8")
         if error_details is not None:
@@ -428,6 +453,8 @@ def annotate_logged_errors(
                             issue_is_closed=False,
                             location=location,
                             location_url=location_url,
+                            additional_collapsed_error_details=additional_collapsed_error_details,
+                            additional_collapsed_error_details_header=additional_collapsed_error_details_header,
                         )
                     )
                     already_reported_issue_numbers.add(issue.info["number"])
@@ -455,6 +482,8 @@ def annotate_logged_errors(
                                 issue_is_closed=True,
                                 location=location,
                                 location_url=location_url,
+                                additional_collapsed_error_details=additional_collapsed_error_details,
+                                additional_collapsed_error_details_header=additional_collapsed_error_details_header,
                             )
                         )
                         already_reported_issue_numbers.add(issue.info["number"])
@@ -468,6 +497,8 @@ def annotate_logged_errors(
                         location_url=location_url,
                         error_type="Unknown error",
                         internal_error_type="UNKNOWN ERROR",
+                        additional_collapsed_error_details=additional_collapsed_error_details,
+                        additional_collapsed_error_details_header=additional_collapsed_error_details_header,
                     )
                 )
 
@@ -497,11 +528,32 @@ def annotate_logged_errors(
                 )
             else:
                 # JUnit error
+                all_error_details_raw = error.text
+                all_error_detail_parts = all_error_details_raw.split(
+                    JUNIT_ERROR_DETAILS_SEPARATOR
+                )
+                error_details = all_error_detail_parts[0]
+
+                if len(all_error_detail_parts) == 3:
+                    additional_collapsed_error_details_header = all_error_detail_parts[
+                        1
+                    ]
+                    additional_collapsed_error_details = all_error_detail_parts[2]
+                elif len(all_error_detail_parts) == 1:
+                    additional_collapsed_error_details_header = None
+                    additional_collapsed_error_details = None
+                else:
+                    raise RuntimeError(
+                        f"Unexpected error details format: {all_error_details_raw}"
+                    )
+
                 handle_error(
                     error_message=error.message,
-                    error_details=error.text,
+                    error_details=error_details,
                     location=error.testcase,
                     location_url=None,
+                    additional_collapsed_error_details_header=additional_collapsed_error_details_header,
+                    additional_collapsed_error_details=additional_collapsed_error_details,
                 )
         else:
             raise RuntimeError(f"Unexpected error type: {type(error)}")
