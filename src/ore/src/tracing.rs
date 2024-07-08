@@ -288,7 +288,10 @@ pub static OPENTELEMETRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
 /// By default we turn off tracing from the following crates, because they
 /// have error spans which are noisy.
 pub static SENTRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
-    vec![Directive::from_str("kube_client::client::builder=off").expect("valid directive")]
+    vec![
+        Directive::from_str("kube_client::client::builder=off").expect("valid directive"),
+        Directive::from_str("mysql_async::conn=off").expect("valid directive"),
+    ]
 });
 
 /// The [`GLOBAL_SUBSCRIBER`] type.
