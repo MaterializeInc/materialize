@@ -9,11 +9,13 @@
 
 //! Apache Arrow encodings and utils for persist data
 
+use std::panic::RefUnwindSafe;
+use std::ptr::NonNull;
 use std::sync::Arc;
 
 use arrow::array::{Array, AsArray, BinaryArray, PrimitiveArray};
-use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType, Field, Schema, ToByteSlice};
 use mz_dyncfg::Config;
 use mz_ore::bytes::MaybeLgBytes;
 use mz_ore::iter::IteratorExt;
@@ -117,6 +119,44 @@ pub(crate) const ENABLE_ARROW_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
     "A feature flag to enable copying decoded arrow data into lgalloc on non-cc sized clusters.",
 );
 
+fn realloc_slice<T: ArrowNativeType + RefUnwindSafe>(
+    slice: &[T],
+    metrics: &ColumnarMetrics,
+) -> Buffer {
+    let region = to_region(slice, metrics);
+    let bytes: &[u8] = region.as_ref().to_byte_slice();
+    let len = bytes.len();
+    if len == 0 {
+        Buffer::from_vec::<u8>(vec![])
+    } else {
+        let first_byte: &u8 = &bytes[0];
+        let ptr: NonNull<u8> = first_byte.into();
+        unsafe { Buffer::from_custom_allocation(ptr, len, Arc::new(region)) }
+    }
+}
+
+fn realloc_bool(bools: &BooleanBuffer, metrics: &ColumnarMetrics) -> BooleanBuffer {
+    BooleanBuffer::new(
+        realloc_slice(bools.inner(), metrics),
+        bools.offset(),
+        bools.len(),
+    )
+}
+
+fn realloc_primitive<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+    metrics: &ColumnarMetrics,
+) -> PrimitiveArray<T>
+where
+    T::Native: RefUnwindSafe,
+{
+    let scalar = ScalarBuffer::new(realloc_slice(array.values(), metrics), 0, array.len());
+    let nulls = array
+        .nulls()
+        .map(|nulls| NullBuffer::new(realloc_bool(nulls.inner(), metrics)));
+    PrimitiveArray::new(scalar, nulls)
+}
+
 /// Converts an [`arrow`] [(K, V, T, D)] [`RecordBatch`] into a [`ColumnarRecords`].
 ///
 /// [`RecordBatch`]: `arrow::array::RecordBatch`
@@ -155,14 +195,14 @@ pub fn decode_arrow_batch_kvtd(
         .as_primitive_opt::<arrow::datatypes::Int64Type>()
         .ok_or_else(|| "diff column is wrong type".to_string())?;
 
-    let key_offsets = to_region(&key.offsets()[..], metrics);
-    let key_data = to_region(key.value_data(), metrics);
+    let key_offsets = Arc::new(to_region(&key.offsets()[..], metrics));
+    let key_data = Arc::new(to_region(key.value_data(), metrics));
 
-    let val_offsets = to_region(&val.offsets()[..], metrics);
-    let val_data = to_region(val.value_data(), metrics);
+    let val_offsets = Arc::new(to_region(&val.offsets()[..], metrics));
+    let val_data = Arc::new(to_region(val.value_data(), metrics));
 
-    let timestamps = to_region(&time.values()[..], metrics);
-    let diffs = to_region(&diff.values()[..], metrics);
+    let timestamps = Arc::new(to_region(&time.values()[..], metrics));
+    let diffs = Arc::new(to_region(&diff.values()[..], metrics));
 
     let len = key.len();
     let ret = ColumnarRecords {
@@ -208,15 +248,15 @@ pub fn decode_arrow_batch_kvtd_ks_vs(
 }
 
 /// Copies a slice of data into a possibly disk-backed lgalloc region.
-fn to_region<T: Copy>(buf: &[T], metrics: &ColumnarMetrics) -> Arc<MetricsRegion<T>> {
+fn to_region<T: Copy>(buf: &[T], metrics: &ColumnarMetrics) -> MetricsRegion<T> {
     let use_lgbytes_mmap = if metrics.is_cc_active {
         ENABLE_ARROW_LGALLOC_CC_SIZES.get(&metrics.cfg)
     } else {
         ENABLE_ARROW_LGALLOC_NONCC_SIZES.get(&metrics.cfg)
     };
     if use_lgbytes_mmap {
-        Arc::new(metrics.lgbytes_arrow.try_mmap_region(buf))
+        metrics.lgbytes_arrow.try_mmap_region(buf)
     } else {
-        Arc::new(metrics.lgbytes_arrow.heap_region(buf.to_owned()))
+        metrics.lgbytes_arrow.heap_region(buf.to_owned())
     }
 }
