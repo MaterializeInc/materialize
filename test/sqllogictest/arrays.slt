@@ -1439,3 +1439,8 @@ query T
 SELECT '{1}'::numeric[] @> '{1, NULL}'::numeric[];
 ----
 false
+
+query T
+SELECT '{1, 2, 3, NULL}'::numeric[] @> '{1, NULL}'::numeric[];
+----
+false

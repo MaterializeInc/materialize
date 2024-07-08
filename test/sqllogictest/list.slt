@@ -3017,3 +3017,8 @@ query T
 SELECT '{1}'::numeric list @> '{1, NULL}'::numeric list;
 ----
 false
+
+query T
+SELECT '{1, 2, 3, NULL}'::numeric list @> '{1, NULL}'::numeric list;
+----
+false
