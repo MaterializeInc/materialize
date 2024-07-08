@@ -189,7 +189,7 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
         else:
             location_markdown = f'<a href="{self.location_url}">{self.location}</a>'
 
-        result = f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {location_markdown}:\n{format_error_message(self.error_message, self.max_details_length)}'
+        result = f'{self.error_type} <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {location_markdown}:\n{format_error_message(self.error_message, self.max_error_length)}'
         if self.error_details is not None:
             result += (
                 f"\n{format_error_message(self.error_details, self.max_details_length)}"
