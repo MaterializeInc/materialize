@@ -1790,6 +1790,7 @@ class CreateKafkaSinkAction(Action):
         return [
             # Another replica can be created in parallel
             "cannot create sink in cluster with more than one replica",
+            "BYTES format with non-encodable type",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
