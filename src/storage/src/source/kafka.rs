@@ -1014,7 +1014,7 @@ impl KafkaSourceReader {
         // that we are ever going to see holds.
         // Offsets are guaranteed to be contiguous when compaction is disabled. If compaction
         // is enabled, there may be gaps in the sequence.
-        // If we see an "old" offset, we ast-forward the consumer and skip that message
+        // If we see an "old" offset, we skip that message.
 
         // Given the explicit consumer to partition assignment, we should never receive a message
         // for a partition for which we have no metadata
