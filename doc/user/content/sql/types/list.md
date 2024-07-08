@@ -519,6 +519,11 @@ SELECT '{{1.5,NULL},{2.25}}'::numeric(38,2) list list AS text_to_list;
 
 ### List containment
 
+{{< note >}}
+Like [array containment operators in PostgreSQL](https://www.postgresql.org/docs/current/functions-array.html#FUNCTIONS-ARRAY),
+list containment operators in Materialize **do not** account for duplicates.
+{{< /note >}}
+
 {{< warn-if-unreleased "v0.107" >}}
 
 ```mzsql
@@ -539,7 +544,6 @@ SELECT LIST[2,7] <@ LIST[1,7,4,2,6] AS is_contained_by;
  t
 ```
 
-Note that array containment in Postgres does NOT account for duplicates. This is mirrored by the list implementation.
 
 ```mzsql
 SELECT LIST[7,3,1] @> LIST[1,3,3,3,3,7] AS contains;
