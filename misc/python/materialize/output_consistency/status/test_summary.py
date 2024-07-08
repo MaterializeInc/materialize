@@ -14,6 +14,9 @@ from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
 from materialize.output_consistency.operation.operation import DbOperationOrFunction
+from materialize.output_consistency.output.reproduction_code_printer import (
+    ReproductionCodePrinter,
+)
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.status.consistency_test_logger import (
     ConsistencyTestLogger,
@@ -188,7 +191,10 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
                 )
 
     def accept_execution_result(
-        self, query: QueryTemplate, test_outcome: ValidationOutcome
+        self,
+        query: QueryTemplate,
+        test_outcome: ValidationOutcome,
+        reproduction_code_printer: ReproductionCodePrinter,
     ) -> None:
         self.count_executed_query_templates += 1
         verdict = test_outcome.verdict()
@@ -201,7 +207,9 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         elif verdict == ValidationVerdict.IGNORED_FAILURE:
             self.count_ignored_error_query_templates += 1
         elif verdict == ValidationVerdict.FAILURE:
-            self.add_failures(test_outcome.to_failure_details())
+            self.add_failures(
+                test_outcome.to_failure_details(reproduction_code_printer)
+            )
         else:
             raise RuntimeError(f"Unexpected verdict: {verdict}")
 

@@ -17,6 +17,9 @@ from materialize.output_consistency.ignore_filter.internal_output_inconsistency_
     YesIgnore,
 )
 from materialize.output_consistency.output.format_constants import LI_PREFIX
+from materialize.output_consistency.output.reproduction_code_printer import (
+    ReproductionCodePrinter,
+)
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
     ValidationMessage,
@@ -115,7 +118,9 @@ class ValidationOutcome:
 
         return "\n".join(f"{LI_PREFIX}{str(entry)}" for entry in entries)
 
-    def to_failure_details(self) -> list[TestFailureDetails]:
+    def to_failure_details(
+        self, reproduction_code_printer: ReproductionCodePrinter
+    ) -> list[TestFailureDetails]:
         failures = []
 
         for error in self.errors:
@@ -128,6 +133,10 @@ class ValidationOutcome:
                     test_case_name_override=test_case_name,
                     message=error.message,
                     details=str(error),
+                    additional_details_header="Code to reproduce",
+                    additional_details=reproduction_code_printer.get_reproduction_code_of_error(
+                        error
+                    ),
                 )
             )
 
