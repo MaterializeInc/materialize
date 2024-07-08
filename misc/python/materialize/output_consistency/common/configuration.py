@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 from materialize.output_consistency.input_data.scenarios.evaluation_scenario import (
     EvaluationScenario,
 )
@@ -29,6 +30,7 @@ class ConsistencyTestConfiguration:
         max_iterations: int,
         avoid_expressions_expecting_db_error: bool,
         postgres_compatible_mode: bool,
+        disable_predefined_queries: bool,
     ):
         self.scenario = scenario
         self.queries_per_tx = queries_per_tx
@@ -45,6 +47,7 @@ class ConsistencyTestConfiguration:
         self.max_iterations = max_iterations
         self.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
         self.postgres_compatible_mode = postgres_compatible_mode
+        self.disable_predefined_queries = disable_predefined_queries
 
     def validate(self) -> None:
         if self.max_runtime_in_sec == 0 and self.max_iterations == 0:
