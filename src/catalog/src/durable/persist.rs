@@ -1440,7 +1440,6 @@ impl DurableCatalogState for PersistCatalogState {
         self.sync_to_current_upper().await?;
 
         if self.is_read_only() {
-            self.confirm_leadership().await?;
             return Ok(Vec::new());
         }
 
