@@ -49,7 +49,6 @@ Explained Query:
         stream={ key=[#1], thinning=(#0, #2) }
       initial_closure
         project=(#1, #0, #2)
-        filter=((#0) IS NOT NULL AND (#2) IS NOT NULL)
       source={ relation=0, key=[#1] }
     plan_path[1]
       delta_stage[1]
@@ -60,7 +59,6 @@ Explained Query:
       delta_stage[0]
         closure
           project=(#2, #3, #1)
-          filter=((#0) IS NOT NULL AND (#3) IS NOT NULL)
         lookup={ relation=0, key=[#1] }
         stream={ key=[#1], thinning=(#0) }
       initial_closure
@@ -75,7 +73,6 @@ Explained Query:
       delta_stage[0]
         closure
           project=(#2, #3, #1)
-          filter=((#0) IS NOT NULL AND (#3) IS NOT NULL)
         lookup={ relation=0, key=[#2] }
         stream={ key=[#1], thinning=(#0) }
       initial_closure

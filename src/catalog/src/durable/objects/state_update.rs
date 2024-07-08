@@ -24,7 +24,7 @@ use crate::durable::{DurableCatalogError, Epoch};
 use crate::memory;
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKindRaw`].
-pub(crate) trait IntoStateUpdateKindRaw:
+pub trait IntoStateUpdateKindRaw:
     Into<StateUpdateKindRaw> + PartialEq + Eq + PartialOrd + Ord + Debug + Clone
 {
     type Error: Debug;
@@ -70,13 +70,13 @@ where
 
 /// A single update to the catalog state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct StateUpdate<T: IntoStateUpdateKindRaw = StateUpdateKind> {
+pub struct StateUpdate<T: IntoStateUpdateKindRaw = StateUpdateKind> {
     /// They kind and contents of the state update.
-    pub(crate) kind: T,
+    pub kind: T,
     /// The timestamp at which the update occurred.
-    pub(crate) ts: Timestamp,
+    pub ts: Timestamp,
     /// Record count difference for the update.
-    pub(crate) diff: Diff,
+    pub diff: Diff,
 }
 
 impl StateUpdate {
@@ -217,15 +217,18 @@ impl TryFrom<StateUpdate<StateUpdateKindRaw>> for StateUpdate<StateUpdateKind> {
     }
 }
 
-impl TryFrom<StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpdate> {
+impl TryFrom<&StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpdate> {
     type Error = DurableCatalogError;
 
     fn try_from(
-        StateUpdate { kind, ts, diff }: StateUpdate<StateUpdateKind>,
+        StateUpdate { kind, ts, diff }: &StateUpdate<StateUpdateKind>,
     ) -> Result<Self, Self::Error> {
         let kind: Option<memory::objects::StateUpdateKind> = TryInto::try_into(kind)?;
-        let diff = diff.try_into().expect("invalid diff");
-        let update = kind.map(|kind| memory::objects::StateUpdate { kind, ts, diff });
+        let update = kind.map(|kind| memory::objects::StateUpdate {
+            kind,
+            ts: ts.clone(),
+            diff: diff.clone().try_into().expect("invalid diff"),
+        });
         Ok(update)
     }
 }
@@ -688,7 +691,7 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
 
 /// Version of [`StateUpdateKind`] to allow reading/writing raw json from/to persist.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct StateUpdateKindRaw(Jsonb);
+pub struct StateUpdateKindRaw(Jsonb);
 
 impl From<StateUpdateKind> for StateUpdateKindRaw {
     fn from(value: StateUpdateKind) -> Self {
@@ -743,18 +746,18 @@ impl StateUpdateKindRaw {
     }
 }
 
-impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
+impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
     type Error = DurableCatalogError;
 
-    fn try_from(kind: StateUpdateKind) -> Result<Self, Self::Error> {
-        fn into_durable<PK, PV, T>(key: PK, value: PV) -> Result<T, DurableCatalogError>
+    fn try_from(kind: &StateUpdateKind) -> Result<Self, Self::Error> {
+        fn into_durable<PK, PV, T>(key: &PK, value: &PV) -> Result<T, DurableCatalogError>
         where
-            PK: ProtoType<T::Key>,
-            PV: ProtoType<T::Value>,
+            PK: ProtoType<T::Key> + Clone,
+            PV: ProtoType<T::Value> + Clone,
             T: DurableType,
         {
-            let key = key.into_rust()?;
-            let value = value.into_rust()?;
+            let key = key.clone().into_rust()?;
+            let value = value.clone().into_rust()?;
             Ok(T::from_key_value(key, value))
         }
 

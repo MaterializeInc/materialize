@@ -26,6 +26,8 @@ use mz_catalog::builtin::{
     MZ_CATALOG_SERVER_CLUSTER,
 };
 use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
+#[cfg(test)]
+use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{CatalogEntry, Cluster, ClusterReplica, Database, Role, Schema};
@@ -445,6 +447,27 @@ impl Catalog {
                 deploy_generation,
                 epoch_lower_bound,
             )
+            .await?;
+        let system_parameter_defaults = BTreeMap::default();
+        Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
+            .await
+    }
+
+    /// Opens a read only debug persist backed catalog defined by `persist_client` and
+    /// `organization_id`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_catalog(
+        persist_client: PersistClient,
+        organization_id: Uuid,
+    ) -> Result<Catalog, anyhow::Error> {
+        let now = SYSTEM_TIME.clone();
+        let environment_id = None;
+        let openable_storage =
+            mz_catalog::durable::test_persist_backed_catalog_state(persist_client, organization_id)
+                .await;
+        let storage = openable_storage
+            .open_read_only(&test_bootstrap_args())
             .await?;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
@@ -1156,6 +1179,18 @@ impl Catalog {
         self.state
             .deserialize_plan_with_enable_for_item_parsing(create_sql, force_if_exists_skip)
     }
+
+    /// Listen for and apply all unconsumed updates to the durable catalog state.
+    // TODO(jkosh44) When this method is actually used outside of a test we can remove the
+    // `#[cfg(test)]` annotation.
+    #[cfg(test)]
+    async fn sync_to_current_updates(
+        &mut self,
+    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
+        let updates = self.storage().await.sync_to_current_updates().await?;
+        let builtin_table_updates = self.state.apply_updates(updates);
+        Ok(builtin_table_updates)
+    }
 }
 
 pub fn is_reserved_name(name: &str) -> bool {
@@ -1865,6 +1900,7 @@ mod tests {
         Builtin, BuiltinType, BUILTINS,
         REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE,
     };
+    use mz_catalog::durable::{CatalogError, DurableCatalogError};
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
@@ -3109,5 +3145,79 @@ mod tests {
 
             catalog.expire().await;
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_multi_subscriber_catalog() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let db_name = "DB";
+
+        let mut writer_catalog =
+            Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
+                .await
+                .expect("open_debug_catalog");
+        let mut read_only_catalog =
+            Catalog::open_debug_read_only_catalog(persist_client.clone(), organization_id.clone())
+                .await
+                .expect("open_debug_read_only_catalog");
+        assert!(writer_catalog.resolve_database(db_name).is_err());
+        assert!(read_only_catalog.resolve_database(db_name).is_err());
+
+        writer_catalog
+            .transact(
+                None,
+                SYSTEM_TIME().into(),
+                None,
+                vec![Op::CreateDatabase {
+                    name: db_name.to_string(),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                }],
+            )
+            .await
+            .expect("failed to transact");
+
+        let write_db = writer_catalog
+            .resolve_database(db_name)
+            .expect("resolve_database");
+        read_only_catalog
+            .sync_to_current_updates()
+            .await
+            .expect("sync_to_current_updates");
+        let read_db = read_only_catalog
+            .resolve_database(db_name)
+            .expect("resolve_database");
+
+        assert_eq!(write_db, read_db);
+
+        let writer_catalog_fencer = Catalog::open_debug_catalog(persist_client, organization_id)
+            .await
+            .expect("open_debug_catalog for fencer");
+        let fencer_db = writer_catalog_fencer
+            .resolve_database(db_name)
+            .expect("resolve_database for fencer");
+        assert_eq!(fencer_db, read_db);
+
+        let write_fence_err = writer_catalog
+            .sync_to_current_updates()
+            .await
+            .expect_err("sync_to_current_updates for fencer");
+        assert!(matches!(
+            write_fence_err,
+            CatalogError::Durable(DurableCatalogError::Fence(_))
+        ));
+        let read_fence_err = read_only_catalog
+            .sync_to_current_updates()
+            .await
+            .expect_err("sync_to_current_updates after fencer");
+        assert!(matches!(
+            read_fence_err,
+            CatalogError::Durable(DurableCatalogError::Fence(_))
+        ));
+
+        writer_catalog.expire().await;
+        read_only_catalog.expire().await;
+        writer_catalog_fencer.expire().await;
     }
 }

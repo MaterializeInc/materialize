@@ -3187,10 +3187,11 @@ def workflow_test_subscribe_hydration_status(
     c.testdrive(
         input=dedent(
             """
-            > SELECT h.hydrated
+            > SET cluster = mz_catalog_server
+            > SELECT DISTINCT h.time_ns IS NOT NULL
               FROM mz_internal.mz_subscriptions s,
               unnest(s.referenced_object_ids) as sroi(id)
-              JOIN mz_internal.mz_compute_hydration_statuses h ON (h.object_id = s.id)
+              JOIN mz_introspection.mz_compute_hydration_times_per_worker h ON h.export_id = s.id
               JOIN mz_tables t ON (t.id = sroi.id)
               WHERE t.name = 'mz_tables'
             true
@@ -3205,10 +3206,11 @@ def workflow_test_subscribe_hydration_status(
     c.testdrive(
         input=dedent(
             """
-            > SELECT h.hydrated
+            > SET cluster = mz_catalog_server
+            > SELECT DISTINCT h.time_ns IS NOT NULL
               FROM mz_internal.mz_subscriptions s,
               unnest(s.referenced_object_ids) as sroi(id)
-              JOIN mz_internal.mz_compute_hydration_statuses h ON (h.object_id = s.id)
+              JOIN mz_introspection.mz_compute_hydration_times_per_worker h ON h.export_id = s.id
               JOIN mz_tables t ON (t.id = sroi.id)
               WHERE t.name = 'mz_tables'
             """

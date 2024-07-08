@@ -287,7 +287,7 @@ SQL type                     | Conversion
 [`numeric`]                  | Values are converted to a JSON string containing the decimal representation of the number.
 [`record`]                   | Records are converted to JSON objects. The names and ordering of the fields in the object match the names and ordering of the fields in the record.
 [`smallint`]                 | values are converted to JSON numbers.
-[`timestamp`][`timestamp with time zone`] | Values are converted to JSON strings containing the number of milliseconds since the Unix epoch.
+[`timestamp`][`timestamp`]<br>[`timestamptz`][`timestamp`] | Values are converted to JSON strings containing the fractional number of milliseconds since the Unix epoch. The fractional component has microsecond precision (i.e., three digits of precision). Example: `"1720032185.312"`
 [`uint2`]                    | Values are converted to JSON numbers.
 [`uint4`]                    | Values are converted to JSON numbers.
 [`uint8`]                    | Values are converted to JSON numbers.

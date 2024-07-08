@@ -415,7 +415,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
-            let mut collection = CollectionState::new(is_subscribe_or_copy);
+            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of.clone());
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
                 let logging = CollectionLogging::new(
@@ -563,7 +563,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             self.compute_state.traces.set(id, trace);
 
             // Initialize compute and logging state for the logging index.
-            let mut collection = CollectionState::new(false);
+            let is_subscribe_or_copy = false;
+            let as_of = Antichain::from_elem(Timestamp::MIN);
+            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of);
 
             let logging =
                 CollectionLogging::new(id, logger.clone(), dataflow_index, std::iter::empty());
@@ -1451,6 +1453,10 @@ pub struct CollectionState {
     /// collections, so we need to be able to recognize them. This is something we would like to
     /// change in the future (#16274).
     pub is_subscribe_or_copy: bool,
+    /// The collection's initial as-of frontier.
+    ///
+    /// Used to determine hydration status.
+    as_of: Antichain<Timestamp>,
 
     /// A token that should be dropped when this collection is dropped to clean up associated
     /// sink state.
@@ -1473,10 +1479,11 @@ pub struct CollectionState {
 }
 
 impl CollectionState {
-    fn new(is_subscribe_or_copy: bool) -> Self {
+    fn new(is_subscribe_or_copy: bool, as_of: Antichain<Timestamp>) -> Self {
         Self {
             reported_frontiers: ReportedFrontiers::new(),
             is_subscribe_or_copy,
+            as_of,
             sink_token: None,
             sink_write_frontier: None,
             input_probes: Default::default(),
@@ -1525,7 +1532,23 @@ impl CollectionState {
 
     /// Set the output frontier that has been reported to the controller.
     fn set_reported_output_frontier(&mut self, frontier: ReportedFrontier) {
+        let already_hydrated = self.hydrated();
+
         self.reported_frontiers.output_frontier = frontier;
+
+        if !already_hydrated && self.hydrated() {
+            if let Some(logging) = &mut self.logging {
+                logging.set_hydrated();
+            }
+        }
+    }
+
+    /// Return whether this collection is hydrated.
+    fn hydrated(&self) -> bool {
+        match &self.reported_frontiers.output_frontier {
+            ReportedFrontier::Reported(frontier) => PartialOrder::less_than(&self.as_of, frontier),
+            ReportedFrontier::NotReported { .. } => false,
+        }
     }
 }
 

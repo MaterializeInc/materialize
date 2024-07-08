@@ -295,7 +295,7 @@ impl TrimStats for ProtoBytesStats {
     }
 }
 
-/// Returns a [`Strategy`] for generating arbitrary [`ByteStats`].
+/// Returns a [`Strategy`] for generating arbitrary [`BytesStats`].
 pub(crate) fn any_bytes_stats() -> impl Strategy<Value = BytesStats> {
     let kind_of_packed = Union::new(vec![
         Just(FixedSizeBytesStatsKind::PackedTime),

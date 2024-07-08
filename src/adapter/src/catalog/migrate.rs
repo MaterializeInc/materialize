@@ -13,7 +13,7 @@ use std::str::FromStr;
 use futures::future::BoxFuture;
 use maplit::btreeset;
 use mz_catalog::durable::{Item, Transaction};
-use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+use mz_catalog::memory::objects::StateUpdate;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp};
@@ -84,8 +84,9 @@ where
 pub(crate) async fn migrate(
     state: &CatalogState,
     tx: &mut Transaction<'_>,
+    item_updates: Vec<StateUpdate>,
     now: NowFn,
-    boot_ts: Timestamp,
+    _boot_ts: Timestamp,
     _connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let catalog_version = tx.get_catalog_content_version();
@@ -117,14 +118,6 @@ pub(crate) async fn migrate(
 
     // Load up a temporary catalog.
     let mut state = state.clone();
-    let item_updates = tx
-        .get_items()
-        .map(|item| StateUpdate {
-            kind: StateUpdateKind::Item(item),
-            ts: boot_ts,
-            diff: StateDiff::Addition,
-        })
-        .collect();
     // The catalog is temporary, so we can throw out the builtin updates.
     let _ = state.apply_updates_for_bootstrap(item_updates).await;
 
@@ -678,7 +671,8 @@ pub(crate) fn durable_migrate(
     catalog_fix_system_cluster_replica_ids_v_0_95_0(tx, boot_ts)?;
     catalog_rename_mz_introspection_cluster_v_0_103_0(tx, boot_ts)?;
     catalog_add_new_unstable_schemas_v_0_106_0(tx)?;
-    catalog_remove_txn_wal_toggle_v_0_107_0(tx)?;
+    catalog_remove_wait_catalog_consolidation_on_startup_v_0_108_0(tx);
+    catalog_remove_txn_wal_toggle_v_0_108_0(tx)?;
     Ok(())
 }
 
@@ -860,8 +854,14 @@ fn catalog_add_new_unstable_schemas_v_0_106_0(tx: &mut Transaction) -> Result<()
     Ok(())
 }
 
+/// This migration removes the server configuration parameter
+/// "wait_catalog_consolidation_on_startup" which is no longer used.
+fn catalog_remove_wait_catalog_consolidation_on_startup_v_0_108_0(tx: &mut Transaction) {
+    tx.remove_system_config("wait_catalog_consolidation_on_startup");
+}
+
 /// This migration removes the txn wal feature flag.
-fn catalog_remove_txn_wal_toggle_v_0_107_0(tx: &mut Transaction) -> Result<(), anyhow::Error> {
+fn catalog_remove_txn_wal_toggle_v_0_108_0(tx: &mut Transaction) -> Result<(), anyhow::Error> {
     tx.set_config("persist_txn_tables".to_string(), None)?;
     tx.remove_system_config("persist_txn_tables");
     Ok(())

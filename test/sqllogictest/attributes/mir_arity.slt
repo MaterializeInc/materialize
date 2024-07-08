@@ -57,26 +57,26 @@ Explained Query:
                         Negate // { arity: 3 }
                           Project (#0..=#2) // { arity: 3 }
                             Join on=(#0 = #3) type=differential // { arity: 4 }
-                              ArrangeBy keys=[[#0]] // { arity: 3 }
-                                Get l0 // { arity: 3 }
+                              Get l1 // { arity: 3 }
                               ArrangeBy keys=[[#0]] // { arity: 1 }
                                 Distinct project=[#0] // { arity: 1 }
                                   Project (#0) // { arity: 1 }
-                                    Get l1 // { arity: 4 }
+                                    Get l2 // { arity: 4 }
                         Get l0 // { arity: 3 }
-                    Get l1 // { arity: 4 }
+                    Get l2 // { arity: 4 }
         Constant // { arity: 4 }
           - (1, 2, 11, 12)
   With
-    cte l1 =
+    cte l2 =
       Project (#0..=#3) // { arity: 4 }
-        Filter (#0) IS NOT NULL // { arity: 5 }
-          Join on=(#0 = #4) type=differential // { arity: 5 }
-            ArrangeBy keys=[[#0]] // { arity: 3 }
-              Filter (#0) IS NOT NULL // { arity: 3 }
-                Get l0 // { arity: 3 }
-            ArrangeBy keys=[[#1]] // { arity: 2 }
-              ReadIndex on=u u_d_idx=[differential join] // { arity: 2 }
+        Join on=(#0 = #4) type=differential // { arity: 5 }
+          Get l1 // { arity: 3 }
+          ArrangeBy keys=[[#1]] // { arity: 2 }
+            ReadIndex on=u u_d_idx=[differential join] // { arity: 2 }
+    cte l1 =
+      ArrangeBy keys=[[#0]] // { arity: 3 }
+        Filter (#0) IS NOT NULL // { arity: 3 }
+          Get l0 // { arity: 3 }
     cte l0 =
       FlatMap generate_series(#0, #1, 1) // { arity: 3 }
         ReadIndex on=t t_a_idx=[*** full scan ***] // { arity: 2 }

@@ -15,7 +15,7 @@ from typing import Any
 
 from pg8000 import Cursor  # type: ignore
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
@@ -23,6 +23,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import selected_by_name
 
 SERVICES = [
     Zookeeper(),
@@ -34,6 +35,10 @@ SERVICES = [
             "log_filter": "mz_cluster::server=debug,info",
         },
     ),
+    Clusterd(name="clusterd_1_1"),
+    Clusterd(name="clusterd_1_2"),
+    Clusterd(name="clusterd_2_1"),
+    Clusterd(name="clusterd_2_2"),
     Testdrive(),
 ]
 
@@ -398,93 +403,96 @@ disruptions = [
 ]
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test replica isolation by introducing faults of various kinds in replica1
     and then making sure that the cluster continues to operate properly
     """
 
+    parser.add_argument("disruptions", nargs="*", default=[d.name for d in disruptions])
+
+    args = parser.parse_args()
+
     c.up("zookeeper", "kafka", "schema-registry", "localstack")
-    for id, disruption in enumerate(disruptions):
+    for id, disruption in enumerate(selected_by_name(args.disruptions, disruptions)):
         run_test(c, disruption, id)
 
 
 def run_test(c: Composition, disruption: Disruption, id: int) -> None:
+    # Cleanup here instead of at the end of the test to make sure we keep state
+    # and logs in case something goes wrong
+    cleanup_list = [
+        "materialized",
+        "testdrive",
+        "clusterd_1_1",
+        "clusterd_1_2",
+        "clusterd_2_1",
+        "clusterd_2_2",
+    ]
+    c.kill(*cleanup_list)
+    c.rm(*cleanup_list, destroy_volumes=True)
+    c.rm_volumes("mzdata")
     print(f"+++ Running disruption scenario {disruption.name}")
 
     c.up("testdrive", persistent=True)
+    c.up("materialized", "clusterd_1_1", "clusterd_1_2", "clusterd_2_1", "clusterd_2_2")
 
-    nodes = [
-        Clusterd(name="clusterd_1_1"),
-        Clusterd(name="clusterd_1_2"),
-        Clusterd(name="clusterd_2_1"),
-        Clusterd(name="clusterd_2_2"),
-    ]
+    c.sql(
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
 
-    with c.override(*nodes):
-        c.up("materialized", *[n.name for n in nodes])
-
+    if ArrangedIntro in disruption.compaction_checks:
+        # Disable introspection subscribes because they break the
+        # `ArrangedIntro` check by disabling compaction of logging indexes
+        # on all replicas if one of the replicas is failing. That's because
+        # of a defect of replica-targeted subscribes: They get installed on
+        # all replicas but only the targeted replica can drive the write
+        # frontier forward. If the targeted replica is crashing, the write
+        # frontier cannot advance and thus the read frontier cannot either.
+        #
+        # TODO(#27399): Fix this by installing targeted subscribes only on the
+        #               targeted replica.
         c.sql(
-            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_introspection_subscribes = false;",
             port=6877,
             user="mz_system",
         )
 
-        if ArrangedIntro in disruption.compaction_checks:
-            # Disable introspection subscribes because they break the
-            # `ArrangedIntro` check by disabling compaction of logging indexes
-            # on all replicas if one of the replicas is failing. That's because
-            # of a defect of replica-targeted subscribes: They get installed on
-            # all replicas but only the targeted replica can drive the write
-            # frontier forward. If the targeted replica is crashing, the write
-            # frontier cannot advance and thus the read frontier cannot either.
-            #
-            # TODO(#27399): Fix this by installing targeted subscribes only on the
-            #               targeted replica.
-            c.sql(
-                "ALTER SYSTEM SET enable_introspection_subscribes = false;",
-                port=6877,
-                user="mz_system",
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
+                STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+                COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+            ),
+            replica2 (
+                STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
+                STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
+                COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
             )
-
-        c.sql(
-            """
-            CREATE CLUSTER cluster1 REPLICAS (
-                replica1 (
-                    STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
-                ),
-                replica2 (
-                    STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
-                )
-            )
-            """
         )
+        """
+    )
 
-        with c.override(
-            Testdrive(
-                no_reset=True,
-                materialize_params={"cluster": "cluster1"},
-                seed=id,
-                default_timeout="300s",
-            )
-        ):
-            populate(c)
+    with c.override(
+        Testdrive(
+            no_reset=True,
+            materialize_params={"cluster": "cluster1"},
+            seed=id,
+            default_timeout="300s",
+        )
+    ):
+        populate(c)
 
-            # Disrupt replica1 by some means
-            disruption.disruption(c)
+        # Disrupt replica1 by some means
+        disruption.disruption(c)
 
-            validate(c)
-            validate_introspection_compaction(c, disruption.compaction_checks)
-
-        cleanup_list = ["materialized", "testdrive", *[n.name for n in nodes]]
-        c.kill(*cleanup_list)
-        c.rm(*cleanup_list, destroy_volumes=True)
-        c.rm_volumes("mzdata")
+        validate(c)
+        validate_introspection_compaction(c, disruption.compaction_checks)
 
 
 def get_single_value_from_cursor(cursor: Cursor) -> Any:

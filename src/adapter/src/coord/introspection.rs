@@ -476,11 +476,28 @@ impl SubscribeSpec {
     }
 }
 
-const SUBSCRIBES: &[SubscribeSpec] = &[SubscribeSpec {
-    introspection_type: IntrospectionType::ComputeErrorCounts,
-    sql: "SUBSCRIBE (
-        SELECT export_id, sum(count)
-        FROM mz_introspection.mz_compute_error_counts_raw
-        GROUP BY export_id
-    )",
-}];
+const SUBSCRIBES: &[SubscribeSpec] = &[
+    SubscribeSpec {
+        introspection_type: IntrospectionType::ComputeErrorCounts,
+        sql: "SUBSCRIBE (
+            SELECT export_id, sum(count)
+            FROM mz_introspection.mz_compute_error_counts_raw
+            GROUP BY export_id
+        )",
+    },
+    SubscribeSpec {
+        introspection_type: IntrospectionType::ComputeHydrationTimes,
+        sql: "SUBSCRIBE (
+            SELECT
+                export_id,
+                CASE count(*) = count(time_ns)
+                    WHEN true THEN max(time_ns)
+                    ELSE NULL
+                END AS time_ns
+            FROM mz_introspection.mz_compute_hydration_times_per_worker
+            WHERE export_id NOT LIKE 't%'
+            GROUP BY export_id
+            OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
+        )",
+    },
+];

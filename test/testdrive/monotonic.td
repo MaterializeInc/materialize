@@ -195,9 +195,21 @@ Used Indexes:
 
 Target cluster: quickstart
 
+# _No_ propagation of monotonicity through materialized views.
+
 > CREATE MATERIALIZED VIEW m1 AS SELECT b FROM non_dbz_data;
 
 > CREATE VIEW v11 AS SELECT * FROM m1 ORDER BY b LIMIT 3;
+
+? EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v11;
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3 must_consolidate
+    Get::PassArrangements materialize.public.m1
+      raw=true
+
+Source materialize.public.m1
+
+Target cluster: quickstart
 
 # Check arrangements, seeing new arrangements can mean a significant increase
 # in memory consumptions and should be understood before adapting the values.
@@ -228,15 +240,3 @@ Target cluster: quickstart
 "Dataflow: materialize.public.monotonic_min" ReduceMonotonic
 "Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
 "Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
-
-# Propagating monotonicity analysis through materialized views
-
-? EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v11;
-Explained Query:
-  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3
-    Get::PassArrangements materialize.public.m1
-      raw=true
-
-Source materialize.public.m1
-
-Target cluster: quickstart

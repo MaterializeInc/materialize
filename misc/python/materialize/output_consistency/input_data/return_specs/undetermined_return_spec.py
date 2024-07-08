@@ -8,19 +8,11 @@
 # by the Apache License, Version 2.0.
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.input_data.return_specs.collection_return_spec import (
-    CollectionReturnTypeSpec,
-)
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
-class ArrayReturnTypeSpec(CollectionReturnTypeSpec):
+class UndeterminedReturnTypeSpec(ReturnTypeSpec):
     def __init__(
         self,
-        param_index_of_array_value_type: int = 0,
-        array_value_type_category: DataTypeCategory = DataTypeCategory.DYNAMIC,
-    ):
-        super().__init__(
-            DataTypeCategory.ARRAY,
-            param_index_of_array_value_type,
-            array_value_type_category,
-        )
+    ) -> None:
+        super().__init__(DataTypeCategory.UNDETERMINED)

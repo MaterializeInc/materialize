@@ -155,6 +155,8 @@ class Workspace:
                         self.exclude[crate.name] = crate
         self.all_crates = self.crates | self.exclude
 
+        self.default_members: list[str] = workspace_config.get("default-members", [])
+
         self.rust_version: str | None = None
         try:
             self.rust_version = workspace_config["package"].get("rust-version")

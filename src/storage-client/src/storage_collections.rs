@@ -2769,8 +2769,8 @@ mod tests {
 
     impl<T: TimelyTimestamp + Lattice + Codec64> BackgroundTask<T> {
         fn new_for_test(
-            persist_location: PersistLocation,
-            persist_client: Arc<PersistClientCache>,
+            _persist_location: PersistLocation,
+            _persist_client: Arc<PersistClientCache>,
         ) -> (mpsc::UnboundedSender<BackgroundCmd<T>>, Self) {
             let (cmds_tx, cmds_rx) = mpsc::unbounded_channel();
             let (_holds_tx, holds_rx) = mpsc::unbounded_channel();

@@ -120,6 +120,11 @@ async fn test_get_and_prune_storage_usage(openable_state: Box<dyn OpenableDurabl
         )
         .await
         .unwrap();
+    // Drain initial updates.
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
     let mut txn = state.transaction().await.unwrap();
     txn.insert_storage_usage_event(
         old_event.shard_id.clone(),
@@ -133,25 +138,26 @@ async fn test_get_and_prune_storage_usage(openable_state: Box<dyn OpenableDurabl
         recent_event.collection_timestamp.clone(),
     )
     .unwrap();
+    // Drain txn updates.
+    let _ = txn.get_and_commit_op_updates();
     txn.commit().await.unwrap();
 
     let old_event = VersionedStorageUsage::V1(old_event);
     let recent_event = VersionedStorageUsage::V1(recent_event);
 
     // Test with no retention period.
-    let events = state
-        .get_and_prune_storage_usage(None, boot_ts, false)
-        .await
-        .unwrap();
+    state.prune_storage_usage(None, boot_ts).await.unwrap();
+    let events = state.get_storage_usage().await.unwrap();
     assert_eq!(events.len(), 2);
     assert!(events.contains(&old_event));
     assert!(events.contains(&recent_event));
 
     // Test with some retention period.
-    let events = state
-        .get_and_prune_storage_usage(Some(Duration::from_millis(10)), boot_ts, false)
+    state
+        .prune_storage_usage(Some(Duration::from_millis(10)), boot_ts)
         .await
         .unwrap();
+    let events = state.get_storage_usage().await.unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events.into_element(), recent_event);
     Box::new(state).expire().await;
@@ -261,10 +267,17 @@ async fn test_audit_logs(openable_state: Box<dyn OpenableDurableCatalogState>) {
         )
         .await
         .unwrap();
+    // Drain initial updates.
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
     let mut txn = state.transaction().await.unwrap();
     for audit_log in &audit_logs {
         txn.insert_audit_log_event(audit_log.clone());
     }
+    // Drain txn updates.
+    let _ = txn.get_and_commit_op_updates();
     txn.commit().await.unwrap();
 
     let persisted_audit_logs = state.get_audit_logs().await.unwrap();
@@ -316,6 +329,11 @@ async fn test_items(openable_state: Box<dyn OpenableDurableCatalogState>) {
         )
         .await
         .unwrap();
+    // Drain initial updates.
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
     let mut txn = state.transaction().await.unwrap();
     for item in &items {
         txn.insert_item(
@@ -329,6 +347,8 @@ async fn test_items(openable_state: Box<dyn OpenableDurableCatalogState>) {
         )
         .unwrap();
     }
+    // Drain txn updates.
+    let _ = txn.get_and_commit_op_updates();
     txn.commit().await.unwrap();
 
     let snapshot_items: Vec<_> = state
@@ -368,11 +388,18 @@ async fn test_schemas(openable_state: Box<dyn OpenableDurableCatalogState>) {
         )
         .await
         .unwrap();
+    // Drain initial updates.
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
     let mut txn = state.transaction().await.unwrap();
 
     let (schema_id, _oid) = txn
         .insert_user_schema(DatabaseId::User(1), "foo", RoleId::User(1), vec![])
         .unwrap();
+    // Drain txn updates.
+    let _ = txn.get_and_commit_op_updates();
     txn.commit().await.unwrap();
 
     // Test removing schemas where one doesn't exist.

@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use maplit::{btreemap, btreeset};
 
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, MaterializedView, Source, View};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Index, Source, View};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 
@@ -179,6 +179,8 @@ impl<'a> DataflowBuilder<'a> {
                 return Ok(());
             }
 
+            let monotonic = self.monotonic_object(*id);
+
             // A valid index is any index on `id` that is known to index oracle.
             // Here, we import all indexes that belong to all imported collections. Later,
             // `prune_and_annotate_dataflow_index_imports` runs at the end of the MIR
@@ -198,7 +200,6 @@ impl<'a> DataflowBuilder<'a> {
                                 .resolve_full_name(entry.name(), entry.conn_id()),
                         )
                         .expect("indexes can only be built on items with descs");
-                    let monotonic = self.monotonic_view(*id);
                     dataflow.import_index(index_id, index_desc, desc.typ().clone(), monotonic);
                 }
             } else {
@@ -206,25 +207,20 @@ impl<'a> DataflowBuilder<'a> {
                 let entry = self.catalog.get_entry(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
-                        dataflow.import_source(*id, table.desc.typ().clone(), false);
+                        dataflow.import_source(*id, table.desc.typ().clone(), monotonic);
                     }
                     CatalogItem::Source(source) => {
-                        dataflow.import_source(
-                            *id,
-                            source.desc.typ().clone(),
-                            self.monotonic_source(source),
-                        );
+                        dataflow.import_source(*id, source.desc.typ().clone(), monotonic);
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();
                         self.import_view_into_dataflow(id, &expr, dataflow)?;
                     }
                     CatalogItem::MaterializedView(mview) => {
-                        let monotonic = self.monotonic_view(*id);
                         dataflow.import_source(*id, mview.desc.typ().clone(), monotonic);
                     }
                     CatalogItem::Log(log) => {
-                        dataflow.import_source(*id, log.variant.desc().typ().clone(), false);
+                        dataflow.import_source(*id, log.variant.desc().typ().clone(), monotonic);
                     }
                     _ => unreachable!(),
                 }
@@ -303,33 +299,42 @@ impl<'a> DataflowBuilder<'a> {
         }
     }
 
-    /// Determine the given view's monotonicity.
+    /// Determine the given objects's monotonicity.
     ///
-    /// This recursively traverses the expressions of all (materialized) views involved in the
-    /// given view's query expression. If this becomes a performance problem, we could add the
-    /// monotonicity information of views into the catalog instead.
-    fn monotonic_view(&self, id: GlobalId) -> bool {
-        self.monotonic_view_inner(id, &mut BTreeMap::new())
+    /// This recursively traverses the expressions of all views depended on by the given object.
+    /// If this becomes a performance problem, we could add the monotonicity information of views
+    /// into the catalog instead.
+    ///
+    /// Note that materialized views are never monotonic, no matter their definition, because the
+    /// self-correcting persist_sink may insert retractions to correct the contents of its output
+    /// collection.
+    fn monotonic_object(&self, id: GlobalId) -> bool {
+        self.monotonic_object_inner(id, &mut BTreeMap::new())
             .unwrap_or_else(|e| {
-                warn!("Error inspecting view {id} for monotonicity: {e}");
+                warn!(%id, "error inspecting object for monotonicity: {e}");
                 false
             })
     }
 
-    fn monotonic_view_inner(
+    fn monotonic_object_inner(
         &self,
         id: GlobalId,
         memo: &mut BTreeMap<GlobalId, bool>,
     ) -> Result<bool, RecursionLimitError> {
-        self.checked_recur(|_| {
+        // An object might be reached multiple times. If we already computed the monotonicity of
+        // the given ID, use that. If not, then compute it and remember the result.
+        if let Some(monotonic) = memo.get(&id) {
+            return Ok(*monotonic);
+        }
+
+        let monotonic = self.checked_recur(|_| {
             match self.catalog.get_entry(&id).item() {
                 CatalogItem::Source(source) => Ok(self.monotonic_source(source)),
-                CatalogItem::View(View { optimized_expr, .. })
-                | CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
+                CatalogItem::View(View { optimized_expr, .. }) => {
                     let mut view_expr = optimized_expr.clone().into_inner();
 
                     // Inspect global ids that occur in the Gets in view_expr, and collect the ids
-                    // of monotonic (materialized) views and sources (but not indexes).
+                    // of monotonic dependees.
                     let mut monotonic_ids = BTreeSet::new();
                     let recursion_result: Result<(), RecursionLimitError> = view_expr
                         .try_visit_post(&mut |e| {
@@ -338,21 +343,8 @@ impl<'a> DataflowBuilder<'a> {
                                 ..
                             } = e
                             {
-                                let got_id = *got_id;
-
-                                // A view might be reached multiple times. If we already computed
-                                // the monotonicity of the gid, then use that. If not, then compute
-                                // it now.
-                                let monotonic = match memo.get(&got_id) {
-                                    Some(monotonic) => *monotonic,
-                                    None => {
-                                        let monotonic = self.monotonic_view_inner(got_id, memo)?;
-                                        memo.insert(got_id, monotonic);
-                                        monotonic
-                                    }
-                                };
-                                if monotonic {
-                                    monotonic_ids.insert(got_id);
+                                if self.monotonic_object_inner(*got_id, memo)? {
+                                    monotonic_ids.insert(*got_id);
                                 }
                             }
                             Ok(())
@@ -360,7 +352,7 @@ impl<'a> DataflowBuilder<'a> {
                     if let Err(error) = recursion_result {
                         // We still might have got some of the IDs, so just log and continue. Now
                         // the subsequent monotonicity analysis can have false negatives.
-                        warn!("Error inspecting view {id} for monotonicity: {error}");
+                        warn!(%id, "error inspecting view for monotonicity: {error}");
                     }
 
                     // Use `monotonic_ids` as a starting point for propagating monotonicity info.
@@ -370,16 +362,21 @@ impl<'a> DataflowBuilder<'a> {
                         &mut BTreeSet::new(),
                     )
                 }
+                CatalogItem::Index(Index { on, .. }) => self.monotonic_object_inner(*on, memo),
                 CatalogItem::Secret(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Connection(_)
                 | CatalogItem::Table(_)
                 | CatalogItem::Log(_)
-                | CatalogItem::Index(_)
+                | CatalogItem::MaterializedView(_)
                 | CatalogItem::Sink(_)
                 | CatalogItem::Func(_) => Ok(false),
             }
-        })
+        })?;
+
+        memo.insert(id, monotonic);
+
+        Ok(monotonic)
     }
 }
 

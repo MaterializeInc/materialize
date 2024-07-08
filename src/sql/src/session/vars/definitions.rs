@@ -2034,13 +2034,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: wait_catalog_consolidation_on_startup,
-        desc: "When opening the Catalog, wait for consolidation to complete before returning",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_copy_to_expr,
         desc: "COPY ... TO 's3://...'",
         default: false,
@@ -2096,6 +2089,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_outer_join_null_filter,
+        desc: "Add an extra null filter to the semi-join part of outer join lowering",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2108,6 +2108,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             enable_cardinality_estimates: vars.enable_cardinality_estimates(),
+            enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
         }

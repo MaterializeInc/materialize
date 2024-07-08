@@ -8,37 +8,29 @@
 # by the Apache License, Version 2.0.
 
 
+from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
-from materialize.output_consistency.input_data.params.collection_operation_param import (
-    CollectionLikeOtherCollectionOperationParam,
-    CollectionOfOtherElementOperationParam,
-    CollectionOperationParam,
-)
+from materialize.output_consistency.operation.operation_param import OperationParam
 
 
-class RangeOperationParam(CollectionOperationParam):
+class RecordOperationParam(OperationParam):
     def __init__(
         self,
         optional: bool = False,
         incompatibilities: set[ExpressionCharacteristics] | None = None,
-        value_type_category: DataTypeCategory | None = None,
     ):
         super().__init__(
-            DataTypeCategory.RANGE,
+            DataTypeCategory.RECORD,
             optional,
             incompatibilities,
-            value_type_category=value_type_category,
+            incompatibility_combinations=None,
         )
 
-
-class RangeLikeOtherRangeOperationParam(CollectionLikeOtherCollectionOperationParam):
-    def get_collection_type_category(self) -> DataTypeCategory:
-        return DataTypeCategory.RANGE
-
-
-class RangeOfOtherElementOperationParam(CollectionOfOtherElementOperationParam):
-    def get_collection_type_category(self) -> DataTypeCategory:
-        return DataTypeCategory.RANGE
+    def supports_type(
+        self, data_type: DataType, previous_args: list[Expression]
+    ) -> bool:
+        return data_type.category == DataTypeCategory.RECORD

@@ -15,9 +15,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use uuid::Uuid;
 
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -28,6 +28,7 @@ use mz_repr::GlobalId;
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
 pub use crate::durable::metrics::Metrics;
+pub use crate::durable::objects::state_update::StateUpdate;
 use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
@@ -35,10 +36,11 @@ pub use crate::durable::objects::{
     Role, Schema, StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription,
     SystemObjectMapping, UnfinalizedShard,
 };
-use crate::durable::persist::UnopenedPersistCatalogState;
+use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
 pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
 pub use crate::durable::upgrade::CATALOG_VERSION;
+use crate::memory;
 
 pub mod debug;
 mod error;
@@ -183,7 +185,16 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// Get all audit log events.
     ///
     /// Results are guaranteed to be sorted by ID.
+    ///
+    /// WARNING: This is meant for use in integration tests and has bad performance.
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError>;
+
+    /// Gets all storage usage events
+    ///
+    /// Results are guaranteed to be sorted by ID.
+    ///
+    /// WARNING: This is meant for use in integration tests and has bad performance.
+    async fn get_storage_usage(&mut self) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
 
     /// Get the next ID of `id_type`, without allocating it.
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError>;
@@ -200,6 +211,21 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
 
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
+
+    /// Listen and return all updates that are currently in the catalog.
+    ///
+    /// Returns an error if this instance has been fenced out.
+    async fn sync_to_current_updates(
+        &mut self,
+    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
+
+    /// Listen and return all updates in the catalog up to and including `ts`.
+    ///
+    /// Returns an error if this instance has been fenced out.
+    async fn sync_updates(
+        &mut self,
+        ts: Timestamp,
+    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 }
 
 /// A read-write API for the durable catalog state.
@@ -220,16 +246,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// NB: We may remove this in later iterations of Pv2.
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError>;
 
-    /// Gets all storage usage events and permanently deletes from the catalog those
+    /// Permanently deletes storage usage events from the catalog
     /// that happened more than the retention period ago from boot_ts.
-    ///
-    /// Results are guaranteed to be sorted by ID.
-    async fn get_and_prune_storage_usage(
+    async fn prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
-        wait_for_consolidation: bool,
-    ) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
+    ) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     #[mz_ore::instrument(level = "debug")]
@@ -239,7 +262,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         }
         let mut txn = self.transaction().await?;
         let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
-        txn.commit().await?;
+        txn.commit_internal().await?;
         Ok(ids)
     }
 

@@ -276,31 +276,33 @@ impl RustType<ProtoDifferentialLog> for DifferentialLog {
     }
 }
 
-/// TODO(#25239): Add documentation.
+/// Variants of compute introspection sources.
 #[derive(
     Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
 )]
 pub enum ComputeLog {
-    /// TODO(#25239): Add documentation.
+    /// Installed dataflow exports.
     DataflowCurrent,
-    /// TODO(#25239): Add documentation.
+    /// Dataflow write frontiers.
     FrontierCurrent,
-    /// TODO(#25239): Add documentation.
+    /// Pending peeks.
     PeekCurrent,
-    /// TODO(#25239): Add documentation.
+    /// A histogram over peek durations.
     PeekDuration,
-    /// TODO(#25239): Add documentation.
+    /// Dataflow import frontiers.
     ImportFrontierCurrent,
-    /// TODO(#25239): Add documentation.
+    /// Arrangement heap sizes.
     ArrangementHeapSize,
-    /// TODO(#25239): Add documentation.
+    /// Arrangement heap capacities.
     ArrangementHeapCapacity,
-    /// TODO(#25239): Add documentation.
+    /// Arrangement heap allocations.
     ArrangementHeapAllocations,
-    /// TODO(#25239): Add documentation.
+    /// A histogram over dataflow shutdown durations.
     ShutdownDuration,
-    /// TODO(#25239): Add documentation.
+    /// Counts of errors in exported collections.
     ErrorCount,
+    /// Hydration times of exported collections.
+    HydrationTime,
 }
 
 impl RustType<ProtoComputeLog> for ComputeLog {
@@ -318,6 +320,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
                 ComputeLog::ArrangementHeapAllocations => ArrangementHeapAllocations(()),
                 ComputeLog::ShutdownDuration => ShutdownDuration(()),
                 ComputeLog::ErrorCount => ErrorCount(()),
+                ComputeLog::HydrationTime => HydrationTime(()),
             }),
         }
     }
@@ -335,6 +338,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
             Some(ArrangementHeapAllocations(())) => Ok(ComputeLog::ArrangementHeapAllocations),
             Some(ShutdownDuration(())) => Ok(ComputeLog::ShutdownDuration),
             Some(ErrorCount(())) => Ok(ComputeLog::ErrorCount),
+            Some(HydrationTime(())) => Ok(ComputeLog::HydrationTime),
             None => Err(TryFromProtoError::missing_field("ProtoComputeLog::kind")),
         }
     }
@@ -488,6 +492,12 @@ impl LogVariant {
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))
+                .with_key(vec![0, 1]),
+
+            LogVariant::Compute(ComputeLog::HydrationTime) => RelationDesc::empty()
+                .with_column("export_id", ScalarType::String.nullable(false))
+                .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("time_ns", ScalarType::UInt64.nullable(true))
                 .with_key(vec![0, 1]),
         }
     }

@@ -344,19 +344,22 @@ true true true true true
 > CREATE CLUSTER counter_cluster SIZE = '1';
 > CREATE SOURCE counter IN CLUSTER counter_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2ms');
 
-> CREATE MATERIALIZED VIEW input AS
+> CREATE VIEW input AS
   SELECT counter % 1000 + 1 AS f1, counter % 10 + 1 AS f2
   FROM counter;
+> CREATE DEFAULT INDEX ON input;
 
-> CREATE MATERIALIZED VIEW m_minmax AS
+> CREATE VIEW m_minmax AS
   SELECT f1, MIN(f2), MAX(f2)
   FROM input
   GROUP BY f1;
+> CREATE DEFAULT INDEX ON m_minmax;
 
-> CREATE MATERIALIZED VIEW m_top1 AS
+> CREATE VIEW m_top1 AS
   SELECT DISTINCT ON (f1) f1, f2
   FROM input
   ORDER BY f1, f2 DESC;
+> CREATE DEFAULT INDEX ON m_top1;
 
 > SELECT
     records >= 2 * 1000,

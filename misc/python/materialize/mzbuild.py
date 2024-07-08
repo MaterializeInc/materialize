@@ -317,15 +317,18 @@ class CargoBuild(CargoPreImage):
             else {}
         )
 
-        cargo_build = [
-            *rd.cargo("build", channel=None, rustflags=rustflags, extra_env=extra_env),
-            "--workspace",
-        ]
+        cargo_build = rd.cargo(
+            "build", channel=None, rustflags=rustflags, extra_env=extra_env
+        )
 
+        packages = set()
         for bin in bins:
             cargo_build.extend(["--bin", bin])
+            packages.add(rd.cargo_workspace.crate_for_bin(bin).name)
         for example in examples:
             cargo_build.extend(["--example", example])
+            packages.add(rd.cargo_workspace.crate_for_example(example).name)
+        cargo_build.extend(f"--package={p}" for p in packages)
 
         if rd.release_mode:
             cargo_build.append("--release")

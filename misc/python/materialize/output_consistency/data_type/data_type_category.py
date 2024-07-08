@@ -33,4 +33,6 @@ class DataTypeCategory(Enum):
     MAP = 302
     RANGE = 303
 
-    OTHER_UNSUPPORTED = 400
+    RECORD = 400
+
+    UNDETERMINED = 500

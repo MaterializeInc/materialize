@@ -24,6 +24,7 @@ from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import selected_by_name
 
 
 def schema() -> str:
@@ -549,16 +550,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    to_run = []
-    for name in args.disruptions:
-        for disruption in disruptions:
-            if disruption.name == name:
-                to_run.append(disruption)
-                break
-        else:
-            raise ValueError(f"Unknown disruption {name}")
-
-    sharded_disruptions = buildkite.shard_list(to_run, lambda s: s.name)
+    sharded_disruptions = buildkite.shard_list(
+        list(selected_by_name(args.disruptions, disruptions)), lambda s: s.name
+    )
     print(
         f"Disruptions in shard with index {buildkite.get_parallelism_index()}: {[d.name for d in sharded_disruptions]}"
     )

@@ -404,6 +404,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [Top K]: /transform-data/patterns/top-k
 [query hints]: /sql/select/#query-hints
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_hydration_times_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability_raw -->

@@ -566,7 +566,7 @@ mz_aws_privatelink_connection_status_history source <null>  <null>
 mz_cluster_replica_frontiers                 source <null>  <null>
 mz_compute_dependencies                      source <null>  <null>
 mz_compute_error_counts_raw_unified          source <null>   <null>
-mz_compute_hydration_statuses                source <null>  <null>
+mz_compute_hydration_times                   source <null>  <null>
 mz_compute_operator_hydration_statuses_per_worker source <null> <null>
 mz_frontiers                                 source <null>  <null>
 mz_materialized_view_refreshes               source <null>  <null>
@@ -611,6 +611,7 @@ name
 mz_activity_log_thinned
 mz_cluster_replica_history
 mz_cluster_replica_utilization
+mz_compute_hydration_statuses
 mz_compute_operator_hydration_statuses
 mz_global_frontiers
 mz_hydration_statuses
@@ -679,6 +680,7 @@ mz_arrangement_sharing_raw                   log   <null>   <null>
 mz_compute_error_counts_raw                  log   <null>   <null>
 mz_compute_exports_per_worker                log   <null>   <null>
 mz_compute_frontiers_per_worker              log   <null>   <null>
+mz_compute_hydration_times_per_worker        log   <null>   <null>
 mz_compute_import_frontiers_per_worker       log   <null>   <null>
 mz_compute_operator_durations_histogram_raw  log   <null>   <null>
 mz_dataflow_addresses_per_worker             log   <null>   <null>
@@ -756,7 +758,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-189
+194
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

@@ -26,17 +26,16 @@
 > CREATE CLUSTER test REPLICAS (hydrated_test_1 (SIZE '1'))
 > SET cluster = test
 
-# Test that on an empty cluster only the introspection dataflows (indexes and
-# subscribes) show up.
+# Test that on an empty cluster only the introspection indexes show up.
+# Introspection subscribes do not show up because the hydration introspection
+# relations exclude transient dataflow.
 
 > SELECT DISTINCT left(h.object_id, 1), h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE r.name LIKE 'hydrated_test%';
 s true
-t true
 
-# `mz_hydration_statuses` does not report on transient dataflows.
 > SELECT DISTINCT left(h.object_id, 1), h.hydrated
   FROM mz_internal.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
@@ -56,16 +55,16 @@ s true
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
 > CREATE MATERIALIZED VIEW mv_const AS SELECT 1
 
-> SELECT o.name, r.name, h.hydrated
+> SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
   FROM mz_internal.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-idx      hydrated_test_1 true
-mv       hydrated_test_1 true
-mv_const hydrated_test_1 true
+idx      hydrated_test_1 true true
+mv       hydrated_test_1 true true
+mv_const hydrated_test_1 true false
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -94,19 +93,19 @@ mv_const hydrated_test_1 true
 
 > CREATE CLUSTER REPLICA test.hydrated_test_2 SIZE '1'
 
-> SELECT o.name, r.name, h.hydrated
+> SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
   FROM mz_internal.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-idx      hydrated_test_1 true
-idx      hydrated_test_2 true
-mv       hydrated_test_1 true
-mv       hydrated_test_2 true
-mv_const hydrated_test_1 true
-mv_const hydrated_test_2 true
+idx      hydrated_test_1 true true
+idx      hydrated_test_2 true true
+mv       hydrated_test_1 true true
+mv       hydrated_test_2 true true
+mv_const hydrated_test_1 true false
+mv_const hydrated_test_2 true false
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -143,16 +142,16 @@ mv_const hydrated_test_1 true
 
 > DROP CLUSTER REPLICA test.hydrated_test_1
 
-> SELECT o.name, r.name, h.hydrated
+> SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
   FROM mz_internal.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-idx      hydrated_test_2 true
-mv       hydrated_test_2 true
-mv_const hydrated_test_2 true
+idx      hydrated_test_2 true true
+mv       hydrated_test_2 true true
+mv_const hydrated_test_2 true false
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -178,7 +177,7 @@ mv       hydrated_test_2 true
 
 > DROP CLUSTER REPLICA test.hydrated_test_2
 
-> SELECT o.name, r.name, h.hydrated
+> SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
   FROM mz_internal.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
@@ -207,16 +206,16 @@ mv       hydrated_test_2 true
 
 > CREATE CLUSTER REPLICA test.hydrated_test_3 SIZE '1'
 
-> SELECT o.name, r.name, h.hydrated
+> SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
   FROM mz_internal.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-idx      hydrated_test_3 true
-mv       hydrated_test_3 true
-mv_const hydrated_test_3 true
+idx      hydrated_test_3 true true
+mv       hydrated_test_3 true true
+mv_const hydrated_test_3 true false
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -243,14 +242,14 @@ mv       hydrated_test_3 true
 > DROP INDEX idx;
 > DROP MATERIALIZED VIEW mv_const;
 
-> SELECT o.name, r.name, h.hydrated
+> SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
   FROM mz_internal.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-mv  hydrated_test_3 true
+mv  hydrated_test_3 true true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -381,16 +380,16 @@ users         hydrated_test_4 true
       )
   SELECT * FROM x;
 
-> SELECT o.name, r.name, h.hydrated
+> SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
   FROM mz_internal.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-mv_wmr       hydrated_test_4 true
-mv_wmr_const hydrated_test_4 true
-mv_wmr_stuck hydrated_test_4 false
+mv_wmr       hydrated_test_4 true  true
+mv_wmr_const hydrated_test_4 true  false
+mv_wmr_stuck hydrated_test_4 false false
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
