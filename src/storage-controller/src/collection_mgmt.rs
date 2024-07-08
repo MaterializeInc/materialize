@@ -200,7 +200,7 @@ where
     /// registered collection every second.
     ///
     /// Update the `desired` state of a differential collection using
-    /// [Self::update_desired].
+    /// [Self::differential_write].
     pub(super) fn register_differential_collection<'a, R>(&self, id: GlobalId, read_handle_fn: R)
     where
         R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>

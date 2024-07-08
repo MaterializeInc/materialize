@@ -16,7 +16,7 @@ resulting pipeline to the Buildkite job that triggers this script.
 On main and tags, all jobs are always run.
 
 For details about how steps are trimmed, see the comment at the top of
-pipeline.template.yml and the docstring on `trim_pipeline` below.
+pipeline.template.yml and the docstring on `trim_tests_pipeline` below.
 """
 
 import argparse
