@@ -72,7 +72,9 @@ class StartMz(MzcomposeAction):
             healthcheck=self.healthcheck,
         )
 
-        with c.override(mz):
+        # Don't fail since we are careful to explicitly kill and collect logs
+        # of the services thus started
+        with c.override(mz, fail_on_new_service=False):
             c.up("materialized" if self.mz_service is None else self.mz_service)
 
             # If we start up Materialize with MZ_DEPLOY_GENERATION, then it
@@ -212,7 +214,9 @@ class KillMz(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        with c.override(Materialized(name=self.mz_service)):
+        # Don't fail since we are careful to explicitly kill and collect logs
+        # of the services thus started
+        with c.override(Materialized(name=self.mz_service), fail_on_new_service=False):
             c.kill(self.mz_service, wait=True)
 
             if self.capture_logs:
