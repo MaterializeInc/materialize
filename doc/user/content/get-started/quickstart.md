@@ -30,7 +30,9 @@ A Materialize account. If you do not have an account, you can [sign up for a fre
 
 ## Step 0. Sign into the Console
 
-Open the [Materialize console](https://console.materialize.com/) and, if not already signed in, sign in. By default, the SQL Shell should display in the console.  You can also select SQL Shell in the console's left-hand menu.
+Navigate to the [Materialize console](https://console.materialize.com/) and sign
+in. By default, you should land in the SQL Shell. If you're already signed in,
+you can access the SQL Shell in the left-hand menu.
 
 ## Step 1. Ingest streaming data
 
