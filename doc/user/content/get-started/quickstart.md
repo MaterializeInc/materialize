@@ -305,7 +305,11 @@ DROP SOURCE auction_house CASCADE;
 DROP TABLE fraud_accounts;
 ```
 
-
+## What's next?
 
 [//]: # "TODO(morsapaes) Extend to suggest third party tools. dbt, Census and Metabase could all fit here to do interesting things as a follow-up."
 
+- To get started with your own data, click the `Connect data` button in the
+  Console.
+
+- To get a guided tour, click the `Talk to us` button in the Console.
