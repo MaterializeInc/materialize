@@ -26,7 +26,7 @@ the superpowers of an operational data warehouse first-hand:
 
 ## Prerequisite
 
-A Materialize account to sign into the [Materialize console](https://console.materialize.com/). If you do not have an account, you can [sign up for a free trial account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
+A Materialize account. If you do not have an account, you can [sign up for a free trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
 ## Step 0. Sign into the Console
 
