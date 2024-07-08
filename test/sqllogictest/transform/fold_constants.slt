@@ -239,19 +239,18 @@ FROM t
 ----
 1 a b
 
-# Blocked on #8963
-#query II
-#SELECT row_number() OVER (), row_number() OVER ()
-#----
-#1 1
+# Regression test for #8963
+query II
+SELECT row_number() OVER (), row_number() OVER ()
+----
+1 1
 
-# Blocked on #8963
-#query II
-#WITH t (x) AS (VALUES ('a'), ('b'))
-#SELECT row_number() OVER (), row_number() OVER () from t
-#----
-#1 1
-#2 2
+query II
+WITH t (x) AS (VALUES ('a'), ('b'))
+SELECT row_number() OVER (), row_number() OVER () from t
+----
+1 1
+2 2
 
 # Regression for #9749
 query error window functions are not allowed in ON
@@ -3105,7 +3104,9 @@ ORDER BY f2, f3, f1, last_value
 7  d  10  7
 
 # Default frame with large peer group
-# Warning: there are multiple valid results of this query
+# Note: there are multiple valid results of this query (because the default frame is up through the current row's last
+# ORDER BY peer, and the ordering among ORDER BY peers is unspecified), but we make the result stable by internally
+# always adding all remaining columns into our orderings.
 query ITII
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f3) OVER (PARTITION BY f2 ORDER BY f1)
