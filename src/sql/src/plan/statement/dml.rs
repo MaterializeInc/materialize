@@ -362,7 +362,8 @@ generate_extracted_config!(
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
-    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None))
+    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
+    (EnableOuterJoinNullFilter, Option<bool>, Default(None))
 );
 
 impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
@@ -402,13 +403,18 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             subtree_size: v.subtree_size,
             timing: v.timing,
             types: v.types,
+            // The ones that are initialized with `Default::default()` are not wired up to EXPLAIN.
             features: OptimizerFeatureOverrides {
                 enable_eager_delta_joins: v.enable_eager_delta_joins,
                 enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering: v.enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis: v.enable_letrec_fixpoint_analysis,
+                enable_consolidate_after_union_negate: Default::default(),
+                enable_reduce_mfp_fusion: Default::default(),
+                enable_outer_join_null_filter: v.enable_outer_join_null_filter,
+                enable_cardinality_estimates: Default::default(),
+                persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,
-                ..Default::default()
             },
         })
     }

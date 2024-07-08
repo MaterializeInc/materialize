@@ -3305,6 +3305,7 @@ pub enum ExplainPlanOptionName {
     EnableEagerDeltaJoins,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
+    EnableOuterJoinNullFilter,
 }
 
 impl WithOptionName for ExplainPlanOptionName {
@@ -3338,7 +3339,8 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
             | Self::EnableVariadicLeftJoinLowering
-            | Self::EnableLetrecFixpointAnalysis => false,
+            | Self::EnableLetrecFixpointAnalysis
+            | Self::EnableOuterJoinNullFilter => false,
         }
     }
 }
