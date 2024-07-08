@@ -318,6 +318,7 @@ impl Coordinator {
                     secret_key,
                     notice_tx,
                     drop_sinks: BTreeSet::new(),
+                    pending_cluster_alters: BTreeSet::new(),
                     connected_at: self.now(),
                     user,
                     application_name,
@@ -1214,6 +1215,8 @@ impl Coordinator {
         self.cancel_pending_peeks(&conn_id);
         self.cancel_pending_watchsets(&conn_id);
         self.cancel_compute_sinks_for_conn(&conn_id).await;
+        self.cancel_cluster_reconfigurations_for_conn(&conn_id)
+            .await;
         if let Some((tx, _rx)) = self.staged_cancellation.get_mut(&conn_id) {
             let _ = tx.send(true);
         }

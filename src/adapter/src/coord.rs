@@ -1021,6 +1021,10 @@ pub struct ConnMeta {
     #[serde(skip)]
     deferred_lock: Option<OwnedMutexGuard<()>>,
 
+    /// Cluster reconfigurations that will need to be
+    /// cleaned up when the current transaction is cleared
+    pending_cluster_alters: BTreeSet<ClusterId>,
+
     /// Channel on which to send notices to a session.
     #[serde(skip)]
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
