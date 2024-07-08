@@ -38,7 +38,7 @@ data freshness**.
     {{< linkbox icon="doc" title="Guides" >}}
 -   [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
 -   [dbt &amp; Materialize](/integrations/dbt/)
--   [Materialize &amp; Node.js](/integrations/node-js/)  
+-   [Materialize &amp; Node.js](/integrations/node-js/)
 
 -   [Time-windowed computation](/sql/patterns/temporal-filters/)
     {{</ linkbox >}}
