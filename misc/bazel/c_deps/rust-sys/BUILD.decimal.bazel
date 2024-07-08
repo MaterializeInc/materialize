@@ -1,0 +1,71 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
+load("@bazel_skylib//rules:select_file.bzl", "select_file")
+
+"""Additive BUILD file for the decimal-sys Rust crate."""
+
+cc_library(
+    name = "decnumber",
+    srcs = [
+        "decnumber/decimal128.c",
+        "decnumber/decimal64.c",
+        "decnumber/decimal32.c",
+        "decnumber/decContext.c",
+        "decnumber/decNumber.c",
+        "decnumber/decSingle.c",
+        "decnumber/decDouble.c",
+        "decnumber/decQuad.c",
+        "decnumber/decPacked.c",
+    ],
+    hdrs = [
+        "decnumber/decimal128.h",
+        "decnumber/decimal64.h",
+        "decnumber/decimal32.h",
+        "decnumber/decContext.h",
+        "decnumber/decNumber.h",
+        "decnumber/decSingle.h",
+        "decnumber/decDouble.h",
+        "decnumber/decQuad.h",
+        "decnumber/decPacked.h",
+        "decnumber/decDPD.h",
+        "decnumber/decNumberLocal.h",
+    ],
+    textual_hdrs = [
+        # The ordering of these is important.
+        "decnumber/decCommon.c",
+        "decnumber/decBasic.c",
+    ],
+    # libdecimal strongly recommends always enabling optimizations.
+    #
+    # See: <https://github.com/MaterializeInc/rust-dec/blob/8f2670e74773e97f2f62f1f0d06b52442047883e/decnumber-sys/decnumber/readme.txt#L57-L58>
+    copts = ["-O3"] + select({
+        "//conditions:default": ["-Wno-unused-but-set-variable"],
+    }),
+    defines = ["DECLITEND=1"],
+    target_compatible_with = select({
+        "@//misc/bazel/platforms:linux_arm": [],
+        "@//misc/bazel/platforms:linux_x86_64": [],
+        "@//misc/bazel/platforms:macos_arm": [],
+        "@//misc/bazel/platforms:macos_x86_64": [],
+        # We can support more platforms but we'll need to take care to
+        # correctly define `DECLITEND`.
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:public"],
+)
+
+# Place the compiled static library in the right place so rustc can find it.
+copy_to_directory(
+    name = "decimal_static_lib",
+    srcs = [":decnumber"],
+    visibility = ["//visibility:public"],
+)

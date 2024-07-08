@@ -256,6 +256,16 @@ crates_repository(
     lockfile = "//misc/bazel:Cargo.crates_io.lock",
     rust_version = RUST_VERSION,
     annotations = {
+        "decnumber-sys": [crate.annotation(
+            gen_build_script = False,
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.decimal.bazel",
+            # Note: This is a target we add from the additive build file above.
+            compile_data = [":decimal_static_lib"],
+            rustc_flags = [
+                "-Lnative=$(execpath :decimal_static_lib)",
+                "-lstatic=decnumber",
+            ]
+        )],
         "librocksdb-sys": [crate.annotation(
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.rocksdb.bazel",
             # Note: The below targets are from the additive build file.
