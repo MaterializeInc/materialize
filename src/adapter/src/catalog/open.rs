@@ -535,17 +535,10 @@ impl Catalog {
                 }
             }
 
-            let wait_for_consolidation = catalog
-                .system_config()
-                .wait_catalog_consolidation_on_startup();
             {
                 let mut storage = catalog.storage().await;
                 storage
-                    .prune_storage_usage(
-                        config.storage_usage_retention_period,
-                        boot_ts,
-                        wait_for_consolidation,
-                    )
+                    .prune_storage_usage(config.storage_usage_retention_period, boot_ts)
                     .await?;
                 let updates = storage.sync_to_current_updates().await?;
                 soft_assert_no_log!(

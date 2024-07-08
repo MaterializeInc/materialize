@@ -146,10 +146,7 @@ async fn test_get_and_prune_storage_usage(openable_state: Box<dyn OpenableDurabl
     let recent_event = VersionedStorageUsage::V1(recent_event);
 
     // Test with no retention period.
-    state
-        .prune_storage_usage(None, boot_ts, false)
-        .await
-        .unwrap();
+    state.prune_storage_usage(None, boot_ts).await.unwrap();
     let events = state.get_storage_usage().await.unwrap();
     assert_eq!(events.len(), 2);
     assert!(events.contains(&old_event));
@@ -157,7 +154,7 @@ async fn test_get_and_prune_storage_usage(openable_state: Box<dyn OpenableDurabl
 
     // Test with some retention period.
     state
-        .prune_storage_usage(Some(Duration::from_millis(10)), boot_ts, false)
+        .prune_storage_usage(Some(Duration::from_millis(10)), boot_ts)
         .await
         .unwrap();
     let events = state.get_storage_usage().await.unwrap();

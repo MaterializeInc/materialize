@@ -671,6 +671,7 @@ pub(crate) fn durable_migrate(
     catalog_fix_system_cluster_replica_ids_v_0_95_0(tx, boot_ts)?;
     catalog_rename_mz_introspection_cluster_v_0_103_0(tx, boot_ts)?;
     catalog_add_new_unstable_schemas_v_0_106_0(tx)?;
+    catalog_remove_wait_catalog_consolidation_on_startup_v_0_108_0(tx);
     Ok(())
 }
 
@@ -850,4 +851,10 @@ fn catalog_add_new_unstable_schemas_v_0_106_0(tx: &mut Transaction) -> Result<()
     }
 
     Ok(())
+}
+
+/// This migration removes the server configuration parameter
+/// "wait_catalog_consolidation_on_startup" which is no longer used.
+fn catalog_remove_wait_catalog_consolidation_on_startup_v_0_108_0(tx: &mut Transaction) {
+    tx.remove_system_config("wait_catalog_consolidation_on_startup");
 }
