@@ -496,11 +496,12 @@ def annotate_logged_errors(
                     )
                 )
             else:
+                # JUnit error
                 handle_error(
-                    error.message,
-                    error.text,
-                    error.testcase,
-                    None,
+                    error_message=error.message,
+                    error_details=error.text,
+                    location=error.testcase,
+                    location_url=None,
                 )
         else:
             raise RuntimeError(f"Unexpected error type: {type(error)}")
