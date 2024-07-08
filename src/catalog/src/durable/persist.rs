@@ -1431,18 +1431,19 @@ impl DurableCatalogState for PersistCatalogState {
         Ok(())
     }
 
-    // TODO(jkosh44) For most modifications we delegate to transactions to avoid duplicate code.
-    // This is slightly inefficient because we have to clone an entire snapshot when we usually
-    // only need one part of the snapshot. A Potential mitigation against these performance hits is
-    // to utilize `CoW`s in `Transaction`s to avoid cloning unnecessary state.
-
     #[mz_ore::instrument]
     async fn prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
         self.sync_to_current_upper().await?;
+
+        if self.is_read_only() {
+            self.confirm_leadership().await?;
+            return Ok(Vec::new());
+        }
+
         // If no usage retention period is set, set the cutoff to MIN so nothing
         // is removed.
         let cutoff_ts = match retention_period {
@@ -1483,15 +1484,12 @@ impl DurableCatalogState for PersistCatalogState {
             }
         }
 
-        if !self.is_read_only() {
-            let mut txn = self.transaction().await?;
-            txn.remove_storage_usage_events(expired);
-            txn.commit_internal().await?;
-        } else {
-            self.confirm_leadership().await?;
-        }
+        let mut txn = self.transaction().await?;
+        txn.remove_storage_usage_events(expired);
+        let updates = txn.get_and_commit_op_updates();
+        txn.commit().await?;
 
-        Ok(())
+        Ok(updates)
     }
 }
 
