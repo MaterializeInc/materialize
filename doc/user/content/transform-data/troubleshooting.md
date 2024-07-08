@@ -189,7 +189,7 @@ You can also grab CPU usage from the system catalog using SQL:
 
 ```mzsql
 SELECT cru.cpu_percent
-FROM mz_internal.mz_cluster_replica_utilization cru
+FROM mz_catalog_unstable.mz_cluster_replica_utilization cru
 LEFT JOIN mz_catalog.mz_cluster_replicas cr ON cru.replica_id = cr.id
 LEFT JOIN mz_catalog.mz_clusters c ON cr.cluster_id = c.id
 WHERE c.name = <CLUSTER_NAME>;
@@ -286,7 +286,7 @@ in the [Materialize console](https://console.materialize.com/). You can filter
 and sort statements by type, duration, and other dimensions.
 
 This data is also available via the
-[mz_internal.mz_recent_activity_log](/sql/system-catalog/mz_internal/#mz_recent_activity_log)
+[mz_catalog_unstable.mz_recent_activity_log](/sql/system-catalog/mz_catalog_unstable/#mz_recent_activity_log)
 catalog table.
 
 It's important to note that the default (and max) sample rate for most

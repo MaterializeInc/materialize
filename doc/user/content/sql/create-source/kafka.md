@@ -379,7 +379,7 @@ the `group_id_prefix` column of the [`mz_kafka_sources`] table. To look up the
 
 ```mzsql
 SELECT group_id_prefix
-FROM mz_internal.mz_kafka_sources ks
+FROM mz_catalog_unstable.mz_kafka_sources ks
 JOIN mz_sources s ON s.id = ks.id
 WHERE s.name = '<src_name>'
 ```
@@ -676,4 +676,4 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 [Append-only envelope]: /sql/create-source/#append-only-envelope
 [Upsert envelope]: /sql/create-source/#upsert-envelope
 [Debezium envelope]: /sql/create-source/#debezium-envelope
-[`mz_kafka_sources`]: /sql/system-catalog/mz_internal/#mz_kafka_sources
+[`mz_kafka_sources`]: /sql/system-catalog/mz_catalog_unstable/#mz_kafka_sources

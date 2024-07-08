@@ -98,7 +98,7 @@ which has been tried and tested in production environments.
                    cluster_id::text AS cluster_id,
                    memory_percent::float AS memory_percent
                 FROM mz_cluster_replicas r
-                JOIN mz_internal.mz_cluster_replica_utilization u ON r.id=u.replica_id;
+                JOIN mz_catalog_unstable.mz_cluster_replica_utilization u ON r.id=u.replica_id;
    ```
 
 1. Once you are done with the Prometheus SQL Exporter configuration,

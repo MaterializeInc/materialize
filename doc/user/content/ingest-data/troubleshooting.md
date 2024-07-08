@@ -26,11 +26,11 @@ to https://console.materialize.com/, clicking the **Sources** tab in the
 navigation bar, and clicking the affected source.
 
 Alternatively, you can get this information from the system catalog by querying
-the [`mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses)
+the [`mz_source_statuses`](/sql/system-catalog/mz_catalog_unstable/#mz_source_statuses)
 table:
 
 ```mzsql
-SELECT * FROM mz_internal.mz_source_statuses
+SELECT * FROM mz_catalog_unstable.mz_source_statuses
 WHERE name = <SOURCE_NAME>;
 ```
 
@@ -57,12 +57,12 @@ Snapshotting can take between a few minutes to several hours, depending on the
 size of your dataset and the [size of your ingestion cluster](https://materialize.com/docs/sql/create-cluster/#disk-enabled-sizes).
 
 To determine whether your source has completed ingesting the initial snapshot,
-you can query the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
+you can query the [`mz_source_statistics`](/sql/system-catalog/mz_catalog_unstable/#mz_source_statistics)
 system catalog table:
 
 ```mzsql
 SELECT snapshot_committed
-FROM mz_internal.mz_source_statistics
+FROM mz_catalog_unstable.mz_source_statistics
 WHERE id = <SOURCE_ID>;
 ```
 
@@ -77,7 +77,7 @@ monitor its progress. See [How do I monitor source ingestion progress?](#how-do-
 ## How do I monitor source ingestion progress?
 
 Repeatedly query the
-[`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
+[`mz_source_statistics`](/sql/system-catalog/mz_catalog_unstable/#mz_source_statistics)
 table and look for ingestion statistics that advance over time:
 
 ```mzsql
@@ -86,7 +86,7 @@ SELECT
     messages_received,
     updates_staged,
     updates_committed
-FROM mz_internal.mz_source_statistics
+FROM mz_catalog_unstable.mz_source_statistics
 WHERE id = <SOURCE_ID>;
 ```
 

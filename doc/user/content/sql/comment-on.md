@@ -20,7 +20,7 @@ menu:
 comment associated with it, so successive calls of `COMMENT ON` to a single object will overwrite
 the previous comment.
 
-To read the comment on an object you need to query the [mz_internal.mz_comments](/sql/system-catalog/mz_internal/#mz_comments)
+To read the comment on an object you need to query the [mz_catalog_unstable.mz_comments](/sql/system-catalog/mz_catalog_unstable/#mz_comments)
 catalog table.
 
 ## Privileges
@@ -43,5 +43,5 @@ COMMENT ON TABLE foo IS 'holds non-important data';
 COMMENT ON TABLE foo IS NULL;
 
 --- Read comments.
-SELECT * FROM mz_internal.mz_comments;
+SELECT * FROM mz_catalog_unstable.mz_comments;
 ```

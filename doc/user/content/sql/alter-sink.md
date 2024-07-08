@@ -44,7 +44,7 @@ make progress.
 
 To monitor the status of a sink after an `ALTER SINK` command, navigate to the
 respective object page in the [Materialize console](https://console.materialize.com/),
-or query the [`mz_internal.mz_sink_statuses`](/sql/system-catalog/mz_internal/#mz_sink_statuses)
+or query the [`mz_catalog_unstable.mz_sink_statuses`](/sql/system-catalog/mz_catalog_unstable/#mz_sink_statuses)
 system catalog view.
 
 ### Cutover scenarios

@@ -95,10 +95,10 @@ When you define a source, Materialize will automatically:
 
     The name of the replication slot created by Materialize is prefixed with
     `materialize_` for easy identification, and can be looked up in
-    `mz_internal.mz_postgres_sources`.
+    `mz_catalog_unstable.mz_postgres_sources`.
 
     ```mzsql
-    SELECT id, replication_slot FROM mz_internal.mz_postgres_sources;
+    SELECT id, replication_slot FROM mz_catalog_unstable.mz_postgres_sources;
     ```
 
     ```
@@ -143,7 +143,7 @@ same source across multiple materializations.
 {{< warning >}}
 Make sure to delete any replication slots if you stop using Materialize, or if
 either the Materialize or PostgreSQL instances crash. To look up the name of
-the replication slot created for each source, use `mz_internal.mz_postgres_sources`.
+the replication slot created for each source, use `mz_catalog_unstable.mz_postgres_sources`.
 {{< /warning >}}
 
 If you delete all objects that depend on a source without also dropping the

@@ -6,7 +6,7 @@ In this step, you'll first verify that the source is running and then check the
 status of the snapshotting process.
 
 1. Back in the SQL client connected to Materialize, use the
-   [`mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses)
+   [`mz_source_statuses`](/sql/system-catalog/mz_catalog_unstable/#mz_source_statuses)
    table to check the overall status of your source:
 
     ```mzsql
@@ -15,11 +15,11 @@ status of the snapshotting process.
       (SELECT id FROM mz_sources WHERE name = 'mz_source')
     SELECT *
     FROM
-      mz_internal.mz_source_statuses
+      mz_catalog_unstable.mz_source_statuses
         JOIN
           (
             SELECT referenced_object_id
-            FROM mz_internal.mz_object_dependencies
+            FROM mz_catalog_unstable.mz_object_dependencies
             WHERE
               object_id IN (SELECT id FROM source_ids)
             UNION SELECT id FROM source_ids
@@ -34,7 +34,7 @@ status of the snapshotting process.
     Also, if the `status` of any subsource is `starting` for more than a few
     minutes, [contact our team](/support/).
 
-2. Once the source is running, use the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
+2. Once the source is running, use the [`mz_source_statistics`](/sql/system-catalog/mz_catalog_unstable/#mz_source_statistics)
    table to check the status of the initial snapshot:
 
     ```mzsql
@@ -43,11 +43,11 @@ status of the snapshotting process.
       (SELECT id FROM mz_sources WHERE name = 'mz_source')
     SELECT sources.referenced_object_id AS id, mz_sources.name, snapshot_committed
     FROM
-      mz_internal.mz_source_statistics
+      mz_catalog_unstable.mz_source_statistics
         JOIN
           (
             SELECT object_id, referenced_object_id
-            FROM mz_internal.mz_object_dependencies
+            FROM mz_catalog_unstable.mz_object_dependencies
             WHERE
               object_id IN (SELECT id FROM source_ids)
             UNION SELECT id, id FROM source_ids

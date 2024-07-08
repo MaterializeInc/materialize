@@ -78,7 +78,7 @@ Materialize's stable interface:
 
   * Features that are in <a href="https://materialize.com/preview-terms/">public or private preview</a> (labeled as such in the documentation)
   * The [`EXPLAIN PLAN`](/sql/explain-plan) and [`EXPLAIN TIMESTAMP`](/sql/explain-timestamp) statements
-  * Objects in the [`mz_internal` schema](/sql/system-catalog/mz_internal)
+  * Objects in the unstable system schemas: [`mz_catalog_unstable`](/sql/system-catalog/mz_catalog_unstable) and [`mz_introspection`](/sql/system-catalog/mz_introspection)
   * Any undocumented features or behavior
 
 These unstable interfaces are not subject to the backwards-compatibility policy.

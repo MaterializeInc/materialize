@@ -93,7 +93,7 @@ indexes in the same schema. For instance:
 
 ## Cutting over
 
-1. Wait for all views on `prod_deploy` to hydrate. You can query [`mz_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_hydration_statuses) or take a look at the lag in
+1. Wait for all views on `prod_deploy` to hydrate. You can query [`mz_hydration_statuses`](/sql/system-catalog/mz_catalog_unstable/#mz_hydration_statuses) or take a look at the lag in
 the Workflow graph in the [Materialize Console](https://console.materialize.com)
 to get a rough sense of when rehydration is complete. The view will appear
 as “caught up”, and you can compare both the `prod` and `prod_deploy` versions

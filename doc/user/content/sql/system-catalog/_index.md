@@ -28,7 +28,7 @@ different types of metadata.
   * [`information_schema`](information_schema), which presents the data in
     `mz_catalog` in the format used by the SQL standard's information_schema.
 
-  * [`mz_internal`](mz_internal), which exposes internal metadata about
+  * [`mz_catalog_unstable`](mz_catalog_unstable), which exposes internal metadata about
     Materialize in an unstable format that is likely to change.
 
   * [`mz_introspection`](mz_introspection), which contains replica
