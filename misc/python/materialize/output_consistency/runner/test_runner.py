@@ -89,14 +89,19 @@ class ConsistencyTestRunner:
 
         time_guard = TimeGuard(self.config.max_runtime_in_sec)
 
-        self.output_printer.start_section("Running predefined queries")
-        success = self._run_predefined_queries(test_summary)
+        if not self.config.disable_predefined_queries:
+            self.output_printer.start_section("Running predefined queries")
+            success = self._run_predefined_queries(test_summary)
 
-        if not success and self.config.fail_fast:
+            if not success and self.config.fail_fast:
+                self.output_printer.print_info(
+                    "Ending test run because the of a comparison mismatch in predefined queries (fail_fast mode)"
+                )
+                return test_summary
+        else:
             self.output_printer.print_info(
-                "Ending test run because the of a comparison mismatch in predefined queries (fail_fast mode)"
+                "Not running predefined queries because they are disabled"
             )
-            return test_summary
 
         self.output_printer.print_empty_line()
         self.output_printer.start_section("Running generated queries")

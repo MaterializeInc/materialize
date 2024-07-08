@@ -64,6 +64,7 @@ class OutputConsistencyTest:
             args.max_runtime_in_sec,
             args.max_iterations,
             args.avoid_expressions_expecting_db_error,
+            args.disable_predefined_queries,
         )
 
     def parse_output_consistency_input_args(
@@ -95,6 +96,12 @@ class OutputConsistencyTest:
             type=bool,
             action=argparse.BooleanOptionalAction,
         )
+        parser.add_argument(
+            "--disable-predefined-queries",
+            default=False,
+            type=bool,
+            action=argparse.BooleanOptionalAction,
+        )
 
         return parser.parse_args()
 
@@ -109,6 +116,7 @@ class OutputConsistencyTest:
         max_runtime_in_sec: int,
         max_iterations: int,
         avoid_expressions_expecting_db_error: bool,
+        disable_predefined_queries: bool,
     ) -> ConsistencyTestSummary:
         input_data = self.create_input_data()
 
@@ -132,6 +140,7 @@ class OutputConsistencyTest:
             print_reproduction_code=True,
             postgres_compatible_mode=scenario
             == EvaluationScenario.POSTGRES_CONSISTENCY,
+            disable_predefined_queries=disable_predefined_queries,
         )
 
         output_printer.print_config(config)
