@@ -258,11 +258,11 @@ crates_repository(
     annotations = {
         "decnumber-sys": [crate.annotation(
             gen_build_script = False,
-            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.decimal.bazel",
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.decnumber.bazel",
             # Note: This is a target we add from the additive build file above.
-            compile_data = [":decimal_static_lib"],
+            compile_data = [":decnumber_static_lib"],
             rustc_flags = [
-                "-Lnative=$(execpath :decimal_static_lib)",
+                "-Lnative=$(execpath :decnumber_static_lib)",
                 "-lstatic=decnumber",
             ]
         )],

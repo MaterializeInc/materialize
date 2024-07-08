@@ -65,7 +65,7 @@ cc_library(
 
 # Place the compiled static library in the right place so rustc can find it.
 copy_to_directory(
-    name = "decimal_static_lib",
+    name = "decnumber_static_lib",
     srcs = [":decnumber"],
     visibility = ["//visibility:public"],
 )
