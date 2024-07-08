@@ -256,11 +256,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Permanently deletes storage usage events from the catalog
     /// that happened more than the retention period ago from boot_ts.
+    ///
+    /// Returns the catalog updates that result from the pruning.
     async fn prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
-    ) -> Result<(), CatalogError>;
+    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     #[mz_ore::instrument(level = "debug")]

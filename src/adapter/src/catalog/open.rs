@@ -534,10 +534,9 @@ impl Catalog {
 
             {
                 let mut storage = catalog.storage().await;
-                storage
+                let updates = storage
                     .prune_storage_usage(config.storage_usage_retention_period, boot_ts)
                     .await?;
-                let updates = storage.sync_to_current_updates().await?;
                 soft_assert_no_log!(
                     updates
                         .iter()
