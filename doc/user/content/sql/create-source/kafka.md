@@ -104,6 +104,33 @@ echo ":" | kcat -b $BROKER -t $TOPIC -Z -K: \
   -X sasl.password=$KAFKA_PASSWORD
 ```
 
+#### Value Decoding Errors
+
+{{< private-preview />}}
+
+To avoid setting an `ENVELOPE UPSERT` source into an error state if a value fails to decode,
+you can use the `VALUE DECODING ERRORS = INLINE` option to store the latest error for each
+key directly in the upsert source:
+```mzsql
+CREATE SOURCE kafka_upsert
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  ENVELOPE UPSERT (VALUE DECODING ERRORS = INLINE);
+```
+
+When the `VALUE DECODING ERRORS = INLINE` option is specified, the source will contain
+two top-level nullable columns, `error` and `value` and will not contain top-level columns for
+fields in decoded values. The source itself will not enter an error state on failure to
+decode the value for a specific key.
+
+The column named `error` is nullable with a type of `record(description: text)`. If the most
+recent value for a key has been successfully decoded, this column will be `NULL`. If the
+most recent value for a key was not succesfully decoded, this column will contain details
+about the error.
+
+The column named `value` is nullable with a type of `record(value columns...)` and will be `NULL`
+if the value could not be decoded.
+
 ### Using Debezium
 
 {{< debezium-json >}}

@@ -187,7 +187,9 @@ create_source_kafka ::=
          ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? | 'HEADER' key 'AS' name ('BYTES')? )
     (',' ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? | 'HEADER' key 'AS' name ('BYTES')? ) )*
   )?
-  ('ENVELOPE' ('NONE' | 'DEBEZIUM' | 'UPSERT'))?
+  ('ENVELOPE' ('NONE' | 'DEBEZIUM' | 'UPSERT'
+    ( '(' 'VALUE DECODING ERRORS = INLINE'  ')' )?
+  ))?
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   with_options?
 create_source_load_generator ::=
