@@ -1410,6 +1410,7 @@ SELECT ((multi_dim_text_array_empty) @> (multi_dim_text_array_two_elem)) FROM t5
 ----
 false
 
+
 query T
 SELECT '{}'::numeric[] @> '{}'::numeric[];
 ----
