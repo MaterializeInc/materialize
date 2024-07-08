@@ -29,7 +29,7 @@ fn bench_interval(c: &mut Criterion) {
 
     const INTERVAL: Interval = Interval::new(1, 1, 0);
     group.bench_function("encode", |b| {
-        let mut buf = vec![0u8; 32];
+        let mut buf = [0u8; 32];
         b.iter(|| {
             let packed = PackedInterval::from_value(std::hint::black_box(INTERVAL));
             std::hint::black_box(&mut buf[..PackedInterval::SIZE])
@@ -71,7 +71,7 @@ fn bench_time(c: &mut Criterion) {
 
     let naive_time = NaiveTime::from_hms_opt(1, 1, 1).unwrap();
     group.bench_function("encode", |b| {
-        let mut buf = vec![0u8; 32];
+        let mut buf = [0u8; 32];
         b.iter(|| {
             let packed = PackedNaiveTime::from_value(std::hint::black_box(naive_time));
             std::hint::black_box(&mut buf[..PackedNaiveTime::SIZE])
@@ -117,7 +117,7 @@ fn bench_acl_item(c: &mut Criterion) {
         acl_mode: AclMode::all(),
     };
     group.bench_function("encode", |b| {
-        let mut buf = vec![0u8; 32];
+        let mut buf = [0u8; 32];
         b.iter(|| {
             let packed = PackedAclItem::from_value(std::hint::black_box(acl_item));
             std::hint::black_box(&mut buf[..PackedAclItem::SIZE])
@@ -163,7 +163,7 @@ fn bench_mz_acl_item(c: &mut Criterion) {
         acl_mode: AclMode::all(),
     };
     group.bench_function("encode", |b| {
-        let mut buf = vec![0u8; 32];
+        let mut buf = [0u8; 32];
         b.iter(|| {
             let packed = PackedMzAclItem::from_value(std::hint::black_box(acl_item));
             std::hint::black_box(&mut buf[..PackedMzAclItem::SIZE])
@@ -208,7 +208,7 @@ fn bench_numeric(c: &mut Criterion) {
 
     let val = Numeric::from(-101);
     group.bench_function("encode", |b| {
-        let mut buf = vec![0u8; 64];
+        let mut buf = [0u8; 64];
         b.iter(|| {
             let packed = PackedNumeric::from_value(std::hint::black_box(val));
             std::hint::black_box(&mut buf[..PackedNumeric::SIZE])

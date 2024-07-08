@@ -3157,11 +3157,11 @@ mod tests {
         let mut writer_catalog =
             Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
                 .await
-                .unwrap();
+                .expect("open_debug_catalog");
         let mut read_only_catalog =
             Catalog::open_debug_read_only_catalog(persist_client.clone(), organization_id.clone())
                 .await
-                .unwrap();
+                .expect("open_debug_read_only_catalog");
         assert!(writer_catalog.resolve_database(db_name).is_err());
         assert!(read_only_catalog.resolve_database(db_name).is_err());
 
@@ -3178,19 +3178,31 @@ mod tests {
             .await
             .expect("failed to transact");
 
-        let write_db = writer_catalog.resolve_database(db_name).unwrap();
-        read_only_catalog.sync_to_current_updates().await.unwrap();
-        let read_db = read_only_catalog.resolve_database(db_name).unwrap();
+        let write_db = writer_catalog
+            .resolve_database(db_name)
+            .expect("resolve_database");
+        read_only_catalog
+            .sync_to_current_updates()
+            .await
+            .expect("sync_to_current_updates");
+        let read_db = read_only_catalog
+            .resolve_database(db_name)
+            .expect("resolve_database");
 
         assert_eq!(write_db, read_db);
 
         let writer_catalog_fencer = Catalog::open_debug_catalog(persist_client, organization_id)
             .await
-            .unwrap();
-        let fencer_db = writer_catalog_fencer.resolve_database(db_name).unwrap();
+            .expect("open_debug_catalog for fencer");
+        let fencer_db = writer_catalog_fencer
+            .resolve_database(db_name)
+            .expect("resolve_database for fencer");
         assert_eq!(fencer_db, read_db);
 
-        let write_fence_err = writer_catalog.sync_to_current_updates().await.unwrap_err();
+        let write_fence_err = writer_catalog
+            .sync_to_current_updates()
+            .await
+            .expect_err("sync_to_current_updates for fencer");
         assert!(matches!(
             write_fence_err,
             CatalogError::Durable(DurableCatalogError::Fence(_))
@@ -3198,7 +3210,7 @@ mod tests {
         let read_fence_err = read_only_catalog
             .sync_to_current_updates()
             .await
-            .unwrap_err();
+            .expect_err("sync_to_current_updates after fencer");
         assert!(matches!(
             read_fence_err,
             CatalogError::Durable(DurableCatalogError::Fence(_))

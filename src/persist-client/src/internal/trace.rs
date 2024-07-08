@@ -30,7 +30,7 @@
 //!   (analogous to `Batch::Merger`) that allows us to represent a merge as it
 //!   is fueling. Normally, this would represent real incremental compaction
 //!   progress, but in persist, it's simply a bookkeeping mechanism. Once fully
-//!   fueled, the `FuelingMerge` is turned into a [SpineBatch::Fueled] variant,
+//!   fueled, the `FuelingMerge` is turned into a fueled [SpineBatch],
 //!   which to the Spine is indistinguishable from a merged batch. At this
 //!   point, it is eligible for asynchronous compaction and a `FueledMergeReq`
 //!   is generated.

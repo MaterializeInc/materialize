@@ -1294,7 +1294,7 @@ fn downcast_array<T: 'static>(array: &Arc<dyn Array>) -> Result<&T, anyhow::Erro
         .ok_or_else(|| anyhow!("expected {}, found {array:?}", std::any::type_name::<T>()))
 }
 
-/// Small helper function to downcast from an array to a [`DatumDecoder`].
+/// Small helper function to downcast from an array to a [`DatumColumnDecoder`].
 ///
 /// Note: it is _super_ important that we downcast as few times as possible. Datum encoding is a
 /// very hot path and downcasting is relatively slow

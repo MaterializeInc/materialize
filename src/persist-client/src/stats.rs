@@ -122,9 +122,9 @@ pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
     }
 }
 
-/// Encodes a [`ColumnarRecords`] into a [`Part`] and calculates [`PartStats`].
+/// Encodes a [`BlobTraceUpdates`] into a [`Part`] and calculates [`PartStats`].
 ///
-/// Note: The [`Part`] will contain the same data as [`ColumnarRecords`], but
+/// Note: The [`Part`] will contain the same data as [`BlobTraceUpdates`], but
 /// the [`Part`] will have the data fully structured as opposed to an opaque
 /// binary blob.
 pub(crate) fn encode_updates<K, V>(
