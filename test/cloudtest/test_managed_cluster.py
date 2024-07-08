@@ -248,26 +248,20 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     time.sleep(1)
 
     assert_replica_names(["r1", "r1-pending"], allow_pending=True)
-    assert (
-        mz.environmentd.sql_query(
-            """
+    assert mz.environmentd.sql_query(
+        """
         SELECT size FROM mz_clusters WHERE name='gracefulatlertest';
         """
-        )
-        == (["1"],)
-    ), "Cluster should use original config during alter"
+    ) == (["1"],), "Cluster should use original config during alter"
 
     thread.join()
 
     assert_replica_names(["r1"], allow_pending=False)
-    assert (
-        mz.environmentd.sql_query(
-            """
+    assert mz.environmentd.sql_query(
+        """
         SELECT size FROM mz_clusters WHERE name='gracefulatlertest';
         """
-        )
-        == (["2"],)
-    ), "Cluster should use new config after alter completes"
+    ) == (["2"],), "Cluster should use new config after alter completes"
 
     # Validate cancelation of alter cluster..with
     mz.environmentd.sql(
@@ -322,14 +316,11 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     time.sleep(1)
 
     assert_replica_names(["r1"], allow_pending=False)
-    assert (
-        mz.environmentd.sql_query(
-            """
+    assert mz.environmentd.sql_query(
+        """
         SELECT size FROM mz_clusters WHERE name='cluster1';
         """
-        )
-        == (["1"],)
-    ), "Cluster should not have updated if canceled during alter"
+    ) == (["1"],), "Cluster should not have updated if canceled during alter"
 
     # Test graceful reconfig wait until ready
     mz.environmentd.sql(
