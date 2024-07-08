@@ -19,9 +19,9 @@ use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
     WithOptionValue,
 };
-use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use mz_storage_types::sources::SubsourceResolver;
 use tokio_postgres::types::Oid;
+use tokio_postgres::Client;
 
 use crate::names::{Aug, PartialItemName, ResolvedItemName};
 use crate::normalize;
@@ -35,11 +35,11 @@ use super::RequestedSubsource;
 /// snapshotting, we break the entire source.
 pub(super) async fn validate_requested_subsources_privileges(
     config: &Config,
-    ssh_tunnel_manager: &SshTunnelManager,
+    client: &Client,
     table_oids: &[Oid],
 ) -> Result<(), PlanError> {
-    privileges::check_table_privileges(config, ssh_tunnel_manager, table_oids).await?;
-    replica_identity::check_replica_identity_full(config, ssh_tunnel_manager, table_oids).await?;
+    privileges::check_table_privileges(config, client, table_oids).await?;
+    replica_identity::check_replica_identity_full(client, table_oids).await?;
 
     Ok(())
 }
@@ -296,13 +296,9 @@ mod privileges {
 
     async fn check_schema_privileges(
         config: &Config,
-        ssh_tunnel_manager: &SshTunnelManager,
+        client: &Client,
         table_oids: &[Oid],
     ) -> Result<(), PlanError> {
-        let client = config
-            .connect("check_schema_privileges", ssh_tunnel_manager)
-            .await?;
-
         let invalid_schema_privileges_rows = client
             .query(
                 "
@@ -356,14 +352,10 @@ mod privileges {
     /// If `config` does not specify a user.
     pub async fn check_table_privileges(
         config: &Config,
-        ssh_tunnel_manager: &SshTunnelManager,
+        client: &Client,
         table_oids: &[Oid],
     ) -> Result<(), PlanError> {
-        check_schema_privileges(config, ssh_tunnel_manager, table_oids).await?;
-
-        let client = config
-            .connect("check_table_privileges", ssh_tunnel_manager)
-            .await?;
+        check_schema_privileges(config, client, table_oids).await?;
 
         let invalid_table_privileges_rows = client
             .query(
@@ -405,7 +397,7 @@ mod privileges {
 }
 
 mod replica_identity {
-    use mz_postgres_util::{Config, PostgresError};
+    use mz_postgres_util::PostgresError;
 
     use super::*;
     use crate::plan::PlanError;
@@ -413,14 +405,9 @@ mod replica_identity {
 
     /// Ensures that all provided OIDs are tables with `REPLICA IDENTITY FULL`.
     pub async fn check_replica_identity_full(
-        config: &Config,
-        ssh_tunnel_manager: &SshTunnelManager,
+        client: &Client,
         table_oids: &[Oid],
     ) -> Result<(), PlanError> {
-        let client = config
-            .connect("check_replica_identity_full", ssh_tunnel_manager)
-            .await?;
-
         let invalid_replica_identity_rows = client
             .query(
                 "

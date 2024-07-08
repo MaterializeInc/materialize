@@ -697,43 +697,35 @@ async fn purify_create_source(
                 )
                 .await?;
 
-            let wal_level = mz_postgres_util::get_wal_level(
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &config,
-            )
-            .await?;
+            let client = config
+                .connect(
+                    "postgres_purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            let wal_level = mz_postgres_util::get_wal_level(&client).await?;
 
             if wal_level < WalLevel::Logical {
                 Err(PgSourcePurificationError::InsufficientWalLevel { wal_level })?;
             }
 
-            let max_wal_senders = mz_postgres_util::get_max_wal_senders(
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &config,
-            )
-            .await?;
+            let max_wal_senders = mz_postgres_util::get_max_wal_senders(&client).await?;
 
             if max_wal_senders < 1 {
                 Err(PgSourcePurificationError::ReplicationDisabled)?;
             }
 
-            let available_replication_slots = mz_postgres_util::available_replication_slots(
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &config,
-            )
-            .await?;
+            let available_replication_slots =
+                mz_postgres_util::available_replication_slots(&client).await?;
 
             // We need 1 replication slot for the snapshots and 1 for the continuing replication
             if available_replication_slots < 2 {
                 Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 2 })?;
             }
 
-            let publication_tables = mz_postgres_util::publication_info(
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &config,
-                &publication,
-            )
-            .await?;
+            let publication_tables =
+                mz_postgres_util::publication_info(&client, &publication).await?;
 
             if publication_tables.is_empty() {
                 Err(PgSourcePurificationError::EmptyPublication(
@@ -765,14 +757,11 @@ async fn purify_create_source(
                     }
                 }
                 ReferencedSubsources::SubsetSchemas(schemas) => {
-                    let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(
-                        &storage_configuration.connection_context.ssh_tunnel_manager,
-                        &config,
-                    )
-                    .await?
-                    .into_iter()
-                    .map(|s| s.name)
-                    .collect();
+                    let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(&client)
+                        .await?
+                        .into_iter()
+                        .map(|s| s.name)
+                        .collect();
 
                     let requested_schemas: BTreeSet<_> =
                         schemas.iter().map(|s| s.as_str().to_string()).collect();
@@ -834,12 +823,8 @@ async fn purify_create_source(
                 .map(|r| r.table.oid)
                 .collect();
 
-            postgres::validate_requested_subsources_privileges(
-                &config,
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &table_oids,
-            )
-            .await?;
+            postgres::validate_requested_subsources_privileges(&config, &client, &table_oids)
+                .await?;
 
             let text_cols_dict = postgres::generate_text_columns(
                 &subsource_resolver,
@@ -1268,23 +1253,24 @@ async fn purify_alter_source(
                 )
                 .await?;
 
-            let available_replication_slots = mz_postgres_util::available_replication_slots(
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &config,
-            )
-            .await?;
+            let client = config
+                .connect(
+                    "postgres_purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            let available_replication_slots =
+                mz_postgres_util::available_replication_slots(&client).await?;
 
             // We need 1 additional replication slot for the snapshots
             if available_replication_slots < 1 {
                 Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
             }
 
-            let new_publication_tables = mz_postgres_util::publication_info(
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &config,
-                &pg_source_connection.publication,
-            )
-            .await?;
+            let new_publication_tables =
+                mz_postgres_util::publication_info(&client, &pg_source_connection.publication)
+                    .await?;
 
             if new_publication_tables.is_empty() {
                 Err(PgSourcePurificationError::EmptyPublication(
@@ -1310,12 +1296,8 @@ async fn purify_alter_source(
                 .map(|r| r.table.oid)
                 .collect();
 
-            postgres::validate_requested_subsources_privileges(
-                &config,
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &table_oids,
-            )
-            .await?;
+            postgres::validate_requested_subsources_privileges(&config, &client, &table_oids)
+                .await?;
 
             if !ignore_columns.is_empty() {
                 sql_bail!(

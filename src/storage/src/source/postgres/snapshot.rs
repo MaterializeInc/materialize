@@ -330,38 +330,40 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 use_snapshot(&client, &snapshot).await?;
             }
 
-            let upstream_info = match mz_postgres_util::publication_info(
-                &config.config.connection_context.ssh_tunnel_manager,
-                &connection_config,
-                &connection.publication,
-            )
-            .await
-            {
-                // If the replication stream cannot be obtained in a definite way there is
-                // nothing else to do. These errors are not retractable.
-                Err(PostgresError::PublicationMissing(publication)) => {
-                    let err = DefiniteError::PublicationDropped(publication);
-                    for oid in reader_snapshot_table_info.keys() {
-                        // Produce a definite error here and then exit to ensure
-                        // a missing publication doesn't generate a transient
-                        // error and restart this dataflow indefinitely.
-                        //
-                        // We pick `u64::MAX` as the LSN which will (in
-                        // practice) never conflict any previously revealed
-                        // portions of the TVC.
-                        let update = ((*oid, Err(err.clone().into())), MzOffset::from(u64::MAX), 1);
-                        raw_handle.give_fueled(&data_cap_set[0], update).await;
-                    }
+            let client = connection_config
+                .connect(
+                    "snapshotting",
+                    &config.config.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+            let upstream_info =
+                match mz_postgres_util::publication_info(&client, &connection.publication).await {
+                    // If the replication stream cannot be obtained in a definite way there is
+                    // nothing else to do. These errors are not retractable.
+                    Err(PostgresError::PublicationMissing(publication)) => {
+                        let err = DefiniteError::PublicationDropped(publication);
+                        for oid in reader_snapshot_table_info.keys() {
+                            // Produce a definite error here and then exit to ensure
+                            // a missing publication doesn't generate a transient
+                            // error and restart this dataflow indefinitely.
+                            //
+                            // We pick `u64::MAX` as the LSN which will (in
+                            // practice) never conflict any previously revealed
+                            // portions of the TVC.
+                            let update =
+                                ((*oid, Err(err.clone().into())), MzOffset::from(u64::MAX), 1);
+                            raw_handle.give_fueled(&data_cap_set[0], update).await;
+                        }
 
-                    definite_error_handle.give(
-                        &definite_error_cap_set[0],
-                        ReplicationError::Definite(Rc::new(err)),
-                    );
-                    return Ok(());
-                }
-                Err(e) => Err(TransientError::from(e))?,
-                Ok(i) => i,
-            };
+                        definite_error_handle.give(
+                            &definite_error_cap_set[0],
+                            ReplicationError::Definite(Rc::new(err)),
+                        );
+                        return Ok(());
+                    }
+                    Err(e) => Err(TransientError::from(e))?,
+                    Ok(i) => i,
+                };
 
             let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
