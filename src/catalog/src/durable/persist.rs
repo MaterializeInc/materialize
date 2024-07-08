@@ -1441,7 +1441,6 @@ impl DurableCatalogState for PersistCatalogState {
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
-        _wait_for_consolidation: bool,
     ) -> Result<(), CatalogError> {
         self.sync_to_current_upper().await?;
         // If no usage retention period is set, set the cutoff to MIN so nothing

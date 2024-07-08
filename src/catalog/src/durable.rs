@@ -260,7 +260,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
-        wait_for_consolidation: bool,
     ) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
