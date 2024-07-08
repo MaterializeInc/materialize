@@ -3075,7 +3075,17 @@ fn kafka_sink_builder(
 
     let map_format = |format: Format<Aug>, desc: &RelationDesc, is_key: bool| match format {
         Format::Json { array: false } => Ok::<_, PlanError>(KafkaSinkFormatType::Json),
-        Format::Bytes if desc.arity() == 1 => Ok(KafkaSinkFormatType::Bytes),
+        Format::Bytes if desc.arity() == 1 => {
+            let col_type = &desc.typ().column_types[0].scalar_type;
+            if !mz_pgrepr::Value::can_encode_binary(col_type) {
+                bail_unsupported!(format!(
+                    "BYTES format with non-encodable type: {:?}",
+                    col_type
+                ));
+            }
+
+            Ok(KafkaSinkFormatType::Bytes)
+        }
         Format::Text if desc.arity() == 1 => Ok(KafkaSinkFormatType::Text),
         Format::Bytes | Format::Text => {
             bail_unsupported!("BYTES or TEXT format with multiple columns")
