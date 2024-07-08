@@ -3550,15 +3550,15 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, String, String) => sql_impl_func("has_cluster_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_TEXT_OID;
             params!(Oid, String, String) => sql_impl_func(&format!("
                 CASE
-                -- We need to validate the name and privileges to return a proper error before
-                -- anything else.
-                WHEN mz_unsafe.mz_error_if_null(
-                    (SELECT name FROM mz_clusters WHERE name = $2),
-                    'error cluster \"' || $2 || '\" does not exist'
-                ) IS NULL
-                OR NOT mz_internal.mz_validate_privileges($3)
+                -- We must first check $2 to avoid a potentially null error message (an error itself).
+                WHEN $2 IS NULL
+                THEN NULL
+                -- Validate the cluster name in order to return a proper error.
+                WHEN NOT EXISTS (SELECT name FROM mz_clusters WHERE name = $2)
+                THEN mz_unsafe.mz_error_if_null(NULL::boolean, 'error cluster \"' || $2 || '\" does not exist')
+                -- Validate the privileges and other arguments.
+                WHEN NOT mz_internal.mz_validate_privileges($3)
                 OR $1 IS NULL
-                OR $2 IS NULL
                 OR $3 IS NULL
                 OR $1 NOT IN (SELECT oid FROM mz_catalog.mz_roles)
                 THEN NULL
