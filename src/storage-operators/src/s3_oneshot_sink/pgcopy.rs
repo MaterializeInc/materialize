@@ -14,7 +14,7 @@ use mz_aws_util::s3_uploader::{
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
-use mz_pgcopy::{encode_copy_format, CopyFormatParams};
+use mz_pgcopy::{encode_copy_format, encode_copy_format_header, CopyFormatParams};
 use mz_repr::{GlobalId, RelationDesc, Row};
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use tracing::info;
@@ -154,7 +154,14 @@ impl PgCopyUploader {
         });
         let (uploader, sdk_config) = handle.wait_and_assert_finished().await;
         self.sdk_config = Some(sdk_config);
-        self.current_file_uploader = Some(uploader?);
+        let mut uploader = uploader?;
+        if self.format.requires_header() {
+            let mut buf: Vec<u8> = vec![];
+            encode_copy_format_header(&self.format, &self.desc, &mut buf)
+                .map_err(|_| anyhow!("error encoding header"))?;
+            uploader.buffer_chunk(&buf)?;
+        }
+        self.current_file_uploader = Some(uploader);
         Ok(())
     }
 }

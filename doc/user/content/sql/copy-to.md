@@ -86,7 +86,7 @@ Setting     | Value
 delimiter   | `,`
 quote       | `"`
 escape      | `"`
-header      | `true`
+header      | `false`
 
 #### Parquet {#copy-to-s3-parquet}
 
