@@ -514,7 +514,14 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
 
             let mut output_container = Vec::new();
 
+            // Pick up all pending inputs before attempting to process the inputs to avoid
+            // picking up more inputs while we go around the decoding loop.
+            let mut buffer = Vec::new();
             while let Some(event) = input.next().await {
+                buffer.push(event);
+            }
+
+            for event in buffer {
                 match event {
                     AsyncEvent::Data(cap, data) => {
                         let mut n_errors = 0;
