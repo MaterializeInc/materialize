@@ -54,6 +54,8 @@ _item&lowbar;name_ | The name of the source, table or materialized view you want
 **CONNECTION** _connection_name_ | The name of the connection to use in the sink. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
 **KEY (** _key&lowbar;column_ **)** | An optional list of columns to use as the Kafka message key. If unspecified, the Kafka key is left unset.
 **HEADERS** | An optional column containing headers to add to each Kafka message emitted by the sink. See [Headers](#headers) for details.
+**FORMAT** | Specifies the format to use for both keys and values: `AVRO USING csr_connection`, `JSON`, `TEXT`, or `BYTES`. See [Formats](#formats) for details.
+**KEY FORMAT .. VALUE FORMAT** | {{< warn-if-unreleased-inline "v0.108" >}} Specifies the key format and value formats separately. See [Formats](#formats) for details.
 **NOT ENFORCED** | Whether to disable validation of key uniqueness when using the upsert envelope. See [Upsert key selection](#upsert-key-selection) for details.
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope) to capture changes in the input view or source.
 **ENVELOPE UPSERT** | The sink emits data with [upsert semantics](#upsert-envelope).
@@ -79,8 +81,8 @@ Field                | Value  | Description
 `AVRO VALUE FULLNAME`       | `text` | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
 `NULL DEFAULTS`             | `bool` | Default: `false`. Whether to automatically default nullable fields to `null` in the generated schemas.
 `DOC ON`                    | `text` | Add a documentation comment to the generated Avro schemas. See [`DOC ON` option syntax](#doc-on-option-syntax) below.
-`KEY COMPATIBILITY LEVEL`   | `text` | {{< warn-if-unreleased-inline "v0.105" >}} If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated key schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
-`VALUE COMPATIBILITY LEVEL` | `text` | {{< warn-if-unreleased-inline "v0.105" >}} If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated value schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
+`KEY COMPATIBILITY LEVEL`   | `text` | If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated key schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
+`VALUE COMPATIBILITY LEVEL` | `text` | If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated value schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
 
 #### `DOC ON` option syntax
 
@@ -135,8 +137,13 @@ message value.
 The `FORMAT` option controls the encoding of the message key and value that
 Materialize writes to Kafka.
 
-**Known limitation:** Materialize does not permit specifying the key
-format independently from the value format.
+To use a different format for keys and values, use `KEY FORMAT .. VALUE FORMAT ..`
+to choose independent formats for each.
+
+Note that the `TEXT` and `BYTES` format options only support single-column
+encoding and cannot be used for keys or values with multiple columns.
+
+Additionally, the `BYTES` format only works with scalar data types.
 
 ### Avro
 
