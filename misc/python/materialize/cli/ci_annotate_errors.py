@@ -157,7 +157,7 @@ class JunitError:
 @dataclass(kw_only=True, unsafe_hash=True)
 class ObservedError(ObservedBaseError):
     # abstract class, do not instantiate
-    error_message: str | None
+    error_message: str
     error_details: str | None = None
     error_type: str
     location: str
