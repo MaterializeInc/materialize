@@ -30,7 +30,7 @@ joining relations.
 To make these concepts a bit more tangible, let's look at the example from the
 [getting started guide](https://materialize.com/docs/get-started/quickstart/).
 
-```sql
+```mzsql
 CREATE SOURCE auction_house
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '100ms')
@@ -52,7 +52,7 @@ understand how this SQL query is translated to a dataflow, we can use
 [`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/) to display the
 plan used to evaluate the join.
 
-```sql
+```mzsql
 EXPLAIN MATERIALIZED VIEW num_bids;
 ```
 ```
@@ -135,7 +135,7 @@ To understand which dataflow is taking the most time we can query the
 time the dataflows was busy since the system started and the dataflow was
 created.
 
-```sql
+```mzsql
 -- Extract raw elapsed time information for dataflows
 SELECT
     mdo.id,
@@ -177,7 +177,7 @@ interpret. The following query therefore only returns operators from the
 `mz_scheduling_elapsed` relation. You can further drill down by adding a filter
 condition that matches the name of a specific dataflow.
 
-```sql
+```mzsql
 SELECT
     mdod.id,
     mdod.name,
@@ -231,7 +231,7 @@ operators, it will become visible in the histogram. The offending operator will
 be scheduled in much longer intervals compared to other operators, which
 reflects in the histogram as larger time buckets.
 
-```sql
+```mzsql
 -- Extract raw scheduling histogram information for operators
 WITH histograms AS (
     SELECT
@@ -280,7 +280,7 @@ The reported duration is still reporting aggregated values since the operator
 has been created. To get a feeling for which operators are currently doing
 work, you can subscribe to the changes of the relation.
 
-```sql
+```mzsql
 -- Observe changes to the raw scheduling histogram information
 COPY(SUBSCRIBE(
     WITH histograms AS (
@@ -331,7 +331,7 @@ numbers of records and the size of the arrangements. The reported records may
 exceed the number of logical records; the report reflects the uncompacted
 state.
 
-```sql
+```mzsql
 -- Extract dataflow records and sizes
 SELECT
     id,
@@ -351,7 +351,7 @@ ORDER BY size DESC
 If you need to drill down into individual operators, you can query
 `mz_arrangement_sizes` instead.
 
-```sql
+```mzsql
 -- Extract operator records and sizes
 SELECT
     mdod.id,
@@ -401,7 +401,7 @@ they (currently) have a granularity determined by the source itself. For
 example, Kafka topic ingestion work can become skewed if most of the data is in
 only one out of multiple partitions.
 
-```sql
+```mzsql
 -- Get operators where one worker has spent more than 2 times the average
 -- amount of time spent. The number 2 can be changed according to the threshold
 -- for the amount of skew deemed problematic.
@@ -438,7 +438,7 @@ position `n`, then it is part of the `x` subregion of the region defined by
 positions `0..n-1`. The example SQL query and result below shows an operator
 whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow 21".
 
-```sql
+```mzsql
 SELECT * FROM mz_internal.mz_dataflow_addresses WHERE id=515;
 ```
 ```
@@ -456,7 +456,7 @@ said operator has only a single entry. For the example operator 515 above, you
 can find the name of the dataflow if you can find the name of the operator
 whose address is just "dataflow 21."
 
-```sql
+```mzsql
 -- get id and name of the operator representing the entirety of the dataflow
 -- that a problematic operator comes from
 SELECT
@@ -481,31 +481,64 @@ WHERE
 ```
 
 ## I dropped an index, why haven't my plans and dataflows changed?
-If you drop an index from the catalog, but it is depended on by downstream objects, then it will continue to be maintained and take up resources until all those dependent objects are dropped or altered, or Materialize is restarted.
 
-<!-- Todo: add reference to the console once it's available there. -->
-To see if you have any residual dataflows on a given cluster, you can run the following query
-```sql
-SET CLUSTER TO <clusterName>;
-SELECT s.name AS residual_index_name, s.id AS dataflow_id, ce.export_id AS former_object_id
-FROM mz_internal.mz_dataflow_arrangement_sizes AS s
-INNER JOIN mz_internal.mz_compute_exports AS ce ON ce.dataflow_id = s.id
-LEFT JOIN mz_catalog.mz_objects AS o ON o.id = ce.export_id
+It's likely that your index has **downstream dependencies**. If an index has
+dependent objects downstream, its underlying dataflow will continue to be
+maintained and take up resources until all dependent object are dropped or
+altered, or Materialize is restarted.
+
+[//]: # "TODO(chaas) Add reference to the console once it's available."
+
+To check if there are residual dataflows on a specific cluster, run the
+following query:
+
+```mzsql
+SET CLUSTER TO <cluster_name>;
+
+SELECT ce.export_id AS dropped_index_id,
+       s.name AS dropped_index_name,
+       s.id AS dataflow_id
+FROM mz_internal.mz_dataflow_arrangement_sizes s
+JOIN mz_internal.mz_compute_exports ce ON ce.dataflow_id = s.id
+LEFT JOIN mz_catalog.mz_objects o ON o.id = ce.export_id
 WHERE o.id IS NULL;
 ```
-To see the object dependencies on a given residual dataflow, you can run the following query:
-```sql
-SELECT do.id AS dependent_object_id, do.name AS dependent_object_name, db.name AS dependent_object_database, s.name AS dependent_object_schema
-FROM mz_internal.mz_compute_dependencies AS cd
-LEFT JOIN mz_catalog.mz_objects AS do ON cd.object_id = do.id
+
+You can then use the `dropped_index_id` object identifier to list the downstream
+dependencies of the residual dataflow, using:
+
+```mzsql
+SELECT do.id AS dependent_object_id,
+       do.name AS dependent_object_name,
+       db.name AS dependent_object_database,
+       s.name AS dependent_object_schema
+FROM mz_internal.mz_compute_dependencies cd
+LEFT JOIN mz_catalog.mz_objects do ON cd.object_id = do.id
 LEFT JOIN mz_catalog.mz_schemas s ON do.schema_id = s.id
-LEFT JOIN mz_catalog.mz_databases AS db ON s.database_id = db.id
-WHERE cd.dependency_id = <former_object_id from above>;
+LEFT JOIN mz_catalog.mz_databases db ON s.database_id = db.id
+WHERE cd.dependency_id = <dropped_index_id>;
 ```
 
-To have your dependent downstream objects re-plan without the index you can
-* Drop all of the dependent objects then recreate them
-* Restart your cluster (first set `REPLICATION FACTOR = 0`, then set replication factor back to the original value)
+To force a re-plan of the downstream objects that doesn't consider the dropped
+index, you can:
 
-Note: take the above actions with caution(!) because both of these will incur downtime while the objects are being recreated and hydrated. It is not advised to do this to production clusters and objects. For
-changing production objects, it is recommended to use [blue/green deployments](/manage/dbt/development-workflows/#bluegreen-deployments).
+{{< warning >}}
+Forcing a re-plan using any of the approaches below **will trigger hydration**,
+which incurs downtime while the objects are recreated and backfilled with
+pre-existing data. We recommend doing a [blue/green deployment](/manage/dbt/development-workflows/#bluegreen-deployments)
+to handle these changes in production environments.
+{{< /warning >}}
+
+* Drop and recreate all downstream dependencies;
+
+* Restart the cluster by setting it's replication factor to `0`, then back to
+  the original value.
+
+    ```mzsql
+    -- Note the original replication factor for the cluster
+    SHOW CREATE CLUSTER <cluster_name>;
+
+    ALTER CLUSTER <cluster_name> SET (REPLICATION FACTOR = 0);
+
+    ALTER CLUSTER <cluster_name> SET (REPLICATION FACTOR = <original_value>)
+    ```
