@@ -182,7 +182,7 @@ def _determine_storage_layout(args: list[Expression]) -> ValueStorageLayout:
             )
 
     if mutual_storage_layout is None:
-        # use this as default (but it should not matter as expressions are expected to always have at least one arg)
-        return ValueStorageLayout.HORIZONTAL
+        # use this as default (in case there are no args)
+        return ValueStorageLayout.ANY
 
     return mutual_storage_layout
