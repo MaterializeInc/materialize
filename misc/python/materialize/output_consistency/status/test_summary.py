@@ -16,6 +16,10 @@ from materialize.output_consistency.operation.operation import DbOperationOrFunc
 from materialize.output_consistency.status.consistency_test_logger import (
     ConsistencyTestLogger,
 )
+from materialize.output_consistency.validation.validation_outcome import (
+    ValidationOutcome,
+    ValidationVerdict,
+)
 
 
 @dataclass
@@ -161,3 +165,22 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
                     number_of_args=arg.count_args(),
                     is_top_level=False,
                 )
+
+    def accept_execution_result(self, test_outcome: ValidationOutcome) -> None:
+        self.count_executed_query_templates += 1
+        verdict = test_outcome.verdict()
+
+        if verdict in {
+            ValidationVerdict.SUCCESS,
+            ValidationVerdict.SUCCESS_WITH_WARNINGS,
+        }:
+            self.count_successful_query_templates += 1
+        elif verdict == ValidationVerdict.IGNORED_FAILURE:
+            self.count_ignored_error_query_templates += 1
+        elif verdict == ValidationVerdict.FAILURE:
+            self.add_failures(test_outcome.to_failure_details())
+        else:
+            raise RuntimeError(f"Unexpected verdict: {verdict}")
+
+        if test_outcome.has_warnings():
+            self.count_with_warning_query_templates += 1

@@ -98,24 +98,9 @@ class QueryExecutionManager:
         all_comparisons_passed = True
 
         for test_outcome in test_outcomes:
-            summary_to_update.count_executed_query_templates += 1
-            verdict = test_outcome.verdict()
-
-            if verdict in {
-                ValidationVerdict.SUCCESS,
-                ValidationVerdict.SUCCESS_WITH_WARNINGS,
-            }:
-                summary_to_update.count_successful_query_templates += 1
-            elif verdict == ValidationVerdict.IGNORED_FAILURE:
-                summary_to_update.count_ignored_error_query_templates += 1
-            elif verdict == ValidationVerdict.FAILURE:
-                summary_to_update.add_failures(test_outcome.to_failure_details())
+            if test_outcome.verdict() == ValidationVerdict.FAILURE:
                 all_comparisons_passed = False
-            else:
-                raise RuntimeError(f"Unexpected verdict: {verdict}")
-
-            if test_outcome.has_warnings():
-                summary_to_update.count_with_warning_query_templates += 1
+            summary_to_update.accept_execution_result(test_outcome)
 
         return all_comparisons_passed
 
