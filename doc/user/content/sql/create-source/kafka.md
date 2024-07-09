@@ -136,11 +136,11 @@ regardless of the specified `FORMAT`:
 Field         | Type                                                                                       | Nullable | Meaning
 --------------|--------------------------------------------------------------------------------------------|--------- |-----------
 `key`         | [[`record`](/sql/types/record/), [`bytea`](/sql/types/bytea/), [`text`](/sql/types/text/)] | `false`  | The Kafka message key. The type of this field depends on the specified `KEY FORMAT`. For unnamed formats (e.g., `TEXT`), the column name will be `key`. If the key is encoded using a format that includes schemas (e.g., `AVRO`), the column will take its name from the schema. The column can be renamed using the [`INCLUDE KEY AS...`](#key) syntax.
-`value`       | [`record`](/sql/types/uint/#uint8-info)                                                    | `true`   | The message value for the given Kafka message key. If the most recent value cannot be decoded, this column will be `NULL`.
-`error`       | [`record`](/sql/types/uint/#uint8-info)                                                    | `true`   | If the most recent value for the given Kafka message key cannot be decoded, this column column will contain the error message. If the most recent value for a key has been successfully decoded, this column will be `NULL`.
+`value`       | [`record`](/sql/types/record/)                                                    | `true`   | The message value for the given Kafka message key. If the most recent value cannot be decoded, this column will be `NULL`.
+`error`       | [`record`](/sql/types/record/)                                                    | `true`   | If the most recent value for the given Kafka message key cannot be decoded, this column column will contain the error message. If the most recent value for a key has been successfully decoded, this column will be `NULL`.
 
 We recommend creating a parsing view on top of your Kafka upsert source that
-maps the strongly-typed [`record`](/sql/types/uint/#uint8-info) fields in
+maps the strongly-typed [`record`](/sql/types/record/) fields in
 `value` to columns, and optionally excludes keys with decoding errors:
 
 ```mzsql
