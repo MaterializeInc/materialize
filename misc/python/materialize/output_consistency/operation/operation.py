@@ -95,14 +95,9 @@ class DbOperationOrFunction:
     def operation_type_name(self) -> str:
         raise NotImplementedError
 
-    def to_description(self) -> str:
-        desc = f"{self.operation_type_name()}"
-        desc = f"{desc} '{self._to_pattern_with_named_params(self.min_param_count)}'"
-
-        if self.min_param_count != self.max_param_count:
-            desc = f"{desc} ... '{self._to_pattern_with_named_params(self.max_param_count)}'"
-
-        return desc
+    def to_description(self, param_count: int) -> str:
+        assert self.min_param_count <= param_count <= self.max_param_count
+        return f"{self.operation_type_name()} '{self._to_pattern_with_named_params(param_count)}'"
 
     def _to_pattern_with_named_params(self, param_count: int) -> str:
         pattern = self.to_pattern(param_count)

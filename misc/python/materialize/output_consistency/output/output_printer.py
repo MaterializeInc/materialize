@@ -11,7 +11,6 @@ import sys
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
-from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
@@ -19,6 +18,7 @@ from materialize.output_consistency.output.base_output_printer import BaseOutput
 from materialize.output_consistency.output.reproduction_code_printer import (
     ReproductionCodePrinter,
 )
+from materialize.output_consistency.status.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.validation.validation_message import ValidationError
 
 
