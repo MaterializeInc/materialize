@@ -136,6 +136,9 @@ IGNORE_RE = re.compile(
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
     # For tests we purposely trigger this error
     | skip-version-upgrade-materialized.* \| .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev)?,\ current:\ \d+\.\d+\.\d+(-dev)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ at\ a\ time
+    # For 0dt upgrades
+    | halting\ process:\ unable\ to\ confirm\ leadership
+    | halting\ process:\ fenced\ out\ old\ deployment;\ rebooting\ as\ leader
     )
     """,
     re.VERBOSE | re.MULTILINE,
