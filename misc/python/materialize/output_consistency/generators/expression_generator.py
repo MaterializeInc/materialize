@@ -169,9 +169,13 @@ class ExpressionGenerator:
         if storage_layout is None:
             storage_layout = self._select_storage_layout(operation)
 
+        number_of_args = self.randomized_picker.random_number(
+            operation.min_param_count, operation.max_param_count
+        )
+
         try:
             args = self._generate_args_for_operation(
-                operation, storage_layout, nesting_level + 1
+                operation, number_of_args, storage_layout, nesting_level + 1
             )
         except NoSuitableExpressionFound as ex:
             if self.config.verbose_output:
@@ -219,14 +223,11 @@ class ExpressionGenerator:
     def _generate_args_for_operation(
         self,
         operation: DbOperationOrFunction,
+        number_of_args: int,
         storage_layout: ValueStorageLayout,
         nesting_level: int,
         try_number: int = 1,
     ) -> list[Expression]:
-        number_of_args = self.randomized_picker.random_number(
-            operation.min_param_count, operation.max_param_count
-        )
-
         if number_of_args == 0:
             return []
 
@@ -252,6 +253,7 @@ class ExpressionGenerator:
             # retry
             return self._generate_args_for_operation(
                 operation,
+                number_of_args,
                 storage_layout,
                 nesting_level=nesting_level,
                 try_number=try_number + 1,
