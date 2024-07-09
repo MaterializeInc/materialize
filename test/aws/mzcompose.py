@@ -190,6 +190,47 @@ def test_assume_role(c: Composition, ctx: TestContext):
     principal = c.sql_query(
         f"SELECT principal FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
     )[0][0]
+
+    _create_role(ctx, customer_role, principal)
+
+    # Wait for IAM to propagate.
+    c.sleep(ctx.iam_propagation_seconds)
+    try:
+        try:
+            c.sql("VALIDATE CONNECTION aws_assume_role")
+        except ProgrammingError as e:
+            # Ensure the top line error message is exactly what we expect.
+            assert "role trust policy does not require an external ID" == e.args[0]["M"]
+            # We're not as prescriptive about the detail/hint fields. Just ensure
+            # that the details include the exact ARN of the connection's role and
+            # that the hint includes a link to further documentation.
+            assert customer_role_arn in e.args[0]["D"]
+            assert (
+                "https://materialize.com/s/aws-connection-role-trust-policy"
+                in e.args[0]["H"]
+            )
+        else:
+            assert False, "connection validation unexpectedly succeeded"
+
+        # Update the customer role's trust policy to use Materialize's example.
+        trust_policy = c.sql_query(
+            f"SELECT example_trust_policy FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        )[0][0]
+        ctx.iam.update_assume_role_policy(
+            RoleName=customer_role,
+            PolicyDocument=json.dumps(trust_policy),
+        )
+
+        # Wait for IAM to propagate.
+        c.sleep(ctx.iam_propagation_seconds)
+
+        # Ensure that connection validation now succeeds.
+        c.sql("VALIDATE CONNECTION aws_assume_role")
+    finally:
+        _delete_role(ctx, customer_role)
+
+
+def _create_role(ctx: TestContext, customer_role: str, principal: str) -> None:
     ctx.iam.create_role(
         RoleName=customer_role,
         AssumeRolePolicyDocument=json.dumps(
@@ -208,36 +249,8 @@ def test_assume_role(c: Composition, ctx: TestContext):
         ),
     )
 
-    # Wait for IAM to propagate.
-    c.sleep(ctx.iam_propagation_seconds)
 
-    try:
-        c.sql("VALIDATE CONNECTION aws_assume_role")
-    except ProgrammingError as e:
-        # Ensure the top line error message is exactly what we expect.
-        assert "role trust policy does not require an external ID" == e.args[0]["M"]
-        # We're not as prescriptive about the detail/hint fields. Just ensure
-        # that the details include the exact ARN of the connection's role and
-        # that the hint includes a link to further documentation.
-        assert customer_role_arn in e.args[0]["D"]
-        assert (
-            "https://materialize.com/s/aws-connection-role-trust-policy"
-            in e.args[0]["H"]
-        )
-    else:
-        assert False, "connection validation unexpectedly succeeded"
-
-    # Update the customer role's trust policy to use Materialize's example.
-    trust_policy = c.sql_query(
-        f"SELECT example_trust_policy FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
-    )[0][0]
-    ctx.iam.update_assume_role_policy(
+def _delete_role(ctx: TestContext, customer_role: str) -> None:
+    ctx.iam.delete_role(
         RoleName=customer_role,
-        PolicyDocument=json.dumps(trust_policy),
     )
-
-    # Wait for IAM to propagate.
-    c.sleep(ctx.iam_propagation_seconds)
-
-    # Ensure that connection validation now succeeds.
-    c.sql("VALIDATE CONNECTION aws_assume_role")
