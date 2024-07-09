@@ -7,7 +7,7 @@ menu:
     parent: commands
 ---
 
-`CREATE CLUSTER` creates a new [cluster](/get-started/key-concepts#clusters).
+`CREATE CLUSTER` creates a new [cluster](/concepts/clusters/).
 
 ## Conceptual framework
 
@@ -18,8 +18,8 @@ The following operations require compute resources in Materialize, and so need
 to be associated with a cluster:
 
 - Executing [`SELECT`] and [`SUBSCRIBE`] statements.
-- Maintaining [indexes](/get-started/key-concepts#indexes) and [materialized views](/get-started/key-concepts#materialized-views).
-- Maintaining [sources](/get-started/key-concepts#sources) and [sinks](/get-started/key-concepts#sinks).
+- Maintaining [indexes](/concepts/indexes/) and [materialized views](/concepts/views/#materialized-views).
+- Maintaining [sources](/concepts/sources/) and [sinks](/concepts/sinks/).
 
 ## Syntax
 

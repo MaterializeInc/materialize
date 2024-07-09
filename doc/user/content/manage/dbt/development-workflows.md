@@ -512,7 +512,7 @@ end-to-end workflow using GitHub and GitHub Actions.
 As a tool primarily meant to manage your data model, the `dbt-materialize`
 adapter does not expose all Materialize objects types. If there is a **clear
 separation** between data modeling and **infrastructure management ownership**
-in your team, and you want to manage objects like [clusters](/get-started/key-concepts/#clusters),
+in your team, and you want to manage objects like [clusters](/concepts/clusters/),
 [connections](/sql/create-connection/), or [secrets](/sql/create-secret/) as code,
 we recommend using the [Materialize Terraform provider](/manage/terraform/) as a
 complementary deployment tool.

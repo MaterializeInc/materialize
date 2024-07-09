@@ -11,7 +11,7 @@ menu:
     weight: 30
 ---
 
-A [sink](../../get-started/key-concepts/#sinks) describes an external system you
+A [sink](/concepts/sinks/) describes an external system you
 want Materialize to write data to, and provides details about how to encode
 that data.
 
@@ -67,7 +67,7 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
-- [Key Concepts](../../get-started/key-concepts/)
+- [Sinks](/concepts/sinks/)
 - [`SHOW SINKS`](/sql/show-sinks/)
 - [`SHOW COLUMNS`](/sql/show-columns/)
 - [`SHOW CREATE SINK`](/sql/show-create-sink/)
