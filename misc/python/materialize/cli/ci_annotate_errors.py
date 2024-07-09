@@ -281,7 +281,7 @@ class Annotation:
                     f"* {error.to_markdown()}{error.occurrences_to_markdown()}\n"
                 )
 
-            return error_markdown.strip()
+            return "\n" + error_markdown.strip()
 
         markdown += errors_to_markdown(
             self.unknown_errors, approx_max_length - len(markdown)
