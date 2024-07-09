@@ -66,9 +66,12 @@ class ResultComparator:
             # do not continue with value comparison if metadata differs
             return validation_outcome
 
-        queries_succeeded = query_execution.outcomes[0].successful
+        # this statement must not be before the metadata validation (otherwise successful of the outcomes may differ)
+        validation_outcome.query_execution_succeeded_in_all_strategies = (
+            query_execution.outcomes[0].successful
+        )
 
-        if queries_succeeded:
+        if validation_outcome.query_execution_succeeded_in_all_strategies:
             self.validate_outcomes_data(query_execution, validation_outcome)
             validation_outcome.success_reason = "result data matches"
         else:

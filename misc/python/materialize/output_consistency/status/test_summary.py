@@ -9,10 +9,12 @@
 from dataclasses import dataclass, field
 
 from materialize.mzcompose.test_result import TestFailureDetails
+from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
 from materialize.output_consistency.operation.operation import DbOperationOrFunction
+from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.status.consistency_test_logger import (
     ConsistencyTestLogger,
 )
@@ -166,7 +168,9 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
                     is_top_level=False,
                 )
 
-    def accept_execution_result(self, test_outcome: ValidationOutcome) -> None:
+    def accept_execution_result(
+        self, query: QueryTemplate, test_outcome: ValidationOutcome
+    ) -> None:
         self.count_executed_query_templates += 1
         verdict = test_outcome.verdict()
 
@@ -184,3 +188,37 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
 
         if test_outcome.has_warnings():
             self.count_with_warning_query_templates += 1
+
+        if test_outcome.query_execution_succeeded_in_all_strategies:
+            self._accept_query_with_successful_execution_in_all_strategies(query)
+
+    def _accept_query_with_successful_execution_in_all_strategies(
+        self, query: QueryTemplate
+    ) -> None:
+        # only consider expressions in the SELECT part for now
+
+        for expression in query.select_expressions:
+            self._accept_expression_with_successful_execution_in_all_strategies(
+                expression
+            )
+
+    def _accept_expression_with_successful_execution_in_all_strategies(
+        self, expression: Expression
+    ) -> None:
+        if not isinstance(expression, ExpressionWithArgs):
+            return
+
+        operation_variant = DbOperationVariant(
+            expression.operation, expression.count_args()
+        )
+        stats = self.stats_by_operation_variant.get(operation_variant)
+        assert (
+            stats is not None
+        ), f"no stats for {operation_variant.to_description()} found"
+
+        stats.count_included_in_successfully_executed_queries = (
+            stats.count_included_in_successfully_executed_queries + 1
+        )
+
+        for arg in expression.args:
+            self._accept_expression_with_successful_execution_in_all_strategies(arg)

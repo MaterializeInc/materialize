@@ -54,6 +54,8 @@ class ValidationOutcome:
         self.errors: list[ValidationError] = []
         self.warnings: list[ValidationWarning] = []
         self.remarks: list[ValidationRemark] = []
+        self.query_execution_succeeded_in_all_strategies: bool = False
+        """Whether the query was executed successfully in all strategies. This provides no info about the validity of the results."""
 
     def add_error(
         self, ignore_filter: GenericInconsistencyIgnoreFilter, error: ValidationError
