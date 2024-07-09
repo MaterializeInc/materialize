@@ -380,7 +380,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         // Savepoint catalogs do not yet know how to update themselves in response to concurrent
         // writes from writer catalogs.
         if self.mode == Mode::Savepoint {
-            self.upper = target_upper;
+            self.upper = max(self.upper, target_upper);
             return Ok(());
         }
 
@@ -1419,6 +1419,7 @@ impl DurableCatalogState for PersistCatalogState {
                         .into_iter()
                         .map(|(kind, diff)| StateUpdate { kind, ts, diff });
                 catalog.apply_updates(updates)?;
+                catalog.upper = catalog.upper.step_forward();
             }
 
             Ok(())
