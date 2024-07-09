@@ -35,5 +35,5 @@ stdenv.mkDerivation rec {
     darwin.apple_sdk.frameworks.Foundation
   ];
 
-  RUSTFLAGS = "-Clink-arg=-Wl,--warn-unresolved-symbols -Cdebuginfo=1 -Csymbol-mangling-version=v0";
+  RUSTFLAGS = "-Cdebuginfo=1 -Csymbol-mangling-version=v0";
 }
