@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{cmp, env, iter, process, thread};
+use std::{cmp, env, iter, thread};
 
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
@@ -581,8 +581,7 @@ fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args) {
-        eprintln!("environmentd: fatal: {}", err.display_with_causes());
-        process::exit(1);
+        panic!("environmentd: fatal: {}", err.display_with_causes());
     }
 }
 
