@@ -562,4 +562,3 @@ SELECT LIST[1,3,7,NULL] @> LIST[1,3,7,NULL] AS contains;
 ----------
  f
 ```
-
