@@ -13,10 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Various profiling utilities:
-//!
-//! (1) Turn jemalloc profiling on and off, and dump heap profiles (`PROF_CTL`)
-//! (2) Parse jemalloc heap files and make them into a hierarchical format (`parse_jeheap`)
+//! Utilities for getting jemalloc statistics, as well as exporting them as metrics.
 
 use std::time::Duration;
 

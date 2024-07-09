@@ -5806,16 +5806,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-proc"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "libc",
- "mz-ore",
- "workspace-hack",
-]
-
-[[package]]
 name = "mz-prof"
 version = "0.0.0"
 dependencies = [
@@ -5826,7 +5816,6 @@ dependencies = [
  "libc",
  "mz-build-tools",
  "mz-ore",
- "mz-proc",
  "once_cell",
  "pprof",
  "pprof_util",
