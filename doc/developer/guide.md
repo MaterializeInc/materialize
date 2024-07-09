@@ -347,9 +347,11 @@ See the [style guide](style.md) for additional recommendations on code style.
 ### Required Tools
 Linting requires the following tools and Cargo packages to be installed:
 * buf ([installation guide](https://buf.build/docs/installation))
+* shellcheck ([installation guide](https://hackage.haskell.org/package/ShellCheck#installing))
 * cargo-about (`cargo install cargo-about`)
 * cargo-hakari (`cargo install cargo-hakari`)
 * cargo-deplint (`cargo install cargo-deplint`)
+* cargo-about (`cargo install cargo-deny`)
 
 ## Submitting and reviewing changes
 
