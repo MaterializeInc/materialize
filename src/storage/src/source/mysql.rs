@@ -265,14 +265,34 @@ pub enum DefiniteError {
     BinlogNotAvailable,
     #[error("mysql server binlog frontier at {0} is beyond required frontier {1}")]
     BinlogMissingResumePoint(String, String),
-    #[error("mysql server configuration error: {0}")]
+    #[error("mysql server configuration: {0}")]
     ServerConfigurationError(String),
 }
 
 impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
         DataflowError::SourceError(Box::new(SourceError {
-            error: SourceErrorDetails::Other(err.to_string()),
+            error: match &err {
+                DefiniteError::ValueDecodeError(_) => SourceErrorDetails::Other(err.to_string()),
+                DefiniteError::TableTruncated(_) => SourceErrorDetails::Other(err.to_string()),
+                DefiniteError::TableDropped(_) => SourceErrorDetails::Other(err.to_string()),
+                DefiniteError::IncompatibleSchema(_) => SourceErrorDetails::Other(err.to_string()),
+                DefiniteError::UnsupportedGtidState(_) => {
+                    SourceErrorDetails::Other(err.to_string())
+                }
+                DefiniteError::BinlogGtidMonotonicityViolation(_, _) => {
+                    SourceErrorDetails::Other(err.to_string())
+                }
+                DefiniteError::BinlogNotAvailable => {
+                    SourceErrorDetails::Initialization(err.to_string())
+                }
+                DefiniteError::BinlogMissingResumePoint(_, _) => {
+                    SourceErrorDetails::Initialization(err.to_string())
+                }
+                DefiniteError::ServerConfigurationError(_) => {
+                    SourceErrorDetails::Initialization(err.to_string())
+                }
+            },
         }))
     }
 }
