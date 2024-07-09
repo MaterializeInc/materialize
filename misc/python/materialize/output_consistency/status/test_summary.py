@@ -26,6 +26,18 @@ class DbOperationOrFunctionStats:
 
 
 @dataclass
+class DbOperationVariant:
+    operation: DbOperationOrFunction
+    param_count: int
+
+    def to_description(self) -> str:
+        return self.operation.to_description(self.param_count)
+
+    def __hash__(self):
+        return hash(self.to_description())
+
+
+@dataclass
 class ConsistencyTestSummary(ConsistencyTestLogger):
     """Summary of the test execution"""
 
@@ -36,9 +48,9 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
     count_ignored_error_query_templates: int = 0
     count_with_warning_query_templates: int = 0
     failures: list[TestFailureDetails] = field(default_factory=list)
-    stats_by_operation_and_function: dict[
-        DbOperationOrFunction, DbOperationOrFunctionStats
-    ] = field(default_factory=dict)
+    stats_by_operation_variant: dict[DbOperationVariant, DbOperationOrFunctionStats] = (
+        field(default_factory=dict)
+    )
 
     def __post_init__(self):
         self.mode = "LIVE_DATABASE" if not self.dry_run else "DRY_RUN"
@@ -106,11 +118,11 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         output = []
 
         for (
-            operation_or_function,
+            operation_variant,
             stats,
-        ) in self.stats_by_operation_and_function.items():
+        ) in self.stats_by_operation_variant.items():
             output.append(
-                f"* {operation_or_function.to_description()}: {stats.count_top_level} top level, {stats.count_nested} nested, {stats.count_generation_failed} generation failed"
+                f"* {operation_variant.to_description()}: {stats.count_top_level} top level, {stats.count_nested} nested, {stats.count_generation_failed} generation failed"
             )
 
         output.sort()
@@ -121,13 +133,15 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         self,
         operation: DbOperationOrFunction,
         expression: ExpressionWithArgs | None,
+        number_of_args: int,
         is_top_level: bool = True,
     ) -> None:
-        stats = self.stats_by_operation_and_function.get(operation)
+        operation_variant = DbOperationVariant(operation, number_of_args)
+        stats = self.stats_by_operation_variant.get(operation_variant)
 
         if stats is None:
             stats = DbOperationOrFunctionStats()
-            self.stats_by_operation_and_function[operation] = stats
+            self.stats_by_operation_variant[operation_variant] = stats
 
         if expression is None:
             assert is_top_level, "expressions at nested levels must not be None"
@@ -144,5 +158,6 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
                 self.accept_generation_statistics(
                     operation=arg.operation,
                     expression=arg,
+                    number_of_args=arg.count_args(),
                     is_top_level=False,
                 )

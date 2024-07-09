@@ -118,8 +118,12 @@ class ConsistencyTestRunner:
                 expression_count, time_guard
             )
 
-            expression = self.expression_generator.generate_expression(operation)
-            test_summary.accept_generation_statistics(operation, expression)
+            expression, number_of_args = self.expression_generator.generate_expression(
+                operation
+            )
+            test_summary.accept_generation_statistics(
+                operation, expression, number_of_args
+            )
 
             if expression is None:
                 continue
