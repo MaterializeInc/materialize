@@ -493,19 +493,14 @@ version = "0.26.0"
 
 In principle, any text editor can be used to edit Rust code.
 
-By default, we recommend that developers without a strong preference of editor use
-Visual Studio Code with the Rust-Analyzer plugin. This is the most mainstream
+By default, we recommend that developers without a strong preference of an editor use
+[Visual Studio Code] with the [rust-analyzer] plugin.
+This is the most mainstream
 setup for developing Materialize, and the one for which you are the most likely
-to be able to get help if something goes wrong. It's important to note that you
-**should not** install the "Rust" plugin, as it is known to
-conflict with Rust-Analyzer; the latter has far more advanced code navigation
-features and is the de-facto standard for developing Rust. If you use
-Rust-Analyzer, you may wish to change the target directory so it does not
-conflict with other cargo commands.  You can do this by adding to the cargo
-check extra args "--target-dir" and "$NEWTARGET".
+to be able to get help if something goes wrong.
 
 Visual Studio Code also works well for editing Python; to work on the Python code
-in the Materialize repository, install the official Python extension from Microsoft
+in the Materialize repository, install the [official Python extension][vscode-python] from Microsoft
 and add the following to your `settings.json`.
 
 ``` json
@@ -529,12 +524,12 @@ If you are using Rust-Analyzer, you should configure it to conform to our
 * `imports.granularity.group` = `module`
 * `imports.prefix` = `crate`
 
-Besides Rust-Analyzer, the only other known tool with good code navigation features
-is CLion along with its Rust plugin. This is a good choice for developers who prefer
+[RustRover] is another option for an IDE with good code navigation features.
+This is a good choice for developers who prefer
 the JetBrains ecosystem, but we no longer recommend it by default, since
 Rust-Analyzer has long since caught up to it in maturity. If you are a
 Materialize employee, ask Nikhil Benesch on Slack for access to our corporate
-JetBrains license. If you're not yet sure you want to use CLion, you can
+JetBrains license. If you're not yet sure you want to use RustRover, you can
 use the 30-day free trial.
 
 ### Editor add-ons
@@ -612,8 +607,12 @@ source /path/to/materialize/misc/completions/zsh/*
 [Python]: https://www.python.org
 [rust-dec]: https://github.com/MaterializeInc/rust-dec
 [Rust]: https://www.rust-lang.org
+[rust-analyzer]: https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer
 [rustfmt]: https://github.com/rust-lang/rustfmt
 [rustup]: https://www.rust-lang.org/tools/install
 [sqlparser]: https://github.com/MaterializeInc/sqlparser
 [Python]: https://www.python.org
+[vscode-python]: https://marketplace.visualstudio.com/items?itemName=ms-python.python
 [Nix]: https://nixos.wiki/wiki/Flakes
+[Visual Studio Code]: https://code.visualstudio.com
+[RustRover]: https://www.jetbrains.com/rust/
