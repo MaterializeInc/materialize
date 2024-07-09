@@ -320,7 +320,29 @@ pub enum DefiniteError {
 impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
         DataflowError::SourceError(Box::new(SourceError {
-            error: SourceErrorDetails::Other(err.to_string()),
+            error: match &err {
+                DefiniteError::SlotCompactedPastResumePoint(_, _) => {
+                    SourceErrorDetails::Other(err.to_string())
+                }
+                DefiniteError::TableTruncated => SourceErrorDetails::Other(err.to_string()),
+                DefiniteError::TableDropped => SourceErrorDetails::Other(err.to_string()),
+                DefiniteError::PublicationDropped(_) => {
+                    SourceErrorDetails::Initialization(err.to_string())
+                }
+                DefiniteError::InvalidReplicationSlot => {
+                    SourceErrorDetails::Initialization(err.to_string())
+                }
+                DefiniteError::MissingColumn => SourceErrorDetails::Other(err.to_string()),
+                DefiniteError::InvalidCopyInput => SourceErrorDetails::Other(err.to_string()),
+                DefiniteError::InvalidTimelineId { .. } => {
+                    SourceErrorDetails::Initialization(err.to_string())
+                }
+                DefiniteError::MissingToast => SourceErrorDetails::Other(err.to_string()),
+                DefiniteError::DefaultReplicaIdentity => SourceErrorDetails::Other(err.to_string()),
+                DefiniteError::IncompatibleSchema(_) => SourceErrorDetails::Other(err.to_string()),
+                DefiniteError::InvalidUTF8(_) => SourceErrorDetails::Other(err.to_string()),
+                DefiniteError::CastError(_) => SourceErrorDetails::Other(err.to_string()),
+            },
         }))
     }
 }

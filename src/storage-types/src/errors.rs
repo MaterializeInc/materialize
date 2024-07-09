@@ -400,11 +400,17 @@ impl Display for SourceErrorDetails {
             SourceErrorDetails::Initialization(e) => {
                 write!(
                     f,
-                    "failed during initialization, must be dropped and recreated: {}",
+                    "failed during initialization, source must be dropped and recreated: {}",
                     e
                 )
             }
-            SourceErrorDetails::Other(e) => write!(f, "{}", e),
+            SourceErrorDetails::Other(e) => {
+                write!(
+                    f,
+                    "source must be dropped and recreated due to failure: {}",
+                    e
+                )
+            }
         }
     }
 }
