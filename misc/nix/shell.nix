@@ -13,21 +13,27 @@ with pkgs;
 stdenv.mkDerivation rec {
   name = "materialize";
   buildInputs = with pkgs; [
-      libclang
-      rustPlatform.bindgenHook
-      cmake
-      perl
-      rustup
-      postgresql
-      pkg-config
-      python3
-      git
+    libclang
+    rustPlatform.bindgenHook
+    cmake
+    perl
+    rustup
+    pkg-config
+    python3
+    openssl
 
-      # For lint checks
-      shellcheck
-      buf
-      nodejs_22
-  ] ++ lib.optionals stdenv.isDarwin [pkgs.buildPackages.darwin.bootstrap_cmds pkgs.libiconv darwin.apple_sdk.frameworks.DiskArbitration darwin.apple_sdk.frameworks.Foundation];
+    postgresql
+    git
+
+    # For lint checks
+    shellcheck
+    buf
+    nodejs_22
+  ] ++ lib.optionals stdenv.isDarwin [
+    libiconv
+    darwin.apple_sdk.frameworks.DiskArbitration
+    darwin.apple_sdk.frameworks.Foundation
+   ];
   
-  RUSTFLAGS = lib.optionalString stdenv.isLinux "-Clinker=clang -Clink-arg=--ld-path=${pkgs.mold}/bin/mold -Clink-arg=-Wl,--warn-unresolved-symbols -Cdebuginfo=1 -Csymbol-mangling-version=v0";
+  RUSTFLAGS = "-Clink-arg=-Wl,--warn-unresolved-symbols -Cdebuginfo=1 -Csymbol-mangling-version=v0";
 }
