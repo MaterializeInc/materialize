@@ -415,10 +415,14 @@ class CargoBuild(CargoPreImage):
                 self.rd, self.bins, self.examples
             )
 
-            output = spawn.capture(
-                cargo_build + ["--message-format=json"],
-                cwd=self.rd.root,
-            )
+            try:
+                output = spawn.capture(
+                    cargo_build + ["--message-format=json"],
+                    cwd=self.rd.root,
+                )
+            except subprocess.CalledProcessError as e:
+                print(e.stdout)
+                raise
             target_dir = self.rd.cargo_target_dir()
             for line in output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
