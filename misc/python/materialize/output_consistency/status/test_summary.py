@@ -29,6 +29,25 @@ class DbOperationOrFunctionStats:
     count_top_level_generated: int = 0
     count_nested_generated: int = 0
     count_generation_failed: int = 0
+    count_included_in_successfully_executed_queries: int = 0
+
+    def to_description(self) -> str:
+        success_experienced_info = (
+            "successfully executed at least once"
+            if self.count_included_in_successfully_executed_queries
+            else (
+                "not included in any query that was successfully executed in all strategies!"
+                if self.count_top_level_generated + self.count_nested_generated > 0
+                else "never generated"
+            )
+        )
+
+        return (
+            f"{self.count_top_level_generated} top level, "
+            f"{self.count_nested_generated} nested, "
+            f"{self.count_generation_failed} generation failed, "
+            f"{success_experienced_info}"
+        )
 
 
 @dataclass
@@ -128,7 +147,7 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
             stats,
         ) in self.stats_by_operation_variant.items():
             output.append(
-                f"* {operation_variant.to_description()}: {stats.count_top_level_generated} top level, {stats.count_nested_generated} nested, {stats.count_generation_failed} generation failed"
+                f"* {operation_variant.to_description()}: {stats.to_description()}"
             )
 
         output.sort()
