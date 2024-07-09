@@ -132,6 +132,7 @@ WITH MUTUALLY RECURSIVE data (build_id TEXT, pipeline TEXT, branch TEXT, build_n
 SELECT
     d.build_id,
     d.pipeline,
+    d.branch,
     d.build_number,
     d.build_job_id,
     d.build_step_key,
@@ -158,7 +159,7 @@ CREATE OR REPLACE MATERIALIZED VIEW mv_recent_build_job_success_on_main IN CLUST
 SELECT *
 FROM v_build_job_success
 WHERE branch = 'main'
-AND date > now() - INTERVAL '30' DAY;
+AND date + INTERVAL '30' DAY > mz_now();
 
 CREATE OR REPLACE VIEW v_most_recent_build_job AS
 WITH most_recent_build_with_completed_build_step AS (
