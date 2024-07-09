@@ -29,7 +29,7 @@ use mz_ore::id_gen::{conn_id_org_uuid, org_id_conn_bits};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
-use mz_ore::{assert_contains, task};
+use mz_ore::{assert_contains, assert_err, assert_ok, task};
 use mz_server_core::TlsCertConfig;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
 use openssl::x509::X509;
@@ -254,7 +254,7 @@ async fn test_balancer() {
         let (tx, rx) = oneshot::channel();
         reload_tx.try_send(Some(tx)).unwrap();
         let res = rx.await.unwrap();
-        assert!(res.is_err());
+        assert_err!(res);
 
         // We should still be on the old cert because now the cert and key mismatch.
         let resp = client
@@ -275,7 +275,7 @@ async fn test_balancer() {
         let (tx, rx) = oneshot::channel();
         reload_tx.try_send(Some(tx)).unwrap();
         let res = rx.await.unwrap();
-        assert!(res.is_ok());
+        assert_ok!(res);
         let resp = client
             .post(&https_url)
             .header("Content-Type", "application/json")

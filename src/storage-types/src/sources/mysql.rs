@@ -596,6 +596,8 @@ pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>,
 #[cfg(test)]
 mod tests {
 
+    use mz_ore::assert_err;
+
     use super::*;
     use std::num::NonZeroU64;
 
@@ -649,7 +651,7 @@ mod tests {
         let gtid_set_str =
             "3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19, 2174B383-5441-11E8-B90A-C80AA9429562:1-3";
         let result = gtid_set_frontier(gtid_set_str);
-        assert!(result.is_err());
+        assert_err!(result);
     }
 
     #[mz_ore::test]
@@ -657,7 +659,7 @@ mod tests {
         let gtid_set_str =
             "2174B383-5441-11E8-B90A-C80AA9429562:1-3:5-8, 3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19";
         let result = gtid_set_frontier(gtid_set_str);
-        assert!(result.is_err());
+        assert_err!(result);
     }
 
     #[mz_ore::test]
@@ -665,7 +667,7 @@ mod tests {
         let gtid_set_str =
             "14c1b43a-eb64-11eb-8a9a-0242ac130002:1-5,24DA167-0C0C-11E8-8442-00059A3C7B00:1";
         let result = gtid_set_frontier(gtid_set_str);
-        assert!(result.is_err());
+        assert_err!(result);
     }
 
     #[mz_ore::test]
@@ -673,7 +675,7 @@ mod tests {
         let gtid_set_str =
             "14c1b43a-eb64-11eb-8a9a-0242ac130002:1-5,14c1b43a-eb64-11eb-8a9a-0242ac130003:1-3:4";
         let result = gtid_set_frontier(gtid_set_str);
-        assert!(result.is_err());
+        assert_err!(result);
     }
 
     #[mz_ore::test]

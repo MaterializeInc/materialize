@@ -22,6 +22,7 @@ use itertools::Itertools;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
 use mz_controller_types::ClusterId;
 use mz_kafka_util::client::MzClientContext;
+use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
@@ -1251,7 +1252,7 @@ async fn purify_alter_source(
         details,
         seen: _,
     } = options.clone().try_into()?;
-    assert!(details.is_none(), "details cannot be explicitly set");
+    assert_none!(details, "details cannot be explicitly set");
 
     let mut create_subsource_stmts = vec![];
 

@@ -601,7 +601,7 @@ fn test_twos_comp_numeric_primitive() {
 fn test_twos_complement_to_numeric_fail() {
     fn inner(b: &mut [u8]) {
         let r = twos_complement_be_to_numeric(b, 0);
-        assert!(r.is_err());
+        mz_ore::assert_err!(r);
     }
     // 17-byte signed digit's max value exceeds 39 digits of precision
     let mut e = [0xFF; Numeric::TWOS_COMPLEMENT_BYTE_WIDTH];
@@ -828,6 +828,7 @@ impl FixedSizeCodec<Numeric> for PackedNumeric {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
@@ -839,14 +840,14 @@ mod tests {
         #[mz_ore::test]
         fn numeric_max_scale_protobuf_roundtrip(expect in any::<NumericMaxScale>()) {
             let actual = protobuf_roundtrip::<_, ProtoNumericMaxScale>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
 
         #[mz_ore::test]
         fn optional_numeric_max_scale_protobuf_roundtrip(expect in any::<Option<NumericMaxScale>>()) {
             let actual = protobuf_roundtrip::<_, ProtoOptionalNumericMaxScale>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -860,7 +861,7 @@ mod tests {
         assert_eq!(og, rnd);
 
         // Returns an error if the size of the slice is invalid.
-        assert!(PackedNumeric::from_bytes(&[0, 0, 0, 0]).is_err());
+        mz_ore::assert_err!(PackedNumeric::from_bytes(&[0, 0, 0, 0]));
     }
 
     #[mz_ore::test]

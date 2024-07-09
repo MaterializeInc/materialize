@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fmt::{self, Debug, Display};
 
 use itertools::Itertools;
+use mz_ore::assert_none;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
@@ -457,7 +458,7 @@ impl TxnsCodec for TxnsCodecRow {
         let ts = datums.next().expect("valid entry");
         let ts = u64::to_le_bytes(ts.unwrap_uint64());
         let batch = datums.next().expect("valid entry");
-        assert!(datums.next().is_none());
+        assert_none!(datums.next());
         if batch.is_null() {
             TxnsEntry::Register(data_id, ts)
         } else {

@@ -409,6 +409,7 @@ mod tests {
     use bytes::Bytes;
     use http::StatusCode;
     use mz_adapter::AppendWebhookError;
+    use mz_ore::assert_none;
     use mz_repr::{GlobalId, Row};
     use mz_sql::plan::{WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders};
     use mz_storage_types::controller::StorageError;
@@ -488,14 +489,14 @@ mod tests {
         let mut h = filter_headers(&headers, &filters);
         assert_eq!(h.next().unwrap().0, "bar");
         assert_eq!(h.next().unwrap().0, "baz");
-        assert!(h.next().is_none());
+        assert_none!(h.next());
 
         let mut filters = WebhookHeaderFilters::default();
         filters.allow.clone_from(&allow);
 
         let mut h = filter_headers(&headers, &filters);
         assert_eq!(h.next().unwrap().0, "bar");
-        assert!(h.next().is_none());
+        assert_none!(h.next());
 
         let mut filters = WebhookHeaderFilters::default();
         filters.allow = allow;
@@ -503,7 +504,7 @@ mod tests {
 
         let mut h = filter_headers(&headers, &filters);
         assert_eq!(h.next().unwrap().0, "bar");
-        assert!(h.next().is_none());
+        assert_none!(h.next());
     }
 
     #[mz_ore::test]
@@ -520,7 +521,7 @@ mod tests {
 
         // We should yield nothing since we block the only thing we allow.
         let mut h = filter_headers(&headers, &filters);
-        assert!(h.next().is_none());
+        assert_none!(h.next());
     }
 
     #[mz_ore::test]

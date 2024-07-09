@@ -777,6 +777,8 @@ impl<T: VisitChildren<T>> StackSafeVisit<T> {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
+
     use super::*;
 
     #[derive(Debug, Eq, PartialEq)]
@@ -1148,7 +1150,7 @@ mod tests {
             _ => (),
         });
 
-        assert!(res.is_ok());
+        assert_ok!(res);
         assert_eq!(act, exp);
     }
 
@@ -1181,7 +1183,7 @@ mod tests {
             _ => (),
         });
 
-        assert!(res.is_ok());
+        assert_ok!(res);
         assert_eq!(act, exp);
     }
 }

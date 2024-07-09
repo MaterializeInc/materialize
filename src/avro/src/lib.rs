@@ -359,6 +359,8 @@ pub use crate::writer::{to_avro_datum, write_avro_datum, ValidationError, Writer
 mod tests {
     use std::str::FromStr;
 
+    use mz_ore::{assert_err, assert_none};
+
     use crate::reader::Reader;
     use crate::schema::Schema;
     use crate::types::{Record, Value};
@@ -416,7 +418,7 @@ mod tests {
                 ("c".to_string(), Value::Enum(1, "spades".to_string())),
             ])
         );
-        assert!(reader.next().is_none());
+        assert_none!(reader.next());
     }
 
     //TODO: move where it fits better
@@ -460,7 +462,7 @@ mod tests {
                 ("c".to_string(), Value::Enum(2, "clubs".to_string())),
             ])
         );
-        assert!(reader.next().is_none());
+        assert_none!(reader.next());
     }
 
     //TODO: move where it fits better
@@ -516,8 +518,8 @@ mod tests {
         writer.flush().unwrap();
         let input = writer.into_inner();
         let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
-        assert!(reader.next().unwrap().is_err());
-        assert!(reader.next().is_none());
+        assert_err!(reader.next().unwrap());
+        assert_none!(reader.next());
     }
 
     //TODO: move where it fits better
@@ -611,6 +613,6 @@ mod tests {
         let malformed: &[u8] = &[0x3e, 0x15, 0xff, 0x1f, 0x15, 0xff];
 
         let value = from_avro_datum(&schema, &mut &malformed[..]);
-        assert!(value.is_err());
+        assert_err!(value);
     }
 }

@@ -907,11 +907,11 @@ fn test_mz_acl_parsing() {
     assert!(mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
     assert_eq!(s, mz_acl.to_string());
 
-    assert!("u42/rw=u666".parse::<MzAclItem>().is_err());
-    assert!("u32=C/".parse::<MzAclItem>().is_err());
-    assert!("=/".parse::<MzAclItem>().is_err());
-    assert!("f62hfiuew827fhh".parse::<MzAclItem>().is_err());
-    assert!("u2=rw/s66=CU/u33".parse::<MzAclItem>().is_err());
+    mz_ore::assert_err!("u42/rw=u666".parse::<MzAclItem>());
+    mz_ore::assert_err!("u32=C/".parse::<MzAclItem>());
+    mz_ore::assert_err!("=/".parse::<MzAclItem>());
+    mz_ore::assert_err!("f62hfiuew827fhh".parse::<MzAclItem>());
+    mz_ore::assert_err!("u2=rw/s66=CU/u33".parse::<MzAclItem>());
 }
 
 #[mz_ore::test]
@@ -962,7 +962,7 @@ fn test_mz_acl_item_binary() {
         MzAclItem::decode_binary(&mz_acl_item.encode_binary()).unwrap()
     );
 
-    assert!(MzAclItem::decode_binary(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]).is_err())
+    mz_ore::assert_err!(MzAclItem::decode_binary(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]))
 }
 
 #[mz_ore::test]
@@ -1047,13 +1047,13 @@ fn test_acl_parsing() {
     assert!(acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
     assert_eq!(s, acl.to_string());
 
-    assert!("42/rw=666".parse::<AclItem>().is_err());
-    assert!("u42=rw/u666".parse::<AclItem>().is_err());
-    assert!("s42=rw/s666".parse::<AclItem>().is_err());
-    assert!("u32=C/".parse::<AclItem>().is_err());
-    assert!("=/".parse::<AclItem>().is_err());
-    assert!("f62hfiuew827fhh".parse::<AclItem>().is_err());
-    assert!("u2=rw/s66=CU/u33".parse::<AclItem>().is_err());
+    mz_ore::assert_err!("42/rw=666".parse::<AclItem>());
+    mz_ore::assert_err!("u42=rw/u666".parse::<AclItem>());
+    mz_ore::assert_err!("s42=rw/s666".parse::<AclItem>());
+    mz_ore::assert_err!("u32=C/".parse::<AclItem>());
+    mz_ore::assert_err!("=/".parse::<AclItem>());
+    mz_ore::assert_err!("f62hfiuew827fhh".parse::<AclItem>());
+    mz_ore::assert_err!("u2=rw/s66=CU/u33".parse::<AclItem>());
 }
 
 #[mz_ore::test]
@@ -1104,7 +1104,7 @@ fn test_acl_item_binary() {
         AclItem::decode_binary(&acl_item.encode_binary()).unwrap()
     );
 
-    assert!(AclItem::decode_binary(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]).is_err())
+    mz_ore::assert_err!(AclItem::decode_binary(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0]))
 }
 
 #[mz_ore::test]

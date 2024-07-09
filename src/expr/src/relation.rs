@@ -3458,6 +3458,7 @@ pub enum AccessStrategy {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use mz_repr::explain::text::text_string_at;
     use proptest::prelude::*;
@@ -3470,7 +3471,7 @@ mod tests {
         #[mz_ore::test]
         fn column_order_protobuf_roundtrip(expect in any::<ColumnOrder>()) {
             let actual = protobuf_roundtrip::<_, ProtoColumnOrder>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3480,7 +3481,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn aggregate_expr_protobuf_roundtrip(expect in any::<AggregateExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateExpr>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3489,7 +3490,7 @@ mod tests {
         #[mz_ore::test]
         fn window_frame_units_protobuf_roundtrip(expect in any::<WindowFrameUnits>()) {
             let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameUnits>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3498,7 +3499,7 @@ mod tests {
         #[mz_ore::test]
         fn window_frame_bound_protobuf_roundtrip(expect in any::<WindowFrameBound>()) {
             let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameBound>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3507,7 +3508,7 @@ mod tests {
         #[mz_ore::test]
         fn window_frame_protobuf_roundtrip(expect in any::<WindowFrame>()) {
             let actual = protobuf_roundtrip::<_, ProtoWindowFrame>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

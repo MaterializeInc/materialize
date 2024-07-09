@@ -29,6 +29,7 @@ use arrow::datatypes::{DataType, Field, Fields};
 use chrono::DateTime;
 use dec::{Context, OrderedDecimal};
 use itertools::Itertools;
+use mz_ore::assert_none;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema2};
 use mz_persist_types::stats::{
     BytesStats, ColumnNullStats, ColumnStatKinds, ColumnarStats, OptionStats, PrimitiveStats,
@@ -413,7 +414,7 @@ impl DatumColumnEncoder {
                 }
             }
             (DatumColumnEncoder::RecordEmpty(builder), Datum::List(records)) => {
-                assert!(records.into_iter().next().is_none());
+                assert_none!(records.into_iter().next());
                 builder.append_value(true);
             }
             (encoder, Datum::Null) => encoder.push_invalid(),
@@ -698,7 +699,7 @@ impl DatumColumnEncoder {
                 // TODO(parkmycar): Record these stats.
                 let (vals, _stats) = vals.finish();
                 // Note: A value being null is managed by the null buffer we manually maintain.
-                assert!(vals.logical_nulls().is_none());
+                assert_none!(vals.logical_nulls());
 
                 let field = Field::new_list_field(vals.data_type().clone(), nulls.is_some());
                 let val_offsets = OffsetBuffer::from_lengths(val_lengths);
@@ -726,7 +727,7 @@ impl DatumColumnEncoder {
                 // TODO(parkmycar): Record these stats.
                 let (values, _stats) = values.finish();
                 // Note: A value being null is managed by the null buffer we manually maintain.
-                assert!(values.logical_nulls().is_none());
+                assert_none!(values.logical_nulls());
 
                 let field = Field::new_list_field(values.data_type().clone(), nulls.is_some());
                 let offsets = OffsetBuffer::<i32>::from_lengths(lengths.iter().copied());
@@ -745,8 +746,8 @@ impl DatumColumnEncoder {
                 // TODO(parkmycar): Record these stats.
                 let (vals, _val_stats) = vals.finish();
                 // Note: A value being null is managed by the null buffer we manually maintain.
-                assert!(keys.logical_nulls().is_none());
-                assert!(vals.logical_nulls().is_none());
+                assert_none!(keys.logical_nulls());
+                assert_none!(vals.logical_nulls());
 
                 let offsets = OffsetBuffer::<i32>::from_lengths(lengths.iter().copied());
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
@@ -1593,6 +1594,7 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_err;
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
 
@@ -1710,7 +1712,7 @@ mod tests {
     fn empty_relation_desc_returns_error() {
         let empty_desc = RelationDesc::empty();
         let result = <RelationDesc as Schema2<Row>>::encoder(&empty_desc);
-        assert!(result.is_err());
+        assert_err!(result);
     }
 
     #[mz_ore::test]

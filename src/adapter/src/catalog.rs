@@ -1905,7 +1905,7 @@ mod tests {
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
     use mz_ore::now::{to_datetime, SYSTEM_TIME};
-    use mz_ore::task;
+    use mz_ore::{assert_err, assert_ok, task};
     use mz_persist_client::PersistClient;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
@@ -2227,8 +2227,10 @@ mod tests {
         let columns = iter::repeat(column).take(column_count).join("");
         let create_sql = format!("{view_def}{columns})");
         let create_sql_check = create_sql.clone();
-        assert!(mz_sql_parser::parser::parse_statements(&create_sql).is_ok());
-        assert!(mz_sql_parser::parser::parse_statements_with_limit(&create_sql).is_err());
+        assert_ok!(mz_sql_parser::parser::parse_statements(&create_sql));
+        assert_err!(mz_sql_parser::parser::parse_statements_with_limit(
+            &create_sql
+        ));
 
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
@@ -3162,8 +3164,8 @@ mod tests {
             Catalog::open_debug_read_only_catalog(persist_client.clone(), organization_id.clone())
                 .await
                 .expect("open_debug_read_only_catalog");
-        assert!(writer_catalog.resolve_database(db_name).is_err());
-        assert!(read_only_catalog.resolve_database(db_name).is_err());
+        assert_err!(writer_catalog.resolve_database(db_name));
+        assert_err!(read_only_catalog.resolve_database(db_name));
 
         writer_catalog
             .transact(

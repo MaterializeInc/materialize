@@ -163,6 +163,7 @@ impl ThresholdPlan {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
@@ -172,7 +173,7 @@ mod tests {
        #[mz_ore::test]
         fn threshold_plan_protobuf_roundtrip(expect in any::<ThresholdPlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoThresholdPlan>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

@@ -837,6 +837,7 @@ impl RustType<ProtoBuildDesc> for BuildDesc<FlatPlan> {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
@@ -852,7 +853,7 @@ mod tests {
         #[mz_ore::test]
         fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp>>()) {
             let actual = protobuf_roundtrip::<_, ProtoDataflowDescription>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

@@ -28,9 +28,9 @@ use mz_adapter::{
 };
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
-use mz_ore::instrument;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
+use mz_ore::{assert_none, assert_ok, instrument};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3};
 use mz_repr::{
@@ -654,7 +654,7 @@ where
         // start_transaction can't error (but assert that just in case it changes in
         // the future.
         let res = self.adapter_client.start_transaction(Some(num_stmts));
-        assert!(res.is_ok());
+        assert_ok!(res);
         Ok(())
     }
 
@@ -1745,7 +1745,7 @@ where
             }
         };
 
-        assert!(tag.is_none(), "tag created but not consumed: {:?}", tag);
+        assert_none!(tag, "tag created but not consumed: {:?}", tag);
         r
     }
 

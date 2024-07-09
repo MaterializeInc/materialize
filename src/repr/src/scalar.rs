@@ -4328,6 +4328,7 @@ fn verify_base_eq_record_nullability() {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
 
     use super::*;
@@ -4337,7 +4338,7 @@ mod tests {
        #[cfg_attr(miri, ignore)] // too slow
         fn scalar_type_protobuf_roundtrip(expect in any::<ScalarType>() ) {
             let actual = protobuf_roundtrip::<_, ProtoScalarType>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

@@ -395,6 +395,7 @@ mod tests {
 
     use futures::stream::FuturesUnordered;
     use futures::StreamExt;
+    use mz_ore::assert_err;
     use mz_persist_client::PersistClient;
 
     use crate::tests::writer;
@@ -660,7 +661,7 @@ mod tests {
                 txn.commit_at(&mut txns, 1).await
             }
         });
-        assert!(commit.await.is_err());
+        assert_err!(commit.await);
 
         let d0 = txns.expect_register(2).await;
         txns.forget(3, [d0]).await.unwrap();
@@ -675,7 +676,7 @@ mod tests {
                 txn.commit_at(&mut txns, 4).await
             }
         });
-        assert!(commit.await.is_err());
+        assert_err!(commit.await);
     }
 
     #[mz_ore::test(tokio::test)]

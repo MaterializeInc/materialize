@@ -25,6 +25,7 @@
 //! `IdGen`, which is used to prepare distinct expressions for inlining.
 
 use mz_expr::{visit::Visit, MirRelationExpr};
+use mz_ore::assert_none;
 use mz_ore::{id_gen::IdGen, stack::RecursionLimitError};
 use mz_repr::optimize::OptimizerFeatures;
 
@@ -142,7 +143,7 @@ impl NormalizeLets {
                 support::replace_bindings_from_map(bindings, ids, values, limits);
             } else {
                 for (id, (value, max_iter)) in bindings.into_iter().rev() {
-                    assert!(max_iter.is_none());
+                    assert_none!(max_iter);
                     *relation = MirRelationExpr::Let {
                         id,
                         value: Box::new(value),
@@ -199,6 +200,7 @@ mod support {
     use itertools::Itertools;
 
     use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
+    use mz_ore::assert_none;
     use mz_repr::optimize::OptimizerFeatures;
 
     pub(super) fn replace_bindings_from_map(
@@ -330,7 +332,7 @@ mod support {
                 } else {
                     let typ = value.typ();
                     let prior = types.insert(*id, typ);
-                    assert!(prior.is_none());
+                    assert_none!(prior);
                 }
             }
             refresh_types_helper(body, types, features)?;

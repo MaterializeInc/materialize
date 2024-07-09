@@ -1250,11 +1250,13 @@ fn encode_headers(datum: Datum) -> Vec<KafkaHeader> {
 
 #[cfg(test)]
 mod test {
+    use mz_ore::assert_err;
+
     use super::*;
 
     #[mz_ore::test]
     fn progress_record_migration() {
-        assert!(parse_progress_record(b"{}").is_err());
+        assert_err!(parse_progress_record(b"{}"));
 
         assert_eq!(
             parse_progress_record(b"{\"timestamp\":1}").unwrap(),
@@ -1296,6 +1298,6 @@ mod test {
             }
         );
 
-        assert!(parse_progress_record(b"{\"frontier\":null}").is_err());
+        assert_err!(parse_progress_record(b"{\"frontier\":null}"));
     }
 }

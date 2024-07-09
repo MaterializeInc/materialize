@@ -23,6 +23,7 @@ use arrow::datatypes::{
     UInt64Type, UInt8Type,
 };
 use bytes::BufMut;
+use mz_ore::assert_none;
 use timely::order::Product;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
@@ -926,7 +927,7 @@ impl ColumnMut<()> for BinaryBuilder {
 
 impl ColumnPush<Vec<u8>> for BinaryBuilder {
     fn push<'a>(&mut self, val: &'a [u8]) {
-        assert!(self.validity_slice().is_none());
+        assert_none!(self.validity_slice());
         <BinaryBuilder>::append_value(self, val)
     }
 
@@ -999,7 +1000,7 @@ impl ColumnMut<()> for StringBuilder {
 
 impl ColumnPush<String> for StringBuilder {
     fn push<'a>(&mut self, val: &'a str) {
-        assert!(self.validity_slice().is_none());
+        assert_none!(self.validity_slice());
         <StringBuilder>::append_value(self, val)
     }
 
@@ -1040,7 +1041,7 @@ impl ColumnGet<Option<OpaqueData>> for BinaryArray {
 
 impl ColumnPush<OpaqueData> for BinaryBuilder {
     fn push<'a>(&mut self, val: <OpaqueData as Data>::Ref<'a>) {
-        assert!(self.validity_slice().is_none());
+        assert_none!(self.validity_slice());
         <BinaryBuilder>::append_value(self, val)
     }
 

@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
 use mz_dyncfg::{Config, ConfigSet};
+use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
@@ -478,7 +479,7 @@ where
                     // of the inputs and independent of anything in persist
                     // state. It's handed back via a Break, so we never even try
                     // to commit it. No network, no Indeterminate.
-                    assert!(indeterminate.is_none());
+                    assert_none!(indeterminate);
                     return CompareAndAppendRes::InvalidUsage(err);
                 }
                 Err(CompareAndAppendBreak::InlineBackpressure) => {

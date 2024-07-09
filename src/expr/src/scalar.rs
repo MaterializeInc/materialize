@@ -3090,6 +3090,7 @@ impl RustType<ProtoDims> for (usize, usize) {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
 
     use super::*;
@@ -3206,7 +3207,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn mir_scalar_expr_protobuf_roundtrip(expect in any::<MirScalarExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoMirScalarExpr>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3215,7 +3216,7 @@ mod tests {
         #[mz_ore::test]
         fn domain_limit_protobuf_roundtrip(expect in any::<DomainLimit>()) {
             let actual = protobuf_roundtrip::<_, ProtoDomainLimit>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3225,7 +3226,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn eval_error_protobuf_roundtrip(expect in any::<EvalError>()) {
             let actual = protobuf_roundtrip::<_, ProtoEvalError>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

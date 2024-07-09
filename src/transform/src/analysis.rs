@@ -82,6 +82,7 @@ pub mod common {
 
     use mz_expr::LocalId;
     use mz_expr::MirRelationExpr;
+    use mz_ore::assert_none;
     use mz_repr::optimize::OptimizerFeatures;
 
     use super::subtree::SubtreeSize;
@@ -351,7 +352,7 @@ pub mod common {
                     Err(local_id) => {
                         // Capture the *remaining* work, which we'll need to flip around.
                         let prior = self.result.bindings.insert(local_id, rev_post_order.len());
-                        assert!(prior.is_none(), "Shadowing not allowed");
+                        assert_none!(prior, "Shadowing not allowed");
                     }
                 }
             }
