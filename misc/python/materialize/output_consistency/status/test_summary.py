@@ -9,6 +9,9 @@
 from dataclasses import dataclass, field
 
 from materialize.mzcompose.test_result import TestFailureDetails
+from materialize.output_consistency.expression.expression_with_args import (
+    ExpressionWithArgs,
+)
 from materialize.output_consistency.operation.operation import DbOperationOrFunction
 from materialize.output_consistency.status.consistency_test_logger import (
     ConsistencyTestLogger,
@@ -25,6 +28,7 @@ class DbOperationOrFunctionStats:
 @dataclass
 class ConsistencyTestSummary(ConsistencyTestLogger):
     """Summary of the test execution"""
+
     dry_run: bool = False
     mode: str = "UNKNOWN"
     count_executed_query_templates: int = 0
@@ -112,3 +116,33 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         output.sort()
 
         return "\n".join(output)
+
+    def accept_generation_statistics(
+        self,
+        operation: DbOperationOrFunction,
+        expression: ExpressionWithArgs | None,
+        is_top_level: bool = True,
+    ) -> None:
+        stats = self.stats_by_operation_and_function.get(operation)
+
+        if stats is None:
+            stats = DbOperationOrFunctionStats()
+            self.stats_by_operation_and_function[operation] = stats
+
+        if expression is None:
+            assert is_top_level, "expressions at nested levels must not be None"
+            stats.count_generation_failed = stats.count_generation_failed + 1
+            return
+
+        if is_top_level:
+            stats.count_top_level = stats.count_top_level + 1
+        else:
+            stats.count_nested = stats.count_nested + 1
+
+        for arg in expression.args:
+            if isinstance(arg, ExpressionWithArgs):
+                self.accept_generation_statistics(
+                    operation=arg.operation,
+                    expression=arg,
+                    is_top_level=False,
+                )

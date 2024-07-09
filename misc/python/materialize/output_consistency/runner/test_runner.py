@@ -18,9 +18,6 @@ from materialize.output_consistency.execution.query_execution_manager import (
     QueryExecutionManager,
 )
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
-from materialize.output_consistency.expression.expression_with_args import (
-    ExpressionWithArgs,
-)
 from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
 )
@@ -31,14 +28,12 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
-from materialize.output_consistency.operation.operation import DbOperationOrFunction
 from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.runner.time_guard import TimeGuard
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.status.test_summary import (
     ConsistencyTestSummary,
-    DbOperationOrFunctionStats,
 )
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
@@ -124,7 +119,7 @@ class ConsistencyTestRunner:
             )
 
             expression = self.expression_generator.generate_expression(operation)
-            _record_statistics(test_summary, operation, expression)
+            test_summary.accept_generation_statistics(operation, expression)
 
             if expression is None:
                 continue
@@ -240,35 +235,3 @@ class ConsistencyTestRunner:
         )
 
         return all_passed
-
-
-def _record_statistics(
-    test_summary: ConsistencyTestSummary,
-    operation: DbOperationOrFunction,
-    expression: ExpressionWithArgs | None,
-    is_top_level: bool = True,
-) -> None:
-    stats = test_summary.stats_by_operation_and_function.get(operation)
-
-    if stats is None:
-        stats = DbOperationOrFunctionStats()
-        test_summary.stats_by_operation_and_function[operation] = stats
-
-    if expression is None:
-        assert is_top_level, "expressions at nested levels must not be None"
-        stats.count_generation_failed = stats.count_generation_failed + 1
-        return
-
-    if is_top_level:
-        stats.count_top_level = stats.count_top_level + 1
-    else:
-        stats.count_nested = stats.count_nested + 1
-
-    for arg in expression.args:
-        if isinstance(arg, ExpressionWithArgs):
-            _record_statistics(
-                test_summary,
-                operation=arg.operation,
-                expression=arg,
-                is_top_level=False,
-            )
