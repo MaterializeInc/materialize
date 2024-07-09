@@ -330,14 +330,16 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 use_snapshot(&client, &snapshot).await?;
             }
 
-            let client = connection_config
-                .connect(
-                    "snapshotting",
-                    &config.config.connection_context.ssh_tunnel_manager,
-                )
-                .await?;
-            let upstream_info =
-                match mz_postgres_util::publication_info(&client, &connection.publication).await {
+            let upstream_info = {
+                let schema_client = connection_config
+                    .connect(
+                        "snapshot schema info",
+                        &config.config.connection_context.ssh_tunnel_manager,
+                    )
+                    .await?;
+                match mz_postgres_util::publication_info(&schema_client, &connection.publication)
+                    .await
+                {
                     // If the replication stream cannot be obtained in a definite way there is
                     // nothing else to do. These errors are not retractable.
                     Err(PostgresError::PublicationMissing(publication)) => {
@@ -363,7 +365,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     }
                     Err(e) => Err(TransientError::from(e))?,
                     Ok(i) => i,
-                };
+                }
+            };
 
             let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
