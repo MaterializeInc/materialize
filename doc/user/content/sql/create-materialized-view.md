@@ -128,37 +128,78 @@ the **default** when you create a materialized view that doesn't explicitly
 specify a refresh strategy, and is the **recommended behavior for the vast
 majority of use cases**.
 
+Depending on your use case, it might make sense to trade-off freshness for
+performance and cost. For example, if it's important to keep results up-to-date
+for the most recent data, but not as much once data goes over a certain time
+threshold, it might be tolerable for changes to the older data to take a longer
+time to reflect.
+
+**Example**
+
+To implement this pattern, you can maintain the recent data in a regular
+materialized view that refreshes on commit, create a second materialized view
+for data that goes over a specific threshold (e.g., one week) using a
+[refresh every](#refresh-every) strategy with the desired freshness interval
+(e.g., one day), and then union these views to get the entire result set.
+
+```mzsql
+CREATE MATERIALIZED VIEW mv AS
+SELECT ...
+-- Keep data newer than one week
+WHERE mz_now() <= event_ts + INTERVAL '1' WEEK;
+```
+
+```mzsql
+CREATE MATERIALIZED VIEW mv_refresh_every
+WITH (
+  -- Refresh at creation, so the view is populated ahead of
+  -- the first scheduled refresh on Jun 18
+  REFRESH AT '2024-06-17 00:00:00',
+  -- Refresh every day at midnight UTC
+  REFRESH EVERY '1 day' ALIGNED TO '2024-04-17 00:00:00'
+) AS
+SELECT ...
+-- Keep data older than one week
+WHERE mz_now() > event_ts + INTERVAL '1' WEEK
+```
+
+```mzsql
+CREATE VIEW v_mv_results AS
+SELECT * FROM mv
+UNION ALL
+SELECT * FROM mv_refresh_every;
+```
+
 #### Refresh at
 
 <p style="font-size:14px"><b>Syntax:</b> <code>REFRESH AT</code> { <code>CREATION</code> | <i>timestamp</i> }</p>
 
 This strategy allows configuring a materialized view to **refresh at a specific
-time**. The refresh time can be specified as a timestamp, or using the `AT
-CREATION` clause, which triggers a first refresh when the materialized view is
-created.
+time**. The refresh time can be specified as a timestamp, or using the `AT CREATION`
+clause, which triggers a first refresh when the materialized view is created.
 
 **Example**
 
 To create a materialized view that is refreshed at creation, and then at the
-specified dates:
+specified times:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW mv_refresh_at
-IN CLUSTER my_refresh_cluster
+IN CLUSTER my_scheduled_cluster
 WITH (
   -- Refresh at creation, so the view is populated ahead of
-  -- the first `AT` refresh
+  -- the first user-specified refresh time
   REFRESH AT CREATION,
-  -- Refresh at a specific (future) time
+  -- Refresh at a user-specified (future) time
   REFRESH AT '2024-06-06 12:00:00',
-  -- Refresh at another specific (future) time
+  -- Refresh at another user-specified (future) time
   REFRESH AT '2024-06-08 22:00:00'
 )
 AS SELECT ... FROM ...;
 ```
 
 You can specify multiple `REFRESH AT` strategies in the same `CREATE` statement,
-and combine them with the [refresh every strategy](#refresh-every).
+and combine them with the [`REFRESH EVERY` strategy](#refresh-every).
 
 #### Refresh every
 
@@ -177,24 +218,84 @@ created.
 To create a materialized view that is refreshed at creation, and then once a day
 at 10PM UTC:
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW mv_refresh_every
 IN CLUSTER my_scheduled_cluster
 WITH (
   -- Refresh at creation, so the view is populated ahead of
-  -- the first `EVERY` refresh
+  -- the first user-specified refresh time
   REFRESH AT CREATION,
   -- Refresh every day at 10PM UTC
-  REFRESH EVERY '1 day' ALIGNED TO '2024-04-17 22:00:00'
-)
-AS SELECT ...  FROM ...;
+  REFRESH EVERY '1 day' ALIGNED TO '2024-06-06 22:00:00'
+) AS
+SELECT ...;
 ```
 
 You can specify multiple `REFRESH EVERY` strategies in the same `CREATE`
-statement, and combine them with the [refresh at strategy](#refresh-at). When using the
-`REFRESH EVERY` strategy, we recommend **always** using also the
-`REFRESH AT CREATION` strategy, so the materialized view is available
-for querying ahead of the first scheduled `EVERY` refresh.
+statement, and combine them with the [`REFRESH AT` strategy](#refresh-at). When
+this strategy, we recommend **always** using the [`REFRESH AT CREATION`](#refresh-at)
+clause, so the materialized view is available for querying ahead of the first
+user-specified refresh time.
+
+#### Querying materialized views with refresh strategies
+
+Materialized views configured with [`REFRESH EVERY` strategies](#refresh-every)
+have a period of unavailability around the scheduled refresh times — during
+this period, the view **will not return any results**. To avoid unavailability
+during the refresh operation, we recommend hosting these views in
+[**scheduled clusters**](/sql/create-cluster/#scheduling) configured to
+automatically [turn on ahead of the scheduled refresh time](/sql/create-cluster/#rehydration-time-estimate).
+
+**Example**
+
+To create a scheduled cluster that turns on 1 hour ahead of any scheduled
+refresh times:
+
+```mzsql
+CREATE CLUSTER my_scheduled_cluster (
+  SIZE = '3200cc',
+  SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour')
+);
+```
+
+You can then create a materialized view in this cluster, configured to refresh
+at creation, then once a day at 12PM UTC:
+
+```mzsql
+CREATE MATERIALIZED VIEW mv_refresh_every
+IN CLUSTER my_scheduled_cluster
+WITH (
+  -- Refresh at creation, so the view is populated ahead of
+  -- the first user-specified refresh time
+  REFRESH AT CREATION,
+  -- Refresh every day at 12PM UTC
+  REFRESH EVERY '1 day' ALIGNED TO '2024-06-18 00:00:00'
+) AS
+SELECT ...;
+```
+
+Because the materialized view is hosted on a scheduled cluster that is
+configured to **turn on ahead of any scheduled refreshes**, you can expect
+`my_scheduled_cluster` to be provisioned at 11PM UTC — or, 1 hour ahead of the
+scheduled refresh time for `mv_refresh_every`. This means that the cluster can
+backfill the view with pre-existing data — a process known as [_hydration_](/transform-data/troubleshooting/#hydrating-upstream-objects)
+— ahead of the refresh operation, which **reduces the total unavailability window
+of the view** to just the duration of the refresh.
+
+If the cluster is **not** configured to turn on ahead of scheduled refreshes
+(i.e., using the `REHYDRATION TIME ESTIMATE` option), the total unavailability
+window of the view will be a combination of the hydration time for all objects
+in the cluster (typically long) and the duration of the refresh for the
+materialized view (typically short).
+
+Depending on the actual time it takes to hydrate the view or set of views in the
+cluster, you can later adjust the rehydration time estimate value for the
+cluster using [`ALTER CLUSTER`](../alter-cluster/#schedule):
+
+```mzsql
+ALTER CLUSTER my_scheduled_cluster
+SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '30 minutes'));
+```
 
 #### Introspection
 
@@ -204,7 +305,7 @@ the [`mz_internal.mz_materialized_view_refresh_strategies`](../system-catalog/mz
 and [`mz_internal.mz_materialized_view_refreshes`](../system-catalog/mz_internal/#mz_materialized_view_refreshes)
 system catalog tables:
 
-```sql
+```mzsql
 SELECT mv.id AS materialized_view_id,
        mv.name AS materialized_view_name,
        rs.type AS refresh_strategy,
@@ -217,9 +318,6 @@ FROM mz_internal.mz_materialized_view_refresh_strategies rs
 JOIN mz_internal.mz_materialized_view_refreshes r ON r.materialized_view_id = rs.materialized_view_id
 JOIN mz_materialized_views mv ON rs.materialized_view_id = mv.id;
 ```
-
-[//]: # "TODO(morsapaes) Add section linking to refresh strategies docs
-in #27521."
 
 ## Examples
 
@@ -253,7 +351,7 @@ FROM users FULL OUTER JOIN orders ON users.id = orders.user_id
 
 ### Using refresh strategies
 
-```sql
+```mzsql
 CREATE MATERIALIZED VIEW mv
 IN CLUSTER my_refresh_cluster
 WITH (
@@ -262,7 +360,7 @@ WITH (
   -- Refresh every Thursday at 12PM UTC
   REFRESH EVERY '7 days' ALIGNED TO '2024-06-06 12:00:00',
   -- Refresh on creation, so the view is populated ahead of
-  -- the first `EVERY` refresh
+  -- the first user-specified refresh time
   REFRESH AT CREATION
 )
 AS SELECT ... FROM ...;

@@ -241,8 +241,8 @@ To support [scheduled refreshes in materialized views](../create-materialized-vi
 you can configure a cluster to automatically turn on and off using the
 `SCHEDULE...ON REFRESH` syntax.
 
-```sql
-CREATE CLUSTER my_refresh_cluster (
+```mzsql
+CREATE CLUSTER my_scheduled_cluster (
   SIZE = '3200cc',
   SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour')
 );
@@ -259,14 +259,14 @@ It's not possible to manually turn on a cluster with `ON REFRESH` scheduling. If
 you need to turn on a cluster outside its schedule, you can temporarily disable
 scheduling and provision compute resources using [`ALTER CLUSTER`](../alter-cluster/#schedule):
 
-```sql
-ALTER CLUSTER my_refresh_cluster SET (SCHEDULE = MANUAL, REPLICATION FACTOR = 1);
+```mzsql
+ALTER CLUSTER my_scheduled_cluster SET (SCHEDULE = MANUAL, REPLICATION FACTOR = 1);
 ```
 
 To re-enable scheduling:
 
-```sql
-ALTER CLUSTER my_refresh_cluster
+```mzsql
+ALTER CLUSTER my_scheduled_cluster
 SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour'));
 ```
 
@@ -275,7 +275,7 @@ SET (SCHEDULE = ON REFRESH (REHYDRATION TIME ESTIMATE = '1 hour'));
 <p style="font-size:14px"><b>Syntax:</b> <code>REHYDRATION TIME ESTIMATE</code> <i>interval</i></p>
 
 By default, scheduled clusters will turn on at the scheduled refresh time. To
-avoid unavailability of the objects scheduled for refresh during the refresh
+avoid [unavailability of the objects scheduled for refresh](/sql/create-materialized-view/#querying-materialized-views-with-refresh-strategies) during the refresh
 operation, we recommend turning the cluster on ahead of the scheduled time to
 allow rehydration to complete. This can be controlled using the `REHYDRATION
 TIME ESTIMATE` clause.
@@ -286,7 +286,7 @@ To check the scheduling strategy associated with a cluster, you can query the
 [`mz_internal.mz_cluster_schedules`](/sql/system-catalog/mz_internal/#mz_cluster_schedules)
 system catalog table:
 
-```sql
+```mzsql
 SELECT c.id AS cluster_id,
        c.name AS cluster_name,
        cs.type AS schedule_type,
@@ -300,7 +300,7 @@ To check if a scheduled cluster is turned on, you can query the
 [`mz_catalog.mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas)
 system catalog table:
 
-```sql
+```mzsql
 SELECT cs.cluster_id,
        -- A cluster with scheduling is "on" when it has compute resources
        -- (i.e. a replica) attached.
@@ -315,7 +315,7 @@ You can also use the [audit log](../system-catalog/mz_catalog/#mz_audit_events)
 to observe the commands that are automatically run when a scheduled cluster is
 turned on and off for materialized view refreshes:
 
-```sql
+```mzsql
 SELECT *
 FROM mz_audit_events
 WHERE object_type = 'cluster-replica'
