@@ -32,7 +32,7 @@ accordingly.
 follows:
 
     1. In Materialize, get the replication slot name associated with your
-    PostgreSQL source from the [`mz_internal.mz_postgres_sources`](/sql/system-catalog/mz_internal/#mz_postgres_sources)
+    PostgreSQL source from the [`mz_catalog_unstable.mz_postgres_sources`](/sql/system-catalog/mz_catalog_unstable/#mz_postgres_sources)
     table:
 
         ```mzsql
@@ -43,7 +43,7 @@ follows:
             pgs.replication_slot
         FROM
             mz_sources AS s
-            JOIN mz_internal.mz_postgres_sources AS pgs ON s.id = pgs.id
+            JOIN mz_catalog_unstable.mz_postgres_sources AS pgs ON s.id = pgs.id
             JOIN mz_schemas AS n ON n.id = s.schema_id
             JOIN mz_databases AS d ON d.id = n.database_id;
         ```

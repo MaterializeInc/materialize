@@ -11,7 +11,7 @@ $ set-from-sql var=previous-bytes
 SELECT
   (SUM(u.bytes_indexed))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name = 'autospill'
 
 # Inserting large value should trigger auto spill
@@ -30,7 +30,7 @@ fish:AREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISH
     SUM(u.bytes_indexed) < (${previous-bytes} * 2),
     SUM(u.records_indexed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name = 'autospill'
   GROUP BY s.name
   ORDER BY s.name
@@ -40,7 +40,7 @@ $ set-from-sql var=previous-bytes-2
 SELECT
   (SUM(u.bytes_indexed))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name = 'autospill'
 
 # Removing all the inserted keys
@@ -59,7 +59,7 @@ animal:
     SUM(u.bytes_indexed) < ${previous-bytes-2},
     SUM(u.records_indexed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name = 'autospill'
   GROUP BY s.name
   ORDER BY s.name

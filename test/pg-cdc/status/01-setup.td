@@ -48,7 +48,7 @@ ALTER TABLE t DROP COLUMN a;
 ALTER TABLE t ADD COLUMN a int;
 INSERT INTO t VALUES (2);
 
-> SELECT name, status FROM mz_internal.mz_source_statuses;
+> SELECT name, status FROM mz_catalog_unstable.mz_source_statuses;
 pg_source           running
 pg_source_progress  running
 t                   ceased
@@ -57,7 +57,7 @@ t                   ceased
         status = 'ceased'
             AND
         error ILIKE '%incompatible schema change%'
-    FROM mz_internal.mz_source_statuses
+    FROM mz_catalog_unstable.mz_source_statuses
     WHERE name = 't';
 true
 

@@ -8,5 +8,5 @@
 -- by the Apache License, Version 2.0.
 
 select *
-from mz_internal.mz_cluster_replica_statuses
+from mz_catalog_unstable.mz_cluster_replica_statuses
 where status != 'ready'

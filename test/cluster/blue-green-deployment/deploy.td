@@ -56,10 +56,10 @@
     ready_dataflows AS (
         SELECT id
         FROM dataflows d
-        JOIN mz_internal.mz_compute_hydration_statuses h ON (h.object_id = d.id)
+        JOIN mz_catalog_unstable.mz_compute_hydration_statuses h ON (h.object_id = d.id)
         -- Left join because some dataflows don't have dependencies and therefore
         -- don't have lag either.
-        LEFT JOIN mz_internal.mz_materialization_lag l ON (l.object_id = d.id)
+        LEFT JOIN mz_catalog_unstable.mz_materialization_lag l ON (l.object_id = d.id)
         WHERE
             h.hydrated AND
             (l.local_lag <= '1s' OR l.local_lag IS NULL)

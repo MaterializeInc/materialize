@@ -52,7 +52,7 @@ contains:Failed to resolve hostname
 
 > ALTER CONNECTION conn SET (broker = 'abcd') WITH (validate = false);
 
-> SELECT status = 'stalled' FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
+> SELECT status = 'stalled' FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'mz_source';
 true
 
 > SHOW CREATE CONNECTION conn

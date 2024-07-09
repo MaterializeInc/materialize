@@ -188,7 +188,7 @@ def test_assume_role(c: Composition, ctx: TestContext):
     # Create the customer role, but incorrectly fail to constrain the
     # external ID.
     principal = c.sql_query(
-        f"SELECT principal FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        f"SELECT principal FROM mz_catalog_unstable.mz_aws_connections WHERE id = '{connection_id}'"
     )[0][0]
     ctx.iam.create_role(
         RoleName=customer_role,
@@ -229,7 +229,7 @@ def test_assume_role(c: Composition, ctx: TestContext):
 
     # Update the customer role's trust policy to use Materialize's example.
     trust_policy = c.sql_query(
-        f"SELECT example_trust_policy FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        f"SELECT example_trust_policy FROM mz_catalog_unstable.mz_aws_connections WHERE id = '{connection_id}'"
     )[0][0]
     ctx.iam.update_assume_role_policy(
         RoleName=customer_role,

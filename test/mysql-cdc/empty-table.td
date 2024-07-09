@@ -40,6 +40,6 @@ CREATE TABLE empty_table (f1 BOOLEAN);
 0
 
 # TODO: #25774 (subsource remains starting)
-> SELECT name, type, status FROM mz_internal.mz_source_statuses WHERE name in ('empty_table', 'mz_source');
+> SELECT name, type, status FROM mz_catalog_unstable.mz_source_statuses WHERE name in ('empty_table', 'mz_source');
 empty_table subsource starting
 mz_source mysql running

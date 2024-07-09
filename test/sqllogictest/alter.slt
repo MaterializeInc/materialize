@@ -27,8 +27,8 @@ COMPLETE 0
 query error must be owner of TABLE mz_catalog.mz_tables
 ALTER TABLE mz_tables RENAME TO foo;
 
-query error must be owner of SOURCE mz_internal.mz_storage_shards
-ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
+query error must be owner of SOURCE mz_catalog_unstable.mz_storage_shards
+ALTER SOURCE mz_catalog_unstable.mz_storage_shards RENAME TO foo;
 
 simple conn=mz_system,user=mz_system
 ALTER TABLE mz_tables RENAME TO foo;
@@ -36,12 +36,12 @@ ALTER TABLE mz_tables RENAME TO foo;
 db error: ERROR: system item 'mz_catalog.mz_tables' cannot be modified
 
 simple conn=mz_system,user=mz_system
-ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
+ALTER SOURCE mz_catalog_unstable.mz_storage_shards RENAME TO foo;
 ----
-db error: ERROR: system item 'mz_internal.mz_storage_shards' cannot be modified
+db error: ERROR: system item 'mz_catalog_unstable.mz_storage_shards' cannot be modified
 
 query error Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
-ALTER SOURCE mz_internal.mz_storage_shards RESET (size);
+ALTER SOURCE mz_catalog_unstable.mz_storage_shards RESET (size);
 
 statement ok
 CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);

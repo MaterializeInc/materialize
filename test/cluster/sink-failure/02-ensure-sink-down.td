@@ -9,7 +9,7 @@
 
 > SELECT DISTINCT mz_sinks.name, error
   FROM
-      mz_internal.mz_sink_status_history
+      mz_catalog_unstable.mz_sink_status_history
           JOIN mz_sinks ON sink_id = mz_sinks.id
   WHERE
       mz_sinks.name = 'snk'

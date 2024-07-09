@@ -52,7 +52,7 @@ def test_create_drop_source(mz: MaterializeApplication) -> None:
             0
 
             # Ensure that there are no sources currently running from the perspective of mz_source_status_history
-            > SELECT COUNT(*) FROM mz_internal.mz_source_status_history JOIN ( SELECT source_id AS src, max(occurred_at) AS ocr FROM mz_internal.mz_source_status_history GROUP BY source_id ) AS newest ON newest.src = source_id AND newest.ocr = occurred_at WHERE status = 'running';
+            > SELECT COUNT(*) FROM mz_catalog_unstable.mz_source_status_history JOIN ( SELECT source_id AS src, max(occurred_at) AS ocr FROM mz_catalog_unstable.mz_source_status_history GROUP BY source_id ) AS newest ON newest.src = source_id AND newest.ocr = occurred_at WHERE status = 'running';
             0
 
             > DROP CLUSTER c CASCADE

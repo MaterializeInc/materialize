@@ -59,7 +59,7 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
                     SET CLUSTER=mz_catalog_server;
                     DECLARE c CURSOR FOR SUBSCRIBE TO (
                        SELECT status, reason
-                       FROM mz_internal.mz_cluster_replica_statuses mcrs
+                       FROM mz_catalog_unstable.mz_cluster_replica_statuses mcrs
                        JOIN mz_cluster_replicas mcr ON mcrs.replica_id = mcr.id
                        JOIN mz_clusters mc ON mcr.cluster_id = mc.id
                        WHERE mc.name = 'oom'

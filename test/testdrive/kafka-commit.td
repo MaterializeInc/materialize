@@ -42,7 +42,7 @@ $ set-from-sql var=consumer-group-id
 SELECT
   ks.group_id_prefix
 FROM mz_sources s
-JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
+JOIN mz_catalog_unstable.mz_kafka_sources ks ON s.id = ks.id
 WHERE s.name = 'topic'
 
 $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partition=0
@@ -69,7 +69,7 @@ $ set-from-sql var=consumer-group-id
 SELECT
   ks.group_id_prefix
 FROM mz_sources s
-JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
+JOIN mz_catalog_unstable.mz_kafka_sources ks ON s.id = ks.id
 WHERE s.name = 'topic'
 
 $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partition=0

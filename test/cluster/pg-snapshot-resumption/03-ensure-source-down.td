@@ -9,7 +9,7 @@
 
 > SELECT name, status, error
   FROM
-      mz_internal.mz_source_statuses
+      mz_catalog_unstable.mz_source_statuses
   WHERE
       name =ANY (ARRAY['mz_source', 't1', 'ten']);
 t1 stalled "postgres: recoverable errors should crash the process during snapshots"

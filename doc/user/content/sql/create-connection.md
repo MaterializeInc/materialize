@@ -94,11 +94,11 @@ connection:
 
 You can retrieve the external ID for the connection, as well as an example trust
 policy, by querying the
-[`mz_internal.mz_aws_connections`](/sql/system-catalog/mz_internal/#mz_aws_connections)
+[`mz_catalog_unstable.mz_aws_connections`](/sql/system-catalog/mz_catalog_unstable/#mz_aws_connections)
 table:
 
 ```mzsql
-SELECT id, external_id, example_trust_policy FROM mz_internal.mz_aws_connections;
+SELECT id, external_id, example_trust_policy FROM mz_catalog_unstable.mz_aws_connections;
 ```
 
 #### Examples {#aws-examples}

@@ -336,7 +336,7 @@ types_table           subsource  ${arg.default-replica-size}  cdc_cluster
 utf8_table            subsource  ${arg.default-replica-size}  cdc_cluster
 таблица               subsource  ${arg.default-replica-size}  cdc_cluster
 
-> SELECT schema_name, table_name FROM mz_internal.mz_postgres_source_tables
+> SELECT schema_name, table_name FROM mz_catalog_unstable.mz_postgres_source_tables
 public          create
 public          pk_table
 public          large_text
@@ -371,10 +371,10 @@ true
     );
 true
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'mz_source';
 running
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source_progress';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'mz_source_progress';
 running
 
 > SELECT lsn > 0 FROM mz_source_progress
@@ -387,7 +387,7 @@ $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\
 
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 
-> SELECT * FROM mz_internal.mz_postgres_sources
+> SELECT * FROM mz_catalog_unstable.mz_postgres_sources
 id             replication_slot         timeline_id
 ---------------------------------------------------
 u<SUPPRESSED>  materialize<SUPPRESSED>  <SUPPRESSED>
@@ -607,7 +607,7 @@ true
 2 two_two
 5 five
 
-> SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table';
+> SELECT status = 'running' FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'large_cluster_source_pk_table';
 true
 
 > DROP SOURCE large_cluster_source CASCADE;
@@ -832,7 +832,7 @@ INSERT INTO pk_table VALUES (99999);
 
 # Ensure that source + all subsources have error
 > SELECT bool_and(error ~* 'publication .+ does not exist')
-  FROM mz_internal.mz_source_statuses
+  FROM mz_catalog_unstable.mz_source_statuses
   WHERE id IN ( SELECT id FROM mz_sources WHERE type != 'progress' );
 true
 

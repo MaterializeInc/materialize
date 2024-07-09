@@ -10,7 +10,7 @@
 # Regression test for #23015.
 
 query TT
-select distinct 'postgres', current_user() from mz_internal.mz_cluster_replica_metrics;
+select distinct 'postgres', current_user() from mz_catalog_unstable.mz_cluster_replica_metrics;
 ----
 postgres
 materialize

@@ -69,7 +69,7 @@ pub async fn describe_table(
                    type_mod,
                    COALESCE(coms.comment, '') = $1 AS primary_key
                FROM mz_columns AS cols
-               LEFT JOIN mz_internal.mz_comments AS coms
+               LEFT JOIN mz_catalog_unstable.mz_comments AS coms
                ON cols.id = coms.id AND cols.position = coms.object_sub_id
                WHERE cols.id = $2
                ORDER BY cols.position ASC"#;

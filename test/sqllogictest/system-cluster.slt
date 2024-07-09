@@ -77,10 +77,10 @@ EXPLAIN SHOW SOURCES
 ----
 Explained Query (fast path):
   Project (#1..=#4)
-    ReadIndex on=mz_internal.mz_show_sources mz_show_sources_ind=[lookup value=("u3")]
+    ReadIndex on=mz_catalog_unstable.mz_show_sources mz_show_sources_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_sources_ind (lookup)
+  - mz_catalog_unstable.mz_show_sources_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -105,10 +105,10 @@ EXPLAIN SHOW MATERIALIZED VIEWS
 ----
 Explained Query (fast path):
   Project (#1, #2)
-    ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
+    ReadIndex on=mz_catalog_unstable.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_materialized_views_ind (lookup)
+  - mz_catalog_unstable.mz_show_materialized_views_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -120,10 +120,10 @@ EXPLAIN SHOW MATERIALIZED VIEWS IN CLUSTER quickstart
 Explained Query (fast path):
   Project (#1, #2)
     Filter (#3 = "u1")
-      ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
+      ReadIndex on=mz_catalog_unstable.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_materialized_views_ind (lookup)
+  - mz_catalog_unstable.mz_show_materialized_views_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -135,10 +135,10 @@ EXPLAIN SHOW INDEXES
 Explained Query (fast path):
   Project (#1..=#4)
     Filter NOT(like["s%"](#5))
-      ReadIndex on=mz_internal.mz_show_indexes mz_show_indexes_ind=[lookup value=("u3")]
+      ReadIndex on=mz_catalog_unstable.mz_show_indexes mz_show_indexes_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_indexes_ind (lookup)
+  - mz_catalog_unstable.mz_show_indexes_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -150,10 +150,10 @@ EXPLAIN SHOW INDEXES IN CLUSTER quickstart
 Explained Query (fast path):
   Project (#1..=#4)
     Filter (#6 = "u1")
-      ReadIndex on=mz_internal.mz_show_indexes mz_show_indexes_ind=[*** full scan ***]
+      ReadIndex on=mz_catalog_unstable.mz_show_indexes mz_show_indexes_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_show_indexes_ind (*** full scan ***)
+  - mz_catalog_unstable.mz_show_indexes_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -164,10 +164,10 @@ EXPLAIN SHOW SINKS
 ----
 Explained Query (fast path):
   Project (#1..=#4)
-    ReadIndex on=mz_internal.mz_show_sinks mz_show_sinks_ind=[lookup value=("u3")]
+    ReadIndex on=mz_catalog_unstable.mz_show_sinks mz_show_sinks_ind=[lookup value=("u3")]
 
 Used Indexes:
-  - mz_internal.mz_show_sinks_ind (lookup)
+  - mz_catalog_unstable.mz_show_sinks_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -234,10 +234,10 @@ EOF
 # ----
 # Explained Query (fast path):
 #   Project (#0)
-#     ReadIndex mz_internal.mz_show_clusters_ind
+#     ReadIndex mz_catalog_unstable.mz_show_clusters_ind
 #
 # Used Indexes:
-#   - mz_internal.mz_show_clusters_ind
+#   - mz_catalog_unstable.mz_show_clusters_ind
 #
 # EOF
 
@@ -245,10 +245,10 @@ query T multiline
 EXPLAIN SHOW CLUSTER REPLICAS
 ----
 Explained Query (fast path):
-  ReadIndex on=mz_internal.mz_show_cluster_replicas mz_show_cluster_replicas_ind=[*** full scan ***]
+  ReadIndex on=mz_catalog_unstable.mz_show_cluster_replicas mz_show_cluster_replicas_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_show_cluster_replicas_ind (*** full scan ***)
+  - mz_catalog_unstable.mz_show_cluster_replicas_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -259,10 +259,10 @@ EXPLAIN SHOW CLUSTER REPLICAS WHERE cluster IN ('compute_qck', 'ingest_qck');
 ----
 Explained Query (fast path):
   Project (#0..=#3)
-    ReadIndex on=mz_internal.mz_show_cluster_replicas mz_show_cluster_replicas_ind=[lookup values=[("ingest_qck"); ("compute_qck")]]
+    ReadIndex on=mz_catalog_unstable.mz_show_cluster_replicas mz_show_cluster_replicas_ind=[lookup values=[("ingest_qck"); ("compute_qck")]]
 
 Used Indexes:
-  - mz_internal.mz_show_cluster_replicas_ind (lookup)
+  - mz_catalog_unstable.mz_show_cluster_replicas_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -353,42 +353,42 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT object_id FROM mz_internal.mz_object_dependencies
+EXPLAIN SELECT object_id FROM mz_catalog_unstable.mz_object_dependencies
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadIndex on=mz_internal.mz_object_dependencies mz_object_dependencies_ind=[*** full scan ***]
+    ReadIndex on=mz_catalog_unstable.mz_object_dependencies mz_object_dependencies_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_object_dependencies_ind (*** full scan ***)
+  - mz_catalog_unstable.mz_object_dependencies_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
 EOF
 
 query T multiline
-EXPLAIN SELECT dependency_id FROM mz_internal.mz_compute_dependencies
+EXPLAIN SELECT dependency_id FROM mz_catalog_unstable.mz_compute_dependencies
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadIndex on=mz_internal.mz_compute_dependencies mz_compute_dependencies_ind=[*** full scan ***]
+    ReadIndex on=mz_catalog_unstable.mz_compute_dependencies mz_compute_dependencies_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_compute_dependencies_ind (*** full scan ***)
+  - mz_catalog_unstable.mz_compute_dependencies_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
 EOF
 
 query T multiline
-EXPLAIN SELECT dropped_at FROM mz_internal.mz_cluster_replica_history
+EXPLAIN SELECT dropped_at FROM mz_catalog_unstable.mz_cluster_replica_history
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadIndex on=mz_internal.mz_cluster_replica_history mz_cluster_replica_history_ind=[*** full scan ***]
+    ReadIndex on=mz_catalog_unstable.mz_cluster_replica_history mz_cluster_replica_history_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_cluster_replica_history_ind (*** full scan ***)
+  - mz_catalog_unstable.mz_cluster_replica_history_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -405,7 +405,7 @@ EXPLAIN SELECT r.id,
   u.memory_percent
 FROM mz_cluster_replicas r
 JOIN mz_clusters c ON c.id = r.cluster_id
-JOIN mz_internal.mz_cluster_replica_utilization u ON u.replica_id = r.id
+JOIN mz_catalog_unstable.mz_cluster_replica_utilization u ON u.replica_id = r.id
 ORDER BY r.id;
 ----
 Explained Query:
@@ -431,7 +431,7 @@ Used Indexes:
   - mz_catalog.mz_clusters_ind (delta join lookup)
   - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
   - mz_catalog.mz_cluster_replica_sizes_ind (delta join lookup)
-  - mz_internal.mz_cluster_replica_metrics_ind (delta join lookup)
+  - mz_catalog_unstable.mz_cluster_replica_metrics_ind (delta join lookup)
 
 Target cluster: mz_catalog_server
 
@@ -440,7 +440,7 @@ EOF
 query T multiline
 EXPLAIN SELECT s.id, s.oid, s.name, s.type, s.size, st.status, st.error
 FROM mz_sources s
-LEFT OUTER JOIN mz_internal.mz_source_statuses st
+LEFT OUTER JOIN mz_catalog_unstable.mz_source_statuses st
 ON st.id = s.id
 WHERE s.id LIKE 'u%';
 ----
@@ -476,7 +476,7 @@ Explained Query:
 
 Used Indexes:
   - mz_catalog.mz_sources_ind (*** full scan ***, differential join)
-  - mz_internal.mz_source_statuses_ind (differential join)
+  - mz_catalog_unstable.mz_source_statuses_ind (differential join)
 
 Target cluster: mz_catalog_server
 
@@ -484,7 +484,7 @@ EOF
 
 query T multiline
 EXPLAIN SELECT MAX(extract(epoch from h.occurred_at) * 1000) as last_occurred, h.error, COUNT(h.occurred_at)
-FROM mz_internal.mz_source_status_history h
+FROM mz_catalog_unstable.mz_source_status_history h
 WHERE source_id = 'u6'
 AND error IS NOT NULL
 AND h.occurred_at BETWEEN 0 AND 100
@@ -499,10 +499,10 @@ Explained Query:
         Project (#0, #3)
           Filter (#6 <= 100) AND (#6 >= 0) AND (#3) IS NOT NULL
             Map (timestamp_tz_to_mz_timestamp(#0))
-              ReadIndex on=mz_internal.mz_source_status_history mz_source_status_history_ind=[lookup value=("u6")]
+              ReadIndex on=mz_catalog_unstable.mz_source_status_history mz_source_status_history_ind=[lookup value=("u6")]
 
 Used Indexes:
-  - mz_internal.mz_source_status_history_ind (lookup)
+  - mz_catalog_unstable.mz_source_status_history_ind (lookup)
 
 Target cluster: mz_catalog_server
 

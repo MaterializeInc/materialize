@@ -15,22 +15,22 @@ reset-server
 # objects
 
 statement error permission denied for SOURCE
-SELECT 1 FROM mz_internal.mz_prepared_statement_history WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_prepared_statement_history WHERE 1 = 0
 
 statement error permission denied for SOURCE
-SELECT 1 FROM mz_internal.mz_statement_execution_history WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_statement_execution_history WHERE 1 = 0
 
-statement error db error: ERROR: unknown catalog item 'mz_internal\.mz_activity_log'
-SELECT 1 FROM mz_internal.mz_activity_log WHERE 1 = 0
-
-statement error permission denied for VIEW
-SELECT 1 FROM mz_internal.mz_sql_text_redacted WHERE 1 = 0
+statement error db error: ERROR: unknown catalog item 'mz_catalog_unstable\.mz_activity_log'
+SELECT 1 FROM mz_catalog_unstable.mz_activity_log WHERE 1 = 0
 
 statement error permission denied for VIEW
-SELECT 1 FROM mz_internal.mz_statement_execution_history_redacted WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_sql_text_redacted WHERE 1 = 0
 
-statement error db error: ERROR: unknown catalog item 'mz_internal\.mz_activity_log_redacted'
-SELECT 1 FROM mz_internal.mz_activity_log_redacted WHERE 1 = 0
+statement error permission denied for VIEW
+SELECT 1 FROM mz_catalog_unstable.mz_statement_execution_history_redacted WHERE 1 = 0
+
+statement error db error: ERROR: unknown catalog item 'mz_catalog_unstable\.mz_activity_log_redacted'
+SELECT 1 FROM mz_catalog_unstable.mz_activity_log_redacted WHERE 1 = 0
 
 # Test that after granting the less-privileged
 # `mz_monitor_redacted` role, we can
@@ -42,39 +42,39 @@ GRANT mz_monitor_redacted TO materialize
 COMPLETE 0
 
 statement error permission denied for SOURCE
-SELECT 1 FROM mz_internal.mz_sql_text WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_sql_text WHERE 1 = 0
 
 statement error permission denied for SOURCE
-SELECT 1 FROM mz_internal.mz_statement_execution_history WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_statement_execution_history WHERE 1 = 0
 
-statement error db error: ERROR: unknown catalog item 'mz_internal\.mz_activity_log'
-SELECT 1 FROM mz_internal.mz_activity_log WHERE 1 = 0
+statement error db error: ERROR: unknown catalog item 'mz_catalog_unstable\.mz_activity_log'
+SELECT 1 FROM mz_catalog_unstable.mz_activity_log WHERE 1 = 0
 
 query I
-SELECT 1 FROM mz_internal.mz_sql_text_redacted WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_sql_text_redacted WHERE 1 = 0
 ----
 
 query I
-SELECT 1 FROM mz_internal.mz_sql_text_redacted WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_sql_text_redacted WHERE 1 = 0
 ----
 
 query I
-SELECT 1 FROM mz_internal.mz_recent_activity_log_redacted WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_recent_activity_log_redacted WHERE 1 = 0
 ----
 
 # Sanity check that none of the `redacted` objects expose sql.
 
 statement error db error: ERROR: column "sql" does not exist
-SELECT sql FROM mz_internal.mz_recent_activity_log_redacted
+SELECT sql FROM mz_catalog_unstable.mz_recent_activity_log_redacted
 
 statement error db error: ERROR: column "sql" does not exist
-SELECT sql FROM mz_internal.mz_recent_sql_text_redacted
+SELECT sql FROM mz_catalog_unstable.mz_recent_sql_text_redacted
 
 statement error db error: ERROR: column "sql" does not exist
-SELECT sql FROM mz_internal.mz_recent_sql_text_redacted
+SELECT sql FROM mz_catalog_unstable.mz_recent_sql_text_redacted
 
 statement error db error: ERROR: column "sql" does not exist
-SELECT sql FROM mz_internal.mz_statement_execution_history_redacted
+SELECT sql FROM mz_catalog_unstable.mz_statement_execution_history_redacted
 
 # TEST that revocation does something
 simple conn=mz_system,user=mz_system
@@ -83,22 +83,22 @@ REVOKE mz_monitor_redacted FROM materialize
 COMPLETE 0
 
 statement error permission denied for SOURCE
-SELECT 1 FROM mz_internal.mz_sql_text WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_sql_text WHERE 1 = 0
 
 statement error permission denied for SOURCE
-SELECT 1 FROM mz_internal.mz_statement_execution_history WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_statement_execution_history WHERE 1 = 0
 
-statement error db error: ERROR: unknown catalog item 'mz_internal\.mz_activity_log'
-SELECT 1 FROM mz_internal.mz_activity_log WHERE 1 = 0
-
-statement error permission denied for VIEW
-SELECT 1 FROM mz_internal.mz_sql_text_redacted WHERE 1 = 0
+statement error db error: ERROR: unknown catalog item 'mz_catalog_unstable\.mz_activity_log'
+SELECT 1 FROM mz_catalog_unstable.mz_activity_log WHERE 1 = 0
 
 statement error permission denied for VIEW
-SELECT 1 FROM mz_internal.mz_sql_text_redacted WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_sql_text_redacted WHERE 1 = 0
 
-statement error db error: ERROR: unknown catalog item 'mz_internal\.mz_activity_log_redacted'
-SELECT 1 FROM mz_internal.mz_activity_log_redacted WHERE 1 = 0
+statement error permission denied for VIEW
+SELECT 1 FROM mz_catalog_unstable.mz_sql_text_redacted WHERE 1 = 0
+
+statement error db error: ERROR: unknown catalog item 'mz_catalog_unstable\.mz_activity_log_redacted'
+SELECT 1 FROM mz_catalog_unstable.mz_activity_log_redacted WHERE 1 = 0
 
 # Test that we can read all tables with the more powerful permission
 # (`mz_monitor`)
@@ -109,25 +109,25 @@ GRANT mz_monitor TO materialize
 COMPLETE 0
 
 query I
-SELECT 1 FROM mz_internal.mz_sql_text WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_sql_text WHERE 1 = 0
 ----
 
 query I
-SELECT 1 FROM mz_internal.mz_statement_execution_history WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_statement_execution_history WHERE 1 = 0
 ----
 
 query I
-SELECT 1 FROM mz_internal.mz_recent_activity_log WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_recent_activity_log WHERE 1 = 0
 ----
 
 query I
-SELECT 1 FROM mz_internal.mz_sql_text_redacted WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_sql_text_redacted WHERE 1 = 0
 ----
 
 query I
-SELECT 1 FROM mz_internal.mz_statement_execution_history_redacted WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_statement_execution_history_redacted WHERE 1 = 0
 ----
 
 query I
-SELECT 1 FROM mz_internal.mz_recent_activity_log_redacted WHERE 1 = 0
+SELECT 1 FROM mz_catalog_unstable.mz_recent_activity_log_redacted WHERE 1 = 0
 ----

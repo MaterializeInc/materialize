@@ -9,10 +9,15 @@
 
 mode cockroach
 
+# Objects in the mz_catalog_unstable schema are unstable.
+
+statement error cannot create view with unstable dependencies
+CREATE VIEW v AS SELECT id, object_type, comment FROM mz_catalog_unstable.mz_comments
+
 # Objects in the mz_internal schema are unstable.
 
 statement error cannot create view with unstable dependencies
-CREATE VIEW v AS SELECT id, object_type, comment FROM mz_internal.mz_comments
+CREATE VIEW v AS SELECT mz_internal.mz_type_name(1)
 
 # Objects in the mz_introspection schema are unstable.
 
@@ -27,17 +32,23 @@ CREATE VIEW v AS SELECT id, oid, schema_id, name FROM mz_tables
 # SELECTs from unstable objects are allowed.
 
 statement ok
-SELECT id, object_type, comment FROM mz_internal.mz_comments
+SELECT id, object_type, comment FROM mz_catalog_unstable.mz_comments
 
 # Test the compatibility mechanism that automatically translates reads from
 # `mz_internal` relations that have been moved out of that schema to their new
 # schemas.
 
 statement ok
+SELECT * FROM mz_internal.mz_comments
+
+statement ok
 SELECT * FROM mz_internal.mz_compute_exports
 
 statement ok
 SET search_path = mz_internal
+
+statement ok
+SELECT * FROM mz_comments
 
 statement ok
 SELECT * FROM mz_compute_exports

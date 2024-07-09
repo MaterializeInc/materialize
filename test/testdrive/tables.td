@@ -395,19 +395,19 @@ $ set-from-sql var=shard-drop-test-empty-id
 SELECT id FROM mz_tables WHERE name = 'shard_drop_test_empty';
 
 # Wait for the mz_storage_shards table to get updated.
-> SELECT COUNT(shard_id) FROM mz_internal.mz_storage_shards WHERE object_id IN ('${shard-drop-test-id}', '${shard-drop-test-empty-id}');
+> SELECT COUNT(shard_id) FROM mz_catalog_unstable.mz_storage_shards WHERE object_id IN ('${shard-drop-test-id}', '${shard-drop-test-empty-id}');
 2
 
 $ set-from-sql var=shard-drop-test-shard-id
-SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${shard-drop-test-id}';
+SELECT shard_id FROM mz_catalog_unstable.mz_storage_shards WHERE object_id = '${shard-drop-test-id}';
 
 $ set-from-sql var=shard-drop-test-empty-shard-id
-SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${shard-drop-test-empty-id}';
+SELECT shard_id FROM mz_catalog_unstable.mz_storage_shards WHERE object_id = '${shard-drop-test-empty-id}';
 
 > DROP TABLE shard_drop_test;
 > DROP TABLE shard_drop_test_empty;
 
-> SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id IN ('${shard-drop-test-id}', '${shard-drop-test-empty-id}');
+> SELECT COUNT(*) FROM mz_catalog_unstable.mz_storage_shards WHERE object_id IN ('${shard-drop-test-id}', '${shard-drop-test-empty-id}');
 0
 
 $ check-shard-tombstone shard-id=${shard-drop-test-shard-id}

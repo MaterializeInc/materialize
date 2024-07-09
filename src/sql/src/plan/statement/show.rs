@@ -376,7 +376,7 @@ fn show_sources<'a>(
 
     let query = format!(
         "SELECT name, type, size, cluster
-        FROM mz_internal.mz_show_sources
+        FROM mz_catalog_unstable.mz_show_sources
         WHERE {where_clause}"
     );
     ShowSelect::new(
@@ -427,7 +427,7 @@ fn show_subsources<'a>(
             subsources.type AS type
         FROM
             mz_sources AS subsources
-            JOIN mz_internal.mz_object_dependencies deps ON (subsources.id = deps.object_id OR subsources.id = deps.referenced_object_id)
+            JOIN mz_catalog_unstable.mz_object_dependencies deps ON (subsources.id = deps.object_id OR subsources.id = deps.referenced_object_id)
             JOIN mz_sources AS sources ON (sources.id = deps.object_id OR sources.id = deps.referenced_object_id)
         WHERE (subsources.type = 'subsource' OR subsources.type = 'progress') AND {}",
         itertools::join(query_filter, " AND "),
@@ -465,7 +465,7 @@ fn show_materialized_views<'a>(
 
     let query = format!(
         "SELECT name, cluster
-         FROM mz_internal.mz_show_materialized_views
+         FROM mz_catalog_unstable.mz_show_materialized_views
          WHERE {where_clause}"
     );
 
@@ -493,7 +493,7 @@ fn show_sinks<'a>(
 
     let query = format!(
         "SELECT name, type, size, cluster
-        FROM mz_internal.mz_show_sinks
+        FROM mz_catalog_unstable.mz_show_sinks
         WHERE {where_clause}"
     );
     ShowSelect::new(
@@ -575,7 +575,7 @@ pub fn show_indexes<'a>(
 
     let query = format!(
         "SELECT name, on, cluster, key
-        FROM mz_internal.mz_show_indexes
+        FROM mz_catalog_unstable.mz_show_indexes
         WHERE {}",
         itertools::join(query_filter.iter(), " AND ")
     );
@@ -659,7 +659,7 @@ pub fn show_cluster_replicas<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "SELECT cluster, replica, size, ready FROM mz_internal.mz_show_cluster_replicas"
+    let query = "SELECT cluster, replica, size, ready FROM mz_catalog_unstable.mz_show_cluster_replicas"
         .to_string();
 
     ShowSelect::new(
@@ -712,7 +712,7 @@ pub fn show_privileges<'a>(
 
     let query = format!(
         "SELECT grantor, grantee, database, schema, name, object_type, privilege_type
-        FROM mz_internal.mz_show_all_privileges
+        FROM mz_catalog_unstable.mz_show_all_privileges
         {query_filter}",
     );
 
@@ -758,7 +758,7 @@ pub fn show_default_privileges<'a>(
 
     let query = format!(
         "SELECT object_owner, database, schema, object_type, grantee, privilege_type
-        FROM mz_internal.mz_show_default_privileges
+        FROM mz_catalog_unstable.mz_show_default_privileges
         {query_filter}",
     );
 
@@ -798,7 +798,7 @@ pub fn show_role_membership<'a>(
 
     let query = format!(
         "SELECT role, member, grantor
-        FROM mz_internal.mz_show_role_members
+        FROM mz_catalog_unstable.mz_show_role_members
         {query_filter}",
     );
 

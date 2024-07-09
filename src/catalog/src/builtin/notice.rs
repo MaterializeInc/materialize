@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use mz_pgrepr::oid;
-use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
+use mz_repr::namespaces::MZ_CATALOG_UNSTABLE_SCHEMA;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::NameReference;
 use once_cell::sync::Lazy;
@@ -22,7 +22,7 @@ pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
 
     BuiltinTable {
         name: "mz_optimizer_notices",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_CATALOG_UNSTABLE_SCHEMA,
         oid: oid::TABLE_MZ_OPTIMIZER_NOTICES_OID,
         desc: RelationDesc::empty()
             .with_column("id", String.nullable(false))
@@ -63,7 +63,7 @@ pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
 /// [^1] <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20231113_optimizer_notice_catalog.md>
 pub static MZ_NOTICES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_notices",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_UNSTABLE_SCHEMA,
     oid: oid::VIEW_MZ_NOTICES_OID,
     column_defs: None,
     sql: "SELECT
@@ -79,7 +79,7 @@ pub static MZ_NOTICES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     n.object_id,
     n.created_at
 FROM
-    mz_internal.mz_optimizer_notices n
+    mz_catalog_unstable.mz_optimizer_notices n
 ",
     access: vec![MONITOR_SELECT],
 });
@@ -89,7 +89,7 @@ FROM
 /// `~`.
 pub static MZ_NOTICES_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_notices_redacted",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_UNSTABLE_SCHEMA,
     oid: oid::VIEW_MZ_NOTICES_REDACTED_OID,
     column_defs: None,
     sql: "SELECT
@@ -102,16 +102,16 @@ pub static MZ_NOTICES_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     object_id,
     created_at
 FROM
-    mz_internal.mz_notices
+    mz_catalog_unstable.mz_notices
 ",
     access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
 });
 
 pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_notices_ind",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_UNSTABLE_SCHEMA,
     oid: oid::INDEX_MZ_NOTICES_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server ON mz_internal.mz_notices(id)",
+    sql: "IN CLUSTER mz_catalog_server ON mz_catalog_unstable.mz_notices(id)",
     is_retained_metrics_object: false,
 };
 

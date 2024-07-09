@@ -83,7 +83,7 @@ mammalmore    moose   2
     SUM(u.offset_known) > 0,
     SUM(u.offset_known) = SUM(u.offset_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -94,7 +94,7 @@ upsert true true
     SUM(u.offset_known) > 0,
     SUM(u.offset_committed) > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('counter')
   GROUP BY s.name
   ORDER BY s.name
@@ -104,7 +104,7 @@ $ set-from-sql var=previous-offset-known
 SELECT
     (SUM(u.offset_known))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 
@@ -122,7 +122,7 @@ birdmore      geese   56
     SUM(u.offset_known) > ${previous-offset-known},
     SUM(u.offset_known) = SUM(u.offset_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name

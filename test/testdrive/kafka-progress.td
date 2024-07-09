@@ -26,7 +26,7 @@ one
 > SELECT * from data
 one
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'data_progress';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'data_progress';
 running
 
 # Ensure that we can select from automatically generated remap collection

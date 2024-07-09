@@ -1283,6 +1283,6 @@ select
                as bool)) = mz_internal.mz_normalize_object_name(
             CAST(ref_4."schema_id" as text))
                ) as subq_7
-  where (select "id" from mz_internal.mz_comments limit 1)
+  where (select "id" from mz_catalog_unstable.mz_comments limit 1)
        = subq_7."c0";
 ----

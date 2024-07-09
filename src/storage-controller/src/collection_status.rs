@@ -23,7 +23,7 @@ use crate::IntrospectionType;
 pub use mz_storage_client::healthcheck::*;
 
 /// A lightweight wrapper around [`CollectionManager`] that assists with
-/// appending status updates to to `mz_internal.mz_{source|status}_history`
+/// appending status updates to to `mz_catalog_unstable.mz_{source|status}_history`
 #[derive(Debug, Clone)]
 pub struct CollectionStatusManager<T>
 where

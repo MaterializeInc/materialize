@@ -31,7 +31,7 @@ fish          fish
 bird          goose
 
 > select st.name, st.type, st.status, st.error
-  from mz_internal.mz_source_statuses st
+  from mz_catalog_unstable.mz_source_statuses st
   join mz_sources s on s.id = st.id
   where s.name = 'failpoint';
 failpoint kafka running <null>

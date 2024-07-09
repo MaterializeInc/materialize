@@ -97,26 +97,26 @@ DETAIL: You must be the 'mz_system' role
 
 # The mz_support user cannot query the un-redacted statement log tables
 simple conn=mz_support,user=mz_support
-SELECT count(*) >= 0 FROM mz_internal.mz_statement_execution_history
+SELECT count(*) >= 0 FROM mz_catalog_unstable.mz_statement_execution_history
 ----
-db error: ERROR: permission denied for SOURCE "mz_internal.mz_statement_execution_history"
-DETAIL: The 'mz_support' role needs SELECT privileges on SOURCE "mz_internal.mz_statement_execution_history"
+db error: ERROR: permission denied for SOURCE "mz_catalog_unstable.mz_statement_execution_history"
+DETAIL: The 'mz_support' role needs SELECT privileges on SOURCE "mz_catalog_unstable.mz_statement_execution_history"
 
 simple conn=mz_support,user=mz_support
-SELECT count(*) >= 0 FROM mz_internal.mz_sql_text
+SELECT count(*) >= 0 FROM mz_catalog_unstable.mz_sql_text
 ----
-db error: ERROR: permission denied for SOURCE "mz_internal.mz_sql_text"
-DETAIL: The 'mz_support' role needs SELECT privileges on SOURCE "mz_internal.mz_sql_text"
+db error: ERROR: permission denied for SOURCE "mz_catalog_unstable.mz_sql_text"
+DETAIL: The 'mz_support' role needs SELECT privileges on SOURCE "mz_catalog_unstable.mz_sql_text"
 
 # It _can_ query the bowdlerized tables
 simple conn=mz_support,user=mz_support
-SELECT count(*) >= 0 FROM mz_internal.mz_sql_text_redacted
+SELECT count(*) >= 0 FROM mz_catalog_unstable.mz_sql_text_redacted
 ----
 t
 COMPLETE 1
 
 simple conn=mz_support,user=mz_support
-SELECT count(*) >= 0 FROM mz_internal.mz_statement_execution_history_redacted
+SELECT count(*) >= 0 FROM mz_catalog_unstable.mz_statement_execution_history_redacted
 ----
 t
 COMPLETE 1

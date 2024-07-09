@@ -96,7 +96,7 @@ $ set-sql-timeout duration=2minutes
   bool_and(u.snapshot_committed),
   SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('metrics_test_source')
   GROUP BY s.name
   ORDER BY s.name
@@ -111,7 +111,7 @@ metrics_test_source true 2 2 2 true true
   bool_and(u.snapshot_committed),
   SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('accounts', 'auction_house', 'auctions', 'bids', 'organizations', 'users')
   GROUP BY s.name
   ORDER BY s.name
@@ -130,7 +130,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > DECLARE c CURSOR FOR SUBSCRIBE (
     SELECT u.messages_received
       FROM mz_sources s
-      JOIN mz_internal.mz_source_statistics_with_history u ON s.id = u.id
+      JOIN mz_catalog_unstable.mz_source_statistics_with_history u ON s.id = u.id
       WHERE s.name = 'auction_house'
     )
   AS OF AT LEAST 0
@@ -160,7 +160,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
     SUM(u.records_indexed),
     bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -174,14 +174,14 @@ $ set-from-sql var=updates-committed
 SELECT
     (SUM(u.updates_committed) + 1)::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 $ set-from-sql var=state-bytes
 SELECT
     (SUM(u.bytes_indexed))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
@@ -196,7 +196,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
     SUM(u.bytes_indexed) < ${state-bytes},
     SUM(u.records_indexed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -213,12 +213,12 @@ upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
     u.records_indexed,
     u.rehydration_latency IS NOT NULL
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
 upsert true 10 "${updates-committed}" "${updates-committed}" true true 2 true
 
 > DROP SOURCE upsert CASCADE
 
 # should be empty because the source was dropped
-> SELECT count(*) FROM mz_internal.mz_source_statistics;
+> SELECT count(*) FROM mz_catalog_unstable.mz_source_statistics;
 0

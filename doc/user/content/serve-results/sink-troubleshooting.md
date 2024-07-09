@@ -12,10 +12,10 @@ menu:
 
 <!-- Copied over from the old manage/troubleshooting guide -->
 ## Why isn't my sink exporting data?
-First, look for errors in [`mz_sink_statuses`](/sql/system-catalog/mz_internal/#mz_sink_statuses):
+First, look for errors in [`mz_sink_statuses`](/sql/system-catalog/mz_catalog_unstable/#mz_sink_statuses):
 
 ```mzsql
-SELECT * FROM mz_internal.mz_sink_statuses
+SELECT * FROM mz_catalog_unstable.mz_sink_statuses
 WHERE name = <SINK_NAME>;
 ```
 
@@ -28,7 +28,7 @@ If your sink reports a status of `starting` for more than a few minutes,
 ## How do I monitor sink ingestion progress?
 
 Repeatedly query the
-[`mz_sink_statistics`](/sql/system-catalog/mz_internal/#mz_sink_statistics)
+[`mz_sink_statistics`](/sql/system-catalog/mz_catalog_unstable/#mz_sink_statistics)
 table and look for ingestion statistics that advance over time:
 
 ```mzsql
@@ -37,7 +37,7 @@ SELECT
     messages_committed,
     bytes_staged,
     bytes_committed
-FROM mz_internal.mz_sink_statistics
+FROM mz_catalog_unstable.mz_sink_statistics
 WHERE id = <SINK ID>;
 ```
 

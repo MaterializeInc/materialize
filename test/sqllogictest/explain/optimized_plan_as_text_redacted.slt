@@ -84,14 +84,14 @@ EOF
 
 # Test catalog queries (index found based on cluster auto-routing).
 query T multiline
-EXPLAIN SELECT * FROM mz_internal.mz_source_status_history
+EXPLAIN SELECT * FROM mz_catalog_unstable.mz_source_status_history
 ----
 Explained Query (fast path):
   Project (#1, #0, #2..=#4)
-    ReadIndex on=mz_internal.mz_source_status_history mz_source_status_history_ind=[*** full scan ***]
+    ReadIndex on=mz_catalog_unstable.mz_source_status_history mz_source_status_history_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_source_status_history_ind (*** full scan ***)
+  - mz_catalog_unstable.mz_source_status_history_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 

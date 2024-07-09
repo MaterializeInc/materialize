@@ -9,7 +9,7 @@
 
 
 > SELECT true
-    FROM mz_internal.mz_source_statuses
+    FROM mz_catalog_unstable.mz_source_statuses
     WHERE
         name = 'schema_test' AND status = 'running';
 true
@@ -17,7 +17,7 @@ true
 # TODO: redesign ceased status #25768
 # # dummy subsource is put into error state
 # > SELECT true
-#     FROM mz_internal.mz_source_statuses
+#     FROM mz_catalog_unstable.mz_source_statuses
 #     WHERE
 #         name = 'dummy' AND status = 'ceased'
 #             AND

@@ -1,17 +1,17 @@
 ---
-title: "mz_internal"
-description: "mz_internal is a system catalog schema which exposes internal metadata about Materialize. This schema is not part of Materialize's stable interface."
+title: "mz_catalog_unstable"
+description: "mz_catalog_unstable is a system catalog schema which exposes internal metadata about Materialize. This schema is not part of Materialize's stable interface."
 menu:
   main:
     parent: 'system-catalog'
     weight: 4
 ---
 
-The following sections describe the available objects in the `mz_internal`
+The following sections describe the available objects in the `mz_catalog_unstable`
 schema.
 
 {{< warning >}}
-The objects in the `mz_internal` schema are not part of Materialize's stable interface.
+The objects in the `mz_catalog_unstable` schema are not part of Materialize's stable interface.
 Backwards-incompatible changes to these objects may be made at any time.
 {{< /warning >}}
 
@@ -49,7 +49,7 @@ sampling rate than the one set in this parameter.
 The view can be accessed by Materialize _superusers_ or users that have been
 granted the [`mz_monitor` role](/manage/access-control/manage-roles#builtin-roles).
 
-<!-- RELATION_SPEC mz_internal.mz_recent_activity_log -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_recent_activity_log -->
 | Field                      | Type                         | Meaning                                                                                                                                                                                                                                                                       |
 |----------------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `execution_id`             | [`uuid`]                     | An ID that is unique for each executed statement.                                                                                                                                                                                                                             |
@@ -88,7 +88,7 @@ granted the [`mz_monitor` role](/manage/access-control/manage-roles#builtin-role
 The `mz_aws_connections` table contains a row for each AWS connection in the
 system.
 
-<!-- RELATION_SPEC mz_internal.mz_aws_connections -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_aws_connections -->
 | Field                         | Type      | Meaning
 |-------------------------------|-----------|--------
 | `id`                          | [`text`]  | The ID of the connection.
@@ -110,7 +110,7 @@ system.
 The `mz_aws_privatelink_connection_status_history` table contains a row describing
 the historical status for each AWS PrivateLink connection in the system.
 
-<!-- RELATION_SPEC mz_internal.mz_aws_privatelink_connection_status_history -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_aws_privatelink_connection_status_history -->
 | Field             | Type                       | Meaning                                                    |
 |-------------------|----------------------------|------------------------------------------------------------|
 | `occurred_at`     | `timestamp with time zone` | Wall-clock timestamp of the status change.       |
@@ -122,7 +122,7 @@ the historical status for each AWS PrivateLink connection in the system.
 The `mz_aws_privatelink_connection_statuses` table contains a row describing
 the most recent status for each AWS PrivateLink connection in the system.
 
-<!-- RELATION_SPEC mz_internal.mz_aws_privatelink_connection_statuses -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_aws_privatelink_connection_statuses -->
 | Field | Type | Meaning |
 |-------|------|---------|
 | `id` | [`text`] | The ID of the connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_sinks). |
@@ -134,7 +134,7 @@ the most recent status for each AWS PrivateLink connection in the system.
 
 The `mz_cluster_schedules` table shows the `SCHEDULE` option specified for each cluster.
 
-<!-- RELATION_SPEC mz_internal.mz_cluster_schedules -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_cluster_schedules -->
 | Field                               | Type         | Meaning                                                       |
 |-------------------------------------|--------------|---------------------------------------------------------------|
 | `cluster_id`                        | [`text`]     | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters).|
@@ -158,7 +158,7 @@ well.
 
 At this time, we do not make any guarantees about the freshness of these numbers.
 
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_frontiers -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_cluster_replica_frontiers -->
 | Field            | Type             | Meaning                                                                |
 | -----------------| ---------------- | --------                                                               |
 | `object_id`      | [`text`]         | The ID of the source, sink, index, materialized view, or subscription. |
@@ -172,7 +172,7 @@ for all processes of all extant cluster replicas.
 
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
 
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_metrics -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_cluster_replica_metrics -->
 | Field               | Type         | Meaning                                                                                                                                                      |
 | ------------------- | ------------ | --------                                                                                                                                                     |
 | `replica_id`        | [`text`]     | The ID of a cluster replica.                                                                                                                                 |
@@ -186,7 +186,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 The `mz_cluster_replica_statuses` table contains a row describing the status
 of each process in each cluster replica in the system.
 
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_statuses -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_cluster_replica_statuses -->
 | Field        | Type                         | Meaning                                                                                                 |
 |--------------|------------------------------|---------------------------------------------------------------------------------------------------------|
 | `replica_id` | [`text`]                     | Materialize's unique ID for the cluster replica.                                                        |
@@ -202,7 +202,7 @@ for all processes of all extant cluster replicas, as a percentage of the total r
 
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
 
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_utilization -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_cluster_replica_utilization -->
 | Field            | Type                 | Meaning                                                                                                                                                                                |
 |------------------|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `replica_id`     | [`text`]             | The ID of a cluster replica.                                                                                                                                                           |
@@ -217,7 +217,7 @@ The `mz_cluster_replica_history` view contains information about the timespan of
 each replica, including the times at which it was created and dropped
 (if applicable).
 
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_history -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_cluster_replica_history -->
 | Field                 | Type                         | Meaning                                                                                                                                   |
 |-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
 | `replica_id`          | [`text`]                     | The ID of a cluster replica.                                                                                                              |
@@ -232,7 +232,7 @@ each replica, including the times at which it was created and dropped
 
 The `mz_internal_cluster_replicas` table lists the replicas that are created and maintained by Materialize support.
 
-<!-- RELATION_SPEC mz_internal.mz_internal_cluster_replicas -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_internal_cluster_replicas -->
 | Field      | Type     | Meaning                                                                                                     |
 |------------|----------|-------------------------------------------------------------------------------------------------------------|
 | id         | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
@@ -241,7 +241,7 @@ The `mz_internal_cluster_replicas` table lists the replicas that are created and
 
 The `mz_comments` table stores optional comments (descriptions) for objects in the database.
 
-<!-- RELATION_SPEC mz_internal.mz_comments -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_comments -->
 | Field          | Type        | Meaning                                                                                      |
 | -------------- |-------------| --------                                                                                     |
 | `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
@@ -256,10 +256,10 @@ The `mz_compute_dependencies` table describes the dependency structure between e
 In contrast to [`mz_object_dependencies`](#mz_object_dependencies), this table only lists dependencies in the compute layer.
 SQL objects that don't exist in the compute layer (such as views) are omitted.
 
-<!-- RELATION_SPEC mz_internal.mz_compute_dependencies -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_compute_dependencies -->
 | Field       | Type     | Meaning                                                                                                                                                                                                                                                                                            |
 | ----------- | -------- | --------                                                                                                                                                                                                                                                                                           |
-| `object_id`     | [`text`] | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions).                                                           |
+| `object_id`     | [`text`] | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_catalog_unstable.mz_subscriptions`](#mz_subscriptions).                                                           |
 | `dependency_id` | [`text`] | The ID of a compute dependency. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
 
 ## `mz_compute_hydration_statuses`
@@ -268,7 +268,7 @@ The `mz_compute_hydration_statuses` view describes the per-replica hydration sta
 
 A compute object is hydrated on a given replica when it has fully processed the initial snapshot of data available in its inputs.
 
-<!-- RELATION_SPEC mz_internal.mz_compute_hydration_statuses -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_compute_hydration_statuses -->
 | Field            | Type         | Meaning  |
 | ---------------- | ------------ | -------- |
 | `object_id`      | [`text`]     | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views) |
@@ -276,7 +276,7 @@ A compute object is hydrated on a given replica when it has fully processed the 
 | `hydrated`       | [`boolean`]  | Whether the compute object is hydrated on the replica. |
 | `hydration_time` | [`interval`] | The amount of time it took for the replica to hydrate the compute object. |
 
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_hydration_times -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_compute_hydration_times -->
 
 ## `mz_compute_operator_hydration_statuses`
 
@@ -284,7 +284,7 @@ The `mz_compute_operator_hydration_statuses` table describes the dataflow operat
 
 A dataflow operator is hydrated on a given replica when it has fully processed the initial snapshot of data available in its inputs.
 
-<!-- RELATION_SPEC mz_internal.mz_compute_operator_hydration_statuses -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_compute_operator_hydration_statuses -->
 | Field                   | Type        | Meaning  |
 | ----------------------- | ----------- | -------- |
 | `object_id`             | [`text`]    | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views). |
@@ -292,7 +292,7 @@ A dataflow operator is hydrated on a given replica when it has fully processed t
 | `replica_id`            | [`text`]    | The ID of a cluster replica. |
 | `hydrated`              | [`boolean`] | Whether the node is hydrated on the replica. |
 
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_operator_hydration_statuses_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_compute_operator_hydration_statuses_per_worker -->
 
 ## `mz_frontiers`
 
@@ -302,14 +302,14 @@ coordinator.
 
 At this time, we do not make any guarantees about the freshness of these numbers.
 
-<!-- RELATION_SPEC mz_internal.mz_frontiers -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_frontiers -->
 | Field            | Type             | Meaning                                                                             |
 | ---------------- | ------------     | --------                                                                            |
 | `object_id`      | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription.       |
 | `read_frontier`  | [`mz_timestamp`] | The earliest timestamp at which the output is still readable.                       |
 | `write_frontier` | [`mz_timestamp`] | The next timestamp at which the output may change.                                  |
 
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_global_frontiers -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_global_frontiers -->
 
 ## `mz_history_retention_strategies`
 
@@ -317,7 +317,7 @@ The `mz_history_retention_strategies` describes the history retention strategies
 for tables, sources, indexes, materialized views that are configured with a
 [history retention period](/transform-data/patterns/time-travel-queries/#history-retention-period).
 
-<!-- RELATION_SPEC mz_internal.mz_history_retention_strategies -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_history_retention_strategies -->
 | Field | Type | Meaning |
 | - | - | - |
 | `id` | [`text`] | The ID of the object. |
@@ -333,10 +333,10 @@ A dataflow-powered object is hydrated on a given replica when the respective
 dataflow has fully processed the initial snapshot of data available in its
 inputs.
 
-<!-- RELATION_SPEC mz_internal.mz_hydration_statuses -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_hydration_statuses -->
 | Field        | Type        | Meaning  |
 | -----------  | ----------- | -------- |
-| `object_id`  | [`text`]    | The ID of a dataflow-powered object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_internal.mz_subscriptions`](#mz_subscriptions), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks). |
+| `object_id`  | [`text`]    | The ID of a dataflow-powered object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog_unstable.mz_subscriptions`](#mz_subscriptions), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks). |
 | `replica_id` | [`text`]    | The ID of a cluster replica. |
 | `hydrated`   | [`boolean`] | Whether the object is hydrated on the replica. |
 
@@ -344,7 +344,7 @@ inputs.
 
 The `mz_kafka_sources` table contains a row for each Kafka source in the system.
 
-<!-- RELATION_SPEC mz_internal.mz_kafka_sources -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_kafka_sources -->
 | Field                  | Type           | Meaning                                                                                                   |
 |------------------------|----------------|-----------------------------------------------------------------------------------------------------------|
 | `id`                   | [`text`]       | The ID of the Kafka source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).        |
@@ -360,7 +360,7 @@ it takes for updates at the inputs to be reflected in the output.
 
 At this time, we do not make any guarantees about the freshness of these numbers.
 
-<!-- RELATION_SPEC mz_internal.mz_materialization_lag -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_materialization_lag -->
 | Field                     | Type             | Meaning                                                                                  |
 | ------------------------- | ---------------- | --------                                                                                 |
 | `object_id`               | [`text`]         | The ID of the materialized view, index, or sink.                                         |
@@ -375,7 +375,7 @@ The `mz_materialized_view_refresh_strategies` table shows the refresh strategies
 specified for materialized views. If a materialized view has multiple refresh
 strategies, a row will exist for each.
 
-<!-- RELATION_SPEC mz_internal.mz_materialized_view_refresh_strategies -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_materialized_view_refresh_strategies -->
 | Field                  | Type       | Meaning                                                                                       |
 |------------------------|------------|-----------------------------------------------------------------------------------------------|
 | `materialized_view_id` | [`text`]   | The ID of the materialized view. Corresponds to [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views)  |
@@ -390,7 +390,7 @@ The `mz_materialized_view_refreshes` table shows the time of the last
 successfully completed refresh and the time of the next scheduled refresh for
 each materialized view with a refresh strategy other than `on-commit`.
 
-<!-- RELATION_SPEC mz_internal.mz_materialized_view_refreshes -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_materialized_view_refreshes -->
 | Field                    | Type                         | Meaning                                                                                                                      |
 |--------------------------|------------------------------|------------------------------------------------------------------------------------------------------------------------------|
 | `materialized_view_id`   | [`text`]                     | The ID of the materialized view. Corresponds to [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views) |
@@ -402,7 +402,7 @@ each materialized view with a refresh strategy other than `on-commit`.
 The `mz_object_dependencies` table describes the dependency structure between
 all database objects in the system.
 
-<!-- RELATION_SPEC mz_internal.mz_object_dependencies -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_object_dependencies -->
 | Field                   | Type         | Meaning                                                                                       |
 | ----------------------- | ------------ | --------                                                                                      |
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).  |
@@ -412,7 +412,7 @@ all database objects in the system.
 
 The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with namespace information.
 
-<!-- RELATION_SPEC mz_internal.mz_object_fully_qualified_names -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_object_fully_qualified_names -->
 | Field          | Type       | Meaning                                                                                                                                        |
 | ---------------|------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | `id`           | [`text`]   | Materialize's unique ID for the object.                                                                                                        |
@@ -427,7 +427,7 @@ The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`
 
 The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with information about the last lifetime event that occurred for each object in the system.
 
-<!-- RELATION_SPEC mz_internal.mz_object_lifetimes -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_object_lifetimes -->
 | Field          | Type                         | Meaning                                          |
 | ---------------|------------------------------|------------------------------------------------- |
 | `id`           | [`text`]                     | Materialize's unique ID for the object.          |
@@ -442,7 +442,7 @@ The `mz_object_transitive_dependencies` view describes the transitive dependency
 all database objects in the system.
 The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_object_dependencies).
 
-<!-- RELATION_SPEC mz_internal.mz_object_transitive_dependencies -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_object_transitive_dependencies -->
 | Field                   | Type         | Meaning                                                                                                               |
 | ----------------------- | ------------ | --------                                                                                                              |
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).                          |
@@ -455,7 +455,7 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 The `mz_notices` view contains a list of currently active notices emitted by the
 system. The view can be accessed by Materialize _superusers_.
 
-<!-- RELATION_SPEC mz_internal.mz_notices -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_notices -->
 | Field                   | Type                         | Meaning                                                                                                                                           |
 | ----------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `id`                    | [`text`]                     | Materialize's unique ID for this notice.                                                                                                          |
@@ -470,7 +470,7 @@ system. The view can be accessed by Materialize _superusers_.
 | `object_id`             | [`text`]                     | The ID of the materialized view or index. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). For global notices, this column is `NULL`. |
 | `created_at`            | [`timestamp with time zone`] | The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.                                        |
 
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_optimizer_notices -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_optimizer_notices -->
 
 ## `mz_notices_redacted`
 
@@ -480,7 +480,7 @@ The `mz_notices_redacted` view contains a redacted list of currently active
 optimizer notices emitted by the system. The view can be accessed by Materialize
 _superusers_ and Materialize support.
 
-<!-- RELATION_SPEC mz_internal.mz_notices_redacted -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_notices_redacted -->
 | Field                   | Type                         | Meaning                                                                                                                                           |
 | ----------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `id`                    | [`text`]                     | Materialize's unique ID for this notice.                                                                                                          |
@@ -497,7 +497,7 @@ _superusers_ and Materialize support.
 The `mz_postgres_sources` table contains a row for each PostgreSQL source in the
 system.
 
-<!-- RELATION_SPEC mz_internal.mz_postgres_sources -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_postgres_sources -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
@@ -509,7 +509,7 @@ system.
 The `mz_postgres_source_tables` table contains the mapping between each
 subsource and the corresponding upstream PostgreSQL table being ingested.
 
-<!-- RELATION_SPEC mz_internal.mz_postgres_source_tables -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_postgres_source_tables -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
@@ -521,7 +521,7 @@ subsource and the corresponding upstream PostgreSQL table being ingested.
 The `mz_mysql_source_tables` table contains the mapping between each
 subsource and the corresponding upstream MySQL table being ingested.
 
-<!-- RELATION_SPEC mz_internal.mz_mysql_source_tables -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_mysql_source_tables -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
@@ -565,7 +565,7 @@ referenced from
 
 The `mz_sessions` table contains a row for each active session in the system.
 
-<!-- RELATION_SPEC mz_internal.mz_sessions -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_sessions -->
 | Field           | Type                           | Meaning                                                                                                                   |
 | --------------- | ------------------------------ | --------                                                                                                                  |
 | `id`            | [`uuid`]                       | The globally unique ID of the session. |
@@ -578,7 +578,7 @@ The `mz_sessions` table contains a row for each active session in the system.
 The `mz_show_all_privileges` view contains a row for each privilege granted
 in the system on user objects to user roles.
 
-<!-- RELATION_SPEC mz_internal.mz_show_all_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_all_privileges -->
 | Field            | Type     | Meaning                                         |
 |------------------|----------|-------------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.            |
@@ -595,7 +595,7 @@ in the system on user objects to user roles.
 The `mz_show_cluster_privileges` view contains a row for each cluster privilege granted
 in the system on user clusters to user roles.
 
-<!-- RELATION_SPEC mz_internal.mz_show_cluster_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_cluster_privileges -->
 | Field            | Type     | Meaning                                     |
 |------------------|----------|---------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.        |
@@ -608,7 +608,7 @@ in the system on user clusters to user roles.
 The `mz_show_database_privileges` view contains a row for each database privilege granted
 in the system on user databases to user roles.
 
-<!-- RELATION_SPEC mz_internal.mz_show_database_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_database_privileges -->
 | Field            | Type     | Meaning                                     |
 |------------------|----------|---------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.        |
@@ -621,7 +621,7 @@ in the system on user databases to user roles.
 The `mz_show_default_privileges` view contains a row for each default privilege granted
 in the system in user databases and schemas to user roles.
 
-<!-- RELATION_SPEC mz_internal.mz_show_default_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_default_privileges -->
 | Field            | Type     | Meaning                                                                                             |
 |------------------|----------|-----------------------------------------------------------------------------------------------------|
 | `object_owner`   | [`text`] | Privileges described in this row will be granted on objects created by `object_owner`.              |
@@ -636,7 +636,7 @@ in the system in user databases and schemas to user roles.
 The `mz_show_object_privileges` view contains a row for each object privilege granted
 in the system on user objects to user roles.
 
-<!-- RELATION_SPEC mz_internal.mz_show_object_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_object_privileges -->
 | Field            | Type     | Meaning                                         |
 |------------------|----------|-------------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.            |
@@ -651,7 +651,7 @@ in the system on user objects to user roles.
 
 The `mz_show_role_members` view contains a row for each role membership in the system.
 
-<!-- RELATION_SPEC mz_internal.mz_show_role_members -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_role_members -->
 | Field     | Type     | Meaning                                                 |
 |-----------|----------|---------------------------------------------------------|
 | `role`    | [`text`] | The role that `member` is a member of.                  |
@@ -663,7 +663,7 @@ The `mz_show_role_members` view contains a row for each role membership in the s
 The `mz_show_schema_privileges` view contains a row for each schema privilege granted
 in the system on user schemas to user roles.
 
-<!-- RELATION_SPEC mz_internal.mz_show_schema_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_schema_privileges -->
 | Field            | Type     | Meaning                                         |
 |------------------|----------|-------------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.            |
@@ -677,7 +677,7 @@ in the system on user schemas to user roles.
 The `mz_show_system_privileges` view contains a row for each system privilege granted
 in the system on to user roles.
 
-<!-- RELATION_SPEC mz_internal.mz_show_system_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_system_privileges -->
 | Field            | Type     | Meaning                                     |
 |------------------|----------|---------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.        |
@@ -687,10 +687,10 @@ in the system on to user roles.
 ## `mz_show_all_my_privileges`
 
 The `mz_show_all_my_privileges` view is the same as
-[`mz_show_all_privileges`](/sql/system-catalog/mz_internal/#mz_show_all_privileges), but
+[`mz_show_all_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_all_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
-<!-- RELATION_SPEC mz_internal.mz_show_all_my_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_all_my_privileges -->
 | Field            | Type     | Meaning                                         |
 |------------------|----------|-------------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.            |
@@ -704,10 +704,10 @@ only includes rows where the current role is a direct or indirect member of `gra
 ## `mz_show_my_cluster_privileges`
 
 The `mz_show_my_cluster_privileges` view is the same as
-[`mz_show_cluster_privileges`](/sql/system-catalog/mz_internal/#mz_show_cluster_privileges), but
+[`mz_show_cluster_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_cluster_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
-<!-- RELATION_SPEC mz_internal.mz_show_my_cluster_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_my_cluster_privileges -->
 | Field            | Type     | Meaning                                     |
 |------------------|----------|---------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.        |
@@ -718,10 +718,10 @@ only includes rows where the current role is a direct or indirect member of `gra
 ## `mz_show_my_database_privileges`
 
 The `mz_show_my_database_privileges` view is the same as
-[`mz_show_database_privileges`](/sql/system-catalog/mz_internal/#mz_show_database_privileges), but
+[`mz_show_database_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_database_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
-<!-- RELATION_SPEC mz_internal.mz_show_my_database_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_my_database_privileges -->
 | Field            | Type     | Meaning                                     |
 |------------------|----------|---------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.        |
@@ -732,10 +732,10 @@ only includes rows where the current role is a direct or indirect member of `gra
 ## `mz_show_my_default_privileges`
 
 The `mz_show_my_default_privileges` view is the same as
-[`mz_show_default_privileges`](/sql/system-catalog/mz_internal/#mz_show_default_privileges), but
+[`mz_show_default_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_default_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
-<!-- RELATION_SPEC mz_internal.mz_show_my_default_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_my_default_privileges -->
 | Field            | Type     | Meaning                                                                                             |
 |------------------|----------|-----------------------------------------------------------------------------------------------------|
 | `object_owner`   | [`text`] | Privileges described in this row will be granted on objects created by `object_owner`.              |
@@ -748,10 +748,10 @@ only includes rows where the current role is a direct or indirect member of `gra
 ## `mz_show_my_object_privileges`
 
 The `mz_show_my_object_privileges` view is the same as
-[`mz_show_object_privileges`](/sql/system-catalog/mz_internal/#mz_show_object_privileges), but
+[`mz_show_object_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_object_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
-<!-- RELATION_SPEC mz_internal.mz_show_my_object_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_my_object_privileges -->
 | Field            | Type     | Meaning                                         |
 |------------------|----------|-------------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.            |
@@ -765,10 +765,10 @@ only includes rows where the current role is a direct or indirect member of `gra
 ## `mz_show_my_role_members`
 
 The `mz_show_my_role_members` view is the same as
-[`mz_show_role_members`](/sql/system-catalog/mz_internal/#mz_show_role_members), but
+[`mz_show_role_members`](/sql/system-catalog/mz_catalog_unstable/#mz_show_role_members), but
 only includes rows where the current role is a direct or indirect member of `member`.
 
-<!-- RELATION_SPEC mz_internal.mz_show_my_role_members -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_my_role_members -->
 | Field     | Type     | Meaning                                                 |
 |-----------|----------|---------------------------------------------------------|
 | `role`    | [`text`] | The role that `member` is a member of.                  |
@@ -778,10 +778,10 @@ only includes rows where the current role is a direct or indirect member of `mem
 ## `mz_show_my_schema_privileges`
 
 The `mz_show_my_schema_privileges` view is the same as
-[`mz_show_schema_privileges`](/sql/system-catalog/mz_internal/#mz_show_schema_privileges), but
+[`mz_show_schema_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_schema_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
-<!-- RELATION_SPEC mz_internal.mz_show_my_schema_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_my_schema_privileges -->
 | Field            | Type     | Meaning                                         |
 |------------------|----------|-------------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.            |
@@ -793,17 +793,17 @@ only includes rows where the current role is a direct or indirect member of `gra
 ## `mz_show_my_system_privileges`
 
 The `mz_show_my_system_privileges` view is the same as
-[`mz_show_system_privileges`](/sql/system-catalog/mz_internal/#mz_show_system_privileges), but
+[`mz_show_system_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_system_privileges), but
 only includes rows where the current role is a direct or indirect member of `grantee`.
 
-<!-- RELATION_SPEC mz_internal.mz_show_my_system_privileges -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_show_my_system_privileges -->
 | Field            | Type     | Meaning                                     |
 |------------------|----------|---------------------------------------------|
 | `grantor`        | [`text`] | The role that granted the privilege.        |
 | `grantee`        | [`text`] | The role that the privilege was granted to. |
 | `privilege_type` | [`text`] | They type of privilege granted.             |
 
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_sink_statistics_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_sink_statistics_raw -->
 
 ## `mz_sink_statistics`
 
@@ -816,7 +816,7 @@ useful for calculating rates_ to understand the general performance of your sink
 Note that:
 - The non-rate values themselves are not directly comparable, because they are collected and aggregated across multiple threads/processes.
 
-<!-- RELATION_SPEC mz_internal.mz_sink_statistics -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_sink_statistics -->
 | Field                | Type      | Meaning                                                                                                             |
 |----------------------|-----------| --------                                                                                                            |
 | `id`                 | [`text`]  | The ID of the sink. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sinks).                            |
@@ -831,7 +831,7 @@ The `mz_sink_statuses` view provides the current state for each sink in the
 system, including potential error messages and additional metadata helpful for
 debugging.
 
-<!-- RELATION_SPEC mz_internal.mz_sink_statuses -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_sink_statuses -->
 | Field                    | Type                            | Meaning                                                                                                          |
 | ------------------------ | ------------------------------- | --------                                                                                                         |
 | `id`                     | [`text`]                        | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                           |
@@ -848,7 +848,7 @@ The `mz_sink_status_history` table contains rows describing the
 history of changes to the status of each sink in the system, including potential error
 messages and additional metadata helpful for debugging.
 
-<!-- RELATION_SPEC mz_internal.mz_sink_status_history -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_sink_status_history -->
 | Field          | Type                            | Meaning                                                                                                          |
 | -------------- | ------------------------------- | --------                                                                                                         |
 | `occurred_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the sink status change.                                                                  |
@@ -857,13 +857,13 @@ messages and additional metadata helpful for debugging.
 | `error`        | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
 
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_source_statistics_raw -->
 
 ## `mz_source_statistics`
 
 The `mz_source_statistics` view contains statistics about each source.
 
-<!-- RELATION_SPEC mz_internal.mz_source_statistics -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_source_statistics -->
 | Field                    | Type        | Meaning                                                                                                                                                                                                                                                                             |
 | -------------------------|-------------| --------                                                                                                                                                                                                                                                                            |
 | `id`                     | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
@@ -880,7 +880,7 @@ The `mz_source_statistics` view contains statistics about each source.
 | `offset_known`            | [`uint8`]    | The offset of the most recent data in the source's upstream service that Materialize knows about. See above for its unit. |
 | `offset_committed`        | [`uint8`]    | The offset of the source's upstream service Materialize has fully committed. See above for its unit. |
 
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_with_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_source_statistics_with_history -->
 
 ### Counters
 `messages_received`, `messages_staged`, `updates_staged`, and `updates_committed` are all counters that monotonically increase. They are _only
@@ -943,7 +943,7 @@ The `mz_source_statuses` view provides the current state for each source in the
 system, including potential error messages and additional metadata helpful for
 debugging.
 
-<!-- RELATION_SPEC mz_internal.mz_source_statuses -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_source_statuses -->
 | Field                    | Type                            | Meaning                                                                                                            |
 | ------------------------ | ------------------------------- | --------                                                                                                           |
 | `id`                     | [`text`]                        | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                       |
@@ -960,7 +960,7 @@ The `mz_source_status_history` table contains a row describing the status of the
 historical state for each source in the system, including potential error
 messages and additional metadata helpful for debugging.
 
-<!-- RELATION_SPEC mz_internal.mz_source_status_history -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_source_status_history -->
 | Field          | Type                            | Meaning                                                                                                            |
 | -------------- | ------------------------------- | --------                                                                                                           |
 | `occurred_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the source status change.                                                                  |
@@ -1000,7 +1000,7 @@ and cannot be changed by users), the latter is used instead.
 
 ## `mz_statement_lifecycle_history`
 
-<!-- RELATION_SPEC mz_internal.mz_statement_lifecycle_history -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_statement_lifecycle_history -->
 | Field          | Type                         | Meaning                                                                                                                                                |
 |----------------|------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `statement_id` | [`uuid`]                     | The ID of the execution event. Corresponds to [`mz_recent_activity_log.execution_id`](#mz_recent_activity_log)                                         |
@@ -1012,7 +1012,7 @@ and cannot be changed by users), the latter is used instead.
 The `mz_subscriptions` table describes all active [`SUBSCRIBE`](/sql/subscribe)
 operations in the system.
 
-<!-- RELATION_SPEC mz_internal.mz_subscriptions -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_subscriptions -->
 | Field                    | Type                         | Meaning                                                                                                                    |
 | ------------------------ |------------------------------| --------                                                                                                                   |
 | `id`                     | [`text`]                     | The ID of the subscription.                                                                                                |
@@ -1025,7 +1025,7 @@ operations in the system.
 
 The `mz_webhook_sources` table contains a row for each webhook source in the system.
 
-<!-- RELATION_SPEC mz_internal.mz_webhook_sources -->
+<!-- RELATION_SPEC mz_catalog_unstable.mz_webhook_sources -->
 | Field          | Type        | Meaning                                                                                      |
 | -------------- |-------------| --------                                                                                     |
 | `id`           | [`text`]    | The ID of the webhook source. Corresponds to [`mz_sources.id`](../mz_catalog/#mz_sources).   |
@@ -1049,32 +1049,32 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 [`uint8`]: /sql/types/uint8
 [`timestamp with time zone`]: /sql/types/timestamp
 
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_raw_unified -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_redacted -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_thinned -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_prepared_statement_history -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_sql_text -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_sql_text_redacted -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_session_history -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_cluster_replicas -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_sinks -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_sources -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_sql_text -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_sql_text_redacted -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history_redacted -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_type_pg_metadata -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_oid_alias -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_activity_log_thinned -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_compute_error_counts_raw_unified -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_recent_activity_log_redacted -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_recent_activity_log_thinned -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_aggregates -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_prepared_statement_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_recent_sql_text -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_recent_sql_text_redacted -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_session_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_show_cluster_replicas -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_show_indexes -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_show_materialized_views -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_show_sinks -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_show_sources -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_sql_text -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_sql_text_redacted -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_statement_execution_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_statement_execution_history_redacted -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_storage_shards -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_storage_usage_by_shard -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_type_pg_metadata -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.mz_object_oid_alias -->
 
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_class_all_databases -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_type_all_databases -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_namespace_all_databases -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_description_all_databases -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_attrdef_all_databases -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_attribute_all_databases -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.pg_class_all_databases -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.pg_type_all_databases -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.pg_namespace_all_databases -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.pg_description_all_databases -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.pg_attrdef_all_databases -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_catalog_unstable.pg_attribute_all_databases -->

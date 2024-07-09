@@ -40,7 +40,7 @@ f1    f2
 fish  1000
 
 # ensure they all were marked as running correctly
-> SELECT status FROM mz_internal.mz_source_statuses st
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
   WHERE s.name in ('fixed_text', 'dynamic_text', 'fixed_plus_csr', 'dynamic_plus_csr')
 running

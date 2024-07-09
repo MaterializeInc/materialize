@@ -7,5 +7,5 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'mz_source';
 running

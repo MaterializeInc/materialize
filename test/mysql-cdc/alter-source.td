@@ -267,11 +267,11 @@ INSERT INTO table_a VALUES (3);
 ! SELECT * FROM table_a;
 contains:incompatible schema change
 
-> SELECT error ~~ '%incompatible schema change%' FROM mz_internal.mz_source_statuses WHERE name = 'table_a';
+> SELECT error ~~ '%incompatible schema change%' FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'table_a';
 true
 
 # Subsource errors not propagated to primary source
-> SELECT error IS NULL FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
+> SELECT error IS NULL FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'mz_source';
 true
 
 > DROP SOURCE table_a;

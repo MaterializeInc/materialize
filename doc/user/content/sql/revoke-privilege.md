@@ -98,18 +98,18 @@ The privileges required to execute this statement are:
 
 ## Useful views
 
-- [`mz_internal.mz_show_system_privileges`](/sql/system-catalog/mz_internal/#mz_show_system_privileges)
-- [`mz_internal.mz_show_my_system_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_system_privileges)
-- [`mz_internal.mz_show_cluster_privileges`](/sql/system-catalog/mz_internal/#mz_show_cluster_privileges)
-- [`mz_internal.mz_show_my_cluster_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_cluster_privileges)
-- [`mz_internal.mz_show_database_privileges`](/sql/system-catalog/mz_internal/#mz_show_database_privileges)
-- [`mz_internal.mz_show_my_database_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_database_privileges)
-- [`mz_internal.mz_show_schema_privileges`](/sql/system-catalog/mz_internal/#mz_show_schema_privileges)
-- [`mz_internal.mz_show_my_schema_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_schema_privileges)
-- [`mz_internal.mz_show_object_privileges`](/sql/system-catalog/mz_internal/#mz_show_object_privileges)
-- [`mz_internal.mz_show_my_object_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_object_privileges)
-- [`mz_internal.mz_show_all_privileges`](/sql/system-catalog/mz_internal/#mz_show_all_privileges)
-- [`mz_internal.mz_show_all_my_privileges`](/sql/system-catalog/mz_internal/#mz_show_all_my_privileges)
+- [`mz_catalog_unstable.mz_show_system_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_system_privileges)
+- [`mz_catalog_unstable.mz_show_my_system_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_my_system_privileges)
+- [`mz_catalog_unstable.mz_show_cluster_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_cluster_privileges)
+- [`mz_catalog_unstable.mz_show_my_cluster_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_my_cluster_privileges)
+- [`mz_catalog_unstable.mz_show_database_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_database_privileges)
+- [`mz_catalog_unstable.mz_show_my_database_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_my_database_privileges)
+- [`mz_catalog_unstable.mz_show_schema_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_schema_privileges)
+- [`mz_catalog_unstable.mz_show_my_schema_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_my_schema_privileges)
+- [`mz_catalog_unstable.mz_show_object_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_object_privileges)
+- [`mz_catalog_unstable.mz_show_my_object_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_my_object_privileges)
+- [`mz_catalog_unstable.mz_show_all_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_all_privileges)
+- [`mz_catalog_unstable.mz_show_all_my_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_all_my_privileges)
 
 ## Related pages
 

@@ -23,7 +23,7 @@ privileges on objects created in the future. It will not revoke any privileges o
 already been created. When revoking a default privilege, all the fields in the revoke statement
 (`target_role`, `schema_name`, `database_name`, `privilege`, `grantee`) must exactly match an
 existing default privilege. The existing default privileges can easily be viewed by the following
-query: `SELECT * FROM mz_internal.mz_show_default_privileges`.
+query: `SELECT * FROM mz_catalog_unstable.mz_show_default_privileges`.
 
 All new environments are created with a single default privilege, `USAGE` is granted on all `TYPES`
 to the `PUBLIC` role. This can be revoked like any other default privilege.
@@ -94,8 +94,8 @@ The privileges required to execute this statement are:
 
 ## Useful views
 
-- [`mz_internal.mz_show_default_privileges`](/sql/system-catalog/mz_internal/#mz_show_default_privileges)
-- [`mz_internal.mz_show_my_default_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_default_privileges)
+- [`mz_catalog_unstable.mz_show_default_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_default_privileges)
+- [`mz_catalog_unstable.mz_show_my_default_privileges`](/sql/system-catalog/mz_catalog_unstable/#mz_show_my_default_privileges)
 
 ## Related pages
 

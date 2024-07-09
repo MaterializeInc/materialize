@@ -165,13 +165,13 @@ INSERT INTO pk_table VALUES (4, 'four');
   FROM MYSQL CONNECTION mysql_conn
   FOR TABLES (public.pk_table);
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'test_slot_source';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'test_slot_source';
 stalled
 
 $ mysql-execute name=mysql
 ROLLBACK;
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'test_slot_source';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'test_slot_source';
 running
 
 > DROP SOURCE test_slot_source CASCADE;
@@ -319,7 +319,7 @@ utf8_table            subsource  ${arg.default-replica-size}  cdc_cluster
 "space table"         subsource  ${arg.default-replica-size}  cdc_cluster
 таблица               subsource  ${arg.default-replica-size}  cdc_cluster
 
-> SELECT schema_name, table_name FROM mz_internal.mz_mysql_source_tables
+> SELECT schema_name, table_name FROM mz_catalog_unstable.mz_mysql_source_tables
 public          create
 public          pk_table
 public          large_text
@@ -337,16 +337,16 @@ public          trailing_space_nopk
 public          "\"\"\"literal_quotes\"\"\""
 conflict_schema conflict_table
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'mz_source';
 running
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source_progress';
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'mz_source_progress';
 running
 
 > SELECT count(*) FROM mz_source_progress WHERE transaction_id > 0
 1
 
-# There is no such thing like mz_internal.mz_mysql_sources because MySQL does not have replication slots.
+# There is no such thing like mz_catalog_unstable.mz_mysql_sources because MySQL does not have replication slots.
 
 #
 # Perform sanity checks of the initial snapshot
@@ -565,7 +565,7 @@ true
 2 two_two
 5 five
 
-> SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table';
+> SELECT status = 'running' FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'large_cluster_source_pk_table';
 true
 
 > DROP SOURCE large_cluster_source CASCADE;

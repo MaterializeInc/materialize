@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Test reporting of controller frontiers through `mz_internal.mz_frontiers` and
-# `mz_internal.mz_cluster_replica_frontiers`.
+# Test reporting of controller frontiers through `mz_catalog_unstable.mz_frontiers` and
+# `mz_catalog_unstable.mz_cluster_replica_frontiers`.
 #
 # These tests rely on testdrive's retry feature, as they query introspection
 # sources whose data might not be immediately available.
@@ -36,7 +36,7 @@
 > SELECT
     mvs.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_catalog_unstable.mz_cluster_replica_frontiers frontiers
   JOIN mz_materialized_views mvs
     ON frontiers.object_id = mvs.id
   LEFT JOIN mz_cluster_replicas replicas
@@ -49,7 +49,7 @@ mv1 r2
 
 > SELECT
     mvs.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_catalog_unstable.mz_frontiers frontiers
   JOIN mz_materialized_views mvs
     ON frontiers.object_id = mvs.id
   WHERE
@@ -66,7 +66,7 @@ mv1
 > SELECT
     indexes.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_catalog_unstable.mz_cluster_replica_frontiers frontiers
   JOIN mz_indexes indexes
     ON frontiers.object_id = indexes.id
   LEFT JOIN mz_cluster_replicas replicas
@@ -79,7 +79,7 @@ idx1 r2
 
 > SELECT
     indexes.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_catalog_unstable.mz_frontiers frontiers
   JOIN mz_indexes indexes
     ON frontiers.object_id = indexes.id
   WHERE
@@ -98,7 +98,7 @@ idx1
 > SELECT
     sources.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_catalog_unstable.mz_cluster_replica_frontiers frontiers
   JOIN mz_sources sources
     ON frontiers.object_id = sources.id
   LEFT JOIN mz_cluster_replicas replicas
@@ -110,7 +110,7 @@ source1 s1
 
 > SELECT
     sources.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_catalog_unstable.mz_frontiers frontiers
   JOIN mz_sources sources
     ON frontiers.object_id = sources.id
   WHERE
@@ -139,7 +139,7 @@ source1_progress
 > SELECT
     sinks.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_catalog_unstable.mz_cluster_replica_frontiers frontiers
   JOIN mz_sinks sinks
     ON frontiers.object_id = sinks.id
   LEFT JOIN mz_cluster_replicas replicas
@@ -151,7 +151,7 @@ sink1 s1
 
 > SELECT
     sinks.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_catalog_unstable.mz_frontiers frontiers
   JOIN mz_sinks sinks
     ON frontiers.object_id = sinks.id
   WHERE
@@ -164,7 +164,7 @@ sink1
 
 > SELECT
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_catalog_unstable.mz_cluster_replica_frontiers frontiers
   JOIN mz_indexes indexes
     ON frontiers.object_id = indexes.id
   JOIN mz_clusters clusters
@@ -180,7 +180,7 @@ r2
 
 > SELECT
     count(*)
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_catalog_unstable.mz_frontiers frontiers
   JOIN mz_indexes indexes
     ON frontiers.object_id = indexes.id
   JOIN mz_clusters clusters
@@ -196,7 +196,7 @@ r2
 
 > SELECT
     tables.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_catalog_unstable.mz_frontiers frontiers
   JOIN mz_tables tables
     ON frontiers.object_id = tables.id
   WHERE
@@ -209,7 +209,7 @@ t1
 
 > SELECT
     sources.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_catalog_unstable.mz_frontiers frontiers
   JOIN mz_sources sources
     ON frontiers.object_id = sources.id
   WHERE
@@ -223,7 +223,7 @@ mz_frontiers
 > SELECT
     objects.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_catalog_unstable.mz_cluster_replica_frontiers frontiers
   JOIN mz_objects objects
     ON frontiers.object_id = objects.id
   JOIN mz_cluster_replicas replicas
@@ -244,7 +244,7 @@ mv1  r2
 > SELECT
     objects.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_catalog_unstable.mz_cluster_replica_frontiers frontiers
   JOIN mz_objects objects
     ON frontiers.object_id = objects.id
   JOIN mz_cluster_replicas replicas
@@ -269,7 +269,7 @@ mv1  r3
 > SELECT
     objects.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_catalog_unstable.mz_cluster_replica_frontiers frontiers
   JOIN mz_objects objects
     ON frontiers.object_id = objects.id
   JOIN mz_cluster_replicas replicas
@@ -292,7 +292,7 @@ mv1  r3
 > SELECT
     replicas.name,
     frontiers.write_frontier
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_catalog_unstable.mz_cluster_replica_frontiers frontiers
   JOIN mz_materialized_views mvs
     ON frontiers.object_id = mvs.id
   JOIN mz_cluster_replicas replicas
@@ -305,7 +305,7 @@ r3 <null>
 > SELECT
     frontiers.read_frontier,
     frontiers.write_frontier
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_catalog_unstable.mz_frontiers frontiers
   JOIN mz_materialized_views mvs
     ON frontiers.object_id = mvs.id
   WHERE
@@ -322,11 +322,11 @@ r3 <null>
 > DROP TABLE t1
 
 > SELECT *
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_catalog_unstable.mz_cluster_replica_frontiers frontiers
   WHERE object_id LIKE 'u%'
 
 > SELECT *
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_catalog_unstable.mz_frontiers frontiers
   WHERE object_id LIKE 'u%'
 
 # Test that frontiers are correctly initialized on for collections on clusters
@@ -337,7 +337,7 @@ r3 <null>
 > CREATE INDEX idx2 IN CLUSTER empty ON t2 (a)
 
 > SELECT read_frontier > 0, read_frontier = write_frontier
-  FROM mz_internal.mz_frontiers
+  FROM mz_catalog_unstable.mz_frontiers
   JOIN mz_indexes ON (id = object_id)
   WHERE name = 'idx2'
 true true

@@ -207,7 +207,7 @@ ALTER MATERIALIZED VIEW winning_bids SET (RETAIN HISTORY FOR '2hr');
 ### Viewing history retention configuration
 
 To see what history retention period has been configured for an object,
-look up the object in the [`mz_internal.mz_history_retention_strategies`](/sql/system-catalog/mz_internal/#mz_history_retention_strategies) catalog table.
+look up the object in the [`mz_catalog_unstable.mz_history_retention_strategies`](/sql/system-catalog/mz_catalog_unstable/#mz_history_retention_strategies) catalog table.
 
 ```mzsql
 SELECT
@@ -220,7 +220,7 @@ FROM
     mz_catalog.mz_materialized_views AS mv
         LEFT JOIN mz_schemas AS s ON mv.schema_id = s.id
         LEFT JOIN mz_databases AS d ON s.database_id = d.id
-        LEFT JOIN mz_internal.mz_history_retention_strategies AS hrs ON mv.id = hrs.id
+        LEFT JOIN mz_catalog_unstable.mz_history_retention_strategies AS hrs ON mv.id = hrs.id
 WHERE mv.name = 'winning_bids';
 ```
 ```nofmt

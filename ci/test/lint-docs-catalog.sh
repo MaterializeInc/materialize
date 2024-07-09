@@ -23,7 +23,7 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 
 catalog_files=(
-  doc/user/content/sql/system-catalog/mz_internal.md
+  doc/user/content/sql/system-catalog/mz_catalog_unstable.md
   doc/user/content/sql/system-catalog/mz_introspection.md
   doc/user/content/sql/system-catalog/mz_catalog.md
 )

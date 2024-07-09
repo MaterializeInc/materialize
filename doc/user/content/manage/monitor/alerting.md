@@ -27,7 +27,7 @@ CPU | 85% | 100% | Average CPU usage for a cluster in the last *15 minutes*.
 Memory | 80% | 90% | Average memory usage for a cluster in the last *15 minutes*.
 Source status | - | On Change | Source status change in the last *1 minute*.
 Cluster status | - | On Change | Cluster replica status change in the last *1 minute*.
-Freshness | > 5s | > 1m | Average [lag behind an input](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_materialization_lag) in the last *15 minutes*.
+Freshness | > 5s | > 1m | Average [lag behind an input](https://materialize.com/docs/sql/system-catalog/mz_catalog_unstable/#mz_materialization_lag) in the last *15 minutes*.
 
 ### Custom Thresholds
 

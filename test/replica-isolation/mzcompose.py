@@ -123,7 +123,7 @@ class MaterializedView(AllowCompactionCheck):
         cursor = c.sql_cursor()
         cursor.execute(
             """
-                SELECT id,shard_id from mz_internal.mz_storage_shards, mz_catalog.mz_materialized_views
+                SELECT id,shard_id from mz_catalog_unstable.mz_storage_shards, mz_catalog.mz_materialized_views
                 WHERE object_id = id AND name = 'v3';
             """
         )

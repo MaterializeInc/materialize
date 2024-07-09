@@ -27,7 +27,7 @@ $ set-arg-default default-replica-size=1
 > CREATE INDEX idx2_div_by_zero ON mv_div_by_zero (x)
 
 > SELECT o.name, r.name, c.count
-  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  FROM mz_catalog_unstable.mz_compute_error_counts_raw_unified c
   JOIN mz_objects o ON c.object_id = o.id
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
@@ -35,7 +35,7 @@ $ set-arg-default default-replica-size=1
 > INSERT INTO zeros VALUES (0)
 
 > SELECT o.name, r.name, c.count
-  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  FROM mz_catalog_unstable.mz_compute_error_counts_raw_unified c
   JOIN mz_objects o ON c.object_id = o.id
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
@@ -46,7 +46,7 @@ mv_div_by_zero   r1 1
 > INSERT INTO zeros VALUES (0), (0)
 
 > SELECT o.name, r.name, c.count
-  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  FROM mz_catalog_unstable.mz_compute_error_counts_raw_unified c
   JOIN mz_objects o ON c.object_id = o.id
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
@@ -57,7 +57,7 @@ mv_div_by_zero   r1 3
 > DELETE FROM zeros
 
 > SELECT o.name, r.name, c.count
-  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  FROM mz_catalog_unstable.mz_compute_error_counts_raw_unified c
   JOIN mz_objects o ON c.object_id = o.id
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
@@ -67,7 +67,7 @@ mv_div_by_zero   r1 3
 > INSERT INTO zeros VALUES (0), (0)
 
 > SELECT o.name, r.name, c.count
-  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  FROM mz_catalog_unstable.mz_compute_error_counts_raw_unified c
   JOIN mz_objects o ON c.object_id = o.id
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
@@ -78,7 +78,7 @@ mv_div_by_zero   r1 2
 > ALTER CLUSTER test SET (REPLICATION FACTOR 2)
 
 > SELECT o.name, r.name, c.count
-  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  FROM mz_catalog_unstable.mz_compute_error_counts_raw_unified c
   JOIN mz_objects o ON c.object_id = o.id
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
@@ -94,7 +94,7 @@ mv_div_by_zero   r2 2
 > ALTER CLUSTER test SET (REPLICATION FACTOR 1)
 
 > SELECT o.name, r.name, c.count
-  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  FROM mz_catalog_unstable.mz_compute_error_counts_raw_unified c
   JOIN mz_objects o ON c.object_id = o.id
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
@@ -107,7 +107,7 @@ mv_div_by_zero   r1 2
 > DROP INDEX idx1_div_by_zero
 
 > SELECT o.name, r.name, c.count
-  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  FROM mz_catalog_unstable.mz_compute_error_counts_raw_unified c
   JOIN mz_objects o ON c.object_id = o.id
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
@@ -117,7 +117,7 @@ mv_div_by_zero   r1 2
 > DROP MATERIALIZED VIEW mv_div_by_zero
 
 > SELECT o.name, r.name, c.count
-  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  FROM mz_catalog_unstable.mz_compute_error_counts_raw_unified c
   JOIN mz_objects o ON c.object_id = o.id
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
@@ -133,7 +133,7 @@ mv_div_by_zero   r1 2
 > CREATE INDEX idx_div_by_zero ON div_by_zero ()
 
 > SELECT o.name, r.name, c.count
-  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  FROM mz_catalog_unstable.mz_compute_error_counts_raw_unified c
   JOIN mz_objects o ON c.object_id = o.id
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
@@ -143,7 +143,7 @@ idx_div_by_zero r1 1
 > DROP TABLE zeros CASCADE
 
 > SELECT o.name, r.name, c.count
-  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  FROM mz_catalog_unstable.mz_compute_error_counts_raw_unified c
   JOIN mz_objects o ON c.object_id = o.id
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0

@@ -9,7 +9,7 @@
 
 # This test script runs after the SSH bastion host has been terminated.
 
-> SELECT status FROM mz_internal.mz_source_statuses st
+> SELECT status FROM mz_catalog_unstable.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
   WHERE s.name = 'mysql_source' AND error LIKE '%ssh:%'
 stalled

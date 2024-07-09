@@ -115,7 +115,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (
   SELECT true
-  FROM mz_introspection.mz_compute_frontiers f, mz_internal.mz_subscriptions s
+  FROM mz_introspection.mz_compute_frontiers f, mz_catalog_unstable.mz_subscriptions s
   WHERE f.export_id = s.id AND time > 0)
 > FETCH 1 c WITH (timeout='5s')
 <TIMESTAMP> 1 true

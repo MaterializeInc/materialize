@@ -100,7 +100,7 @@ def workflow_github_8021(c: Composition) -> None:
     c.kill("materialized")
 
 
-# Test that `mz_internal.mz_object_dependencies` re-populates.
+# Test that `mz_catalog_unstable.mz_object_dependencies` re-populates.
 def workflow_github_17578(c: Composition) -> None:
     c.up("testdrive_no_reset", persistent=True)
     c.up("materialized")
@@ -114,7 +114,7 @@ def workflow_github_17578(c: Composition) -> None:
             > SELECT DISTINCT
               top_level_s.name as source,
               s.name AS subsource
-              FROM mz_internal.mz_object_dependencies AS d
+              FROM mz_catalog_unstable.mz_object_dependencies AS d
               JOIN mz_sources AS s ON s.id = d.referenced_object_id OR s.id = d.object_id
               JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id OR top_level_s.id = d.referenced_object_id
               WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
@@ -141,7 +141,7 @@ def workflow_github_17578(c: Composition) -> None:
             > SELECT
               top_level_s.name as source,
               s.name AS subsource
-              FROM mz_internal.mz_object_dependencies AS d
+              FROM mz_catalog_unstable.mz_object_dependencies AS d
               JOIN mz_sources AS s ON s.id = d.referenced_object_id OR s.id = d.object_id
               JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id OR top_level_s.id = d.referenced_object_id
               WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
@@ -234,7 +234,7 @@ def workflow_storage_managed_collections(c: Composition) -> None:
     user_shards: list[str] = []
     while len(user_shards) == 0:
         user_shards = c.sql_query(
-            "SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%';"
+            "SELECT shard_id FROM mz_catalog_unstable.mz_storage_shards WHERE object_id LIKE 'u%';"
         )
 
     # Restart mz.
@@ -245,7 +245,7 @@ def workflow_storage_managed_collections(c: Composition) -> None:
     restart_user_shards: list[str] = []
     while len(restart_user_shards) == 0:
         restart_user_shards = c.sql_query(
-            "SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%';"
+            "SELECT shard_id FROM mz_catalog_unstable.mz_storage_shards WHERE object_id LIKE 'u%';"
         )
 
     if user_shards != restart_user_shards or not user_shards:
@@ -485,10 +485,10 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
         service="testdrive_no_reset",
         input=dedent(
             """
-            > SELECT COUNT(*) > 7 FROM mz_internal.mz_source_status_history
+            > SELECT COUNT(*) > 7 FROM mz_catalog_unstable.mz_source_status_history
             true
 
-            > SELECT COUNT(*) > 7 FROM mz_internal.mz_sink_status_history
+            > SELECT COUNT(*) > 7 FROM mz_catalog_unstable.mz_sink_status_history
             true
             """
         ),
@@ -505,10 +505,10 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
         service="testdrive_no_reset",
         input=dedent(
             """
-            > SELECT COUNT(*) FROM mz_internal.mz_source_status_history
+            > SELECT COUNT(*) FROM mz_catalog_unstable.mz_source_status_history
             7
 
-            > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
+            > SELECT COUNT(*) FROM mz_catalog_unstable.mz_sink_status_history
             7
             """
         ),
@@ -552,7 +552,7 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
                         SELECT
                           cd.object_id
                         FROM
-                          mz_internal.mz_compute_dependencies cd JOIN
+                          mz_catalog_unstable.mz_compute_dependencies cd JOIN
                           mz_objects dep ON (cd.dependency_id = dep.id)
                         WHERE
                           dep.name = '{dep_name}'
@@ -568,7 +568,7 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
                         SELECT
                           cd.object_id
                         FROM
-                          mz_internal.mz_compute_dependencies cd JOIN
+                          mz_catalog_unstable.mz_compute_dependencies cd JOIN
                           mz_objects dep ON (cd.dependency_id = dep.id)
                         WHERE
                           dep.name = '{dep_name}'

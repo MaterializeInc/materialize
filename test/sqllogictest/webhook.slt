@@ -30,7 +30,7 @@ SHOW COLUMNS FROM webhook_bytes
 body false bytea
 
 query TT
-SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
+SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_catalog_unstable.mz_webhook_sources
 ----
 webhook_bytes {/api/webhook/materialize/public/webhook_bytes}
 
@@ -38,7 +38,7 @@ statement ok
 CREATE SOURCE "weird-name-(]%/'" IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES
 
 query TT
-SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
+SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_catalog_unstable.mz_webhook_sources
 ----
 webhook_bytes {/api/webhook/materialize/public/webhook_bytes}
 weird-name-(]%/' {/api/webhook/materialize/public/weird-name-(]%25%2F'}
@@ -47,7 +47,7 @@ statement ok
 DROP SOURCE "weird-name-(]%/'"
 
 query TT
-SELECT id, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
+SELECT id, regexp_match(url, '(/api/webhook/.*)') FROM mz_catalog_unstable.mz_webhook_sources
 ----
 u1 {/api/webhook/materialize/public/webhook_bytes}
 
@@ -376,7 +376,7 @@ CREATE SOURCE webhook_on_cluster1 IN CLUSTER cluster1 FROM WEBHOOK
 # Make sure we report webhook sources as running.
 
 query TTTT
-SELECT name, type, status, error FROM mz_internal.mz_source_statuses WHERE name = 'webhook_bytes'
+SELECT name, type, status, error FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'webhook_bytes'
 ----
 webhook_bytes webhook running NULL
 
@@ -384,7 +384,7 @@ statement ok
 DROP SOURCE webhook_bytes;
 
 query TTTT
-SELECT name, type, status, error FROM mz_internal.mz_source_statuses WHERE name = 'webhook_bytes'
+SELECT name, type, status, error FROM mz_catalog_unstable.mz_source_statuses WHERE name = 'webhook_bytes'
 ----
 
 # Cleanup.

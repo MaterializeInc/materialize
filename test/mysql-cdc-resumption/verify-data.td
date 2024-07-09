@@ -23,7 +23,7 @@ contains:Source error
 contains:incompatible schema change
 
 # Ensure non-definite errors are cleared.
-> SELECT COUNT(*) = 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%Connection refused%';
+> SELECT COUNT(*) = 0 FROM mz_catalog_unstable.mz_source_statuses WHERE error LIKE '%Connection refused%';
 true
 
 ! SELECT * FROM t0

@@ -61,7 +61,7 @@ Column     | Type                        | Optional?                            
 ### Webhook URL
 
 After source creation, the unique URL that allows you to **POST** events to the
-source can be looked up in the [`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources)
+source can be looked up in the [`mz_catalog_unstable.mz_webhook_sources`](/sql/system-catalog/mz_catalog_unstable/#mz_webhook_sources)
 system catalog table. The URL will have the following format:
 
 ```

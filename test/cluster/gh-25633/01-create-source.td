@@ -20,7 +20,7 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
 > SELECT
     u.rehydration_latency IS NOT NULL
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_catalog_unstable.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('count')
 true
 

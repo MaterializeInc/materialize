@@ -53,7 +53,7 @@ banana
 > SELECT EXISTS (
     SELECT 1
     FROM mz_sources
-    JOIN mz_internal.mz_source_status_history ON mz_sources.id = mz_source_status_history.source_id
+    JOIN mz_catalog_unstable.mz_source_status_history ON mz_sources.id = mz_source_status_history.source_id
     WHERE name = 'broken'
     AND error ILIKE '%error when polling consumer for source%Group authorization failed%'
   )
@@ -92,7 +92,7 @@ $ kafka-verify-commit topic=data partition=0 consumer-group-id=lockdown-material
 > SELECT EXISTS (
     SELECT 1
     FROM mz_sinks
-    JOIN mz_internal.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
+    JOIN mz_catalog_unstable.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
     WHERE name = 'broken1'
     AND error ILIKE '%Transactional Id authorization failed%'
   )
@@ -110,7 +110,7 @@ true
 > SELECT EXISTS (
     SELECT 1
     FROM mz_sinks
-    JOIN mz_internal.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
+    JOIN mz_catalog_unstable.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
     WHERE name = 'broken2'
     AND error ILIKE '%kafka: error registering kafka progress topic for sink%Topic authorization failed%'
   )
@@ -128,7 +128,7 @@ true
 > SELECT EXISTS (
     SELECT 1
     FROM mz_sinks
-    JOIN mz_internal.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
+    JOIN mz_catalog_unstable.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
     WHERE name = 'broken3'
     AND error ILIKE '%Error creating topic testdrive-broken-${testdrive.seed}%Topic authorization failed%'
   )
@@ -158,7 +158,7 @@ $ kafka-verify-data format=json key=false sink=materialize.public.broken4 sort-m
 > SELECT EXISTS (
     SELECT 1
     FROM mz_sinks
-    JOIN mz_internal.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
+    JOIN mz_catalog_unstable.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
     WHERE name = 'broken4'
     AND error ILIKE '%failed to fetch progress message%Group authorization failed%'
   )
@@ -193,7 +193,7 @@ $ kafka-verify-data format=json key=false sink=materialize.public.working sort-m
 
 # Ensure that the sink never entered the `stalled` status.
 > SELECT DISTINCT status FROM mz_sinks
-  JOIN mz_internal.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
+  JOIN mz_catalog_unstable.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
   WHERE mz_sinks.name = 'working'
 starting
 running

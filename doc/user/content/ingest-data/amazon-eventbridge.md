@@ -81,7 +81,7 @@ https://<HOST>/api/webhook/<database>/<schema>/<src_name>
 ```
 
 If you missed the notice, you can find the URLs for all webhook sources in the
-[`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources)
+[`mz_catalog_unstable.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_catalog_unstable/#mz_webhook_sources)
 system table.
 
 ### Access and authentication
