@@ -138,7 +138,7 @@ The `mz_cluster_schedules` table shows the `SCHEDULE` option specified for each 
 | Field                               | Type         | Meaning                                                       |
 |-------------------------------------|--------------|---------------------------------------------------------------|
 | `cluster_id`                        | [`text`]     | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters).|
-| `type`                              | [`text`]     | `on-refresh`, or `manual` (the default)                       |
+| `type`                              | [`text`]     | `on-refresh`, or `manual`. Default: `manual`                       |
 | `refresh_rehydration_time_estimate` | [`interval`] | The interval given in the `REHYDRATION TIME ESTIMATE` option. |
 
 ## `mz_cluster_replica_frontiers`
@@ -1037,7 +1037,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 [`bytea`]: /sql/types/bytea
 [`double precision`]: /sql/types/double-precision
 [`integer`]: /sql/types/integer
-[`interval`]: /sql/types/interval/
+[`interval`]: /sql/types/interval
 [`jsonb`]: /sql/types/jsonb
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
@@ -1047,6 +1047,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 [`uuid`]: /sql/types/uuid
 [`uint4`]: /sql/types/uint4
 [`uint8`]: /sql/types/uint8
+[`uint8 list`]: /sql/types/list
 [`timestamp with time zone`]: /sql/types/timestamp
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->
