@@ -24,7 +24,12 @@ from materialize.version_ancestor_overrides import (
 )
 from materialize.version_list import resolve_ancestor_image_tag
 
-SERVICES = [RQG()]
+SERVICES = [
+    RQG(),
+    Materialized(name="mz_this"),
+    Materialized(name="mz_other"),
+    Postgres(),
+]
 
 
 class Dataset(Enum):

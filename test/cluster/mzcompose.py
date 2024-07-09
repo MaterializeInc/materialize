@@ -55,6 +55,7 @@ SERVICES = [
         propagate_crashes=False,
         external_cockroach=True,
     ),
+    Postgres(),
     Redpanda(),
     Toxiproxy(),
     Testdrive(
@@ -635,7 +636,7 @@ def workflow_test_github_15496(c: Composition) -> None:
     c.down(destroy_volumes=True)
     with c.override(
         Clusterd(
-            name="clusterd_nopanic",
+            name="clusterd1",
             environment_extra=[
                 "MZ_SOFT_ASSERTIONS=0",
             ],
@@ -644,7 +645,7 @@ def workflow_test_github_15496(c: Composition) -> None:
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.up("clusterd_nopanic")
+        c.up("clusterd1")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -663,10 +664,10 @@ def workflow_test_github_15496(c: Composition) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
-                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
-                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 2
                 )
             );
@@ -698,7 +699,7 @@ def workflow_test_github_15496(c: Composition) -> None:
         )
 
         # ensure that an error was put into the logs
-        c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
+        c1 = c.invoke("logs", "clusterd1", capture=True)
         assert "Non-positive accumulation in ReduceMinsMaxes" in c1.stdout
 
 
@@ -961,7 +962,7 @@ def workflow_test_github_17509(c: Composition) -> None:
     c.down(destroy_volumes=True)
     with c.override(
         Clusterd(
-            name="clusterd_nopanic",
+            name="clusterd1",
             environment_extra=[
                 "MZ_SOFT_ASSERTIONS=0",
             ],
@@ -970,7 +971,7 @@ def workflow_test_github_17509(c: Composition) -> None:
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.up("clusterd_nopanic")
+        c.up("clusterd1")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -989,10 +990,10 @@ def workflow_test_github_17509(c: Composition) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
-                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
-                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 2
                 )
             );
@@ -1036,7 +1037,7 @@ def workflow_test_github_17509(c: Composition) -> None:
         )
 
         # ensure that an error was put into the logs
-        c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
+        c1 = c.invoke("logs", "clusterd1", capture=True)
         assert "Non-positive accumulation in MinsMaxesHierarchical" in c1.stdout
         assert "Negative accumulation in ReduceMinsMaxes" not in c1.stdout
 
@@ -1055,7 +1056,7 @@ def workflow_test_github_19610(c: Composition) -> None:
     c.down(destroy_volumes=True)
     with c.override(
         Clusterd(
-            name="clusterd_nopanic",
+            name="clusterd1",
             environment_extra=[
                 "MZ_PERSIST_COMPACTION_DISABLED=true",
             ],
@@ -1064,7 +1065,7 @@ def workflow_test_github_19610(c: Composition) -> None:
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.up("clusterd_nopanic")
+        c.up("clusterd1")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -1083,10 +1084,10 @@ def workflow_test_github_19610(c: Composition) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
-                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
-                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 4
                 )
             );
@@ -1163,7 +1164,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
     c.down(destroy_volumes=True)
     with c.override(
         Clusterd(
-            name="clusterd_nopanic",
+            name="clusterd1",
             environment_extra=[
                 "MZ_PERSIST_COMPACTION_DISABLED=true",
             ],
@@ -1172,7 +1173,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.up("clusterd_nopanic")
+        c.up("clusterd1")
 
         c.sql(
             "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
@@ -1191,10 +1192,10 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
-                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
-                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 4
                 )
             );
@@ -1374,7 +1375,6 @@ def workflow_test_resource_limits(c: Composition) -> None:
 
     with c.override(
         Testdrive(),
-        Postgres(),
         Materialized(),
     ):
         c.up("materialized", "postgres")
@@ -1389,13 +1389,13 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
 
     with c.override(
         # Start postgres for the pg source
-        Postgres(),
         Testdrive(no_reset=True),
         Clusterd(
-            name="storage", environment_extra=["FAILPOINTS=pg_snapshot_failure=return"]
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_failure=return"],
         ),
     ):
-        c.up("materialized", "postgres", "storage")
+        c.up("materialized", "postgres", "clusterd1")
 
         c.run_testdrive_files("pg-snapshot-resumption/01-configure-postgres.td")
         c.run_testdrive_files("pg-snapshot-resumption/02-create-sources.td")
@@ -1408,9 +1408,9 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
 
         with c.override(
             # turn off the failpoint
-            Clusterd(name="storage")
+            Clusterd(name="clusterd1")
         ):
-            c.up("storage")
+            c.up("clusterd1")
             c.run_testdrive_files("pg-snapshot-resumption/05-verify-data.td")
 
 
@@ -1423,20 +1423,20 @@ def workflow_sink_failure(c: Composition) -> None:
         # Start postgres for the pg source
         Testdrive(no_reset=True),
         Clusterd(
-            name="storage",
+            name="clusterd1",
             environment_extra=["FAILPOINTS=kafka_sink_creation_error=return"],
         ),
     ):
-        c.up("materialized", "zookeeper", "kafka", "schema-registry", "storage")
+        c.up("materialized", "zookeeper", "kafka", "schema-registry", "clusterd1")
 
         c.run_testdrive_files("sink-failure/01-configure-sinks.td")
         c.run_testdrive_files("sink-failure/02-ensure-sink-down.td")
 
         with c.override(
             # turn off the failpoint
-            Clusterd(name="storage")
+            Clusterd(name="clusterd1")
         ):
-            c.up("storage")
+            c.up("clusterd1")
             c.run_testdrive_files("sink-failure/03-verify-data.td")
 
 
@@ -1702,13 +1702,13 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
 
     with c.override(
         # Start postgres for the pg source
-        Postgres(),
         Testdrive(no_reset=True),
         Clusterd(
-            name="storage", environment_extra=["FAILPOINTS=pg_snapshot_pause=return(2)"]
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(2)"],
         ),
     ):
-        c.up("materialized", "postgres", "storage")
+        c.up("materialized", "postgres", "clusterd1")
 
         c.run_testdrive_files("pg-snapshot-partial-failure/01-configure-postgres.td")
         c.run_testdrive_files("pg-snapshot-partial-failure/02-create-sources.td")
@@ -1717,14 +1717,14 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
             "pg-snapshot-partial-failure/03-verify-good-sub-source.td"
         )
 
-        c.kill("storage")
+        c.kill("clusterd1")
         # Restart the storage instance with the failpoint off...
         with c.override(
             # turn off the failpoint
-            Clusterd(name="storage")
+            Clusterd(name="clusterd1")
         ):
             c.run_testdrive_files("pg-snapshot-partial-failure/04-add-more-data.td")
-            c.up("storage")
+            c.up("clusterd1")
             c.run_testdrive_files("pg-snapshot-partial-failure/05-verify-data.td")
 
 
@@ -2122,7 +2122,6 @@ def workflow_test_query_without_default_cluster(c: Composition) -> None:
 
     with c.override(
         Testdrive(),
-        Postgres(),
         Materialized(),
     ):
         c.up("materialized", "postgres")

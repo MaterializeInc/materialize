@@ -38,8 +38,18 @@ SERVICES = [
     Clusterd(),
     Postgres(),
     Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
+    Kafka(
+        name="badkafka",
+        environment=[
+            "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
+            # Setting the following values to 3 to trigger a failure
+            # sets the transaction.state.log.min.isr config
+            "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=3",
+            # sets the transaction.state.log.replication.factor config
+            "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+        ],
+    ),
+    SchemaRegistry(kafka_servers=[("badkafka", "9092")]),
 ]
 
 
@@ -61,18 +71,6 @@ class KafkaTransactionLogGreaterThan1:
         c.up("testdrive", persistent=True)
 
         with c.override(
-            Kafka(
-                name="badkafka",
-                environment=[
-                    "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
-                    # Setting the following values to 3 to trigger a failure
-                    # sets the transaction.state.log.min.isr config
-                    "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=3",
-                    # sets the transaction.state.log.replication.factor config
-                    "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
-                ],
-            ),
-            SchemaRegistry(kafka_servers=[("badkafka", "9092")]),
             Testdrive(
                 no_reset=True,
                 seed=seed,

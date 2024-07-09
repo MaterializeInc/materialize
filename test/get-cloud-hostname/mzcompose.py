@@ -12,9 +12,11 @@ import os
 from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 
 SERVICES = [
     Materialized(),
+    Mz(app_password=""),
 ]
 
 

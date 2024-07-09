@@ -16,10 +16,10 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 
 > CREATE CLUSTER storage REPLICAS (
     r1 (
-      STORAGECTL ADDRESSES ['storage:2100'],
-      STORAGE ADDRESSES ['storage:2103'],
-      COMPUTECTL ADDRESSES ['storage:2101'],
-      COMPUTE ADDRESSES ['storage:2102']
+      STORAGECTL ADDRESSES ['clusterd1:2100'],
+      STORAGE ADDRESSES ['clusterd1:2103'],
+      COMPUTECTL ADDRESSES ['clusterd1:2101'],
+      COMPUTE ADDRESSES ['clusterd1:2102']
     )
   )
 
