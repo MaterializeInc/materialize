@@ -375,7 +375,7 @@ Linting requires the following tools and Cargo packages to be installed:
 * cargo-about (`cargo install cargo-about`)
 * cargo-hakari (`cargo install cargo-hakari`)
 * cargo-deplint (`cargo install cargo-deplint`)
-* cargo-about (`cargo install cargo-deny`)
+* cargo-deny (`cargo install cargo-deny`)
 
 ## Submitting and reviewing changes
 
