@@ -33,7 +33,7 @@ stdenv.mkDerivation rec {
     libiconv
     darwin.apple_sdk.frameworks.DiskArbitration
     darwin.apple_sdk.frameworks.Foundation
-   ];
-  
+  ];
+
   RUSTFLAGS = "-Clink-arg=-Wl,--warn-unresolved-symbols -Cdebuginfo=1 -Csymbol-mangling-version=v0";
 }
