@@ -90,7 +90,6 @@ work but are not supported. Our recommended installation methods are:
 - macOS: [Homebrew](https://brew.sh)
 - Linux: System package manager if possible, or [community package repositories](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa) if necessary
 - Windows: [Microsoft App Store](https://apps.microsoft.com/detail/python-3-11/9NRWMJP3717K?hl=en-US&gl=US)
-- Cross-platform: [Nix] [flake](../../misc/nix)
 
 If none of the above work well for you, these are a few other methods that have
 worked for us in the past, but are not formally supported:
@@ -180,19 +179,44 @@ location, set `$CONFLUENT_HOME` to this location and add `$CONFLUENT_HOME/bin`
 to your $PATH. I found this to be the most convenient way to get confluent
 and it also works in a distro neutral way (if you are using, Arch Linux for example).
 
+### Nix
+
+Optionally, you can use [nix][Nix] to install all required dependencies on both Linux and macOS,
+using the provided [`shell.nix`](../../misc/nix). [Install nix][nix-manual] and use `nix-shell` to enter an
+environment that is isolated from the main OS.
+
+```bash
+nix-shell misc/nix/shell.nix
+[nix-shell]$ rustup install stable # If not installed already
+```
+
+Materialize can then be build inside this shell. Note that CockroachDB is not included in the above configuration
+and needs to be installed separately, as described above. Also, IDEs will not be able to access the installed
+dependencies unless they are started from within the `nix-shell` environment:
+
+```bash
+code . # Linux
+/Applications/Visual\ Studio\ Code.app/Contents/MacOS/Electron # MacOS
+```
+
 ## Building Materialize
 
 First, clone this repository:
 
 ```shell
 git clone git@github.com:MaterializeInc/materialize.git
-git submodule init
-git submodule update --recursive´
 ```
 
 Because the MaterializeInc organization requires two-factor authentication
 (2FA), you'll need to clone via SSH as indicated above, or [configure a personal
 access token for use with HTTPS][github-https].
+
+Optionally, you may need to also clone the associated submodules:
+
+```shell
+git submodule init
+git submodule update --recursive
+```
 
 Then you can build Materialize. Because Materialize is a collection of several
 Rust services that need to be built together, each service can be built
@@ -605,7 +629,8 @@ source /path/to/materialize/misc/completions/zsh/*
 [forked-cockroach-tap]: https://github.com/materializeInc/homebrew-cockroach
 [Kubernetes]: https://kubernetes.io
 [materialize-dbt-utils]: https://github.com/MaterializeInc/materialize-dbt-utils
-[Nix]: https://nixos.org
+[Nix]: https://nix.dev/tutorials/first-steps/ad-hoc-shell-environments
+[nix-manual]: https://nix.dev/manual/nix/2.18/installation/installing-binary
 [Python]: https://www.python.org
 [rust-dec]: https://github.com/MaterializeInc/rust-dec
 [Rust]: https://www.rust-lang.org
@@ -615,6 +640,5 @@ source /path/to/materialize/misc/completions/zsh/*
 [sqlparser]: https://github.com/MaterializeInc/sqlparser
 [Python]: https://www.python.org
 [vscode-python]: https://marketplace.visualstudio.com/items?itemName=ms-python.python
-[Nix]: https://nixos.wiki/wiki/Flakes
 [Visual Studio Code]: https://code.visualstudio.com
 [RustRover]: https://www.jetbrains.com/rust/

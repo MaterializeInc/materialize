@@ -10,33 +10,24 @@
 { pkgs ? import <nixpkgs> {} }:
 with pkgs;
 
-let
-    target-analyzer = builtins.toString ./../../.rust-analyzer/target;
-    scoped-rust-analyzer = pkgs.writeShellScriptBin "rust-analyzer" ''
-      exec ${pkgs.coreutils}/bin/env CARGO_TARGET_DIR=${target-analyzer} ${pkgs.rust-analyzer}/bin/rust-analyzer
-    '';
-in
 stdenv.mkDerivation rec {
   name = "materialize";
   buildInputs = with pkgs; [
-      clang_14
+      libclang
+      rustPlatform.bindgenHook
       cmake
+      perl
       rustup
-      openssl
       postgresql
       pkg-config
-      lld_14
-      python311
-      scoped-rust-analyzer
+      python3
+      git
+
+      # For lint checks
       shellcheck
-  ];
-
-  hardeningDisable = [ "fortify" ];
-
-  RUSTFLAGS = "-Clinker=clang -Clink-arg=--ld-path=${pkgs.mold}/bin/mold -Clink-arg=-Wl,--warn-unresolved-symbols -Cdebuginfo=1 -Csymbol-mangling-version=v0 --cfg=tokio_usntable";
-
-  shellHook = ''
-    export LD_LIBRARY_PATH=${pkgs.stdenv.cc.cc.lib}/lib:$LD_LIBRARY_PATH
-    export LIBCLANG_PATH="${llvmPackages_14.libclang.lib}/lib";
-  '';
+      buf
+      nodejs_22
+  ] ++ lib.optionals stdenv.isDarwin [pkgs.buildPackages.darwin.bootstrap_cmds pkgs.libiconv darwin.apple_sdk.frameworks.DiskArbitration darwin.apple_sdk.frameworks.Foundation];
+  
+  RUSTFLAGS = lib.optionalString stdenv.isLinux "-Clinker=clang -Clink-arg=--ld-path=${pkgs.mold}/bin/mold -Clink-arg=-Wl,--warn-unresolved-symbols -Cdebuginfo=1 -Csymbol-mangling-version=v0";
 }
