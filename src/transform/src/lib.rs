@@ -363,17 +363,18 @@ impl Transform for Fixpoint {
                     self.limit
                 );
             } else {
-                return Err(TransformError::Internal(format!(
-                    "Fixpoint {} ran for {} iterations \
-                     without reaching a fixpoint or reducing the relation size; \
-                     current_size ({}) >= prev_size ({}); \
-                     transformed relation:\n{}",
+                // We failed to reach a fixed point, or find a sufficiently short cycle.
+                // This is not catastrophic, because we can just say we are done now,
+                // but it would be great to eventually find a way to prevent these loops from
+                // happening in the first place. We have several relevant issues, see
+                // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
+                mz_repr::explain::trace_plan(relation);
+                soft_panic_or_log!(
+                    "Fixpoint {} failed to reach a fixed point, or cycle of length at most {}",
                     self.name,
-                    iter_no,
-                    current_size,
-                    prev_size,
-                    relation.pretty()
-                )));
+                    self.limit,
+                );
+                return Ok(());
             }
         }
     }
