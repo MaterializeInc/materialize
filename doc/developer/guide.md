@@ -186,6 +186,8 @@ First, clone this repository:
 
 ```shell
 git clone git@github.com:MaterializeInc/materialize.git
+git submodule init
+git submodule update --recursive´
 ```
 
 Because the MaterializeInc organization requires two-factor authentication
