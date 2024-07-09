@@ -9,13 +9,12 @@
 
 //! Apache Arrow encodings and utils for persist data
 
-use std::panic::RefUnwindSafe;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use arrow::array::{Array, AsArray, BinaryArray, PrimitiveArray};
+use arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray, BinaryArray, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType, Field, Schema, ToByteSlice};
+use arrow::datatypes::{DataType, Field, Schema, ToByteSlice};
 use mz_dyncfg::Config;
 use mz_ore::bytes::MaybeLgBytes;
 use mz_ore::iter::IteratorExt;
@@ -115,42 +114,48 @@ pub(crate) const ENABLE_ARROW_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
     "A feature flag to enable copying decoded arrow data into lgalloc on non-cc sized clusters.",
 );
 
-fn realloc_slice<T: ArrowNativeType + RefUnwindSafe>(
-    slice: &[T],
-    metrics: &ColumnarMetrics,
-) -> Buffer {
+fn realloc_data(data: ArrayData, metrics: &ColumnarMetrics) -> ArrayData {
+    // NB: we don't have type information for each buffer, so we don't request any particular
+    // alignment. Thankfully, lgalloc aligns everything to the page boundary. Arrow validates
+    // the alignment of the provided buffers, so if this ever changed, `build` would return
+    // an error below.
+    let buffers = data
+        .buffers()
+        .iter()
+        .map(|b| realloc_slice(b, metrics))
+        .collect();
+    let child_data = data
+        .child_data()
+        .iter()
+        .cloned()
+        .map(|d| realloc_data(d, metrics))
+        .collect();
+    let nulls = data.nulls().map(|n| {
+        let buffer = realloc_slice(n.buffer(), metrics);
+        NullBuffer::new(BooleanBuffer::new(buffer, n.offset(), n.len()))
+    });
+
+    data.into_builder()
+        .buffers(buffers)
+        .child_data(child_data)
+        .nulls(nulls)
+        .build()
+        .expect("reconstructing valid arrow array")
+}
+fn realloc_any(array: &ArrayRef, metrics: &ColumnarMetrics) -> ArrayRef {
+    let data = array.to_data();
+    let data = realloc_data(data, metrics);
+    make_array(data)
+}
+
+fn realloc_slice(slice: &[u8], metrics: &ColumnarMetrics) -> Buffer {
     let region = to_region(slice, metrics);
     let bytes: &[u8] = region.as_ref().to_byte_slice();
-    let len = bytes.len();
-    if len == 0 {
-        Buffer::from_vec::<u8>(vec![])
-    } else {
-        let first_byte: &u8 = &bytes[0];
-        let ptr: NonNull<u8> = first_byte.into();
-        unsafe { Buffer::from_custom_allocation(ptr, len, Arc::new(region)) }
-    }
-}
-
-fn realloc_bool(bools: &BooleanBuffer, metrics: &ColumnarMetrics) -> BooleanBuffer {
-    BooleanBuffer::new(
-        realloc_slice(bools.inner(), metrics),
-        bools.offset(),
-        bools.len(),
-    )
-}
-
-fn realloc_primitive<T: ArrowPrimitiveType>(
-    array: &PrimitiveArray<T>,
-    metrics: &ColumnarMetrics,
-) -> PrimitiveArray<T>
-where
-    T::Native: RefUnwindSafe,
-{
-    let scalar = ScalarBuffer::new(realloc_slice(array.values(), metrics), 0, array.len());
-    let nulls = array
-        .nulls()
-        .map(|nulls| NullBuffer::new(realloc_bool(nulls.inner(), metrics)));
-    PrimitiveArray::new(scalar, nulls)
+    let ptr: NonNull<[u8]> = bytes.into();
+    // This is fine: see [[NonNull::as_non_null_ptr]] for an unstable version of this usage.
+    let ptr: NonNull<u8> = ptr.cast();
+    // SAFETY: `ptr` is valid for `len` bytes, and kept alive as long as `region` lives.
+    unsafe { Buffer::from_custom_allocation(ptr, bytes.len(), Arc::new(region)) }
 }
 
 /// Converts an [`arrow`] [(K, V, T, D)] [`RecordBatch`] into a [`ColumnarRecords`].
@@ -178,6 +183,7 @@ pub fn decode_arrow_batch_kvtd(
         _ => return Err(format!("expected 4 columns got {}", columns.len())),
     };
 
+    let key_col = realloc_any(&key_col, metrics);
     let key = key_col
         .as_binary_opt::<i32>()
         .ok_or_else(|| "key column is wrong type".to_string())?;
@@ -187,7 +193,8 @@ pub fn decode_arrow_batch_kvtd(
     let time = ts_col
         .as_primitive_opt::<arrow::datatypes::Int64Type>()
         .ok_or_else(|| "time column is wrong type".to_string())?;
-    let diff = diff_col
+    let diff_col = realloc_any(&diff_col, metrics);
+    let diffs = diff_col
         .as_primitive_opt::<arrow::datatypes::Int64Type>()
         .ok_or_else(|| "diff column is wrong type".to_string())?;
 
@@ -198,7 +205,6 @@ pub fn decode_arrow_batch_kvtd(
     let val_data = Arc::new(to_region(val.value_data(), metrics));
 
     let timestamps = Arc::new(to_region(&time.values()[..], metrics));
-    let diffs = realloc_primitive(diff, metrics);
 
     let len = key.len();
     let ret = ColumnarRecords {
@@ -208,7 +214,7 @@ pub fn decode_arrow_batch_kvtd(
         val_data: MaybeLgBytes::LgBytes(LgBytes::from(val_data)),
         val_offsets,
         timestamps,
-        diffs,
+        diffs: diffs.clone(),
     };
     ret.borrow().validate()?;
 
