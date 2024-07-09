@@ -14,7 +14,7 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::DifferentialEvent;
 use differential_dataflow::Collection;
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
-use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
+use mz_ore::flatcontainer::{MzOffsetOptimized, MzRegionPreference, OwnedRegionOpinion};
 use mz_repr::{Diff, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::errors::DataflowError;
@@ -100,7 +100,7 @@ struct LoggingContext<'a, A: Allocate> {
     now: Instant,
     start_offset: Duration,
     t_event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, TimelyEvent)>>,
-    r_event_queue: EventQueue<FlatStack<ReachabilityEventRegion>>,
+    r_event_queue: EventQueue<FlatStack<ReachabilityEventRegion, MzOffsetOptimized>>,
     d_event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, DifferentialEvent)>>,
     c_event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
@@ -188,7 +188,9 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
 
     fn reachability_logger(&self) -> Logger<TrackerEvent> {
         let event_queue = self.r_event_queue.clone();
-        type CB = PreallocatingCapacityContainerBuilder<FlatStack<ReachabilityEventRegion>>;
+        type CB = PreallocatingCapacityContainerBuilder<
+            FlatStack<ReachabilityEventRegion, MzOffsetOptimized>,
+        >;
         let mut logger = BatchLogger::<CB, _>::new(event_queue.link, self.interval_ms);
         Logger::new(
             self.now,

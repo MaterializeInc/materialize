@@ -911,13 +911,13 @@ mod lgallocvec {
             assert_eq!(region.index(index), &42);
 
             let mut region = LgAllocVec::<u32>::default();
-            region.push(42);
-            region.push(43);
-            region.push(44);
+            let i0 = <_ as Push<_>>::push(&mut region, 42);
+            let i1 = <_ as Push<_>>::push(&mut region, 43);
+            let i2 = <_ as Push<_>>::push(&mut region, 44);
             region.reserve_items([1, 2, 3].iter());
-            assert_eq!(region.index(0), &42);
-            assert_eq!(region.index(1), &43);
-            assert_eq!(region.index(2), &44);
+            assert_eq!(region.index(i0), &42);
+            assert_eq!(region.index(i1), &43);
+            assert_eq!(region.index(i2), &44);
         }
     }
 }

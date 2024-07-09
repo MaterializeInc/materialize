@@ -14,16 +14,16 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
-use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
+use mz_ore::flatcontainer::{MzOffsetOptimized, MzRegionPreference, OwnedRegionOpinion};
 use mz_ore::region::LgAllocVec;
 use mz_repr::{Datum, Diff, Timestamp};
+use mz_timely_util::containers::PreallocatingCapacityContainerBuilder;
 use mz_timely_util::replay::MzReplay;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
-use timely::container::columnation::{Columnation, CopyRegion};
+use timely::container::flatcontainer::FlatStack;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
@@ -361,10 +361,12 @@ struct MessageCount {
     records: i64,
 }
 
-type Pusher<D> =
-    Counter<Timestamp, Vec<(D, Timestamp, Diff)>, Tee<Timestamp, Vec<(D, Timestamp, Diff)>>>;
+type FlatStackFor<D> =
+    FlatStack<<(D, Timestamp, Diff) as MzRegionPreference>::Region, MzOffsetOptimized>;
+
+type Pusher<D> = Counter<Timestamp, FlatStackFor<D>, Tee<Timestamp, FlatStackFor<D>>>;
 type OutputSession<'a, D> =
-    Session<'a, Timestamp, ConsolidatingContainerBuilder<Vec<(D, Timestamp, Diff)>>, Pusher<D>>;
+    Session<'a, Timestamp, PreallocatingCapacityContainerBuilder<FlatStackFor<D>>, Pusher<D>>;
 
 /// Bundled output buffers used by the demux operator.
 //
@@ -374,7 +376,7 @@ type OutputSession<'a, D> =
 struct DemuxOutput<'a> {
     operates: OutputSession<'a, (usize, String)>,
     channels: OutputSession<'a, (ChannelDatum, ())>,
-    addresses: OutputSession<'a, (usize, Vec<usize>)>,
+    addresses: OutputSession<'a, (usize, OwnedRegionOpinion<Vec<usize>>)>,
     parks: OutputSession<'a, (ParkDatum, ())>,
     batches_sent: OutputSession<'a, (MessageDatum, ())>,
     batches_received: OutputSession<'a, (MessageDatum, ())>,

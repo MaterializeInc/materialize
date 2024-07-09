@@ -1981,7 +1981,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/antiguru/differential-dataflow.git?branch=region_update#0697f7a519247a2f2ca08bad28a59617f3fcce72"
+source = "git+https://github.com/antiguru/differential-dataflow.git?branch=region_update#bb5836a50e5233795cf3efcc042f8945f78b4350"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -2037,7 +2037,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/antiguru/differential-dataflow.git?branch=region_update#0697f7a519247a2f2ca08bad28a59617f3fcce72"
+source = "git+https://github.com/antiguru/differential-dataflow.git?branch=region_update#bb5836a50e5233795cf3efcc042f8945f78b4350"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -9591,7 +9591,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/antiguru/timely-dataflow.git?branch=flatcontainer_storage#3f9d3874c6c5d75e2a9e67af9e78d6c40234be6a"
+source = "git+https://github.com/antiguru/timely-dataflow.git?branch=flatcontainer_storage#63103bd5f7584fd77b3256580df229189cbcd314"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -9608,12 +9608,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/antiguru/timely-dataflow.git?branch=flatcontainer_storage#3f9d3874c6c5d75e2a9e67af9e78d6c40234be6a"
+source = "git+https://github.com/antiguru/timely-dataflow.git?branch=flatcontainer_storage#63103bd5f7584fd77b3256580df229189cbcd314"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/antiguru/timely-dataflow.git?branch=flatcontainer_storage#3f9d3874c6c5d75e2a9e67af9e78d6c40234be6a"
+source = "git+https://github.com/antiguru/timely-dataflow.git?branch=flatcontainer_storage#63103bd5f7584fd77b3256580df229189cbcd314"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -9629,7 +9629,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/antiguru/timely-dataflow.git?branch=flatcontainer_storage#3f9d3874c6c5d75e2a9e67af9e78d6c40234be6a"
+source = "git+https://github.com/antiguru/timely-dataflow.git?branch=flatcontainer_storage#63103bd5f7584fd77b3256580df229189cbcd314"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -9639,7 +9639,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/antiguru/timely-dataflow.git?branch=flatcontainer_storage#3f9d3874c6c5d75e2a9e67af9e78d6c40234be6a"
+source = "git+https://github.com/antiguru/timely-dataflow.git?branch=flatcontainer_storage#63103bd5f7584fd77b3256580df229189cbcd314"
 
 [[package]]
 name = "tiny-keccak"

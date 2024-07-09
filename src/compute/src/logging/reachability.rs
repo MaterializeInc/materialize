@@ -16,7 +16,7 @@ use std::rc::Rc;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
-use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
+use mz_ore::flatcontainer::{MzOffsetOptimized, MzRegionPreference, OwnedRegionOpinion};
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, RowArena, SharedRow, Timestamp};
 use mz_timely_util::containers::PreallocatingCapacityContainerBuilder;
@@ -39,7 +39,7 @@ use crate::typedefs::{FlatKeyValSpineDefault, RowRowSpine};
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    event_queue: EventQueue<FlatStack<ReachabilityEventRegion>>,
+    event_queue: EventQueue<FlatStack<ReachabilityEventRegion, MzOffsetOptimized>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_index = worker.index();
@@ -57,7 +57,8 @@ pub(super) fn construct<A: Allocate>(
         );
         type UpdatesRegion = <((UpdatesKey, ()), Timestamp, Diff) as MzRegionPreference>::Region;
 
-        type CB = PreallocatingCapacityContainerBuilder<FlatStack<UpdatesRegion>>;
+        type CB =
+            PreallocatingCapacityContainerBuilder<FlatStack<UpdatesRegion, MzOffsetOptimized>>;
         let (updates, token) = Some(event_queue.link).mz_replay::<_, CB, _>(
             scope,
             "reachability logs",

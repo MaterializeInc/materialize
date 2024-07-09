@@ -11,8 +11,9 @@
 
 use std::collections::VecDeque;
 
+use timely::container::flatcontainer::impls::index::IndexContainer;
 use timely::container::flatcontainer::{FlatStack, Push, Region};
-use timely::container::{ContainerBuilder, PushInto, SizableContainer};
+use timely::container::{CapacityContainer, ContainerBuilder, PushInto};
 use timely::Container;
 
 pub mod array;
@@ -31,50 +32,50 @@ pub mod stack;
 #[derive(Default, Debug)]
 pub struct PreallocatingCapacityContainerBuilder<C> {
     /// Container that we're writing to.
-    current: C,
+    current: Option<C>,
     /// Emtpy allocation.
     empty: Option<C>,
     /// Completed containers pending to be sent.
     pending: VecDeque<C>,
 }
 
-impl<T, R> PushInto<T> for PreallocatingCapacityContainerBuilder<FlatStack<R>>
+impl<T, R, S> PushInto<T> for PreallocatingCapacityContainerBuilder<FlatStack<R, S>>
 where
     R: Region + Push<T> + Clone + 'static,
+    S: IndexContainer<R::Index> + Clone + 'static,
+    FlatStack<R, S>: CapacityContainer,
 {
     #[inline]
     fn push_into(&mut self, item: T) {
-        if self.current.capacity() == 0 {
-            self.current = self.empty.take().unwrap_or_default();
-            // Protect against non-emptied containers.
-            self.current.clear();
-        }
-        // Ensure capacity
-        let preferred_capacity = FlatStack::<R>::preferred_capacity();
-        if self.current.capacity() < preferred_capacity {
-            self.current
-                .reserve(preferred_capacity - self.current.len());
+        if self.current.is_none() {
+            let mut empty = self.empty.take().unwrap_or_default();
+            empty.clear();
+            self.current = Some(empty);
         }
 
+        let current = self.current.as_mut().unwrap();
+
+        // Ensure capacity
+        current.ensure_preferred_capacity();
         // Push item
-        self.current.push(item);
+        current.push(item);
 
         // Maybe flush
-        if self.current.len() == self.current.capacity() {
-            let pending = std::mem::take(&mut self.current);
-            self.current = FlatStack::merge_capacity(std::iter::once(&pending));
-            self.current
-                .reserve(preferred_capacity.saturating_sub(self.current.len()));
+        if current.len() >= FlatStack::<R, S>::preferred_capacity() {
+            let pending = std::mem::take(current);
+            *current = FlatStack::merge_capacity(std::iter::once(&pending));
             self.pending.push_back(pending);
         }
     }
 }
 
-impl<R> ContainerBuilder for PreallocatingCapacityContainerBuilder<FlatStack<R>>
+impl<R, S> ContainerBuilder for PreallocatingCapacityContainerBuilder<FlatStack<R, S>>
 where
     R: Region + Clone + 'static,
+    S: IndexContainer<R::Index> + Clone + 'static,
+    FlatStack<R, S>: CapacityContainer,
 {
-    type Container = FlatStack<R>;
+    type Container = FlatStack<R, S>;
 
     #[inline]
     fn extract(&mut self) -> Option<&mut Self::Container> {
@@ -84,12 +85,11 @@ where
 
     #[inline]
     fn finish(&mut self) -> Option<&mut Self::Container> {
-        if !self.current.is_empty() {
-            let pending = std::mem::take(&mut self.current);
-            self.current = FlatStack::merge_capacity(std::iter::once(&pending));
-            let preferred_capacity = FlatStack::<R>::preferred_capacity();
-            self.current
-                .reserve(preferred_capacity.saturating_sub(self.current.len()));
+        let current = self.current.as_mut();
+        if current.as_ref().map_or(false, |c| !c.is_empty()) {
+            let current = current.unwrap();
+            let pending = std::mem::take(current);
+            *current = FlatStack::merge_capacity(std::iter::once(&pending));
             self.pending.push_back(pending);
         }
         self.empty = self.pending.pop_front();
