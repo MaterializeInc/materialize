@@ -250,9 +250,9 @@ def _validate_parallelism_configuration() -> None:
     ), f"{job_index_desc} out of valid range with {job_count_desc}"
 
 
-def truncate_str(text: str, length: int = 900_000) -> str:
+def truncate_annotation_str(text: str, max_length: int = 900_000) -> str:
     # 400 Bad Request: The annotation body must be less than 1 MB
-    return text if len(text) <= length else text[:length] + "..."
+    return text if len(text) <= max_length else text[:max_length] + "..."
 
 
 def get_artifact_url(artifact: dict[str, Any]) -> str:
@@ -263,6 +263,10 @@ def get_artifact_url(artifact: dict[str, Any]) -> str:
 
 
 def add_annotation_raw(style: str, markdown: str) -> None:
+    """
+    Note that this does not trim the data.
+    :param markdown: must not exceed 1 MB
+    """
     spawn.runv(
         [
             "buildkite-agent",
@@ -278,12 +282,12 @@ def add_annotation(style: str, title: str, content: str) -> None:
     if style == "info":
         markdown = f"""<details><summary>{title}</summary>
 
-{truncate_str(content)}
+{truncate_annotation_str(content)}
 </details>"""
     else:
         markdown = f"""{title}
 
-{truncate_str(content)}"""
+{truncate_annotation_str(content)}"""
     add_annotation_raw(style, markdown)
 
 
