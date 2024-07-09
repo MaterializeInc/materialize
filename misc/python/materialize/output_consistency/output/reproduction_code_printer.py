@@ -111,8 +111,9 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         characteristics = self.__get_involved_characteristics(
             query_template, query_column_selection
         )
+        characteristic_names = ", ".join([char.name for char in characteristics])
         self._print_text(
-            f"All assumed directly or indirectly involved characteristics: {characteristics}"
+            f"All assumed directly or indirectly involved characteristics: {characteristic_names}"
         )
 
     def __print_setup_code_for_error(
