@@ -11,11 +11,15 @@ aliases:
 ---
 
 {{% create-source/intro %}}
-To connect to a Kafka broker (and optionally a schema registry), you first need to [create a connection](#creating-a-connection) that specifies access and authentication parameters. Once created, a connection is **reusable** across multiple `CREATE SOURCE` and `CREATE SINK` statements.
+To connect to a Kafka broker (and optionally a schema registry), you first need
+to [create a connection](#creating-a-connection) that specifies access and
+authentication parameters. Once created, a connection is **reusable** across
+multiple `CREATE SOURCE` and `CREATE SINK` statements.
 {{% /create-source/intro %}}
 
 {{< note >}}
-The same syntax, supported formats and features can be used to connect to a [Redpanda](/integrations/redpanda/) broker.
+The same syntax, supported formats and features can be used to connect to a
+[Redpanda](/integrations/redpanda/) broker.
 {{</ note >}}
 
 ## Syntax
@@ -64,13 +68,17 @@ Field                                         | Value     | Description
 
 ### Key-value encoding
 
-By default, the message key is decoded using the same format as the message value. However, you can set the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT` [syntax](#syntax).
+By default, the message key is decoded using the same format as the message
+value. However, you can set the key and value encodings explicitly using the
+`KEY FORMAT ... VALUE FORMAT` [syntax](#syntax).
 
 ## Features
 
 ### Handling upserts
 
-To create a source that uses the standard key-value convention to support inserts, updates, and deletes within Materialize, you can use `ENVELOPE UPSERT`:
+To create a source that uses the standard key-value convention to support
+inserts, updates, and deletes within Materialize, you can use `ENVELOPE
+UPSERT`:
 
 ```mzsql
 CREATE SOURCE kafka_upsert
@@ -82,6 +90,7 @@ CREATE SOURCE kafka_upsert
 Note that:
 
 - Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
+
 - This envelope can lead to high memory and disk utilization in the cluster
   maintaining the source. We recommend using a standard-sized cluster, rather
   than a legacy-sized cluster, to automatically spill the workload to disk. See
@@ -104,38 +113,52 @@ echo ":" | kcat -b $BROKER -t $TOPIC -Z -K: \
   -X sasl.password=$KAFKA_PASSWORD
 ```
 
-#### Value Decoding Errors
+#### Value decoding errors
 
 {{< private-preview />}}
 
-To avoid setting an `ENVELOPE UPSERT` source into an error state if a value fails to decode,
-you can use the `VALUE DECODING ERRORS = INLINE` option to store the latest error for each
-key directly in the upsert source:
+By default, if an error happens while decoding the value of a message for a
+specific key, Materialize sets the source into an error state. You can
+configure the source to continue ingesting data in the presence of value
+decoding errors using the `VALUE DECODING ERRORS = INLINE` option:
+
 ```mzsql
 CREATE SOURCE kafka_upsert
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE UPSERT (VALUE DECODING ERRORS = INLINE);
 ```
 
-When the `VALUE DECODING ERRORS = INLINE` option is specified, the source will contain
-two top-level nullable columns, `error` and `value` and will not contain top-level columns for
-fields in decoded values. The source itself will not enter an error state on failure to
-decode the value for a specific key.
+When this option is specified, the source will have the following schema,
+regardless of the specified `FORMAT`:
 
-The column named `error` is nullable with a type of `record(description: text)`. If the most
-recent value for a key has been successfully decoded, this column will be `NULL`. If the
-most recent value for a key was not succesfully decoded, this column will contain details
-about the error.
+Field         | Type                                                                                       | Nullable | Meaning
+--------------|--------------------------------------------------------------------------------------------|--------- |-----------
+`key`         | [[`record`](/sql/types/record/), [`bytea`](/sql/types/bytea/), [`text`](/sql/types/text/)] | `false`  | The Kafka message key. The type of this field depends on the specified `KEY FORMAT`. For unnamed formats (e.g., `TEXT`), the column name will be `key`. If the key is encoded using a format that includes schemas (e.g., `AVRO`), the column will take its name from the schema. The column can be renamed using the [`INCLUDE KEY AS...`](#key) syntax.
+`value`       | [`record`](/sql/types/uint/#uint8-info)                                                    | `true`   | The message value for the given Kafka message key. If the most recent value cannot be decoded, this column will be `NULL`.
+`error`       | [`record`](/sql/types/uint/#uint8-info)                                                    | `true`   | If the most recent value for the given Kafka message key cannot be decoded, this column column will contain the error message. If the most recent value for a key has been successfully decoded, this column will be `NULL`.
 
-The column named `value` is nullable with a type of `record(value columns...)` and will be `NULL`
-if the value could not be decoded.
+We recommend creating a parsing view on top of your Kafka upsert source that
+maps the strongly-typed [`record`](/sql/types/uint/#uint8-info) fields in
+`value` to columns, and optionally excludes keys with decoding errors:
+
+```mzsql
+CREATE VIEW kafka_upsert_parsed
+SELECT (value).*
+FROM kafka_upsert
+-- Optionally exclude messages for keys with values
+-- that cannot be decoded
+WHERE error IS NULL;
+```
 
 ### Using Debezium
 
 {{< debezium-json >}}
 
-Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka messages produced by [Debezium](https://debezium.io/). To create a source that interprets Debezium messages:
+Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka
+messages produced by [Debezium](https://debezium.io/). To create a source that
+interprets Debezium messages:
 
 ```mzsql
 CREATE SOURCE kafka_repl
@@ -144,9 +167,12 @@ CREATE SOURCE kafka_repl
   ENVELOPE DEBEZIUM;
 ```
 
-Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
+Any materialized view defined on top of this source will be incrementally
+updated as new change events stream in through Kafka, as a result of `INSERT`,
+`UPDATE` and `DELETE` operations in the original database.
 
-For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check [Using Debezium](/integrations/debezium/).
+For more details and a step-by-step guide on using Kafka+Debezium for Change
+Data Capture (CDC), check [Using Debezium](/integrations/debezium/).
 
 Note that:
 
@@ -165,11 +191,13 @@ Spilling to disk is not available with [legacy cluster sizes](/sql/create-cluste
 
 ### Exposing source metadata
 
-In addition to the message value, Materialize can expose the message key, headers and other source metadata fields to SQL.
+In addition to the message value, Materialize can expose the message key,
+headers and other source metadata fields to SQL.
 
 #### Key
 
-The message key is exposed via the `INCLUDE KEY` option. Composite keys are also supported {{% gh 7645 %}}.
+The message key is exposed via the `INCLUDE KEY` option. Composite keys are also
+supported {{% gh 7645 %}}.
 
 ```mzsql
 CREATE SOURCE kafka_metadata
@@ -196,9 +224,13 @@ Note that:
 
 **All headers**
 
-All of a message's headers can be exposed using `INCLUDE HEADERS`, followed by an `AS <header_col>`.
+All of a message's headers can be exposed using `INCLUDE HEADERS`, followed by
+an `AS <header_col>`.
 
-This introduces column with the name specified or `headers` if none was specified. The column has the type `record(key: text, value: bytea?) list`, i.e. a list of records containing key-value pairs, where the keys are `text` and the values are nullable `bytea`s.
+This introduces column with the name specified or `headers` if none was
+specified. The column has the type `record(key: text, value: bytea?) list`,
+i.e. a list of records containing key-value pairs, where the keys are `text`
+and the values are nullable `bytea`s.
 
 ```mzsql
 CREATE SOURCE kafka_metadata
@@ -208,7 +240,8 @@ CREATE SOURCE kafka_metadata
   ENVELOPE NONE;
 ```
 
-To simplify turning the headers column into a `map` (so individual headers can be searched), you can use the `map_build` function, e.g.
+To simplify turning the headers column into a `map` (so individual headers can
+be searched), you can use the [`map_build`](/sql/functions/#map_build) function:
 
 ```mzsql
 SELECT
@@ -231,9 +264,11 @@ FROM kafka_metadata;
 
 **Individual headers**
 
-Individual message headers can be exposed via the `INCLUDE HEADER key AS name` option.
+Individual message headers can be exposed via the `INCLUDE HEADER key AS name`
+option.
 
-The `bytea` value of the header is automatically parsed into an UTF-8 string. To expose the raw `bytea` instead, the `BYTES` option can be used.
+The `bytea` value of the header is automatically parsed into an UTF-8 string. To
+expose the raw `bytea` instead, the `BYTES` option can be used.
 
 ```mzsql
 CREATE SOURCE kafka_metadata
@@ -265,11 +300,17 @@ FROM kafka_metadata;
 ```
 
 Note that:
-- Messages that do not contain all header keys as specified in the source DDL will cause an error that prevents further querying the source.
-- Header values containing badly formed UTF-8 strings will cause an error in the source that prevents querying it, unless the `BYTES` option is specified.
+
+- Messages that do not contain all header keys as specified in the source DDL
+  will cause an error that prevents further querying the source.
+
+- Header values containing badly formed UTF-8 strings will cause an error in the
+  source that prevents querying it, unless the `BYTES` option is specified.
+
 #### Partition, offset, timestamp
 
-These metadata fields are exposed via the `INCLUDE PARTITION`, `INCLUDE OFFSET` and `INCLUDE TIMESTAMP` options.
+These metadata fields are exposed via the `INCLUDE PARTITION`, `INCLUDE OFFSET`
+and `INCLUDE TIMESTAMP` options.
 
 ```mzsql
 CREATE SOURCE kafka_metadata
@@ -295,7 +336,8 @@ offset
 
 ### Setting start offsets
 
-To start consuming a Kafka stream from a specific offset, you can use the `START OFFSET` option.
+To start consuming a Kafka stream from a specific offset, you can use the `START
+OFFSET` option.
 
 ```mzsql
 CREATE SOURCE kafka_offset
@@ -310,16 +352,27 @@ CREATE SOURCE kafka_offset
 
 Note that:
 
-- If fewer offsets than partitions are provided, the remaining partitions will start at offset 0. This is true if you provide `START OFFSET (1)` or `START OFFSET (1, ...)`.
+- If fewer offsets than partitions are provided, the remaining partitions will
+  start at offset 0. This is true if you provide `START OFFSET (1)` or `START
+  OFFSET (1, ...)`.
+
 - Providing more offsets than partitions is not supported.
 
 #### Time-based offsets
 
-It's also possible to set a start offset based on Kafka timestamps, using the `START TIMESTAMP` option. This approach sets the start offset for each available partition based on the Kafka timestamp and the source behaves as if `START OFFSET` was provided directly.
+It's also possible to set a start offset based on Kafka timestamps, using the
+`START TIMESTAMP` option. This approach sets the start offset for each
+available partition based on the Kafka timestamp and the source behaves as if
+`START OFFSET` was provided directly.
 
-It's important to note that `START TIMESTAMP` is a property of the source: it will be calculated _once_ at the time the `CREATE SOURCE` statement is issued. This means that the computed start offsets will be the **same** for all views depending on the source and **stable** across restarts.
+It's important to note that `START TIMESTAMP` is a property of the source: it
+will be calculated _once_ at the time the `CREATE SOURCE` statement is issued.
+This means that the computed start offsets will be the **same** for all views
+depending on the source and **stable** across restarts.
 
-If you need to limit the amount of data maintained as state after source creation, consider using [temporal filters](/sql/patterns/temporal-filters/) instead.
+If you need to limit the amount of data maintained as state after source
+creation, consider using [temporal filters](/sql/patterns/temporal-filters/)
+instead.
 
 #### `CONNECTION` options
 
@@ -333,7 +386,10 @@ Field               | Value | Description
 It is possible to define how an Avro reader schema will be chosen for Avro sources by
 using the `KEY STRATEGY` and `VALUE STRATEGY` keywords, as shown in the syntax diagram.
 
-A strategy of `LATEST` (the default) will choose the latest writer schema from the schema registry to use as a reader schema. `ID` or `INLINE` will allow specifying a schema from the registry by ID or inline in the `CREATE SOURCE` statement, respectively.
+A strategy of `LATEST` (the default) will choose the latest writer schema from
+the schema registry to use as a reader schema. `ID` or `INLINE` will allow
+specifying a schema from the registry by ID or inline in the `CREATE SOURCE`
+statement, respectively.
 
 ### Monitoring source progress
 
@@ -425,9 +481,12 @@ Read           | Group            | All group IDs starting with the specified [`
 
 ### Creating a connection
 
-A connection describes how to connect and authenticate to an external system you want Materialize to read data from.
+A connection describes how to connect and authenticate to an external system you
+want Materialize to read data from.
 
-Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+Once created, a connection is **reusable** across multiple `CREATE SOURCE`
+statements. For more details on creating connections, check the
+[`CREATE CONNECTION`](/sql/create-connection) documentation page.
 
 #### Broker
 
@@ -459,7 +518,8 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 {{< /tabs >}}
 
-If your Kafka broker is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections) through an AWS PrivateLink service or an SSH bastion host:
+If your Kafka broker is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections)
+through an AWS PrivateLink service or an SSH bastion host:
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
@@ -480,7 +540,10 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check [this guide](/ops/network-security/privatelink/).
+For step-by-step instructions on creating AWS PrivateLink connections and
+configuring an AWS PrivateLink service to accept connections from Materialize,
+check [this guide](/ops/network-security/privatelink/).
+
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
 
@@ -501,7 +564,8 @@ BROKERS (
 );
 ```
 
-For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
+For step-by-step instructions on creating SSH tunnel connections and configuring
+an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 {{< /tab >}}
 {{< /tabs >}}
 
@@ -537,7 +601,9 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 {{< /tab >}}
 {{< /tabs >}}
 
-If your Confluent Schema Registry server is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections) through an AWS PrivateLink service or an SSH bastion host:
+If your Confluent Schema Registry server is not exposed to the public internet,
+you can [tunnel the connection](/sql/create-connection/#network-security-connections)
+through an AWS PrivateLink service or an SSH bastion host:
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
@@ -556,7 +622,9 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 );
 ```
 
-For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check [this guide](/ops/network-security/privatelink/).
+For step-by-step instructions on creating AWS PrivateLink connections and
+configuring an AWS PrivateLink service to accept connections from Materialize,
+check [this guide](/ops/network-security/privatelink/).
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
 ```mzsql
@@ -574,7 +642,8 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 );
 ```
 
-For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
+For step-by-step instructions on creating SSH tunnel connections and configuring
+an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 {{< /tab >}}
 {{< /tabs >}}
 
@@ -627,7 +696,9 @@ CREATE SOURCE proto_source
 
 **Using an inline schema**
 
-If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause to specify a Protobuf schema descriptor inline. Protobuf does not serialize a schema with the message, so before creating a source you must:
+If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause
+to specify a Protobuf schema descriptor inline. Protobuf does not serialize a
+schema with the message, so before creating a source you must:
 
 * Compile the Protobuf schema into a descriptor file using [`protoc`](https://grpc.io/docs/protoc-installation/):
 
