@@ -21,7 +21,7 @@
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::{fmt, iter};
@@ -318,8 +318,8 @@ impl Transform for Fixpoint {
         // a bug somewhere that prevents the relation from settling on a
         // stable shape.
         let mut iter_no = 0;
-        let mut seen = BTreeSet::new();
-        seen.insert(relation.clone());
+        let mut seen = BTreeMap::new();
+        seen.insert(relation.clone(), iter_no);
         loop {
             let prev_size = relation.size();
             for i in iter_no..iter_no + self.limit {
@@ -329,7 +329,8 @@ impl Transform for Fixpoint {
                     mz_repr::explain::trace_plan(relation);
                     return Ok(());
                 }
-                if !seen.insert(relation.clone()) {
+                let seen_i = seen.insert(relation.clone(), i);
+                if let Some(seen_i) = seen_i {
                     // We got into an infinite loop (e.g., we are oscillating between two plans).
                     // This is not catastrophic, because we can just say we are done now,
                     // but it would be great to eventually find a way to prevent these loops from
@@ -337,8 +338,10 @@ impl Transform for Fixpoint {
                     // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
                     mz_repr::explain::trace_plan(relation);
                     soft_panic_or_log!(
-                        "Fixpoint {} detected a loop after {i} iterations",
-                        self.name
+                        "Fixpoint {} detected a loop of length {} after {} iterations",
+                        self.name,
+                        i - seen_i,
+                        i
                     );
                     return Ok(());
                 }
@@ -349,20 +352,26 @@ impl Transform for Fixpoint {
 
             if current_size < prev_size {
                 tracing::warn!(
-                    "Fixpoint {} ran for {iter_no} iterations \
+                    "Fixpoint {} ran for {} iterations \
                      without reaching a fixpoint but reduced the relation size; \
-                     current_size ({current_size}) < prev_size ({prev_size}); \
+                     current_size ({}) < prev_size ({}); \
                      continuing for {} more iterations",
                     self.name,
+                    iter_no,
+                    current_size,
+                    prev_size,
                     self.limit
                 );
             } else {
                 return Err(TransformError::Internal(format!(
-                    "Fixpoint {} ran for {iter_no} iterations \
+                    "Fixpoint {} ran for {} iterations \
                      without reaching a fixpoint or reducing the relation size; \
-                     current_size ({current_size}) >= prev_size ({prev_size}); \
+                     current_size ({}) >= prev_size ({}); \
                      transformed relation:\n{}",
                     self.name,
+                    iter_no,
+                    current_size,
+                    prev_size,
                     relation.pretty()
                 )));
             }
