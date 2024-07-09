@@ -249,6 +249,7 @@ fn bench_numeric(c: &mut Criterion) {
     group.finish();
 }
 
+#[allow(clippy::useless_vec)]
 fn bench_timestamp(c: &mut Criterion) {
     let mut group = c.benchmark_group("Timestamp");
     group.throughput(Throughput::Elements(1));
