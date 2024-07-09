@@ -16,7 +16,6 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 )
 from materialize.output_consistency.execution.sql_executor import SqlExecutionError
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
-from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
@@ -31,6 +30,7 @@ from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.selection import (
     ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
 )
+from materialize.output_consistency.status.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.output_consistency.validation.validation_outcome import (
     ValidationOutcome,

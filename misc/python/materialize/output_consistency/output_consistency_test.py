@@ -23,7 +23,6 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 )
 from materialize.output_consistency.execution.sql_executor import create_sql_executor
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
-from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
 )
@@ -43,6 +42,7 @@ from materialize.output_consistency.input_data.test_input_data import (
 from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.runner.test_runner import ConsistencyTestRunner
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
+from materialize.output_consistency.status.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 

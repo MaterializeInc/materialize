@@ -8,16 +8,9 @@
 # by the Apache License, Version 2.0.
 from materialize.mzcompose.test_result import TestFailureDetails
 from materialize.output_consistency.operation.operation import DbOperationOrFunction
-
-
-class ConsistencyTestLogger:
-    def __init__(
-        self,
-    ) -> None:
-        self.global_warnings: list[str] = []
-
-    def add_global_warning(self, message: str) -> None:
-        self.global_warnings.append(message)
+from materialize.output_consistency.status.consistency_test_logger import (
+    ConsistencyTestLogger,
+)
 
 
 class DbOperationOrFunctionStats:

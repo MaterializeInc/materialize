@@ -12,7 +12,6 @@ from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
-from materialize.output_consistency.execution.test_summary import ConsistencyTestLogger
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -31,6 +30,9 @@ from materialize.output_consistency.selection.randomized_picker import Randomize
 from materialize.output_consistency.selection.selection import (
     ALL_ROWS_SELECTION,
     DataRowSelection,
+)
+from materialize.output_consistency.status.consistency_test_logger import (
+    ConsistencyTestLogger,
 )
 
 

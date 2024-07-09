@@ -18,10 +18,6 @@ from materialize.output_consistency.execution.query_execution_manager import (
     QueryExecutionManager,
 )
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
-from materialize.output_consistency.execution.test_summary import (
-    ConsistencyTestSummary,
-    DbOperationOrFunctionStats,
-)
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
@@ -40,6 +36,10 @@ from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.runner.time_guard import TimeGuard
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
+from materialize.output_consistency.status.test_summary import (
+    ConsistencyTestSummary,
+    DbOperationOrFunctionStats,
+)
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 ENABLE_ADDING_WHERE_CONDITIONS = True
