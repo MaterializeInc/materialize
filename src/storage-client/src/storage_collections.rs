@@ -493,6 +493,7 @@ where
                 finalized_shards: Arc::clone(&finalized_shards),
                 persist_location: persist_location.clone(),
                 persist: Arc::clone(&persist_clients),
+                read_only,
             }),
         );
 
@@ -2441,6 +2442,7 @@ struct FinalizeShardsTaskConfig {
     finalized_shards: Arc<std::sync::Mutex<BTreeSet<ShardId>>>,
     persist_location: PersistLocation,
     persist: Arc<PersistClientCache>,
+    read_only: bool,
 }
 
 async fn finalize_shards_task<T>(
@@ -2451,10 +2453,15 @@ async fn finalize_shards_task<T>(
         finalized_shards,
         persist_location,
         persist,
+        read_only,
     }: FinalizeShardsTaskConfig,
 ) where
     T: TimelyTimestamp + Lattice + Codec64,
 {
+    if read_only {
+        return;
+    }
+
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
