@@ -875,6 +875,8 @@ async fn determine_sink_progress(
         // transactions, there might even be a lot of garbage at the end of the
         // topic or in between.
 
+        metrics.consumed_progress_records.set(0);
+
         // First, determine the current high water mark for the progress topic.
         // This is the position our `progress_client` consumer *must* reach
         // before we can conclude that we've seen the latest progress record for
@@ -1011,6 +1013,8 @@ async fn determine_sink_progress(
                 // This is a progress message for a different sink.
                 continue;
             }
+
+            metrics.consumed_progress_records.inc();
 
             let Some(payload) = message.payload() else {
                 continue
