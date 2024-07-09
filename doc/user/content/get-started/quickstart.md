@@ -28,7 +28,7 @@ the superpowers of an operational data warehouse first-hand:
 
 A Materialize account. If you do not have an account, you can [sign up for a free trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
-## Step 0. Sign into the Console
+## Step 0. Sign in to Materialize
 
 Navigate to the [Materialize console](https://console.materialize.com/) and sign
 in. By default, you should land in the SQL Shell. If you're already signed in,
