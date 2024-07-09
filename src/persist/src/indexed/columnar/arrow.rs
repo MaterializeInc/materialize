@@ -17,7 +17,6 @@ use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow::datatypes::{DataType, Field, Schema, ToByteSlice};
 use mz_dyncfg::Config;
 use mz_ore::iter::IteratorExt;
-use mz_ore::lgbytes::MetricsRegion;
 use once_cell::sync::Lazy;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
@@ -107,7 +106,7 @@ fn realloc_data(data: ArrayData, metrics: &ColumnarMetrics) -> ArrayData {
     let buffers = data
         .buffers()
         .iter()
-        .map(|b| realloc_slice(b, metrics))
+        .map(|b| realloc_buffer(b, metrics))
         .collect();
     let child_data = data
         .child_data()
@@ -116,7 +115,7 @@ fn realloc_data(data: ArrayData, metrics: &ColumnarMetrics) -> ArrayData {
         .map(|d| realloc_data(d, metrics))
         .collect();
     let nulls = data.nulls().map(|n| {
-        let buffer = realloc_slice(n.buffer(), metrics);
+        let buffer = realloc_buffer(n.buffer(), metrics);
         NullBuffer::new(BooleanBuffer::new(buffer, n.offset(), n.len()))
     });
 
@@ -142,8 +141,23 @@ pub fn realloc_any(array: &ArrayRef, metrics: &ColumnarMetrics) -> ArrayRef {
     make_array(data)
 }
 
-fn realloc_slice(slice: &[u8], metrics: &ColumnarMetrics) -> Buffer {
-    let region = to_region(slice, metrics);
+fn realloc_buffer(buffer: &Buffer, metrics: &ColumnarMetrics) -> Buffer {
+    let use_lgbytes_mmap = if metrics.is_cc_active {
+        ENABLE_ARROW_LGALLOC_CC_SIZES.get(&metrics.cfg)
+    } else {
+        ENABLE_ARROW_LGALLOC_NONCC_SIZES.get(&metrics.cfg)
+    };
+    let region = if use_lgbytes_mmap {
+        metrics
+            .lgbytes_arrow
+            .try_mmap_region(buffer.as_slice())
+            .ok()
+    } else {
+        None
+    };
+    let Some(region) = region else {
+        return buffer.clone();
+    };
     let bytes: &[u8] = region.as_ref().to_byte_slice();
     let ptr: NonNull<[u8]> = bytes.into();
     // This is fine: see [[NonNull::as_non_null_ptr]] for an unstable version of this usage.
@@ -232,18 +246,4 @@ pub fn decode_arrow_batch_kvtd_ks_vs(
     };
 
     Ok((primary_records, structured_ext))
-}
-
-/// Copies a slice of data into a possibly disk-backed lgalloc region.
-fn to_region<T: Copy>(buf: &[T], metrics: &ColumnarMetrics) -> MetricsRegion<T> {
-    let use_lgbytes_mmap = if metrics.is_cc_active {
-        ENABLE_ARROW_LGALLOC_CC_SIZES.get(&metrics.cfg)
-    } else {
-        ENABLE_ARROW_LGALLOC_NONCC_SIZES.get(&metrics.cfg)
-    };
-    if use_lgbytes_mmap {
-        metrics.lgbytes_arrow.try_mmap_region(buf)
-    } else {
-        metrics.lgbytes_arrow.heap_region(buf.to_owned())
-    }
 }

@@ -1623,6 +1623,8 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
 #[cfg(test)]
 mod tests {
     use mz_ore::assert_err;
+    use mz_persist::indexed::columnar::arrow::realloc_array;
+    use mz_persist::metrics::ColumnarMetrics;
     use proptest::prelude::*;
     use proptest::strategy::Strategy;
 
@@ -1632,19 +1634,24 @@ mod tests {
     use crate::{arb_datum_for_column, arb_row_for_relation, ColumnName, ColumnType, RowArena};
 
     #[track_caller]
-    fn roundtrip_datum<'a>(ty: ColumnType, datum: impl Iterator<Item = Datum<'a>>) {
+    fn roundtrip_datum<'a>(
+        ty: ColumnType,
+        datum: impl Iterator<Item = Datum<'a>>,
+        metrics: &ColumnarMetrics,
+    ) {
         let desc = RelationDesc::empty().with_column("a", ty);
         let rows = datum.map(|d| Row::pack_slice(&[d])).collect();
-        roundtrip_rows(&desc, rows)
+        roundtrip_rows(&desc, rows, metrics)
     }
 
     #[track_caller]
-    fn roundtrip_rows(desc: &RelationDesc, rows: Vec<Row>) {
+    fn roundtrip_rows(desc: &RelationDesc, rows: Vec<Row>, metrics: &ColumnarMetrics) {
         let mut encoder = <RelationDesc as Schema2<Row>>::encoder(desc).unwrap();
         for row in &rows {
             encoder.append(row);
         }
         let (col, stats) = encoder.finish();
+        let col = realloc_array(&col, metrics);
         let decoder = <RelationDesc as Schema2<Row>>::decoder(desc, col).unwrap();
 
         // Collect all of our lower and upper bounds.
@@ -1719,9 +1726,10 @@ mod tests {
             proptest::collection::vec(arb_datum_for_column(&ty), 0..16)
                 .prop_map(move |d| (ty.clone(), d))
         });
+        let metrics = ColumnarMetrics::disconnected();
 
         proptest!(|((ty, datums) in strat)| {
-            roundtrip_datum(ty.clone(), datums.iter().map(Datum::from));
+            roundtrip_datum(ty.clone(), datums.iter().map(Datum::from), &metrics);
         })
     }
 
@@ -1732,9 +1740,10 @@ mod tests {
             proptest::collection::vec(arb_row_for_relation(&desc), 0..12)
                 .prop_map(move |rows| (desc.clone(), rows))
         });
+        let metrics = ColumnarMetrics::disconnected();
 
         proptest!(|((desc, rows) in strat)| {
-            roundtrip_rows(&desc, rows)
+            roundtrip_rows(&desc, rows, &metrics)
         })
     }
 
@@ -1749,6 +1758,7 @@ mod tests {
     fn smoketest_collections() {
         let mut row = Row::default();
         let mut packer = row.packer();
+        let metrics = ColumnarMetrics::disconnected();
 
         packer
             .push_array(
@@ -1764,6 +1774,7 @@ mod tests {
         roundtrip_datum(
             ScalarType::Array(Box::new(ScalarType::UInt32)).nullable(true),
             [array].into_iter(),
+            &metrics,
         );
     }
 
