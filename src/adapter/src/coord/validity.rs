@@ -192,10 +192,7 @@ mod tests {
                 Box<dyn Fn(&mut PlanValidity)>,
                 Box<dyn Fn(Result<(), AdapterError>)>,
             )] = &[
-                (
-                    Box::new(|_validity| {}),
-                    Box::new(|res| assert_ok!(res)),
-                ),
+                (Box::new(|_validity| {}), Box::new(|res| assert_ok!(res))),
                 (
                     Box::new(|validity| {
                         validity.cluster_id = Some(ClusterId::User(3));

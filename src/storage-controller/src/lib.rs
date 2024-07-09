@@ -35,9 +35,9 @@ use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_storage_client::storage_collections::{CollectionFrontiers, StorageCollections};
 use timely::progress::Timestamp as TimelyTimestamp;
 
-use mz_ore::{assert_none, instrument};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::{assert_none, instrument};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;

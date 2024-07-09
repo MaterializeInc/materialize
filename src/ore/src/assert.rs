@@ -324,8 +324,7 @@ macro_rules! assert_contains {
 macro_rules! assert_none {
     ($val:expr, $($msg:tt)+) => {{
         if let Some(y) = &$val {
-            let formatted_msg = format!($($msg)+);
-            panic!("assertion failed: expected None found Some({y:?}), {formatted_msg}");
+            panic!("assertion failed: expected None found Some({y:?}), {}", format!($($msg)+));
         }
     }};
     ($val:expr) => {{
@@ -372,8 +371,7 @@ macro_rules! assert_none {
 macro_rules! assert_ok {
     ($val:expr, $($msg:tt)+) => {{
         if let Err(y) = &$val {
-            let formatted_msg = format!($($msg)+);
-            panic!("assertion failed: expected Ok found Err({y:?}), {formatted_msg}");
+            panic!("assertion failed: expected Ok found Err({y:?}), {}", format!($($msg)+));
         }
     }};
     ($val:expr) => {{
@@ -420,8 +418,7 @@ macro_rules! assert_ok {
 macro_rules! assert_err {
     ($val:expr, $($msg:tt)+) => {{
         if let Ok(y) = &$val {
-            let formatted_msg = format!($($msg)+);
-            panic!("assertion failed: expected Err found Ok({y:?}), {formatted_msg}");
+            panic!("assertion failed: expected Err found Ok({y:?}), {}", format!($($msg)+));
         }
     }};
     ($val:expr) => {{
