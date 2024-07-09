@@ -113,6 +113,8 @@ const CATALOG_SEED: usize = 1;
 /// Persist guarantees that the shard versions are non-decreasing, so we don't need to worry about
 /// race conditions where the shard version decreases after reading it.
 const UPGRADE_SEED: usize = 2;
+/// Seed used to generate the persist shard ID for builtin table migrations.
+const BUILTIN_MIGRATION_SEED: usize = 3;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -1503,7 +1505,13 @@ impl DurableCatalogState for PersistCatalogState {
     }
 }
 
-/// Deterministically generate an ID for the given `organization_id` and `seed`.
+/// /// Deterministically generate a builtin table migration shard ID for the given
+/// `organization_id`.
+pub fn builtin_migration_shard_id(organization_id: Uuid) -> ShardId {
+    shard_id(organization_id, BUILTIN_MIGRATION_SEED)
+}
+
+/// Deterministically generate a shard ID for the given `organization_id` and `seed`.
 fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
     let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
     soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");

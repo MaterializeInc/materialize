@@ -23,7 +23,7 @@ use clap::Parser;
 use futures::future::FutureExt;
 use mz_adapter::catalog::Catalog;
 use mz_build_info::{build_info, BuildInfo};
-use mz_catalog::config::{ClusterReplicaSizeMap, StateConfig};
+use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
     ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
@@ -550,6 +550,7 @@ async fn upgrade_check(
                 InMemorySecretsController::new(),
             )),
             active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0, 0))),
+            builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
         },
         &mut storage,
     )

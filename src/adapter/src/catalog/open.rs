@@ -9,6 +9,8 @@
 
 //! Logic related to opening a [`Catalog`].
 
+mod builtin_item_migration;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -62,6 +64,9 @@ use tracing::{info, warn, Instrument};
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
+use crate::catalog::open::builtin_item_migration::{
+    migrate_builtin_items, BuiltinItemMigrationResult,
+};
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
 };
@@ -166,7 +171,7 @@ impl Catalog {
     ) -> Result<
         (
             CatalogState,
-            BuiltinMigrationMetadata,
+            BTreeSet<GlobalId>,
             Vec<BuiltinTableUpdate>,
             String,
         ),
@@ -421,30 +426,27 @@ impl Catalog {
         builtin_table_updates.extend(builtin_table_update);
 
         // Migrate builtin items.
-        let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
-            .map(|builtin| {
-                let id = state.resolve_builtin_object(builtin);
-                let fingerprint = builtin.fingerprint();
-                (id, fingerprint)
-            })
-            .collect();
-        let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
-            &state,
+        let BuiltinItemMigrationResult {
+            builtin_table_updates: builtin_table_update,
+            storage_collections_to_drop,
+            cleanup_action,
+        } = migrate_builtin_items(
+            &mut state,
             &mut txn,
             migrated_builtins,
-            id_fingerprint_map,
-        )?;
-        let builtin_table_update =
-            Catalog::apply_builtin_migration(&mut state, &mut txn, &mut builtin_migration_metadata)
-                .await?;
+            config.builtin_item_migration_config,
+        )
+        .await?;
         builtin_table_updates.extend(builtin_table_update);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
 
         txn.commit().await?;
 
+        cleanup_action.await;
+
         Ok((
             state,
-            builtin_migration_metadata,
+            storage_collections_to_drop,
             builtin_table_updates,
             last_seen_version,
         ))
@@ -466,19 +468,11 @@ impl Catalog {
         boot_ts: mz_repr::Timestamp,
     ) -> BoxFuture<
         'static,
-        Result<
-            (
-                Catalog,
-                BuiltinMigrationMetadata,
-                Vec<BuiltinTableUpdate>,
-                String,
-            ),
-            AdapterError,
-        >,
+        Result<(Catalog, BTreeSet<GlobalId>, Vec<BuiltinTableUpdate>, String), AdapterError>,
     > {
         async move {
             let mut storage = config.storage;
-            let (state, builtin_migration_metadata, mut builtin_table_updates, last_seen_version) =
+            let (state, storage_collections_to_drop, mut builtin_table_updates, last_seen_version) =
                 // BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
                 // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
                 // Because of that we purposefully move this Future onto the heap (i.e. Box it).
@@ -558,7 +552,7 @@ impl Catalog {
 
             Ok((
                 catalog,
-                builtin_migration_metadata,
+                storage_collections_to_drop,
                 builtin_table_updates,
                 last_seen_version,
             ))
@@ -576,7 +570,7 @@ impl Catalog {
     async fn initialize_storage_controller_state(
         &mut self,
         storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
+        storage_collections_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
         let collections = self
             .entries()
@@ -592,11 +586,7 @@ impl Catalog {
         let mut txn = storage.transaction().await?;
 
         storage_controller
-            .initialize_state(
-                &mut txn,
-                collections,
-                builtin_migration_metadata.previous_storage_collection_ids,
-            )
+            .initialize_state(&mut txn, collections, storage_collections_to_drop)
             .await
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
@@ -618,7 +608,7 @@ impl Catalog {
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
+        storage_collections_to_drop: BTreeSet<GlobalId>,
         // Whether to use the new txn-wal tables implementation or the
         // legacy one.
         txn_wal_tables: TxnWalTablesImpl,
@@ -650,7 +640,7 @@ impl Catalog {
 
         self.initialize_storage_controller_state(
             &mut *controller.storage,
-            builtin_migration_metadata,
+            storage_collections_to_drop,
         )
         .await?;
 

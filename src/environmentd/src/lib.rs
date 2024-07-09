@@ -397,7 +397,7 @@ impl Listeners {
         let preflight_config = PreflightInput {
             boot_ts,
             environment_id: config.environment_id.clone(),
-            persist_client,
+            persist_client: persist_client.clone(),
             bootstrap_default_cluster_replica_size: config
                 .bootstrap_default_cluster_replica_size
                 .clone(),
@@ -513,6 +513,7 @@ impl Listeners {
             controller_envd_epoch: envd_epoch,
             controller_txn_wal_tables: txn_wal_tables,
             storage: adapter_storage,
+            persist_client,
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
@@ -545,6 +546,7 @@ impl Listeners {
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
             read_only_controllers: read_only,
+            enable_0dt_deployment,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;

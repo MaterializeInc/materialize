@@ -19,6 +19,7 @@ use mz_controller::clusters::ReplicaAllocation;
 use mz_orchestrator::MemoryLimit;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
+use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
@@ -83,6 +84,17 @@ pub struct StateConfig {
     pub connection_context: mz_storage_types::connections::ConnectionContext,
     /// Global connection limit and count
     pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
+    pub builtin_item_migration_config: BuiltinItemMigrationConfig,
+}
+
+#[derive(Debug)]
+pub enum BuiltinItemMigrationConfig {
+    Legacy,
+    ZeroDownTime {
+        persist_client: PersistClient,
+        deploy_generation: u64,
+        read_only: bool,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

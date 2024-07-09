@@ -90,7 +90,7 @@ use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, ReadCapability};
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
-use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
+use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc, Source,
 };
@@ -178,6 +178,7 @@ use crate::{flags, AdapterNotice, ReadHolds, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_ore::future::TimeoutError;
+use mz_persist_client::PersistClient;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
@@ -931,6 +932,7 @@ pub struct Config {
     pub controller_envd_epoch: NonZeroI64,
     pub controller_txn_wal_tables: TxnWalTablesImpl,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    pub persist_client: PersistClient,
     pub timestamp_oracle_url: Option<String>,
     pub unsafe_mode: bool,
     pub all_features: bool,
@@ -964,6 +966,8 @@ pub struct Config {
     /// meant for use during development of read-only clusters and 0dt upgrades
     /// and should go away once we have proper orchestration during upgrades.
     pub read_only_controllers: bool,
+    /// Whether to enable zero-downtime deployments.
+    pub enable_0dt_deployment: bool,
 }
 
 /// Soft-state metadata about a compute replica
@@ -3243,6 +3247,7 @@ pub fn serve(
         controller_envd_epoch,
         controller_txn_wal_tables,
         storage,
+        persist_client,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -3273,6 +3278,7 @@ pub fn serve(
         http_host_name,
         tracing_handle,
         read_only_controllers,
+        enable_0dt_deployment,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -3338,39 +3344,53 @@ pub fn serve(
         let boot_ts = epoch_millis_oracle.write_ts().await.timestamp;
 
         info!("coordinator init: opening catalog");
-        let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
-            Catalog::open(
-                mz_catalog::config::Config {
-                    storage,
-                    metrics_registry: &metrics_registry,
-                    storage_usage_retention_period,
-                    state: mz_catalog::config::StateConfig {
-                        unsafe_mode,
-                        all_features,
-                        build_info,
-                        environment_id: environment_id.clone(),
-                        now: now.clone(),
-                        boot_ts: boot_ts.clone(),
-                        skip_migrations: false,
-                        cluster_replica_sizes,
-                        builtin_system_cluster_replica_size,
-                        builtin_catalog_server_cluster_replica_size,
-                        builtin_probe_cluster_replica_size,
-                        builtin_support_cluster_replica_size,
-                        system_parameter_defaults,
-                        remote_system_parameters,
-                        availability_zones,
-                        egress_ips,
-                        aws_principal_context,
-                        aws_privatelink_availability_zones,
-                        connection_context,
-                        active_connection_count,
-                        http_host_name,
-                    },
+        let builtin_item_migration_config = if enable_0dt_deployment {
+            BuiltinItemMigrationConfig::ZeroDownTime {
+                persist_client,
+                deploy_generation: controller_config.deploy_generation,
+                read_only: read_only_controllers,
+            }
+        } else {
+            BuiltinItemMigrationConfig::Legacy
+        };
+        let (
+            mut catalog,
+            storage_collections_to_drop,
+            builtin_table_updates,
+            _last_catalog_version,
+        ) = Catalog::open(
+            mz_catalog::config::Config {
+                storage,
+                metrics_registry: &metrics_registry,
+                storage_usage_retention_period,
+                state: mz_catalog::config::StateConfig {
+                    unsafe_mode,
+                    all_features,
+                    build_info,
+                    environment_id: environment_id.clone(),
+                    now: now.clone(),
+                    boot_ts: boot_ts.clone(),
+                    skip_migrations: false,
+                    cluster_replica_sizes,
+                    builtin_system_cluster_replica_size,
+                    builtin_catalog_server_cluster_replica_size,
+                    builtin_probe_cluster_replica_size,
+                    builtin_support_cluster_replica_size,
+                    system_parameter_defaults,
+                    remote_system_parameters,
+                    availability_zones,
+                    egress_ips,
+                    aws_principal_context,
+                    aws_privatelink_availability_zones,
+                    connection_context,
+                    active_connection_count,
+                    http_host_name,
+                    builtin_item_migration_config,
                 },
-                boot_ts,
-            )
-            .await?;
+            },
+            boot_ts,
+        )
+        .await?;
         epoch_millis_oracle.apply_write(boot_ts).await;
         let session_id = catalog.config().session_id;
         let start_instant = catalog.config().start_instant;
@@ -3418,7 +3438,7 @@ pub fn serve(
                             controller_config,
                             controller_envd_epoch,
                             read_only_controllers,
-                            builtin_migration_metadata,
+                            storage_collections_to_drop,
                             controller_txn_wal_tables,
                         )
                     })
@@ -3473,9 +3493,7 @@ pub fn serve(
                     buffered_builtin_table_updates: Some(Vec::new()),
                 };
                 let bootstrap = handle.block_on(async {
-                    coord
-                        .bootstrap(builtin_table_updates)
-                        .await?;
+                    coord.bootstrap(builtin_table_updates).await?;
                     coord
                         .controller
                         .remove_orphaned_replicas(
