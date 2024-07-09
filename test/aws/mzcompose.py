@@ -190,23 +190,8 @@ def test_assume_role(c: Composition, ctx: TestContext):
     principal = c.sql_query(
         f"SELECT principal FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
     )[0][0]
-    ctx.iam.create_role(
-        RoleName=customer_role,
-        AssumeRolePolicyDocument=json.dumps(
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Principal": {
-                            "AWS": principal,
-                        },
-                        "Action": "sts:AssumeRole",
-                    }
-                ],
-            }
-        ),
-    )
+
+    _create_role(ctx, customer_role, principal)
 
     # Wait for IAM to propagate.
     c.sleep(ctx.iam_propagation_seconds)
@@ -241,3 +226,23 @@ def test_assume_role(c: Composition, ctx: TestContext):
 
     # Ensure that connection validation now succeeds.
     c.sql("VALIDATE CONNECTION aws_assume_role")
+
+
+def _create_role(ctx: TestContext, customer_role: str, principal: str) -> None:
+    ctx.iam.create_role(
+        RoleName=customer_role,
+        AssumeRolePolicyDocument=json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "AWS": principal,
+                        },
+                        "Action": "sts:AssumeRole",
+                    }
+                ],
+            }
+        ),
+    )
