@@ -242,7 +242,7 @@ class Annotation:
     unknown_errors: Sequence[ObservedBaseError] = field(default_factory=list)
     known_errors: Sequence[ObservedBaseError] = field(default_factory=list)
 
-    def to_markdown(self) -> str:
+    def to_markdown(self, approx_max_length: int = 900_000) -> str:
         only_known_errors = len(self.unknown_errors) == 0 and len(self.known_errors) > 0
         no_errors = len(self.unknown_errors) == 0 and len(self.known_errors) == 0
         wrap_in_details = only_known_errors
@@ -265,16 +265,30 @@ class Annotation:
         if wrap_in_summary:
             markdown = f"<summary>{markdown}</summary>\n"
 
-        if len(self.unknown_errors) > 0:
-            markdown += "\n" + "\n".join(
-                f"* {error.to_markdown()}{error.occurrences_to_markdown()}"
-                for error in self.unknown_errors
-            )
-        if len(self.known_errors) > 0:
-            markdown += "\n" + "\n".join(
-                f"* {error.to_markdown()}{error.occurrences_to_markdown()}"
-                for error in self.known_errors
-            )
+        def errors_to_markdown(
+            errors: Sequence[ObservedBaseError], available_length: int
+        ) -> str:
+            if len(errors) == 0:
+                return ""
+
+            error_markdown = ""
+            for error in errors:
+                if len(error_markdown) > available_length:
+                    error_markdown = "* Further errors exist!\n"
+                    break
+
+                error_markdown = (
+                    f"* {error.to_markdown()}{error.occurrences_to_markdown()}\n"
+                )
+
+            return error_markdown.strip()
+
+        markdown += errors_to_markdown(
+            self.unknown_errors, approx_max_length - len(markdown)
+        )
+        markdown += errors_to_markdown(
+            self.known_errors, approx_max_length - len(markdown)
+        )
 
         if wrap_in_details:
             markdown = f"<details>{markdown}\n</details>"
