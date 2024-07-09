@@ -24,8 +24,8 @@ from materialize.output_consistency.validation.validation_outcome import (
 
 @dataclass
 class DbOperationOrFunctionStats:
-    count_top_level: int = 0
-    count_nested: int = 0
+    count_top_level_generated: int = 0
+    count_nested_generated: int = 0
     count_generation_failed: int = 0
 
 
@@ -126,7 +126,7 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
             stats,
         ) in self.stats_by_operation_variant.items():
             output.append(
-                f"* {operation_variant.to_description()}: {stats.count_top_level} top level, {stats.count_nested} nested, {stats.count_generation_failed} generation failed"
+                f"* {operation_variant.to_description()}: {stats.count_top_level_generated} top level, {stats.count_nested_generated} nested, {stats.count_generation_failed} generation failed"
             )
 
         output.sort()
@@ -153,9 +153,9 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
             return
 
         if is_top_level:
-            stats.count_top_level = stats.count_top_level + 1
+            stats.count_top_level_generated = stats.count_top_level_generated + 1
         else:
-            stats.count_nested = stats.count_nested + 1
+            stats.count_nested_generated = stats.count_nested_generated + 1
 
         for arg in expression.args:
             if isinstance(arg, ExpressionWithArgs):
