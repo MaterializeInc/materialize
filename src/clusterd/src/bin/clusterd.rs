@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::path::PathBuf;
-use std::process;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -156,8 +155,7 @@ async fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args).await {
-        eprintln!("clusterd: fatal: {}", err.display_with_causes());
-        process::exit(1);
+        panic!("clusterd: fatal: {}", err.display_with_causes());
     }
 }
 
