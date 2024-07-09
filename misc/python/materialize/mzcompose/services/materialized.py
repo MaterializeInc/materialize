@@ -126,7 +126,7 @@ class Materialized(Service):
         if propagate_crashes:
             command += ["--orchestrator-process-propagate-crashes"]
 
-        if deploy_generation != None:
+        if deploy_generation is not None:
             command += [f"--deploy-generation={deploy_generation}"]
 
         self.default_storage_size = (
