@@ -6,6 +6,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from dataclasses import dataclass, field
+
 from materialize.mzcompose.test_result import TestFailureDetails
 from materialize.output_consistency.operation.operation import DbOperationOrFunction
 from materialize.output_consistency.status.consistency_test_logger import (
@@ -13,34 +15,29 @@ from materialize.output_consistency.status.consistency_test_logger import (
 )
 
 
+@dataclass
 class DbOperationOrFunctionStats:
-    def __init__(self):
-        self.count_top_level = 0
-        self.count_nested = 0
-        self.count_generation_failed = 0
+    count_top_level: int = 0
+    count_nested: int = 0
+    count_generation_failed: int = 0
 
 
+@dataclass
 class ConsistencyTestSummary(ConsistencyTestLogger):
     """Summary of the test execution"""
+    dry_run: bool = False
+    mode: str = "UNKNOWN"
+    count_executed_query_templates: int = 0
+    count_successful_query_templates: int = 0
+    count_ignored_error_query_templates: int = 0
+    count_with_warning_query_templates: int = 0
+    failures: list[TestFailureDetails] = field(default_factory=list)
+    stats_by_operation_and_function: dict[
+        DbOperationOrFunction, DbOperationOrFunctionStats
+    ] = field(default_factory=dict)
 
-    def __init__(
-        self,
-        dry_run: bool = False,
-        count_executed_query_templates: int = 0,
-        count_successful_query_templates: int = 0,
-        count_ignored_error_query_templates: int = 0,
-        count_with_warning_query_templates: int = 0,
-    ):
-        super().__init__()
-        self.mode = "LIVE_DATABASE" if not dry_run else "DRY_RUN"
-        self.count_executed_query_templates = count_executed_query_templates
-        self.count_successful_query_templates = count_successful_query_templates
-        self.count_ignored_error_query_templates = count_ignored_error_query_templates
-        self.count_with_warning_query_templates = count_with_warning_query_templates
-        self.failures: list[TestFailureDetails] = []
-        self.stats_by_operation_and_function: dict[
-            DbOperationOrFunction, DbOperationOrFunctionStats
-        ] = dict()
+    def __post_init__(self):
+        self.mode = "LIVE_DATABASE" if not self.dry_run else "DRY_RUN"
 
     def add_failures(self, failures: list[TestFailureDetails]):
         self.failures.extend(failures)

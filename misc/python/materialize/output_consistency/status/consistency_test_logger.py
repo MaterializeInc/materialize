@@ -6,13 +6,12 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from dataclasses import dataclass, field
 
 
+@dataclass
 class ConsistencyTestLogger:
-    def __init__(
-        self,
-    ) -> None:
-        self.global_warnings: list[str] = []
+    global_warnings: list[str] = field(default_factory=list)
 
     def add_global_warning(self, message: str) -> None:
         self.global_warnings.append(message)
