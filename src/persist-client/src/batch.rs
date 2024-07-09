@@ -352,7 +352,7 @@ pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
 pub(crate) const BATCH_COLUMNAR_FORMAT: Config<&'static str> = Config::new(
     "persist_batch_columnar_format",
     BatchColumnarFormat::default().as_str(),
-    "Columnar format for a batch written to Persist, either 'row' or 'both_v2' (Materialize).",
+    "Columnar format for a batch written to Persist, either 'row', 'both', or 'both_v2' (Materialize).",
 );
 
 pub(crate) const BATCH_RECORD_PART_FORMAT: Config<bool> = Config::new(

@@ -1160,12 +1160,11 @@ impl RowColumnarDecoder {
 
         // For performance reasons we downcast just a single time.
         let mut decoders = Vec::with_capacity(desc_columns.len());
-        let mut itoa = itoa::Buffer::new();
 
         // The columns of the `StructArray` are named with their column index.
         for (col_idx, col_type) in desc_columns.iter().enumerate() {
-            let field_name = itoa.format(col_idx);
-            let column = col.column_by_name(field_name).ok_or_else(|| {
+            let field_name = col_idx.to_string();
+            let column = col.column_by_name(&field_name).ok_or_else(|| {
                 anyhow::anyhow!(
                     "StructArray did not contain column name {field_name}, found {:?}",
                     col.column_names()
@@ -1278,7 +1277,6 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
             ..
         } = self;
 
-        let mut itoa = itoa::Buffer::new();
         let (arrays, fields, stats): (Vec<_>, Vec<_>, Vec<_>) = col_names
             .iter()
             .zip(encoders.into_iter())
@@ -1286,7 +1284,7 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
                 let nullable = encoder.nullable;
                 let (array, stats) = encoder.finish();
                 let stats = (col_name.to_string(), stats);
-                let field = Field::new(itoa.format(*col_idx), array.data_type().clone(), nullable);
+                let field = Field::new(col_idx.to_string(), array.data_type().clone(), nullable);
 
                 (array, field, stats)
             })

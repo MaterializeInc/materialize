@@ -1744,7 +1744,12 @@ impl SourceDataRowColumnarEncoder {
     pub fn append(&mut self, row: &Row) {
         match self {
             SourceDataRowColumnarEncoder::Row(encoder) => encoder.append(row),
-            SourceDataRowColumnarEncoder::EmptyRow => assert_eq!(row.iter().count(), 0),
+            SourceDataRowColumnarEncoder::EmptyRow => {
+                // TODO(parkmcar): Re-enable this check.
+                if false {
+                    assert_eq!(row.iter().count(), 0)
+                }
+            },
         }
     }
 

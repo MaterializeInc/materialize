@@ -43,7 +43,6 @@ fast-float = "0.2.0"
 flatcontainer = "0.4.1"
 hex = "0.4.3"
 itertools = "0.10.5"
-itoa = "1"
 once_cell = "1.16.0"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = [
