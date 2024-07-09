@@ -12,13 +12,12 @@
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray, BinaryArray, PrimitiveArray};
-use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray};
+use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow::datatypes::{DataType, Field, Schema, ToByteSlice};
 use mz_dyncfg::Config;
-use mz_ore::bytes::MaybeLgBytes;
 use mz_ore::iter::IteratorExt;
-use mz_ore::lgbytes::{LgBytes, MetricsRegion};
+use mz_ore::lgbytes::MetricsRegion;
 use once_cell::sync::Lazy;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
@@ -51,23 +50,9 @@ pub static SCHEMA_ARROW_RS_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
 
 /// Converts a [`ColumnarRecords`] into `(K, V, T, D)` [`arrow`] columns.
 pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Vec<arrow::array::ArrayRef> {
-    let key = BinaryArray::try_new(
-        OffsetBuffer::new(ScalarBuffer::from((*x.key_offsets).as_ref().to_vec())),
-        Buffer::from_vec(x.key_data.as_ref().to_vec()),
-        None,
-    )
-    .expect("valid key array");
-    let val = BinaryArray::try_new(
-        OffsetBuffer::new(ScalarBuffer::from((*x.val_offsets).as_ref().to_vec())),
-        Buffer::from_vec(x.val_data.as_ref().to_vec()),
-        None,
-    )
-    .expect("valid val array");
-    let ts = PrimitiveArray::<arrow::datatypes::Int64Type>::try_new(
-        (*x.timestamps).as_ref().to_vec().into(),
-        None,
-    )
-    .expect("valid ts array");
+    let key = x.key_data.clone();
+    let val = x.val_data.clone();
+    let ts = x.timestamps.clone();
     let diff = x.diffs.clone();
 
     vec![Arc::new(key), Arc::new(val), Arc::new(ts), Arc::new(diff)]
@@ -115,10 +100,10 @@ pub(crate) const ENABLE_ARROW_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
 );
 
 fn realloc_data(data: ArrayData, metrics: &ColumnarMetrics) -> ArrayData {
-    // NB: we don't have type information for each buffer, so we don't request any particular
-    // alignment. Thankfully, lgalloc aligns everything to the page boundary. Arrow validates
-    // the alignment of the provided buffers, so if this ever changed, `build` would return
-    // an error below.
+    // NB: Arrow generally aligns buffers very coarsely: see arrow::alloc::ALIGNMENT.
+    // However, lgalloc aligns buffers even more coarsely - to the page boundary -
+    // so we never expect alignment issues in practice. If that changes, build()
+    // will return an error below, as it does for all invalid data.
     let buffers = data
         .buffers()
         .iter()
@@ -142,7 +127,16 @@ fn realloc_data(data: ArrayData, metrics: &ColumnarMetrics) -> ArrayData {
         .build()
         .expect("reconstructing valid arrow array")
 }
-fn realloc_any(array: &ArrayRef, metrics: &ColumnarMetrics) -> ArrayRef {
+
+/// Re-allocate the backing storage for a specific array using lgalloc, if it's configured.
+pub fn realloc_array<A: Array + From<ArrayData>>(array: &A, metrics: &ColumnarMetrics) -> A {
+    let data = array.to_data();
+    let data = realloc_data(data, metrics);
+    A::from(data)
+}
+
+/// Re-allocate the backing storage for an array ref using lgalloc, if it's configured.
+pub fn realloc_any(array: &ArrayRef, metrics: &ColumnarMetrics) -> ArrayRef {
     let data = array.to_data();
     let data = realloc_data(data, metrics);
     make_array(data)
@@ -183,38 +177,29 @@ pub fn decode_arrow_batch_kvtd(
         _ => return Err(format!("expected 4 columns got {}", columns.len())),
     };
 
-    let key_col = realloc_any(&key_col, metrics);
     let key = key_col
         .as_binary_opt::<i32>()
         .ok_or_else(|| "key column is wrong type".to_string())?;
+
     let val = val_col
         .as_binary_opt::<i32>()
         .ok_or_else(|| "val column is wrong type".to_string())?;
+
     let time = ts_col
         .as_primitive_opt::<arrow::datatypes::Int64Type>()
         .ok_or_else(|| "time column is wrong type".to_string())?;
-    let diff_col = realloc_any(&diff_col, metrics);
-    let diffs = diff_col
+
+    let diff = diff_col
         .as_primitive_opt::<arrow::datatypes::Int64Type>()
         .ok_or_else(|| "diff column is wrong type".to_string())?;
-
-    let key_offsets = Arc::new(to_region(&key.offsets()[..], metrics));
-    let key_data = Arc::new(to_region(key.value_data(), metrics));
-
-    let val_offsets = Arc::new(to_region(&val.offsets()[..], metrics));
-    let val_data = Arc::new(to_region(val.value_data(), metrics));
-
-    let timestamps = Arc::new(to_region(&time.values()[..], metrics));
 
     let len = key.len();
     let ret = ColumnarRecords {
         len,
-        key_data: MaybeLgBytes::LgBytes(LgBytes::from(key_data)),
-        key_offsets,
-        val_data: MaybeLgBytes::LgBytes(LgBytes::from(val_data)),
-        val_offsets,
-        timestamps,
-        diffs: diffs.clone(),
+        key_data: realloc_array(key, metrics),
+        val_data: realloc_array(val, metrics),
+        timestamps: realloc_array(time, metrics),
+        diffs: realloc_array(diff, metrics),
     };
     ret.borrow().validate()?;
 

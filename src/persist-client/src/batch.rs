@@ -864,8 +864,7 @@ where
 
         let ((mut key_lower, _), _, _) = &updates[0];
         let start = Instant::now();
-        let mut builder = ColumnarRecordsBuilder::default();
-        builder.reserve_exact(
+        let mut builder = ColumnarRecordsBuilder::with_capacity(
             self.current_part.len(),
             self.current_part_key_bytes,
             self.current_part_value_bytes,

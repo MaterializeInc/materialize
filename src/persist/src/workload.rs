@@ -159,10 +159,10 @@ impl DataGenerator {
         if batch_start >= batch_end {
             return None;
         }
-        let mut batch = ColumnarRecordsBuilder::default();
-        batch.reserve(
-            batch_end - batch_start,
-            self.record_size_bytes - TS_DIFF_GOODPUT_SIZE,
+        let items = batch_end - batch_start;
+        let mut batch = ColumnarRecordsBuilder::with_capacity(
+            items,
+            (self.record_size_bytes - TS_DIFF_GOODPUT_SIZE) * items,
             0,
         );
         for record_idx in batch_start..batch_end {
