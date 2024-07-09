@@ -44,6 +44,12 @@ the cluster. Colocating multiple sinks onto the same cluster can be more
 resource efficient when you have many low-traffic sinks that occasionally need
 some burst capacity.
 
+## Details
+
+A sink cannot be created directly on a catalog object. As a workaround you can
+create a materialized view on a catalog object and create a sink on the
+materialized view.
+
 [//]: # "TODO(morsapaes) Add best practices for sizing sinks."
 
 ## Privileges
