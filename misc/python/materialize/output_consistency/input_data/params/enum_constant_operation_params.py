@@ -124,5 +124,5 @@ ARRAY_DIMENSION_PARAM = EnumConstantOperationParam(
 )
 
 RECORD_FIELD_PARAM = EnumConstantOperationParam(
-    ["f1", "f2", "f3", "f4"], add_quotes=False, add_invalid_value=True
+    ["*", "f1", "f2", "f3", "f4"], add_quotes=False, add_invalid_value=True
 )
