@@ -10,7 +10,6 @@ aliases:
   - /katacoda/
   - /quickstarts/
   - /install/
-  - /get-started/
 ---
 
 Materialize is a new kind of **data warehouse built for operational workloads**: the

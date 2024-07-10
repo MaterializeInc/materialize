@@ -10,17 +10,32 @@ menu:
 
 ## Overview
 
-Indexes assemble and maintain a query's results in memory within a
-[cluster](/concepts/clusters/), which provides future queries
-the data they need in a format they can immediately use.
+Indexes can improve query performance.
 
-These continually updated indexes are known as
-_arrangements_ within Materialize's dataflows. In the simplest case, the
-arrangement is the last operator and simply stores the query's output in
-memory. In more complex cases, arrangements let Materialize perform
-sophisticated operations like joins more efficiently.
+## Indexes and non-materialized views
 
-For a deeper dive into how indexes work, see [Arrangements](/overview/arrangements/).
+In Materialize, indexing a [non-materialize
+view](/concepts/views/#non-materialized-views) causes view results to be
+**maintained and incrementally updated in memory** within the
+[cluster](/concepts/clusters/). The in-memory up-to-date results are accessible
+to queries within the cluster, even for queries that do not use the index
+key(s).
+
+Queries from other clusters cannot use the index.
+
+## Indexes and materialized views
+
+In Materialize, indexing a [materialize
+view](/concepts/views/#materialized-views) loads the already up-to-date view
+results from durable storage to memory within the
+[cluster](/concepts/clusters/).  Because materialized view maintains the
+up-to-date results in durable storage, indexes on materialized views serve
+up-to-date results without themselves performing the incremental computation.
+The in-memory up-to-date results are accessible to queries within the cluster,
+even for queries that do not use the index key(s).
+
+Queries from other clusters cannot use the index.
+
 
 ## Related pages
 

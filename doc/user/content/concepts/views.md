@@ -1,5 +1,5 @@
 ---
-title: Views (Non-Materialized and Materialized )
+title: Views (Non-Materialized and Materialized)
 description: Conceptual page on views.
 menu:
   main:
@@ -10,59 +10,98 @@ menu:
 
 ## Overview
 
-In SQL, views represent a query that you save with some given name. These are
-used primarily as shorthand for some lengthy, complicated `SELECT` statement.
-Materialize uses the idiom of views similarly, but the implication of views is
-fundamentally different.
+Views represent queries that are saved under a name for reference. Views provide
+a shorthand for the underlying query.
 
 Materialize offers the following types of views:
 
-Type | Use
------|-----
-**Materialized views** | Incrementally updated views whose results are persisted in durable storage
-**Non-materialized views** | Queries saved under a name for reference, like traditional SQL views
+Type |
+-----|------------
+[**Non-materialized views**](#non-materialized-views) | Results are **not** persisted in durable storage. Non-materialized views can be indexed to maintain and incrementally update results in memory.
+[**Materialized views**](#materialized-views) | Results **are** persisted and incrementally updated in durable storage. Materialized views can be indexed to load the updated results from durable storage into memory.
 
-All views in Materialize are built by reading data from sources and other views.
+All views in Materialize are built by reading data from
+[sources](/concepts/sources) and other views.
 
 ## Non-materialized views
 
-Non-materialized views simply store a verbatim query and provide a shorthand
-for performing the query.
+A non-materialized view saves a query under a name to provide a shorthand for
+referencing the query. The query is **not** executed during non-materialized
+view creation, and a non-materialized view does **not** persist its results in durable storage.
 
-Unlike materialized views, non-materialized views _do not_ store the results of
-their embedded queries. The results of a view can be incrementally
-maintained in memory within a [cluster](/concepts/clusters/) by
-creating an index. This allows you to serve queries without
-the overhead of materializing the view.
+**However**, you can [index](/concepts/indexes/) a non-materialized view to
+**maintain and incrementally update view results** in memory within the cluster.
+This enables queries within the [cluster](/concepts/clusters/) to use the index
+to access view results from memory.  See [Indexes and non-materialized
+views](#indexes-and-non-materialized-views) for more information.
 
-See [`CREATE VIEW`](/sql/create-view) for details about
-non-materialized views.
+See also:
+
+- [`CREATE VIEW`](/sql/create-view)
+
+### Indexes and non-materialized views
+
+Indexes can improve query performance. In Materialize, non-materialized views
+can be [indexed](/concepts/indexes/). Indexing a non-materialize view causes
+view results to be **maintained and incrementally updated in memory** within the
+[cluster](/concepts/clusters/). The in-memory up-to-date results are accessible
+to queries within the cluster, even for queries that do not use the index
+key(s). Queries from other clusters cannot use the index.
+
+See also:
+
+- [Indexes](/concepts/indexes/)
+- [`CREATE INDEX`](/sql/create-index/)
+
+### Clusters and non-materialized views
+
+A non-materialized view can be referenced in any [cluster](/concepts/clusters/).
+However, if the non-materialized view is indexed, in-memory results are only
+accessible to queries within the cluster. Queries from other clusters cannot use the index.
 
 ## Materialized views
 
-Materialized views embed a query like a traditional SQL view, but&mdash;unlike a
-SQL view&mdash;compute and incrementally update the results of this embedded
-query. The results of a materialized view are persisted in durable storage,
-which allows you to effectively decouple the computational resources used for
-view maintenance from the resources used for query serving.
+A materialized view, like a non-materialized view, saves a query under a name to
+provide a shorthand for referencing the query. But, unlike a non-materialized
+view, the query is executed during the view creation, and a materialized view
+**persists and incrementally updates** its
+results in durable storage.
 
-Materialize accomplishes incremental updates by creating a set of persistent
-transformations&mdash;known as a "dataflow"&mdash;that represent the query's
-output. As new data comes in from sources, it's fed into materialized views that
-query the source. Materialize then incrementally updates the materialized view's
-output by understanding what has changed in the data, based on the source's
-envelope. Any changes to a view's output are then propagated to materialized
-views that query it, and the process repeats.
+You can index a materialized view to load the up-to-date view results in memory
+within the cluster. This enables queries within the cluster to use the index to
+access view results from memory.  See [Indexes and materialized
+views](#indexes-and-materialized-views) for more information.
 
-When reading from a materialized view, Materialize simply returns the dataflow's
-current result set from durable storage. To improve the speed of queries on
-materialized views, we recommend creating [indexes] based on
-common query patterns.
+See also:
 
-See [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view) for details
-about materialized views.
+- [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)
 
 
+### Indexes and materialized views
+
+Indexes can improve query performance. In Materialize,
+[indexing](/concepts/indexes/) a materialized view loads the already up-to-date
+view results from durable storage to memory within the
+[cluster](/concepts/clusters/).  Because materialized view maintains the
+up-to-date results in durable storage, indexes on materialized views serve
+up-to-date results without themselves performing the incremental computation.
+The in-memory up-to-date results are accessible to queries within the cluster,
+even for queries that do not use the index key(s). Queries from other clusters cannot use the index.
+
+See also:
+
+- [Indexes](/concepts/indexes/)
+- [`CREATE INDEX`](/sql/create-index/)
+
+### Clusters and materialized views
+
+A materialized view can be referenced in any [cluster](/concepts/clusters/).
+Because the up-to-date results of a materialized view are persisted in durable
+storage, you can decouple the computational resources used for view maintenance
+from the resources used for query serving.
+
+If a materialized view is indexed, in-memory results are only accessible to
+queries within the cluster. Queries from other clusters cannot use the index.
 
 ## Related pages
 
