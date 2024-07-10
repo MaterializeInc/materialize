@@ -82,7 +82,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) {
         let stage = return_if_err!(
-            self.create_view_validate(ctx.session(), plan, resolved_ids, ExplainContext::None),
+            self.create_view_validate(plan, resolved_ids, ExplainContext::None),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -127,7 +127,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_view_validate(ctx.session(), plan, resolved_ids, explain_ctx),
+            self.create_view_validate(plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -179,7 +179,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_view_validate(ctx.session(), plan, resolved_ids, explain_ctx),
+            self.create_view_validate(plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -242,7 +242,6 @@ impl Coordinator {
     #[instrument]
     fn create_view_validate(
         &mut self,
-        session: &Session,
         plan: plan::CreateViewPlan,
         resolved_ids: ResolvedIds,
         // An optional context set iff the state machine is initiated from
@@ -263,13 +262,8 @@ impl Coordinator {
         self.validate_timeline_context(expr_depends_on.iter().copied())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
 
-        let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
-            expr_depends_on.clone(),
-            None,
-            None,
-            session.role_metadata().clone(),
-        );
+        let validity =
+            PlanValidity::require_transient_revision(self.catalog().transient_revision());
 
         Ok(CreateViewStage::Optimize(CreateViewOptimize {
             validity,

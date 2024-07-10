@@ -102,9 +102,9 @@ use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::{
     AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
-    CreateConnectionValidationReady, ExecuteContext, ExplainContext, Message, PendingRead,
-    PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, StageResult, Staged,
-    StagedContext, TargetCluster, WatchSetResponse,
+    CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, ExplainContext,
+    Message, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
+    StageResult, Staged, StagedContext, TargetCluster, WatchSetResponse,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
@@ -4484,6 +4484,24 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::ReassignOwned)
+    }
+
+    #[instrument]
+    pub(crate) async fn handle_deferred_statement(&mut self) {
+        // It is possible Message::DeferredStatementReady was sent but then a session cancellation
+        // was processed, removing the single element from deferred_statements, so it is exepcted
+        // that this is sometimes empty.
+        let Some(DeferredPlanStatement { ctx, ps }) = self.serialized_ddl.pop_front() else {
+            return;
+        };
+        match ps {
+            crate::coord::PlanStatement::Statement { stmt, params } => {
+                self.handle_execute_inner(stmt, params, ctx).await;
+            }
+            crate::coord::PlanStatement::Plan { plan, resolved_ids } => {
+                self.sequence_plan(ctx, plan, resolved_ids).await;
+            }
+        }
     }
 
     #[instrument]

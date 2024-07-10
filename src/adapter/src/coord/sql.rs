@@ -21,7 +21,7 @@ use mz_sql_parser::ast::{Raw, Statement};
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::Catalog;
 use crate::coord::appends::BuiltinTableAppendNotify;
-use crate::coord::Coordinator;
+use crate::coord::{Coordinator, Message};
 use crate::session::{Session, TransactionStatus};
 use crate::util::describe;
 use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse};
@@ -209,6 +209,19 @@ impl Coordinator {
             // Make it explicit that we're dropping these read holds. Dropping
             // them will release them at the Coordinator.
             drop(txn_reads);
+        }
+
+        if let Some(_guard) = self
+            .active_conns
+            .get_mut(conn_id)
+            .expect("must exist for active session")
+            .deferred_lock
+            .take()
+        {
+            // If there are waiting deferred statements, process one.
+            if !self.serialized_ddl.is_empty() {
+                let _ = self.internal_cmd_tx.send(Message::DeferredStatementReady);
+            }
         }
     }
 

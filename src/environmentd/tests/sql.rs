@@ -3885,3 +3885,89 @@ async fn test_builtin_schemas() {
         );
     }
 }
+
+// Test that DDLs are appear serial. This does not test that they are actually executed serially,
+// only that they appear so. Do this by generating DDLs where the success of one will cause all
+// others to fail.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_serialized_ddl_serial() {
+    let server = test_util::TestHarness::default().start().await;
+    let mut handles = Vec::new();
+    let n = 10;
+    for i in 0..n {
+        let client = server.connect().await.unwrap();
+        let handle = task::spawn(|| "test", async move {
+            let stmt = format!("CREATE VIEW v AS SELECT {i}");
+            let res = client
+                .batch_execute(&stmt)
+                .await
+                .map_err(|err| err.to_string());
+            res
+        });
+        handles.push(handle);
+    }
+
+    let mut successes = 0;
+    let mut errors = 0;
+    for handle in handles {
+        let result = handle.await.unwrap();
+        match result {
+            Ok(_) => {
+                successes += 1;
+            }
+            Err(_) => {
+                errors += 1;
+            }
+        }
+    }
+    // Exactly one must succeed.
+    assert_eq!(successes, 1);
+    assert_eq!(errors, n - 1);
+}
+
+// Test that serial DDLs are cancellable.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_serialized_ddl_cancel() {
+    let server = test_util::TestHarness::default().start().await;
+    server
+        .enable_feature_flags(&["enable_unsafe_functions"])
+        .await;
+
+    let client1 = server.connect().await.unwrap();
+    let client2 = server.connect().await.unwrap();
+    let cancel1 = client1.cancel_token();
+    let cancel2 = client2.cancel_token();
+
+    let handle1 = task::spawn(|| "test", async move {
+        let err = client1
+            .batch_execute("create view y as select mz_unsafe.mz_sleep(3)")
+            .await
+            .unwrap_err();
+        err
+    });
+    let handle2 = task::spawn(|| "test", async move {
+        // Encourage client1 to always execute first.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let err = client2
+            .batch_execute("create view z as select mz_unsafe.mz_sleep(3)")
+            .await
+            .unwrap_err();
+        err
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Cancel the pending statement (this uses different cancellation logic and is the actual thing
+    // we are trying to test here).
+    cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
+    let err = handle2.await.unwrap();
+    assert_contains!(err.to_string(), "canceling statement due to user request");
+    // Cancel the in-progress statement.
+    cancel1.cancel_query(tokio_postgres::NoTls).await.unwrap();
+    let err = handle1.await.unwrap();
+    assert_contains!(err.to_string(), "canceling statement due to user request");
+
+    // The mz_sleep calls above cause this test to not exit until the optimization tasks have fully
+    // run, because spawn_blocking (used by optimization) are waited upon during Drop. Thus, don't
+    // pass very high durations to mz_sleep so that we aren't waiting for long.
+}

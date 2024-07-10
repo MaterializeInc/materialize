@@ -28,13 +28,14 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ScalarType, Timestamp};
 use mz_sql::ast::{
-    AlterSourceAction, ConstantVisitor, CopyRelation, CopyStatement, CreateSourceOptionName, Raw,
-    Statement, SubscribeStatement,
+    AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
+    CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributes;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
 use mz_sql::plan::{
-    AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
+    AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan,
+    StatementClassification, TransactionType,
 };
 use mz_sql::pure::{
     materialized_view_option_contains_temporal, purify_create_materialized_view_options,
@@ -62,7 +63,8 @@ use crate::command::{
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::{
-    ConnMeta, Coordinator, Message, PendingTxn, PlanValidity, PurifiedStatementReady,
+    ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
+    PurifiedStatementReady,
 };
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -320,6 +322,7 @@ impl Coordinator {
                     uuid,
                     conn_id: conn_id.clone(),
                     authenticated_role: role_id,
+                    deferred_lock: None,
                 };
                 let update = self.catalog().state().pack_session_update(&conn, 1);
                 let update = self.catalog().state().resolve_builtin_table_update(update);
@@ -502,6 +505,51 @@ impl Coordinator {
         params: Params,
         mut ctx: ExecuteContext,
     ) {
+        // This comment describes the various ways DDL can execute (the ordered operations: name
+        // resolve, purify, plan, sequence), all of which are managed by this function. DDL has
+        // three notable properties that all partially interact.
+        //
+        // 1. Most DDL statements (and a few others) support single-statement transaction delayed
+        //    execution. This occurs when a session executes `BEGIN`, a single DDL, then `COMMIT`.
+        //    We announce success of the single DDL when it is executed, but do not attempt to plan
+        //    or sequence it until `COMMIT`, which is able to error if needed while sequencing the
+        //    DDL (this behavior is Postgres-compatible). The purpose of this is because some
+        //    drivers or tools wrap all statements in `BEGIN` and `COMMIT` and we would like them to
+        //    work. When the single DDL is announced as successful we also put the session's
+        //    transaction ops into `SingleStatement` which will produce an error if any other
+        //    statement is run in the transaction except `COMMIT`. Additionally, this will cause
+        //    `handle_execute_inner` to stop further processing (no planning, etc.) of the
+        //    statement.
+        // 2. A few other DDL statements (`ALTER .. RENAME/SWAP`) enter the `DDL` ops which allows
+        //    any number of only these DDL statements to be executed in a transaction. At sequencing
+        //    these generate the `Op::TransactionDryRun` catalog op. When applied with
+        //    `catalog_transact`, that op will always produce the `TransactionDryRun` error. The
+        //    `catalog_transact_with_ddl_transaction` function intercepts that error and reports
+        //    success to the user, but nothing is yet committed to the real catalog. At `COMMIT` all
+        //    of the ops but without dry run are applied. The purpose of this is to allow multiple,
+        //    atomic renames in the same transaction.
+        // 3. Some DDLs do off-thread work during purification or sequencing that is expensive or
+        //    makes network calls (interfacing with secrets, optimization of views/indexes, source
+        //    purification). These must guarantee correctness when they return to the main
+        //    coordinator thread because the catalog state could have changed while they were doing
+        //    the off-thread work. Previously we would use `PlanValidity::Checks` to specify a bunch
+        //    of IDs that we needed to exist. We discovered the way we were doing that was not
+        //    always correct. Instead of attempting to get that completely right, we have opted to
+        //    serialize DDL. Getting this right is difficult because catalog changes can affect name
+        //    resolution, planning, sequencing, and optimization. Correctly writing logic that is
+        //    aware of all possible catalog changes that would affect any of those parts is not
+        //    something our current code has been designed to be helpful at. Even if a DDL statement
+        //    is doing off-thread work, another DDL must not yet execute at all. Executing these
+        //    serially will guarantee that no off-thread work has affected the state of the catalog.
+        //    This is done by adding a VecDeque of deferred statements and a lock to the
+        //    Coordinator. When a DDL is run in `handle_execute_inner` (after applying whatever
+        //    transaction ops are needed to the session as described above), it attempts to own the
+        //    lock (a tokio Mutex). If acquired, it stashes the lock in the connection`s `ConnMeta`
+        //    struct in `active_conns` and proceeds. The lock is dropped at transaction end in
+        //    `clear_transaction` and a message sent to the Coordinator to execute the next queued
+        //    DDL. If the lock could not be acquired, the DDL is put into the VecDeque where it
+        //    awaits dequeing caused by the lock being released.
+
         // Verify that this statement type can be executed in the current
         // transaction state.
         match ctx.session().transaction() {
@@ -663,6 +711,31 @@ impl Coordinator {
                         )));
                     }
                 }
+            }
+        }
+
+        // DDLs must be planned and sequenced serially. We do not rely on PlanValidity checking
+        // variaous IDs because we have incorrectly done that in the past. Attempt to acquire the
+        // ddl lock. The lock is stashed in the ConnMeta which is dropped at transaction end. If
+        // acquired, proceed with sequencing. If not, enque and return.
+        if Self::must_serialize_ddl(&stmt) {
+            if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
+                let prev = self
+                    .active_conns
+                    .get_mut(ctx.session().conn_id())
+                    .expect("connection must exist")
+                    .deferred_lock
+                    .replace(guard);
+                assert!(
+                    prev.is_none(),
+                    "connections should have at most one lock guard"
+                );
+            } else {
+                self.serialized_ddl.push_back(DeferredPlanStatement {
+                    ctx,
+                    ps: PlanStatement::Statement { stmt, params },
+                });
+                return;
             }
         }
 
@@ -846,8 +919,56 @@ impl Coordinator {
         }
     }
 
+    /// Whether the statement must be serialized and is DDL.
+    fn must_serialize_ddl(stmt: &Statement<Raw>) -> bool {
+        // Non-DDL is not serialized here.
+        if !StatementClassification::from(&*stmt).is_ddl() {
+            return false;
+        }
+        // Off-thread, pre-planning purification can perform arbitrarily slow network calls so must
+        // not be serialized. These all use PlanValidity for their checking, and we must ensure
+        // those checks are sufficient.
+        if Self::must_spawn_purification(stmt) {
+            return false;
+        }
+        // Some DDL is exempt. It is not great that weqkw are matching on Statements here, but
+        // different plans can be produced from the same top-level statement type (i.e., `ALTER
+        // CONNECTION ROTATE KEYS`). But the whole point of this is to prevent things from being
+        // planned in the first place, so we accept the abstraction leak.
+        match stmt {
+            // Secrets have a small and understood set of dependencies, and their off-thread work
+            // interacts with k8s.
+            Statement::AlterSecret(_) => false,
+            Statement::CreateSecret(_) => false,
+            Statement::AlterConnection(AlterConnectionStatement { actions, .. })
+                if actions
+                    .iter()
+                    .all(|action| matches!(action, AlterConnectionAction::RotateKeys)) =>
+            {
+                false
+            }
+
+            // Statements that support multiple DDLs in a single transaction aren't serialized here.
+            // Their operations are serialized when applied to the catalog, guaranteeing that any
+            // off-thread DDLs concurrent with a multiple DDL transaction will have a serial order.
+            Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_) => false,
+
+            // The off-thread work that altering a cluster may do (waiting for replicas to spin-up),
+            // does not affect its catalog names or ids and so is safe to not serialize. This could
+            // change the set of replicas that exist. For queries that name replicas or use the
+            // current_replica session var, the `replica_id` field of `PlanValidity` serves to
+            // ensure that those replicas exist during the query finish stage. Additionally, that
+            // work can take hours (configured by the user), so would also be a bad experience for
+            // users.
+            Statement::AlterCluster(_) => false,
+
+            // Everything is must be serialized.
+            _ => true,
+        }
+    }
+
     /// Whether the statement must be purified off of the Coordinator thread.
-    fn must_spawn_purification(stmt: &Statement<Aug>) -> bool {
+    fn must_spawn_purification<A: AstInfo>(stmt: &Statement<A>) -> bool {
         // `CREATE` and `ALTER` `SOURCE` and `SINK` statements must be purified off the main
         // coordinator thread.
         if !matches!(
@@ -1003,8 +1124,9 @@ impl Coordinator {
     /// interactive work for the named `conn_id`.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
-        // Cancel pending writes. There is at most one pending write per session.
         let mut maybe_ctx = None;
+
+        // Cancel pending writes. There is at most one pending write per session.
         if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
             matches!(pending_write_txn, PendingWriteTxn::User {
                 pending_txn: PendingTxn { ctx, .. },
@@ -1030,6 +1152,19 @@ impl Coordinator {
             if let Deferred::Plan(ready) = ready {
                 maybe_ctx = Some(ready.ctx);
             }
+        }
+
+        // Cancel deferred statements.
+        if let Some(idx) = self
+            .serialized_ddl
+            .iter()
+            .position(|deferred| *deferred.ctx.session().conn_id() == conn_id)
+        {
+            let deferred = self
+                .serialized_ddl
+                .remove(idx)
+                .expect("known to exist from call to `position` above");
+            maybe_ctx = Some(deferred.ctx);
         }
 
         // Cancel reads waiting on being linearized. There is at most one linearized read per

@@ -34,7 +34,9 @@ use tracing::{event, Instrument, Level, Span};
 
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse, Response};
-use crate::coord::{catalog_serving, Coordinator, Message, TargetCluster};
+use crate::coord::{
+    catalog_serving, Coordinator, DeferredPlanStatement, Message, PlanStatement, TargetCluster,
+};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
@@ -283,6 +285,28 @@ impl Coordinator {
                 | Plan::AbortTransaction(AbortTransactionPlan {
                     ref transaction_type,
                 }) => {
+                    // Serialize DDL transactions.
+                    if ctx.session().transaction().is_ddl() {
+                        if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
+                            let prev = self
+                                .active_conns
+                                .get_mut(ctx.session().conn_id())
+                                .expect("connection must exist")
+                                .deferred_lock
+                                .replace(guard);
+                            assert!(
+                                prev.is_none(),
+                                "connections should have at most one lock guard"
+                            );
+                        } else {
+                            self.serialized_ddl.push_back(DeferredPlanStatement {
+                                ctx,
+                                ps: PlanStatement::Plan { plan, resolved_ids },
+                            });
+                            return;
+                        }
+                    }
+
                     let action = match &plan {
                         Plan::CommitTransaction(_) => EndTransactionAction::Commit,
                         Plan::AbortTransaction(_) => EndTransactionAction::Rollback,

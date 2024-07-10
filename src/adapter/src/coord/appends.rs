@@ -239,7 +239,7 @@ impl Coordinator {
             // If some pending transaction already holds the write lock, then we can execute a group
             // commit.
             (Some(guard), self.pending_writes.drain(..).collect())
-        } else if let Ok(guard) = Arc::clone(&self.write_lock).try_lock_owned() {
+        } else if let Ok(guard) = self.write_lock_wait_group.try_lock_owned() {
             // If no pending transaction holds the write lock, then we need to acquire it.
             (Some(guard), self.pending_writes.drain(..).collect())
         } else {
@@ -482,7 +482,7 @@ impl Coordinator {
         self.write_lock_wait_group.push_back(deferred);
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let write_lock = Arc::clone(&self.write_lock);
+        let write_lock = self.write_lock_wait_group.mutex();
         // TODO(guswynn): see if there is more relevant info to add to this name
         task::spawn(|| format!("defer_write:{id}"), async move {
             let guard = write_lock.lock_owned().await;
@@ -500,7 +500,7 @@ impl Coordinator {
         &self,
         session: &mut Session,
     ) -> Result<(), tokio::sync::TryLockError> {
-        Arc::clone(&self.write_lock).try_lock_owned().map(|p| {
+        self.write_lock_wait_group.try_lock_owned().map(|p| {
             session.grant_write_lock(p);
         })
     }

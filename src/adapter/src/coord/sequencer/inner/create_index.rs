@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, Index};
@@ -19,7 +19,6 @@ use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
-use mz_sql::session::metadata::SessionMetadata;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -85,7 +84,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) {
         let stage = return_if_err!(
-            self.create_index_validate(ctx.session(), plan, resolved_ids, ExplainContext::None),
+            self.create_index_validate(plan, resolved_ids, ExplainContext::None),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -130,7 +129,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_index_validate(ctx.session(), plan, resolved_ids, explain_ctx),
+            self.create_index_validate(plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -182,7 +181,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_index_validate(ctx.session(), plan, resolved_ids, explain_ctx),
+            self.create_index_validate(plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -271,24 +270,12 @@ impl Coordinator {
     #[instrument]
     fn create_index_validate(
         &mut self,
-        session: &Session,
         plan: plan::CreateIndexPlan,
         resolved_ids: ResolvedIds,
         explain_ctx: ExplainContext,
     ) -> Result<CreateIndexStage, AdapterError> {
-        let plan::CreateIndexPlan {
-            index: plan::Index { on, cluster_id, .. },
-            ..
-        } = &plan;
-
-        let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
-            BTreeSet::from_iter(std::iter::once(*on)),
-            Some(*cluster_id),
-            None,
-            session.role_metadata().clone(),
-        );
-
+        let validity =
+            PlanValidity::require_transient_revision(self.catalog().transient_revision());
         Ok(CreateIndexStage::Optimize(CreateIndexOptimize {
             validity,
             plan,

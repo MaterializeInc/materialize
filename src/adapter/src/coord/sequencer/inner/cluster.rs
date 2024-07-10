@@ -7,15 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
-
 use mz_catalog::memory::objects::ClusterVariantManaged;
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::DEFAULT_REPLICA_LOGGING_INTERVAL;
 use mz_ore::instrument;
 use mz_sql::catalog::ObjectType;
+use mz_sql::plan;
 use mz_sql::plan::{AlterClusterPlan, AlterOptionParameter};
-use mz_sql::{plan, session::metadata::SessionMetadata};
 use tracing::Span;
 
 use crate::catalog::ReplicaCreateDropReason;
@@ -70,23 +68,17 @@ impl Coordinator {
         ctx: ExecuteContext,
         plan: plan::AlterClusterPlan,
     ) {
-        let stage = return_if_err!(self.alter_cluster_validate(ctx.session(), plan).await, ctx);
+        let stage = return_if_err!(self.alter_cluster_validate(plan).await, ctx);
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
     #[instrument]
     async fn alter_cluster_validate(
         &mut self,
-        session: &Session,
         plan: plan::AlterClusterPlan,
     ) -> Result<ClusterStage, AdapterError> {
-        let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
-            BTreeSet::new(),
-            Some(plan.id.clone()),
-            None,
-            session.role_metadata().clone(),
-        );
+        let validity =
+            PlanValidity::require_transient_revision(self.catalog().transient_revision());
         Ok(ClusterStage::Alter(AlterCluster { validity, plan }))
     }
 

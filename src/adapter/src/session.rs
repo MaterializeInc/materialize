@@ -996,6 +996,19 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         }
     }
 
+    /// Whether the transaction's ops are DDL.
+    pub fn is_ddl(&self) -> bool {
+        match self {
+            TransactionStatus::Default => false,
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransaction(txn)
+            | TransactionStatus::InTransactionImplicit(txn)
+            | TransactionStatus::Failed(txn) => {
+                matches!(txn.ops, TransactionOps::DDL { .. })
+            }
+        }
+    }
+
     /// Expresses whether or not the transaction was implicitly started.
     /// However, its negation does not imply explicitly started.
     pub fn is_implicit(&self) -> bool {
@@ -1081,15 +1094,18 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         }
     }
 
-    /// Adds operations to the current transaction. An error is produced if
-    /// they cannot be merged (i.e., a timestamp-dependent read cannot be
-    /// merged to an insert).
+    /// Adds operations to the current transaction. An error is produced if they cannot be merged
+    /// (i.e., a timestamp-dependent read cannot be merged to an insert).
+    ///
+    /// The `DDL` variant is an exception and does not merge operations, but instead overwrites the
+    /// old ops with the new ops. This is correct because it is only used in conjunction with the
+    /// Dry Run catalog op which returns an error containing all of the ops, and those ops are
+    /// passed to this function which then overwrites.
     ///
     /// # Panics
-    /// If the operations are compatible but the operation metadata doesn't match.
-    /// Such as reads at different timestamps, reads on different timelines, reads
-    /// on different clusters, etc. It's up to the caller to make sure these are
-    /// aligned.
+    /// If the operations are compatible but the operation metadata doesn't match. Such as reads at
+    /// different timestamps, reads on different timelines, reads on different clusters, etc. It's
+    /// up to the caller to make sure these are aligned.
     pub fn add_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
         match self {
             TransactionStatus::Started(Transaction { ops, access, .. })
@@ -1202,6 +1218,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                             if *og_revision != new_revision {
                                 return Err(AdapterError::DDLTransactionRace);
                             }
+                            // The old og_ops are overwritten, not extended.
                             if !new_ops.is_empty() {
                                 *og_ops = new_ops;
                                 *og_state = new_state;
