@@ -12,7 +12,7 @@ from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
 from materialize.checks.mzcompose_actions import (
-    KillMz,
+    MzcomposeAction,
     PromoteMz,
     StartMz,
     WaitReadyMz,
@@ -22,36 +22,13 @@ from materialize.checks.scenarios_upgrade import (
     get_last_version,
     get_minor_versions,
     get_previous_version,
+    start_mz_read_only,
 )
 from materialize.mz_version import MzVersion
 
 
-def start_mz_in_read_only_and_deploy(
-    scenario: Scenario,
-    deploy_generation: int,
-    mz_service: str = "materialized",
-    tag: MzVersion | None = None,
-) -> list[Action]:
-    result: list[Action] = []
-    result.extend(
-        [
-            StartMz(
-                scenario,
-                tag=tag,
-                mz_service=mz_service,
-                deploy_generation=deploy_generation,
-                healthcheck=[
-                    "CMD",
-                    "curl",
-                    "-f",
-                    "localhost:6878/api/leader/status",
-                ],
-            ),
-            WaitReadyMz(mz_service=mz_service),
-            PromoteMz(mz_service=mz_service),
-        ]
-    )
-    return result
+def wait_ready_and_promote(mz_service: str = "materialized") -> list[MzcomposeAction]:
+    return [WaitReadyMz(mz_service=mz_service), PromoteMz(mz_service=mz_service)]
 
 
 class ZeroDowntimeRestartEntireMz(Scenario):
@@ -59,17 +36,15 @@ class ZeroDowntimeRestartEntireMz(Scenario):
         return [
             StartMz(self, mz_service="mz_1"),
             Initialize(self, mz_service="mz_1"),
-            *start_mz_in_read_only_and_deploy(
-                self, deploy_generation=1, mz_service="mz_2"
-            ),
-            Manipulate(self, phase=1, mz_service="mz_2"),
-            *start_mz_in_read_only_and_deploy(
-                self, deploy_generation=2, mz_service="mz_1"
-            ),
-            Manipulate(self, phase=2, mz_service="mz_1"),
-            *start_mz_in_read_only_and_deploy(
-                self, deploy_generation=3, mz_service="mz_2"
-            ),
+            start_mz_read_only(self, deploy_generation=1, mz_service="mz_2"),
+            Manipulate(self, phase=1, mz_service="mz_1"),
+            *wait_ready_and_promote(mz_service="mz_2"),
+            start_mz_read_only(self, deploy_generation=2, mz_service="mz_1"),
+            Manipulate(self, phase=2, mz_service="mz_2"),
+            *wait_ready_and_promote(mz_service="mz_1"),
+            start_mz_read_only(self, deploy_generation=3, mz_service="mz_2"),
+            Validate(self, mz_service="mz_1"),
+            *wait_ready_and_promote(mz_service="mz_2"),
             Validate(self, mz_service="mz_2"),
         ]
 
@@ -85,16 +60,14 @@ class ZeroDowntimeUpgradeEntireMz(Scenario):
         return [
             StartMz(self, tag=self.base_version(), mz_service="mz_1"),
             Initialize(self, mz_service="mz_1"),
+            start_mz_read_only(self, tag=None, deploy_generation=1, mz_service="mz_2"),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            *start_mz_in_read_only_and_deploy(
-                self, deploy_generation=1, mz_service="mz_2"
-            ),
+            *wait_ready_and_promote(mz_service="mz_2"),
             Manipulate(self, phase=2, mz_service="mz_2"),
+            start_mz_read_only(self, tag=None, deploy_generation=2, mz_service="mz_1"),
             Validate(self, mz_service="mz_2"),
-            # A second restart while already on the new version
-            KillMz(capture_logs=True, mz_service="mz_2"),
-            StartMz(self, tag=None, mz_service="mz_2", deploy_generation=1),
-            Validate(self, mz_service="mz_2"),
+            *wait_ready_and_promote(mz_service="mz_1"),
+            Validate(self, mz_service="mz_1"),
         ]
 
 
@@ -112,20 +85,19 @@ class ZeroDowntimeUpgradeEntireMzTwoVersions(Scenario):
             StartMz(self, tag=self.base_version(), mz_service="mz_1"),
             Initialize(self, mz_service="mz_1"),
             # Upgrade to last_version
-            *start_mz_in_read_only_and_deploy(
-                self, deploy_generation=1, mz_service="mz_2"
+            start_mz_read_only(
+                self, tag=get_last_version(), deploy_generation=1, mz_service="mz_2"
             ),
-            Manipulate(self, phase=1, mz_service="mz_2"),
+            Manipulate(self, phase=1, mz_service="mz_1"),
+            *wait_ready_and_promote(mz_service="mz_2"),
             # Upgrade to current source
-            *start_mz_in_read_only_and_deploy(
-                self, deploy_generation=2, mz_service="mz_1"
-            ),
-            Manipulate(self, phase=2, mz_service="mz_1"),
+            start_mz_read_only(self, tag=None, deploy_generation=2, mz_service="mz_1"),
+            Manipulate(self, phase=2, mz_service="mz_2"),
+            *wait_ready_and_promote(mz_service="mz_1"),
+            start_mz_read_only(self, tag=None, deploy_generation=3, mz_service="mz_2"),
             Validate(self, mz_service="mz_1"),
-            # A second restart while already on the current source
-            KillMz(mz_service="mz_1"),
-            StartMz(self, tag=None, mz_service="mz_1", deploy_generation=2),
-            Validate(self, mz_service="mz_1"),
+            *wait_ready_and_promote(mz_service="mz_2"),
+            Validate(self, mz_service="mz_2"),
         ]
 
 
@@ -148,22 +120,23 @@ class ZeroDowntimeUpgradeEntireMzFourVersions(Scenario):
         return [
             StartMz(self, tag=self.minor_versions[3], mz_service="mz_1"),
             Initialize(self, mz_service="mz_1"),
-            *start_mz_in_read_only_and_deploy(
+            start_mz_read_only(
                 self, tag=self.minor_versions[2], deploy_generation=1, mz_service="mz_2"
             ),
-            Manipulate(self, phase=1, mz_service="mz_2"),
-            *start_mz_in_read_only_and_deploy(
+            Manipulate(self, phase=1, mz_service="mz_1"),
+            *wait_ready_and_promote(mz_service="mz_2"),
+            start_mz_read_only(
                 self, tag=get_previous_version(), deploy_generation=2, mz_service="mz_1"
             ),
-            Manipulate(self, phase=2, mz_service="mz_1"),
-            *start_mz_in_read_only_and_deploy(
+            Manipulate(self, phase=2, mz_service="mz_2"),
+            *wait_ready_and_promote(mz_service="mz_1"),
+            start_mz_read_only(
                 self, tag=get_last_version(), deploy_generation=3, mz_service="mz_2"
             ),
-            *start_mz_in_read_only_and_deploy(
-                self, tag=None, deploy_generation=4, mz_service="mz_1"
-            ),
             Validate(self, mz_service="mz_1"),
-            KillMz(mz_service="mz_1"),
-            StartMz(self, tag=None, mz_service="mz_1", deploy_generation=4),
+            *wait_ready_and_promote(mz_service="mz_2"),
+            start_mz_read_only(self, tag=None, deploy_generation=4, mz_service="mz_1"),
+            Validate(self, mz_service="mz_2"),
+            *wait_ready_and_promote(mz_service="mz_1"),
             Validate(self, mz_service="mz_1"),
         ]

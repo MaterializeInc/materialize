@@ -54,6 +54,26 @@ def get_previous_version() -> MzVersion:
     return _previous_version
 
 
+def start_mz_read_only(
+    scenario: Scenario,
+    deploy_generation: int,
+    mz_service: str = "materialized",
+    tag: MzVersion | None = None,
+) -> StartMz:
+    return StartMz(
+        scenario,
+        tag=tag,
+        mz_service=mz_service,
+        deploy_generation=deploy_generation,
+        healthcheck=[
+            "CMD",
+            "curl",
+            "-f",
+            "localhost:6878/api/leader/status",
+        ],
+    )
+
+
 class UpgradeEntireMz(Scenario):
     """Upgrade the entire Mz instance from the last released version."""
 
@@ -244,17 +264,7 @@ class PreflightCheckContinue(Scenario):
             KillMz(
                 capture_logs=True
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
-            StartMz(
-                self,
-                tag=None,
-                healthcheck=[
-                    "CMD",
-                    "curl",
-                    "-f",
-                    "localhost:6878/api/leader/status",
-                ],
-                deploy_generation=1,
-            ),
+            start_mz_read_only(self, tag=None, deploy_generation=1),
             WaitReadyMz(),
             PromoteMz(),
             Manipulate(self, phase=2),
@@ -285,17 +295,7 @@ class PreflightCheckRollback(Scenario):
             KillMz(
                 capture_logs=True
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
-            StartMz(
-                self,
-                tag=None,
-                healthcheck=[
-                    "CMD",
-                    "curl",
-                    "-f",
-                    "localhost:6878/api/leader/status",
-                ],
-                deploy_generation=1,
-            ),
+            start_mz_read_only(self, tag=None, deploy_generation=1),
             WaitReadyMz(),
             KillMz(capture_logs=True),
             StartMz(self, tag=self.base_version()),
