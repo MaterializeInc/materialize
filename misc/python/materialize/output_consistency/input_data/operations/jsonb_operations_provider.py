@@ -20,6 +20,9 @@ from materialize.output_consistency.input_data.params.jsonb_operation_param impo
 from materialize.output_consistency.input_data.params.record_operation_param import (
     RecordOperationParam,
 )
+from materialize.output_consistency.input_data.params.same_operation_param import (
+    SameOperationParam,
+)
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
 )
@@ -34,6 +37,7 @@ from materialize.output_consistency.input_data.return_specs.string_return_spec i
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
+    DbFunctionWithCustomPattern,
     DbOperation,
     DbOperationOrFunction,
     OperationRelevance,
@@ -158,9 +162,10 @@ JSONB_OPERATION_TYPES.append(
 )
 
 JSONB_OPERATION_TYPES.append(
-    DbFunction(
+    DbFunctionWithCustomPattern(
         "jsonb_agg",
-        [AnyOperationParam()],
+        {2: "jsonb_agg($ ORDER BY row_index, $)"},
+        [AnyOperationParam(), SameOperationParam(index_of_previous_param=0)],
         JsonbReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
@@ -169,9 +174,10 @@ JSONB_OPERATION_TYPES.append(
 )
 
 JSONB_OPERATION_TYPES.append(
-    DbFunction(
+    DbFunctionWithCustomPattern(
         "jsonb_agg",
-        [RecordOperationParam()],
+        {2: "jsonb_agg($ ORDER BY row_index, $)"},
+        [RecordOperationParam(), SameOperationParam(index_of_previous_param=0)],
         JsonbReturnTypeSpec(),
         is_aggregation=True,
         comment="additional overlapping variant only for records",
@@ -179,9 +185,14 @@ JSONB_OPERATION_TYPES.append(
 )
 
 JSONB_OPERATION_TYPES.append(
-    DbFunction(
+    DbFunctionWithCustomPattern(
         "jsonb_object_agg",
-        [AnyOperationParam(), AnyOperationParam()],
+        {3: "jsonb_object_agg($, $ ORDER BY row_index, $)"},
+        [
+            AnyOperationParam(),
+            AnyOperationParam(),
+            SameOperationParam(index_of_previous_param=0),
+        ],
         JsonbReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
@@ -190,9 +201,14 @@ JSONB_OPERATION_TYPES.append(
 )
 
 JSONB_OPERATION_TYPES.append(
-    DbFunction(
+    DbFunctionWithCustomPattern(
         "jsonb_object_agg",
-        [AnyOperationParam(), RecordOperationParam()],
+        {3: "jsonb_object_agg($, $ ORDER BY row_index, $)"},
+        [
+            AnyOperationParam(),
+            RecordOperationParam(),
+            SameOperationParam(index_of_previous_param=0),
+        ],
         JsonbReturnTypeSpec(),
         is_aggregation=True,
         comment="additional overlapping variant only for records",
