@@ -1749,7 +1749,7 @@ impl SourceDataRowColumnarEncoder {
                 if false {
                     assert_eq!(row.iter().count(), 0)
                 }
-            },
+            }
         }
     }
 
