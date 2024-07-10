@@ -508,10 +508,10 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // is an `IndexMap`.
     multi_get_scratch.clear();
     multi_get_scratch.extend(commands_state.iter().map(|(k, _)| *k));
-    match state
-        .multi_get(multi_get_scratch.drain(..), commands_state.values_mut())
-        .await
-    {
+    #[allow(clippy::disallowed_methods)]
+    match futures::executor::block_on(
+        state.multi_get(multi_get_scratch.drain(..), commands_state.values_mut()),
+    ) {
         Ok(_) => {}
         Err(e) => {
             error_emitter
@@ -590,21 +590,19 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
         }
     }
 
-    match state
-        .multi_put(commands_state.drain(..).map(|(k, cv)| {
-            (
-                k,
-                types::PutValue {
-                    value: cv.value.map(|cv| cv.into_decoded()),
-                    previous_value_metadata: cv.metadata.map(|v| ValueMetadata {
-                        size: v.size.try_into().expect("less than i64 size"),
-                        is_tombstone: v.is_tombstone,
-                    }),
-                },
-            )
-        }))
-        .await
-    {
+    #[allow(clippy::disallowed_methods)]
+    match futures::executor::block_on(state.multi_put(commands_state.drain(..).map(|(k, cv)| {
+        (
+            k,
+            types::PutValue {
+                value: cv.value.map(|cv| cv.into_decoded()),
+                previous_value_metadata: cv.metadata.map(|v| ValueMetadata {
+                    size: v.size.try_into().expect("less than i64 size"),
+                    is_tombstone: v.is_tombstone,
+                }),
+            },
+        )
+    }))) {
         Ok(_) => {}
         Err(e) => {
             error_emitter
@@ -782,13 +780,11 @@ where
                 }
             }
 
-            match state
-                .consolidate_snapshot_chunk(
-                    events.drain(..),
-                    PartialOrder::less_equal(&resume_upper, &snapshot_upper),
-                )
-                .await
-            {
+            #[allow(clippy::disallowed_methods)]
+            match futures::executor::block_on(state.consolidate_snapshot_chunk(
+                events.drain(..),
+                PartialOrder::less_equal(&resume_upper, &snapshot_upper),
+            )) {
                 Ok(_) => {
                     if let Some(ts) = snapshot_upper.clone().into_option() {
                         // As we shutdown, we could ostensibly get data from later than the
