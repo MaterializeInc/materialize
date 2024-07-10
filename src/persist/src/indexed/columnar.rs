@@ -10,14 +10,19 @@
 //! A columnar representation of ((Key, Val), Time, i64) data suitable for in-memory
 //! reads and persistent storage.
 
+use std::cmp::Ordering;
 use std::fmt;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use ::arrow::array::{Array, AsArray, BinaryArray, BinaryBuilder, Int64Array};
+use ::arrow::array::{
+    Array, AsArray, BinaryArray, BinaryBuilder, Int64Array, UInt32Array,
+};
 use ::arrow::buffer::OffsetBuffer;
+use ::arrow::compute::FilterBuilder;
 use ::arrow::datatypes::ToByteSlice;
 use bytes::Bytes;
+use mz_ore::cast::CastFrom;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::gen::persist::ProtoColumnarRecords;
@@ -171,6 +176,81 @@ impl ColumnarRecords {
             val_data: realloc_array(concat(|c| &c.val_data).as_binary(), metrics),
             timestamps: realloc_array(concat(|c| &c.timestamps).as_primitive(), metrics),
             diffs: realloc_array(concat(|c| &c.diffs).as_primitive(), metrics),
+        }
+    }
+
+    /// Apply a function to the timestamp of every row, filtering out the row when it returns `None`.
+    pub fn filter_map_ts(
+        &self,
+        filter_map: impl Fn([u8; 8]) -> Option<[u8; 8]>,
+        metrics: &ColumnarMetrics,
+    ) -> ColumnarRecords {
+        // We don't bother with unary_mut here, since that can't reuse a lgalloc allocation,
+        // so we'd end up copying in the only case that matters.
+        let timestamps = self
+            .timestamps
+            .unary_opt(|t: i64| filter_map(t.to_le_bytes()).map(i64::from_le_bytes));
+
+        if timestamps.null_count() == 0 {
+            return Self {
+                len: self.len,
+                key_data: self.key_data.clone(),
+                val_data: self.val_data.clone(),
+                timestamps: realloc_array(&timestamps, metrics),
+                diffs: self.diffs.clone(),
+            };
+        }
+
+        let non_null = ::arrow::compute::is_not_null(&timestamps).expect("infallible");
+        let filter = FilterBuilder::new(&non_null).optimize().build();
+        let do_filter = |array: &dyn Array| filter.filter(array).expect("valid filter len");
+
+        let timestamps = realloc_array(do_filter(&timestamps).as_primitive(), metrics);
+        Self {
+            len: timestamps.len(),
+            key_data: realloc_array(do_filter(&self.key_data).as_binary(), metrics),
+            val_data: realloc_array(do_filter(&self.val_data).as_binary(), metrics),
+            timestamps,
+            diffs: realloc_array(do_filter(&self.diffs).as_primitive(), metrics),
+        }
+    }
+
+    /// Sort the columnar data, using the specified comparator for the time column.
+    pub fn sorted_by(
+        &self,
+        cmp_ts: impl Fn([u8; 8], [u8; 8]) -> Ordering,
+        metrics: &ColumnarMetrics,
+    ) -> ColumnarRecords {
+        // We can't use an arrow-native sort because timestamps don't sort the same in their
+        // encoded and decoded forms. Instead, sort an index array and do the `take`.
+        let len: u32 = self
+            .len
+            .try_into()
+            .expect("len longer than our max array size");
+        let mut indices: Vec<_> = (0..len).collect();
+        indices.sort_unstable_by(|i, j| {
+            let i = usize::cast_from(*i);
+            let j = usize::cast_from(*j);
+            match self.key_data.value(i).cmp(self.key_data.value(j)) {
+                Ordering::Equal => match self.val_data.value(i).cmp(self.val_data.value(j)) {
+                    Ordering::Equal => cmp_ts(
+                        self.timestamps.value(i).to_le_bytes(),
+                        self.timestamps.value(j).to_le_bytes(),
+                    ),
+                    other => other,
+                },
+                other => other,
+            }
+        });
+        let indices = UInt32Array::from(indices);
+        let do_index =
+            |array: &dyn Array| ::arrow::compute::take(array, &indices, None).expect("valid len");
+        ColumnarRecords {
+            len: self.len,
+            key_data: realloc_array(do_index(&self.key_data).as_binary(), metrics),
+            val_data: realloc_array(do_index(&self.val_data).as_binary(), metrics),
+            timestamps: realloc_array(do_index(&self.timestamps).as_primitive(), metrics),
+            diffs: realloc_array(do_index(&self.diffs).as_primitive(), metrics),
         }
     }
 }
