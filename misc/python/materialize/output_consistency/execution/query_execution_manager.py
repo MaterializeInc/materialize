@@ -100,7 +100,9 @@ class QueryExecutionManager:
         for test_outcome in test_outcomes:
             if test_outcome.verdict() == ValidationVerdict.FAILURE:
                 all_comparisons_passed = False
-            summary_to_update.accept_execution_result(query, test_outcome)
+            summary_to_update.accept_execution_result(
+                query, test_outcome, self.output_printer.reproduction_code_printer
+            )
 
         return all_comparisons_passed
 

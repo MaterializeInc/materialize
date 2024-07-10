@@ -14,7 +14,10 @@ from materialize.output_consistency.common.configuration import (
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
-from materialize.output_consistency.output.base_output_printer import BaseOutputPrinter
+from materialize.output_consistency.output.base_output_printer import (
+    BaseOutputPrinter,
+    OutputPrinterMode,
+)
 from materialize.output_consistency.output.reproduction_code_printer import (
     ReproductionCodePrinter,
 )
@@ -23,7 +26,12 @@ from materialize.output_consistency.validation.validation_message import Validat
 
 
 class OutputPrinter(BaseOutputPrinter):
-    def __init__(self, input_data: ConsistencyTestInputData):
+    def __init__(
+        self,
+        input_data: ConsistencyTestInputData,
+        mode: OutputPrinterMode = OutputPrinterMode.PRINT,
+    ):
+        super().__init__(mode=mode)
         self.reproduction_code_printer = ReproductionCodePrinter(input_data)
 
     def print_sql(self, sql: str) -> None:
