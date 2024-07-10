@@ -12,7 +12,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
@@ -192,7 +192,7 @@ pub fn decode_parquet_file_kvtd(
             }
             Ok(BlobTraceUpdates::Row(ret))
         }
-        Some(ProtoFormatMetadata::StructuredMigration(1)) => {
+        Some(ProtoFormatMetadata::StructuredMigration(v @ 1 | v @ 2)) => {
             if schema.fields().len() > 6 {
                 return Err(
                     format!("expected at most 6 columns, got {}", schema.fields().len()).into(),
@@ -212,31 +212,23 @@ pub fn decode_parquet_file_kvtd(
             // The first 4 columns are our primary (K, V, T, D) and optionally
             // we also have K_S and/or V_S if we wrote structured data.
             let primary_columns = &columns[..4];
+
+            // Version 1 is a deprecated format so we just ignored the k_s and v_s columns.
+            if *v == 1 {
+                let records = decode_arrow_batch_kvtd(primary_columns, metrics)?;
+                return Ok(BlobTraceUpdates::Row(vec![records]));
+            }
+
             let k_s_column = schema
                 .fields()
                 .iter()
                 .position(|field| field.name() == "k_s")
-                .map(|idx| columns[idx].as_ref());
+                .map(|idx| Arc::clone(&columns[idx]));
             let v_s_column = schema
                 .fields()
                 .iter()
                 .position(|field| field.name() == "v_s")
-                .map(|idx| columns[idx].as_ref());
-
-            if let Some(k_s) = k_s_column.as_ref() {
-                if !matches!(k_s.data_type(), DataType::Struct(_)) {
-                    return Err(
-                        format!("k_s should be a Struct, found {:?}", k_s.data_type()).into(),
-                    );
-                }
-            }
-            if let Some(v_s) = v_s_column.as_ref() {
-                if !matches!(v_s.data_type(), DataType::Struct(_)) {
-                    return Err(
-                        format!("v_s should be a Struct, found {:?}", v_s.data_type()).into(),
-                    );
-                }
-            }
+                .map(|idx| Arc::clone(&columns[idx]));
             if k_s_column.is_none() && v_s_column.is_none() {
                 return Err(
                     format!("at least one of k_s or v_s should exist, found {schema:?}").into(),
