@@ -363,6 +363,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     storage_state,
                     metrics,
                     export.ingestion_output,
+                    Arc::clone(&busy_signal),
                 );
                 upper_streams.push(upper_stream);
                 tokens.extend(sink_tokens);
