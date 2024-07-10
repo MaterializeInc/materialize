@@ -165,7 +165,7 @@ where
                         K::decode_from(k_buf, k, &mut k_storage)?;
                         V::decode_from(v_buf, v, &mut v_storage)?;
 
-                        builder.push(&k_buf, &v_buf, t, d);
+                        builder.push(k_buf, v_buf, t, d);
                     }
                     (_, _) => {
                         let k = K::decode(k)?;
