@@ -294,7 +294,13 @@ class ResultComparator:
             raise RuntimeError("Result contains no columns!")
 
         if num_columns1 != num_columns2:
-            raise RuntimeError("Results count different number of columns!")
+            raise RuntimeError("Results contain a different number of columns!")
+
+        if num_columns1 != len(query_execution.query_template.select_expressions):
+            # This would happen with the disabled .* operator on a row() function
+            raise RuntimeError(
+                "Number of columns in the result does not match the number of select expressions!"
+            )
 
         for col_index in range(0, num_columns1):
             self.validate_column(
