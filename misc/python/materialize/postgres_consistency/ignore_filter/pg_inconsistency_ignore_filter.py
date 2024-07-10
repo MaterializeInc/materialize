@@ -44,6 +44,9 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
     PostExecutionInconsistencyIgnoreFilterBase,
     PreExecutionInconsistencyIgnoreFilterBase,
 )
+from materialize.output_consistency.input_data.operations.array_operations_provider import (
+    TAG_ARRAY_INDEX_OPERATION,
+)
 from materialize.output_consistency.input_data.operations.equality_operations_provider import (
     TAG_EQUALITY,
     TAG_EQUALITY_ORDERING,
@@ -553,6 +556,10 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if "timestamp out of range" in mz_error_msg:
             return YesIgnore("#22264")
 
+        if "bigint out of range" in mz_error_msg:
+            # when a large decimal number or NaN is used as an array index
+            return YesIgnore("#28145")
+
         if "invalid regular expression: regex parse error" in mz_error_msg:
             return YesIgnore("#22956")
 
@@ -589,6 +596,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if "|| does not support implicitly casting" in mz_error_msg:
             return YesIgnore("#28024: no implicit casting from ...[] to ...[]")
+
+        if query_template.matches_any_expression(
+            partial(is_operation_tagged, tag=TAG_ARRAY_INDEX_OPERATION),
+            True,
+        ):
+            return YesIgnore("Different evaluation order")
 
         return NoIgnore()
 

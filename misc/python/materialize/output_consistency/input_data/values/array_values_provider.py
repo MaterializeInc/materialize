@@ -21,9 +21,9 @@ from materialize.output_consistency.input_data.types.array_type_provider import 
 
 VALUES_PER_ARRAY_DATA_TYPE: dict[ArrayDataType, DataTypeWithValues] = dict()
 
-for list_data_type in ARRAY_DATA_TYPES:
-    values_of_type = DataTypeWithValues(list_data_type)
-    VALUES_PER_ARRAY_DATA_TYPE[list_data_type] = values_of_type
+for array_data_type in ARRAY_DATA_TYPES:
+    values_of_type = DataTypeWithValues(array_data_type)
+    VALUES_PER_ARRAY_DATA_TYPE[array_data_type] = values_of_type
 
     values_of_type.add_raw_value(
         as_array_sql([]),
@@ -32,13 +32,13 @@ for list_data_type in ARRAY_DATA_TYPES:
     )
 
     values_of_type.add_raw_value(
-        as_array_sql([list_data_type.entry_value_1]),
+        as_array_sql([array_data_type.entry_value_1]),
         "ONE_ELEM",
         set(),
     )
 
     values_of_type.add_raw_value(
-        as_array_sql([list_data_type.entry_value_1, list_data_type.entry_value_2]),
+        as_array_sql([array_data_type.entry_value_1, array_data_type.entry_value_2]),
         "TWO_ELEM",
         set(),
     )
@@ -46,9 +46,9 @@ for list_data_type in ARRAY_DATA_TYPES:
     values_of_type.add_raw_value(
         as_array_sql(
             [
-                list_data_type.entry_value_1,
-                list_data_type.entry_value_1,
-                list_data_type.entry_value_2,
+                array_data_type.entry_value_1,
+                array_data_type.entry_value_1,
+                array_data_type.entry_value_2,
             ]
         ),
         "DUP_ELEM",
