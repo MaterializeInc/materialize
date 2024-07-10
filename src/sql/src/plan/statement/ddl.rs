@@ -23,9 +23,7 @@ use mz_controller_types::{
     is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
 };
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
-use mz_interchange::avro::{
-    AvroKeySchemaGenerator, AvroSchemaOptions, AvroValueSchemaGenerator, DocTarget,
-};
+use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
@@ -3035,42 +3033,20 @@ fn kafka_sink_builder(
                 )
             }
         };
-        let CsrConfigOptionExtracted {
-            avro_key_fullname,
-            avro_value_fullname,
-            null_defaults,
-            key_doc_options,
-            value_doc_options,
-            key_compatibility_level,
-            value_compatibility_level,
-            seen: _,
-        } = options.try_into()?;
+        let extracted_options: CsrConfigOptionExtracted = options.try_into()?;
 
-        if key_desc_and_indices.is_none() && avro_key_fullname.is_some() {
+        if key_desc_and_indices.is_none() && extracted_options.avro_key_fullname.is_some() {
             sql_bail!("Cannot specify AVRO KEY FULLNAME without a corresponding KEY field");
         }
 
         if key_desc_and_indices.is_some()
-            && (avro_key_fullname.is_some() ^ avro_value_fullname.is_some())
+            && (extracted_options.avro_key_fullname.is_some()
+                ^ extracted_options.avro_value_fullname.is_some())
         {
             sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
         }
 
-        let options = AvroSchemaOptions {
-            avro_key_fullname,
-            avro_value_fullname,
-            set_null_defaults: null_defaults,
-            is_debezium: matches!(envelope, SinkEnvelope::Debezium),
-            sink_from: Some(sink_from),
-            value_doc_options,
-            key_doc_options,
-        };
-        Ok((
-            csr_connection,
-            options,
-            key_compatibility_level,
-            value_compatibility_level,
-        ))
+        Ok((csr_connection, extracted_options))
     };
 
     let map_format = |format: Format<Aug>, desc: &RelationDesc, is_key: bool| match format {
@@ -3092,23 +3068,38 @@ fn kafka_sink_builder(
         }
         Format::Json { array: true } => bail_unsupported!("JSON ARRAY format in sinks"),
         Format::Avro(AvroSchema::Csr { csr_connection }) => {
-            let (csr_connection, options, key_compatibility_level, value_compatibility_level) =
-                gen_avro_schema_options(csr_connection)?;
+            let (csr_connection, options) = gen_avro_schema_options(csr_connection)?;
             let schema = if is_key {
-                AvroKeySchemaGenerator::new(desc.clone(), options)?
-                    .schema()
-                    .to_string()
+                AvroSchemaGenerator::new(
+                    desc.clone(),
+                    false,
+                    options.key_doc_options,
+                    options.avro_key_fullname.as_deref().unwrap_or("row"),
+                    options.null_defaults,
+                    Some(sink_from),
+                    false,
+                )?
+                .schema()
+                .to_string()
             } else {
-                AvroValueSchemaGenerator::new(desc.clone(), options)?
-                    .schema()
-                    .to_string()
+                AvroSchemaGenerator::new(
+                    desc.clone(),
+                    matches!(envelope, SinkEnvelope::Debezium),
+                    options.value_doc_options,
+                    options.avro_value_fullname.as_deref().unwrap_or("envelope"),
+                    options.null_defaults,
+                    Some(sink_from),
+                    true,
+                )?
+                .schema()
+                .to_string()
             };
             Ok(KafkaSinkFormatType::Avro {
                 schema,
                 compatibility_level: if is_key {
-                    key_compatibility_level
+                    options.key_compatibility_level
                 } else {
-                    value_compatibility_level
+                    options.value_compatibility_level
                 },
                 csr_connection,
             })

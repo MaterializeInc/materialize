@@ -1143,22 +1143,22 @@ fn encode_collection<G: Scope>(
                 .map(|(desc, _indices)| desc.clone());
             let value_desc = connection.value_desc;
 
-            let key_encoder: Option<Box<dyn Encode>> = if let Some(desc) = key_desc {
-                match connection.format.key_format {
-                    Some(KafkaSinkFormatType::Bytes) => {
+            let key_encoder: Option<Box<dyn Encode>> =
+                match (key_desc, connection.format.key_format) {
+                    (Some(desc), Some(KafkaSinkFormatType::Bytes)) => {
                         Some(Box::new(BinaryEncoder::new(desc, false)))
                     }
-                    Some(KafkaSinkFormatType::Text) => {
+                    (Some(desc), Some(KafkaSinkFormatType::Text)) => {
                         Some(Box::new(TextEncoder::new(desc, false)))
                     }
-                    Some(KafkaSinkFormatType::Json) => {
+                    (Some(desc), Some(KafkaSinkFormatType::Json)) => {
                         Some(Box::new(JsonEncoder::new(desc, false)))
                     }
-                    Some(KafkaSinkFormatType::Avro {
+                    (Some(desc), Some(KafkaSinkFormatType::Avro {
                         schema,
                         compatibility_level,
                         csr_connection,
-                    }) => {
+                    })) => {
                         // Ensure that schemas are registered with the schema registry.
                         //
                         // Note that where this lies in the rendering cycle means that we will publish the
@@ -1179,11 +1179,15 @@ fn encode_collection<G: Scope>(
 
                         Some(Box::new(AvroEncoder::new(desc, false, &schema, schema_id)))
                     }
-                    None => None,
-                }
-            } else {
-                None
-            };
+                    (None, None) => None,
+                    (desc, format) => {
+                        return Err(anyhow!(
+                            "key_desc and key_format must be both set or both unset, but key_desc: {:?}, key_format: {:?}",
+                            desc,
+                            format
+                        ))
+                    }
+                };
 
             // whether to apply the debezium envelope to the value encoding
             let debezium = matches!(envelope, SinkEnvelope::Debezium);
