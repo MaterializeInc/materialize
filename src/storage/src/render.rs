@@ -205,7 +205,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription};
+use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use timely::communication::Allocate;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
 use timely::dataflow::Scope;
@@ -213,6 +213,7 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::source::RawSourceCreationConfig;
 use crate::storage_state::StorageState;
 
 mod persist_sink;
@@ -249,6 +250,34 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let (feedback_handle, feedback) = mz_scope.feedback(Default::default());
 
             let connection = description.desc.connection.clone();
+
+            let base_source_config = RawSourceCreationConfig {
+                name: format!("{}-{}", connection.name(), primary_source_id),
+                id: primary_source_id,
+                source_exports: description.source_exports_with_output_indices(),
+                timestamp_interval: description.desc.timestamp_interval,
+                worker_id: mz_scope.index(),
+                worker_count: mz_scope.peers(),
+                now: storage_state.now.clone(),
+                metrics: storage_state.metrics.clone(),
+                as_of: as_of.clone(),
+                resume_uppers: resume_uppers.clone(),
+                source_resume_uppers,
+                storage_metadata: description.ingestion_metadata.clone(),
+                persist_clients: Arc::clone(&storage_state.persist_clients),
+                source_statistics: storage_state
+                    .aggregated_statistics
+                    .get_source(&primary_source_id)
+                    .expect("statistics initialized")
+                    .clone(),
+                shared_remap_upper: Rc::clone(
+                    &storage_state.source_uppers[&description.remap_collection_id],
+                ),
+                // This might quite a large clone, but its just during rendering
+                config: storage_state.storage_configuration.clone(),
+                remap_collection_id: description.remap_collection_id.clone(),
+            };
+
             let (mut outputs, source_health, source_tokens) = match connection {
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
                     mz_scope,
@@ -256,11 +285,9 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     primary_source_id,
                     c,
                     description.clone(),
-                    as_of.clone(),
-                    resume_uppers.clone(),
-                    source_resume_uppers,
                     &feedback,
                     storage_state,
+                    base_source_config,
                 ),
                 GenericSourceConnection::Postgres(c) => crate::render::sources::render_source(
                     mz_scope,
@@ -268,11 +295,9 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     primary_source_id,
                     c,
                     description.clone(),
-                    as_of.clone(),
-                    resume_uppers.clone(),
-                    source_resume_uppers,
                     &feedback,
                     storage_state,
+                    base_source_config,
                 ),
                 GenericSourceConnection::MySql(c) => crate::render::sources::render_source(
                     mz_scope,
@@ -280,11 +305,9 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     primary_source_id,
                     c,
                     description.clone(),
-                    as_of.clone(),
-                    resume_uppers.clone(),
-                    source_resume_uppers,
                     &feedback,
                     storage_state,
+                    base_source_config,
                 ),
                 GenericSourceConnection::LoadGenerator(c) => crate::render::sources::render_source(
                     mz_scope,
@@ -292,11 +315,9 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     primary_source_id,
                     c,
                     description.clone(),
-                    as_of.clone(),
-                    resume_uppers.clone(),
-                    source_resume_uppers,
                     &feedback,
                     storage_state,
+                    base_source_config,
                 ),
             };
             tokens.extend(source_tokens);
