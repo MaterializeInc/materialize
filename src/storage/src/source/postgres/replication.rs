@@ -780,12 +780,11 @@ fn extract_transaction<'a>(
                         // to check the current local schema against the current remote schema to
                         // ensure e.g. we haven't received a schema update with the same terminal
                         // column name which is actually a different column.
-                        let upstream_info = mz_postgres_util::publication_info(
-                            ssh_tunnel_manager,
-                            connection_config,
-                            publication,
-                        )
-                        .await?;
+                        let client = connection_config
+                            .connect("replication schema verification", ssh_tunnel_manager)
+                            .await?;
+                        let upstream_info =
+                            mz_postgres_util::publication_info(&client, publication).await?;
                         let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
                         if let Err(err) =

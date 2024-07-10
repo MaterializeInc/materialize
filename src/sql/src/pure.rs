@@ -678,7 +678,7 @@ async fn purify_create_source(
             };
             let crate::plan::statement::PgConfigOptionExtracted {
                 publication,
-                mut text_columns,
+                text_columns,
                 details,
                 ..
             } = options.clone().try_into()?;
@@ -698,179 +698,56 @@ async fn purify_create_source(
                 )
                 .await?;
 
-            let wal_level = mz_postgres_util::get_wal_level(
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &config,
-            )
-            .await?;
+            let client = config
+                .connect(
+                    "postgres_purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            let wal_level = mz_postgres_util::get_wal_level(&client).await?;
 
             if wal_level < WalLevel::Logical {
                 Err(PgSourcePurificationError::InsufficientWalLevel { wal_level })?;
             }
 
-            let max_wal_senders = mz_postgres_util::get_max_wal_senders(
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &config,
-            )
-            .await?;
+            let max_wal_senders = mz_postgres_util::get_max_wal_senders(&client).await?;
 
             if max_wal_senders < 1 {
                 Err(PgSourcePurificationError::ReplicationDisabled)?;
             }
 
-            let available_replication_slots = mz_postgres_util::available_replication_slots(
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &config,
-            )
-            .await?;
+            let available_replication_slots =
+                mz_postgres_util::available_replication_slots(&client).await?;
 
             // We need 1 replication slot for the snapshots and 1 for the continuing replication
             if available_replication_slots < 2 {
                 Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 2 })?;
             }
 
-            let publication_tables = mz_postgres_util::publication_info(
-                &storage_configuration.connection_context.ssh_tunnel_manager,
+            let postgres::PurifiedSubsources {
+                new_subsources,
+                referenced_tables,
+                normalized_text_columns,
+            } = postgres::purify_subsources(
+                &client,
                 &config,
                 &publication,
+                &connection,
+                referenced_subsources,
+                text_columns,
+                None,
+                source_name,
+                &catalog,
             )
             .await?;
 
-            if publication_tables.is_empty() {
-                Err(PgSourcePurificationError::EmptyPublication(
-                    publication.to_string(),
-                ))?;
-            }
-
-            let subsource_resolver =
-                SubsourceResolver::new(&connection.database, &publication_tables)?;
-
-            let mut validated_requested_subsources = vec![];
-            match referenced_subsources
-                .as_mut()
-                .ok_or(PgSourcePurificationError::RequiresReferencedSubsources)?
-            {
-                ReferencedSubsources::All => {
-                    for table in &publication_tables {
-                        let upstream_name = UnresolvedItemName::qualified(&[
-                            Ident::new(&connection.database)?,
-                            Ident::new(&table.namespace)?,
-                            Ident::new(&table.name)?,
-                        ]);
-                        let subsource_name = subsource_name_gen(source_name, &table.name)?;
-                        validated_requested_subsources.push(RequestedSubsource {
-                            upstream_name,
-                            subsource_name,
-                            table,
-                        });
-                    }
-                }
-                ReferencedSubsources::SubsetSchemas(schemas) => {
-                    let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(
-                        &storage_configuration.connection_context.ssh_tunnel_manager,
-                        &config,
-                    )
-                    .await?
-                    .into_iter()
-                    .map(|s| s.name)
-                    .collect();
-
-                    let requested_schemas: BTreeSet<_> =
-                        schemas.iter().map(|s| s.as_str().to_string()).collect();
-
-                    let missing_schemas: Vec<_> = requested_schemas
-                        .difference(&available_schemas)
-                        .map(|s| s.to_string())
-                        .collect();
-
-                    if !missing_schemas.is_empty() {
-                        Err(PgSourcePurificationError::DatabaseMissingFilteredSchemas {
-                            database: connection.database.clone(),
-                            schemas: missing_schemas,
-                        })?;
-                    }
-
-                    for table in &publication_tables {
-                        if !requested_schemas.contains(table.namespace.as_str()) {
-                            continue;
-                        }
-
-                        let upstream_name = UnresolvedItemName::qualified(&[
-                            Ident::new(&connection.database)?,
-                            Ident::new(&table.namespace)?,
-                            Ident::new(&table.name)?,
-                        ]);
-                        let subsource_name = subsource_name_gen(source_name, &table.name)?;
-                        validated_requested_subsources.push(RequestedSubsource {
-                            upstream_name,
-                            subsource_name,
-                            table,
-                        });
-                    }
-                }
-                ReferencedSubsources::SubsetTables(subsources) => {
-                    // The user manually selected a subset of upstream tables so we need to
-                    // validate that the names actually exist and are not ambiguous
-                    validated_requested_subsources.extend(subsource_gen(
-                        subsources,
-                        &subsource_resolver,
-                        &publication_tables,
-                        3,
-                        source_name,
-                    )?);
-                }
-            };
-
-            if validated_requested_subsources.is_empty() {
-                sql_bail!(
-                    "[internal error]: Postgres source must ingest at least one table, but {} matched none",
-                    referenced_subsources.as_ref().unwrap().to_ast_string()
-                );
-            }
-
-            validate_subsource_names(&validated_requested_subsources)?;
-
-            let table_oids: Vec<_> = validated_requested_subsources
-                .iter()
-                .map(|r| r.table.oid)
-                .collect();
-
-            postgres::validate_requested_subsources_privileges(
-                &config,
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &table_oids,
-            )
-            .await?;
-
-            let text_cols_dict = postgres::generate_text_columns(
-                &subsource_resolver,
-                &publication_tables,
-                &mut text_columns,
-                &PgConfigOptionName::TextColumns.to_ast_string(),
-            )?;
-
-            // Normalize options to contain full qualified values.
             if let Some(text_cols_option) = options
                 .iter_mut()
                 .find(|option| option.name == PgConfigOptionName::TextColumns)
             {
-                text_columns.sort();
-                text_columns.dedup();
-                text_cols_option.value = Some(WithOptionValue::Sequence(
-                    text_columns
-                        .into_iter()
-                        .map(WithOptionValue::UnresolvedItemName)
-                        .collect(),
-                ));
+                text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
             }
-
-            let (new_subsources, referenced_tables) = postgres::generate_targeted_subsources(
-                &scx,
-                None,
-                validated_requested_subsources,
-                text_cols_dict,
-                &publication_tables,
-            )?;
 
             // Now that we know which subsources to create alongside this
             // statement, remove the references so it is not canonicalized as
@@ -1233,7 +1110,7 @@ async fn purify_alter_source(
 
     // If we don't need to handle added subsources, early return.
     let AlterSourceAction::AddSubsources {
-        subsources: mut targeted_subsources,
+        subsources: targeted_subsources,
         mut options,
     } = action
     else {
@@ -1247,7 +1124,7 @@ async fn purify_alter_source(
     };
 
     let crate::plan::statement::ddl::AlterSourceAddSubsourceOptionExtracted {
-        mut text_columns,
+        text_columns,
         ignore_columns,
         details,
         seen: _,
@@ -1269,54 +1146,20 @@ async fn purify_alter_source(
                 )
                 .await?;
 
-            let available_replication_slots = mz_postgres_util::available_replication_slots(
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &config,
-            )
-            .await?;
+            let client = config
+                .connect(
+                    "postgres_purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            let available_replication_slots =
+                mz_postgres_util::available_replication_slots(&client).await?;
 
             // We need 1 additional replication slot for the snapshots
             if available_replication_slots < 1 {
                 Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
             }
-
-            let new_publication_tables = mz_postgres_util::publication_info(
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &config,
-                &pg_source_connection.publication,
-            )
-            .await?;
-
-            if new_publication_tables.is_empty() {
-                Err(PgSourcePurificationError::EmptyPublication(
-                    pg_source_connection.publication.to_string(),
-                ))?;
-            }
-
-            let subsource_resolver =
-                SubsourceResolver::new(&pg_connection.database, &new_publication_tables)?;
-
-            let validated_requested_subsources = subsource_gen(
-                &mut targeted_subsources,
-                &subsource_resolver,
-                &new_publication_tables,
-                3,
-                &unresolved_source_name,
-            )?;
-
-            validate_subsource_names(&validated_requested_subsources)?;
-
-            let table_oids: Vec<_> = validated_requested_subsources
-                .iter()
-                .map(|r| r.table.oid)
-                .collect();
-
-            postgres::validate_requested_subsources_privileges(
-                &config,
-                &storage_configuration.connection_context.ssh_tunnel_manager,
-                &table_oids,
-            )
-            .await?;
 
             if !ignore_columns.is_empty() {
                 sql_bail!(
@@ -1326,36 +1169,32 @@ async fn purify_alter_source(
                 )
             }
 
-            let text_cols_dict = postgres::generate_text_columns(
-                &subsource_resolver,
-                &new_publication_tables,
-                &mut text_columns,
-                &AlterSourceAddSubsourceOptionName::TextColumns.to_ast_string(),
-            )?;
+            let mut referenced_subsources =
+                Some(ReferencedSubsources::SubsetTables(targeted_subsources));
 
-            if !text_columns.is_empty() {
-                // Normalize options to contain full qualified values.
-                text_columns.sort();
-                text_columns.dedup();
-                options.retain(|o| o.name != AlterSourceAddSubsourceOptionName::TextColumns);
-                options.push(AlterSourceAddSubsourceOption {
-                    name: mz_sql_parser::ast::AlterSourceAddSubsourceOptionName::TextColumns,
-                    value: Some(WithOptionValue::Sequence(
-                        text_columns
-                            .into_iter()
-                            .map(WithOptionValue::UnresolvedItemName)
-                            .collect(),
-                    )),
-                });
-            }
-
-            let (new_subsources, referenced_tables) = postgres::generate_targeted_subsources(
-                &scx,
+            let postgres::PurifiedSubsources {
+                new_subsources,
+                referenced_tables,
+                normalized_text_columns,
+            } = postgres::purify_subsources(
+                &client,
+                &config,
+                &pg_source_connection.publication,
+                pg_connection,
+                &mut referenced_subsources,
+                text_columns,
                 Some(resolved_source_name),
-                validated_requested_subsources,
-                text_cols_dict,
-                &new_publication_tables,
-            )?;
+                &unresolved_source_name,
+                &catalog,
+            )
+            .await?;
+
+            if let Some(text_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == AlterSourceAddSubsourceOptionName::TextColumns)
+            {
+                text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
+            }
 
             create_subsource_stmts.extend(new_subsources);
 
