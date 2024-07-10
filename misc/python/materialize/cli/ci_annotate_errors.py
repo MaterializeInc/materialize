@@ -332,17 +332,24 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    test_analytics_config = create_test_analytics_config_with_hostname(
-        args.cloud_hostname
-    )
-    test_analytics = TestAnalyticsDb(test_analytics_config)
+    try:
+        test_analytics_config = create_test_analytics_config_with_hostname(
+            args.cloud_hostname
+        )
+        test_analytics = TestAnalyticsDb(test_analytics_config)
 
-    # always insert a build job regardless whether it has annotations or not
-    test_analytics.builds.add_build_job(
-        was_successful=has_successful_buildkite_status()
-    )
+        # always insert a build job regardless whether it has annotations or not
+        test_analytics.builds.add_build_job(
+            was_successful=has_successful_buildkite_status()
+        )
 
-    return_code = annotate_logged_errors(args.log_files, test_analytics)
+        return_code = annotate_logged_errors(args.log_files, test_analytics)
+    except Exception as e:
+        add_annotation_raw(
+            style="error",
+            markdown=f"ci_annotate_errors failed, report this to #team-testing:\n```\n{e}\n```",
+        )
+        raise
 
     try:
         test_analytics.submit_updates()
