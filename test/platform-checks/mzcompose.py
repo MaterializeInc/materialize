@@ -19,6 +19,7 @@ from materialize.checks.scenarios import Scenario, SystemVarChange
 from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
 from materialize.checks.scenarios_platform_v2 import *  # noqa: F401 F403
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
+from materialize.checks.scenarios_zero_downtime import *  # noqa: F401 F403
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -91,6 +92,20 @@ SERVICES = [
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
     Materialized(
+        external_cockroach=True,
+        external_minio=True,
+        sanity_restart=False,
+        volumes_extra=["secrets:/share/secrets"],
+    ),
+    Materialized(
+        name="mz_1",
+        external_cockroach=True,
+        external_minio=True,
+        sanity_restart=False,
+        volumes_extra=["secrets:/share/secrets"],
+    ),
+    Materialized(
+        name="mz_2",
         external_cockroach=True,
         external_minio=True,
         sanity_restart=False,

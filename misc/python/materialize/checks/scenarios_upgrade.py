@@ -247,13 +247,13 @@ class PreflightCheckContinue(Scenario):
             StartMz(
                 self,
                 tag=None,
-                environment_extra=["MZ_DEPLOY_GENERATION=1"],
                 healthcheck=[
                     "CMD",
                     "curl",
                     "-f",
                     "localhost:6878/api/leader/status",
                 ],
+                deploy_generation=1,
             ),
             WaitReadyMz(),
             PromoteMz(),
@@ -264,7 +264,7 @@ class PreflightCheckContinue(Scenario):
             StartMz(
                 self,
                 tag=None,
-                environment_extra=["MZ_DEPLOY_GENERATION=1"],
+                deploy_generation=1,
             ),
             Validate(self),
         ]
@@ -288,13 +288,13 @@ class PreflightCheckRollback(Scenario):
             StartMz(
                 self,
                 tag=None,
-                environment_extra=["MZ_DEPLOY_GENERATION=1"],
                 healthcheck=[
                     "CMD",
                     "curl",
                     "-f",
                     "localhost:6878/api/leader/status",
                 ],
+                deploy_generation=1,
             ),
             WaitReadyMz(),
             KillMz(capture_logs=True),
