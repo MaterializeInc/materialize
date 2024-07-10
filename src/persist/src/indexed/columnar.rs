@@ -105,6 +105,26 @@ impl fmt::Debug for ColumnarRecords {
 }
 
 impl ColumnarRecords {
+    /// Make a new columnar records from existing data, asserting invariants.
+    pub fn new(
+        key_data: BinaryArray,
+        val_data: BinaryArray,
+        timestamps: Int64Array,
+        diffs: Int64Array,
+    ) -> Self {
+        let records = Self {
+            len: key_data.len(),
+            key_data,
+            val_data,
+            timestamps,
+            diffs,
+        };
+
+        records.borrow().validate().expect("valid");
+
+        records
+    }
+
     /// The number of (potentially duplicated) ((Key, Val), Time, i64) records
     /// stored in Self.
     pub fn len(&self) -> usize {
@@ -165,6 +185,21 @@ impl ColumnarRecords {
     /// The keys in this columnar records as an array.
     pub fn keys(&self) -> &BinaryArray {
         &self.key_data
+    }
+
+    /// The values in this columnar records as an array.
+    pub fn values(&self) -> &BinaryArray {
+        &self.val_data
+    }
+
+    /// The values in this columnar records as an array.
+    pub fn timestamps(&self) -> &Int64Array {
+        &self.timestamps
+    }
+
+    /// The values in this columnar records as an array.
+    pub fn diffs(&self) -> &Int64Array {
+        &self.diffs
     }
 
     /// The number of logical bytes in the represented data, excluding offsets

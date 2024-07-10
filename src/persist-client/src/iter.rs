@@ -61,7 +61,7 @@ fn clone_tuple<T, D>((k, v, t, d): TupleRef<T, D>) -> Tuple<T, D> {
     ((k.to_vec(), v.to_vec()), t, d)
 }
 
-pub trait Sort {
+pub trait Sort: Send + Sync + Debug {
     fn accepts(&self, version: Version, format: BatchColumnarFormat) -> bool;
 
     fn order(&self, from: BlobTraceUpdates) -> ColumnarRecords;
@@ -69,6 +69,7 @@ pub trait Sort {
     fn disorder(&self, columns: ColumnarRecords) -> BlobTraceUpdates;
 }
 
+#[derive(Debug)]
 struct CodecSort;
 
 impl Sort for CodecSort {
@@ -85,6 +86,7 @@ impl Sort for CodecSort {
     }
 }
 
+#[derive(Debug)]
 struct ColumnarSort<K: Codec, V: Codec> {
     schemas: Schemas<K, V>,
     key_converter: RowConverter,
@@ -133,7 +135,7 @@ fn splat<A: Codec>(schema: &A::Schema, data: &dyn Array) -> anyhow::Result<Binar
     Ok(builder.finish())
 }
 
-impl<K: Codec, V: Codec> Sort for ColumnarSort<K, V> {
+impl<K: Codec + Debug, V: Codec + Debug> Sort for ColumnarSort<K, V> {
     fn accepts(&self, _version: Version, format: BatchColumnarFormat) -> bool {
         format.is_structured()
     }
@@ -293,6 +295,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
         part: EncodedPart<T>,
         filter: &'a FetchBatchFilter<T>,
         mut maybe_unconsolidated: bool,
+        sort: &dyn Sort,
         metrics: &Metrics,
     ) -> Self {
         maybe_unconsolidated |= part.maybe_unconsolidated();
@@ -302,6 +305,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
         } else {
             records
         };
+        let part = sort.order(BlobTraceUpdates::Row(part));
         Self::Columnar {
             records: part,
             index: 0,
@@ -368,7 +372,7 @@ pub(crate) struct Consolidator<T, D> {
     filter: FetchBatchFilter<T>,
     budget: usize,
     split_old_runs: bool,
-    use_arrow_row: bool,
+    sort: Arc<dyn Sort>,
     // NB: this is the tricky part!
     // One hazard of streaming consolidation is that we may start consolidating a particular KVT,
     // but not be able to finish, because some other part that might also contain the same KVT
@@ -417,7 +421,7 @@ where
             filter,
             budget: prefetch_budget_bytes,
             split_old_runs,
-            use_arrow_row: true,
+            sort: Arc::new(CodecSort),
             initial_state: None,
             drop_stash: None,
         }
@@ -450,7 +454,13 @@ where
                             &updates,
                             ts_rewrite.as_ref(),
                         );
-                        ConsolidationPart::from_encoded(part, &self.filter, true, &self.metrics)
+                        ConsolidationPart::from_encoded(
+                            part,
+                            &self.filter,
+                            true,
+                            &*self.sort,
+                            &self.metrics,
+                        )
                     }
                     part => ConsolidationPart::Queued {
                         data: FetchData::Unfetched {
@@ -600,6 +610,7 @@ where
                                 .await?,
                             &self.filter,
                             maybe_unconsolidated,
+                            &*self.sort,
                             &*self.metrics,
                         );
                     }
@@ -618,6 +629,7 @@ where
                             handle.await??,
                             &self.filter,
                             *maybe_unconsolidated,
+                            &*self.sort,
                             &*self.metrics,
                         );
                     }
@@ -1131,7 +1143,7 @@ mod tests {
                                     );
                                     (
                                         ConsolidationPart::from_encoded(
-                                            part, &filter, true, metrics,
+                                            part, &filter, true, &CodecSort, metrics,
                                         ),
                                         0,
                                     )
@@ -1142,7 +1154,7 @@ mod tests {
                     filter,
                     budget: 0,
                     split_old_runs: true,
-                    use_arrow_row: false,
+                    sort: Arc::new(CodecSort),
                     initial_state: None,
                     drop_stash: None,
                 };
