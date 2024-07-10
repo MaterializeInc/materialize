@@ -6,7 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+from materialize.output_consistency.input_data.params.any_operation_param import (
+    AnyOperationParam,
+)
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     JSON_FIELD_INDEX_PARAM,
     JSON_FIELD_NAME_PARAM,
@@ -14,6 +16,9 @@ from materialize.output_consistency.input_data.params.enum_constant_operation_pa
 )
 from materialize.output_consistency.input_data.params.jsonb_operation_param import (
     JsonbOperationParam,
+)
+from materialize.output_consistency.input_data.params.record_operation_param import (
+    RecordOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
@@ -149,4 +154,24 @@ JSONB_OPERATION_TYPES.append(
         [JsonbOperationParam()],
         JsonbReturnTypeSpec(),
     )
+)
+
+JSONB_OPERATION_TYPES.append(
+    DbFunction(
+        "jsonb_agg",
+        [RecordOperationParam()],
+        JsonbReturnTypeSpec(),
+        # this is not aggregating the rows from the original source but only the provided records
+        is_aggregation=False,
+    ),
+)
+
+JSONB_OPERATION_TYPES.append(
+    DbFunction(
+        "jsonb_object_agg",
+        [AnyOperationParam(), RecordOperationParam()],
+        JsonbReturnTypeSpec(),
+        # this is not aggregating the rows from the original source but only the provided records
+        is_aggregation=False,
+    ),
 )
