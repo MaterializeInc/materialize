@@ -19,8 +19,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec,
-    GaugeVecExt, HistogramVec, HistogramVecExt, IntCounterVec, MetricsRegistry,
+    CounterVec, CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram,
+    GaugeVec, GaugeVecExt, HistogramVec, HistogramVecExt, IntCounterVec, MetricsRegistry,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
@@ -30,6 +30,7 @@ use prometheus::core::{AtomicF64, AtomicU64};
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
 
+type Counter = DeleteOnDropCounter<'static, AtomicF64, Vec<String>>;
 type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
 type Gauge = DeleteOnDropGauge<'static, AtomicF64, Vec<String>>;
 /// TODO(#25239): Add documentation.
@@ -66,6 +67,10 @@ pub struct ComputeControllerMetrics {
 
     // dataflows
     dataflow_initial_output_duration_seconds: GaugeVec,
+    dataflow_wallclock_lag_total: CounterVec,
+    dataflow_wallclock_max_lag_seconds: GaugeVec,
+    dataflow_wallclock_fresh_seconds_total: CounterVec,
+    dataflow_wallclock_nonfresh_seconds_total: CounterVec,
 }
 
 impl ComputeControllerMetrics {
@@ -162,6 +167,28 @@ impl ComputeControllerMetrics {
                 name: "mz_dataflow_initial_output_duration_seconds",
                 help: "The time from dataflow creation up to when the first output was produced.",
                 var_labels: ["instance_id", "replica_id", "collection_id"],
+            )),
+            dataflow_wallclock_lag_total: metrics_registry.register(metric!(
+                name: "mz_dataflow_wallclock_lag_total",
+                help: "The sum of the second-by-second lag of the dataflow frontier relative to \
+                       wallclock time.",
+                var_labels: ["instance_id", "collection_id"],
+            )),
+            dataflow_wallclock_max_lag_seconds: metrics_registry.register(metric!(
+                name: "mz_dataflow_wallclock_max_lag_seconds",
+                help: "The per-minute maximum lag of the dataflow frontier relative to wallclock \
+                       time.",
+                var_labels: ["instance_id", "collection_id"],
+            )),
+            dataflow_wallclock_fresh_seconds_total: metrics_registry.register(metric!(
+                name: "mz_dataflow_wallclock_fresh_seconds_total",
+                help: "The total number of seconds the dataflow output was FRESH.",
+                var_labels: ["instance_id", "collection_id"],
+            )),
+            dataflow_wallclock_nonfresh_seconds_total: metrics_registry.register(metric!(
+                name: "mz_dataflow_wallclock_nonfresh_seconds_total",
+                help: "The total number of seconds the dataflow output was NONFRESH.",
+                var_labels: ["instance_id", "collection_id"],
             )),
         }
     }
@@ -310,6 +337,42 @@ impl InstanceMetrics {
     }
 
     /// TODO(#25239): Add documentation.
+    pub fn for_collection(&self, collection_id: GlobalId) -> Option<CollectionMetrics> {
+        // In an effort to reduce the cardinality of timeseries created, we collect metrics only
+        // for non-transient collections. This is roughly equivalent to "long-lived" collections,
+        // with the exception of subscribes which may or may not be long-lived. We might want to
+        // change this policy in the future to track subscribes as well.
+        if collection_id.is_transient() {
+            return None;
+        }
+
+        let labels = vec![self.instance_id.to_string(), collection_id.to_string()];
+        let wallclock_lag_total = self
+            .metrics
+            .dataflow_wallclock_lag_total
+            .get_delete_on_drop_counter(labels.clone());
+        let wallclock_max_lag_seconds = self
+            .metrics
+            .dataflow_wallclock_max_lag_seconds
+            .get_delete_on_drop_gauge(labels.clone());
+        let wallclock_fresh_seconds_total = self
+            .metrics
+            .dataflow_wallclock_fresh_seconds_total
+            .get_delete_on_drop_counter(labels.clone());
+        let wallclock_nonfresh_seconds_total = self
+            .metrics
+            .dataflow_wallclock_nonfresh_seconds_total
+            .get_delete_on_drop_counter(labels);
+
+        Some(CollectionMetrics {
+            wallclock_lag_total,
+            wallclock_max_lag_seconds,
+            wallclock_fresh_seconds_total,
+            wallclock_nonfresh_seconds_total,
+        })
+    }
+
+    /// TODO(#25239): Add documentation.
     pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
         let labels = vec![self.instance_id.to_string()];
         let command_counts = CommandMetrics::build(|typ| {
@@ -336,6 +399,19 @@ impl InstanceMetrics {
             .for_peek_response(response)
             .observe(duration.as_secs_f64());
     }
+}
+
+/// Per-collection metrics.
+#[derive(Debug)]
+pub struct CollectionMetrics {
+    /// TODO(#25239): Add documentation.
+    pub wallclock_lag_total: Counter,
+    /// TODO(#25239): Add documentation.
+    pub wallclock_max_lag_seconds: Gauge,
+    /// TODO(#25239): Add documentation.
+    pub wallclock_fresh_seconds_total: Counter,
+    /// TODO(#25239): Add documentation.
+    pub wallclock_nonfresh_seconds_total: Counter,
 }
 
 /// Per-replica metrics.

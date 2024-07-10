@@ -29,7 +29,9 @@
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::num::NonZeroI64;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -66,7 +68,7 @@ use crate::controller::error::{
 use crate::controller::instance::Instance;
 use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
-use crate::metrics::ComputeControllerMetrics;
+use crate::metrics::{CollectionMetrics, ComputeControllerMetrics};
 use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -165,6 +167,8 @@ pub struct ComputeController<T> {
     envd_epoch: NonZeroI64,
     /// The compute controller metrics.
     metrics: ComputeControllerMetrics,
+    /// A function that compute the lag between the given time and wallclock time.
+    wallclock_lag: WallclockLagFn<T>,
     /// Dynamic system configuration.
     ///
     /// Updated through `ComputeController::update_configuration` calls and shared with all
@@ -195,6 +199,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         envd_epoch: NonZeroI64,
         read_only: bool,
         metrics_registry: MetricsRegistry,
+        wallclock_lag: WallclockLagFn<T>,
     ) -> Self {
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
         let (introspection_tx, introspection_rx) = crossbeam_channel::unbounded();
@@ -213,6 +218,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             stashed_replica_response: None,
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
+            wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
             response_rx,
             response_tx,
@@ -332,6 +338,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             stashed_replica_response,
             envd_epoch,
             metrics: _,
+            wallclock_lag: _,
             dyncfg: _,
             response_rx: _,
             response_tx: _,
@@ -396,6 +403,7 @@ where
                 arranged_logs,
                 self.envd_epoch,
                 self.metrics.for_instance(id),
+                self.wallclock_lag.clone(),
                 Arc::clone(&self.dyncfg),
                 self.response_tx.clone(),
                 self.introspection_tx.clone(),
@@ -741,7 +749,7 @@ where
 }
 
 /// A read-only handle to a compute instance.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ComputeInstanceRef<'a, T> {
     instance_id: ComputeInstanceId,
     instance: &'a Instance<T>,
@@ -820,6 +828,12 @@ pub struct CollectionState<T> {
 
     /// Introspection state associated with this collection.
     collection_introspection: CollectionIntrospection<T>,
+    /// Metrics tracked for this collection.
+    ///
+    /// If this is `None`, no metrics are collected.
+    metrics: Option<CollectionMetrics>,
+    /// The maximum wallclock lag observed during the last minute.
+    wallclock_max_lag: Duration,
 }
 
 impl<T> CollectionState<T> {
@@ -848,7 +862,7 @@ impl<T> CollectionState<T> {
 
 impl<T: ComputeControllerTimestamp> CollectionState<T> {
     /// Creates a new collection state, with an initial read policy valid from `since`.
-    pub fn new(
+    pub(crate) fn new(
         collection_id: GlobalId,
         as_of: Antichain<T>,
         storage_dependencies: Vec<GlobalId>,
@@ -856,6 +870,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
         initial_as_of: Option<Antichain<T>>,
         refresh_schedule: Option<RefreshSchedule>,
+        metrics: Option<CollectionMetrics>,
     ) -> Self {
         // A collection is not readable before the `as_of`.
         let since = as_of.clone();
@@ -890,11 +905,13 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
                 refresh_schedule,
                 upper,
             ),
+            metrics,
+            wallclock_max_lag: Duration::ZERO,
         }
     }
 
     /// Creates a new collection state for a log collection.
-    pub fn new_log_collection(
+    pub(crate) fn new_log_collection(
         id: GlobalId,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
@@ -905,6 +922,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             Vec::new(),
             Vec::new(),
             introspection_tx,
+            None,
             None,
             None,
         );
@@ -1103,5 +1121,32 @@ impl<T: ComputeControllerTimestamp> RefreshIntrospectionState<T> {
                 self.next_refresh = write_frontier.clone().into();
             }
         }
+    }
+}
+
+/// TODO
+#[derive(Clone)]
+pub struct WallclockLagFn<T>(Arc<dyn Fn(&T) -> Duration>);
+
+impl<T> fmt::Debug for WallclockLagFn<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("<wallclock_lag_fn>")
+    }
+}
+
+impl<F, T> From<F> for WallclockLagFn<T>
+where
+    F: Fn(&T) -> Duration + 'static,
+{
+    fn from(f: F) -> Self {
+        Self(Arc::new(f))
+    }
+}
+
+impl<T> Deref for WallclockLagFn<T> {
+    type Target = dyn Fn(&T) -> Duration;
+
+    fn deref(&self) -> &Self::Target {
+        &(*self.0)
     }
 }

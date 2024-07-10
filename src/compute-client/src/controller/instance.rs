@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
@@ -46,7 +46,7 @@ use crate::controller::error::{CollectionMissing, ERROR_TARGET_REPLICA_FAILED};
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionState, ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates,
-    ReplicaId,
+    ReplicaId, WallclockLagFn,
 };
 use crate::logging::LogVariant;
 use crate::metrics::{InstanceMetrics, ReplicaMetrics};
@@ -148,7 +148,6 @@ pub(super) enum SubscribeTargetError {
 }
 
 /// The state we keep for a compute instance.
-#[derive(Debug)]
 pub(super) struct Instance<T> {
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
@@ -217,6 +216,10 @@ pub(super) struct Instance<T> {
     replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
+    /// The last time we refreshed the collection metrics.
+    last_collection_metrics_refresh: Option<(Instant, Instant)>,
+    /// A function that compute the lag between the given time and wallclock time.
+    wallclock_lag: WallclockLagFn<T>,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
 }
@@ -283,6 +286,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             self.introspection_tx.clone(),
             initial_as_of,
             refresh_schedule,
+            self.metrics.for_collection(id),
         );
         // If the collection is write-only, clear its read policy to reflect that.
         if write_only {
@@ -428,6 +432,55 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         self.metrics
             .copy_to_count
             .set(u64::cast_from(self.copy_tos.len()));
+    }
+
+    fn refresh_collection_metrics(&mut self) {
+        let now = Instant::now();
+        let Some((last_refresh, last_minute_refresh)) = self.last_collection_metrics_refresh else {
+            self.last_collection_metrics_refresh = Some((now, now));
+            return;
+        };
+
+        let elapsed_s = (now - last_refresh).as_secs_f64();
+        if elapsed_s == 0. {
+            return;
+        }
+
+        let minute_refresh = (now - last_minute_refresh) >= Duration::from_secs(60);
+
+        for collection in self.collections.values_mut() {
+            let Some(metrics) = &collection.metrics else {
+                continue;
+            };
+
+            let lag = match collection.write_frontier.as_option() {
+                Some(ts) => (self.wallclock_lag)(ts),
+                None => Duration::ZERO,
+            };
+
+            let lag_by_second = lag.as_secs_f64() / elapsed_s;
+            metrics.wallclock_lag_total.inc_by(lag_by_second);
+
+            let fresh = lag < Duration::from_secs(2);
+            if fresh {
+                metrics.wallclock_fresh_seconds_total.inc_by(elapsed_s);
+            } else {
+                metrics.wallclock_nonfresh_seconds_total.inc_by(elapsed_s);
+            }
+
+            collection.wallclock_max_lag = std::cmp::max(collection.wallclock_max_lag, lag);
+
+            if minute_refresh {
+                let max_lag = std::mem::take(&mut collection.wallclock_max_lag);
+                metrics.wallclock_max_lag_seconds.set(max_lag.as_secs_f64());
+            }
+        }
+
+        if minute_refresh {
+            self.last_collection_metrics_refresh = Some((now, now));
+        } else {
+            self.last_collection_metrics_refresh = Some((now, last_minute_refresh));
+        }
     }
 
     /// Report updates (inserts or retractions) to the identified collection's dependencies.
@@ -592,6 +645,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             envd_epoch,
             replica_epochs,
             metrics: _,
+            last_collection_metrics_refresh,
+            wallclock_lag: _,
             dyncfg: _,
         } = self;
 
@@ -624,6 +679,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .iter()
             .map(|(id, epoch)| (id.to_string(), epoch))
             .collect();
+        let last_collection_metrics_refresh = format!("{last_collection_metrics_refresh:?}");
 
         let map = serde_json::Map::from_iter([
             field("initialized", initialized)?,
@@ -635,6 +691,10 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field("copy_tos", copy_tos)?,
             field("envd_epoch", envd_epoch)?,
             field("replica_epochs", replica_epochs)?,
+            field(
+                "last_collection_metrics_refresh",
+                last_collection_metrics_refresh,
+            )?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
@@ -651,6 +711,7 @@ where
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
+        wallclock_lag: WallclockLagFn<T>,
         dyncfg: Arc<ConfigSet>,
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
@@ -682,6 +743,8 @@ where
             envd_epoch,
             replica_epochs: Default::default(),
             metrics,
+            last_collection_metrics_refresh: None,
+            wallclock_lag,
             dyncfg,
         };
 
@@ -2073,6 +2136,7 @@ where
         self.schedule_collections();
         self.cleanup_collections();
         self.refresh_state_metrics();
+        self.refresh_collection_metrics();
     }
 }
 
