@@ -10,7 +10,12 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET max_result_size TO 10000;
+ALTER SYSTEM SET max_result_size TO 1;
+----
+db error: ERROR: parameter "max_result_size" cannot have value "1B": only supports values in range ByteSize(1048576)..
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_result_size TO '1MB';
 ----
 COMPLETE 0
 
@@ -27,15 +32,15 @@ SELECT workers FROM mz_catalog.mz_cluster_replica_sizes JOIN mz_cluster_replicas
 8
 
 statement ok
-CREATE TABLE t1 (a int);
+CREATE TABLE t1 (a int, b text);
 
 statement ok
-INSERT INTO t1 SELECT * FROM generate_series(1, 1000);
+INSERT INTO t1 SELECT * FROM generate_series(1, 10000), repeat('a', 100);
 
 statement ok
 SET cluster TO 'c1';
 
 # Note: 'total' in the error message here is important because it indicates we failed when
 # aggregating the result from multiple workers, as opposed to on any single worker.
-query error db error: ERROR: total result exceeds max size of 10.0 KB
+query error db error: ERROR: total result exceeds max size of 1048.6 KB
 SELECT * FROM t1;
