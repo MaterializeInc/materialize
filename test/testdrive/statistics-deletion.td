@@ -69,13 +69,14 @@ one:two
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds. Here we are just ensuring metrics were populated.
 
-> SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
+# TODO(bosconi) SUM(u.bytes_received) > 0 once increment is implemented
+> SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed), SUM(u.bytes_received) = 0
   FROM mz_sinks s
   JOIN mz_internal.mz_sink_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('sink_size', 'sink_cluster')
   GROUP BY s.name
-sink_size 1 1 true true
-sink_cluster 1 1 true true
+sink_size 1 1 true true true
+sink_cluster 1 1 true true true
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0

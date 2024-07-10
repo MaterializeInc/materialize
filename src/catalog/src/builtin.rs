@@ -6888,6 +6888,7 @@ SELECT
     -- Counters
     SUM(messages_received)::uint8 AS messages_received,
     SUM(bytes_received)::uint8 AS bytes_received,
+    SUM(bytes_sent)::uint8 AS bytes_sent,
     SUM(updates_staged)::uint8 AS updates_staged,
     SUM(updates_committed)::uint8 AS updates_committed,
     -- Resetting Gauges
@@ -6950,7 +6951,8 @@ SELECT
     SUM(messages_staged)::uint8 AS messages_staged,
     SUM(messages_committed)::uint8 AS messages_committed,
     SUM(bytes_staged)::uint8 AS bytes_staged,
-    SUM(bytes_committed)::uint8 AS bytes_committed
+    SUM(bytes_committed)::uint8 AS bytes_committed,
+    SUM(bytes_received)::uint8 AS bytes_received
 FROM mz_internal.mz_sink_statistics_raw
 GROUP BY id",
     access: vec![PUBLIC_SELECT],

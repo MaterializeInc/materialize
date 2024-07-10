@@ -24,6 +24,7 @@ message ProtoSourceStatisticsUpdate {
     uint64 updates_staged = 3;
     uint64 updates_committed = 4;
     uint64 bytes_received = 5;
+    uint64 bytes_sent = 14;
 
     uint64 records_indexed = 7;
     uint64 bytes_indexed = 6;
@@ -43,4 +44,5 @@ message ProtoSinkStatisticsUpdate {
     uint64 messages_committed = 3;
     uint64 bytes_staged = 4;
     uint64 bytes_committed = 5;
+    uint64 bytes_received = 6;
 }

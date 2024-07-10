@@ -19,16 +19,18 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
 $ webhook-append database=materialize schema=public name=webhook_text
 a
 
+# TODO(bosconi) SUM(u.bytes_sent) > 0 once increment is implemented
 > SELECT
     s.name,
     u.messages_received,
     u.bytes_received > 0,
+    u.bytes_sent = 0,
     u.updates_staged,
     u.updates_committed
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('webhook_text')
-webhook_text 1 true 1 1
+webhook_text 1 true true 1 1
 
 $ set-from-sql var=bytes-received
 SELECT
@@ -37,19 +39,28 @@ SELECT
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('webhook_text')
 
+$ set-from-sql var=bytes-sent
+SELECT
+    (u.bytes_sent)::text
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('webhook_text')
+
 $ webhook-append database=materialize schema=public name=webhook_text
 b
 
+# TODO(bosconi) u.bytes_received > ${bytes-received} once increment is implemented
 > SELECT
     s.name,
     u.messages_received,
     u.bytes_received > ${bytes-received},
+    u.bytes_sent = ${bytes-sent},
     u.updates_staged,
     u.updates_committed
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('webhook_text')
-webhook_text 2 true 2 2
+webhook_text 2 true true 2 2
 
 > DROP SOURCE webhook_text CASCADE;
 

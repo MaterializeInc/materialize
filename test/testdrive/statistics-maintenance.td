@@ -45,12 +45,13 @@ one:two
   ENVELOPE UPSERT
 
 # Ensure we produce statistics
-> SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
+# TODO(bosconi) SUM(u.bytes_received) > 0 once increment is implemented
+> SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed), SUM(u.bytes_received) = 0
   FROM mz_sinks s
   JOIN mz_internal.mz_sink_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('sink1')
   GROUP BY s.name
-sink1 1 1 true true
+sink1 1 1 true true true
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
@@ -65,12 +66,13 @@ upsert1 true 1
 > ALTER CLUSTER cluster1 SET (REPLICATION FACTOR = 0)
 
 # Statistics should remain the same
-> SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
+# TODO(bosconi) SUM(u.bytes_received) > 0 once increment is implemented
+> SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed), SUM(u.bytes_received) = 0
   FROM mz_sinks s
   JOIN mz_internal.mz_sink_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('sink1')
   GROUP BY s.name
-sink1 1 1 true true
+sink1 1 1 true true true
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
@@ -89,12 +91,13 @@ $ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
 two:three
 
 # Statistics should remain the same
-> SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
+# TODO(bosconi) SUM(u.bytes_received) > 0 once increment is implemented
+> SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed), SUM(u.bytes_received) = 0
   FROM mz_sinks s
   JOIN mz_internal.mz_sink_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('sink1')
   GROUP BY s.name
-sink1 2 2 true true
+sink1 2 2 true true true
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0,

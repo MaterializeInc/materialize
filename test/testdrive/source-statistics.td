@@ -92,35 +92,37 @@ $ set-sql-timeout duration=2minutes
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds.
+# TODO(bosconi) SUM(u.bytes_sent) > 0 once increment is implemented
 > SELECT s.name,
   bool_and(u.snapshot_committed),
-  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
+  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, SUM(u.bytes_sent) >= 0, bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('metrics_test_source')
   GROUP BY s.name
   ORDER BY s.name
-metrics_test_source true 2 2 2 true true
+metrics_test_source true 2 2 2 true true true
 
 > DROP SOURCE metrics_test_source CASCADE
 
 # Note that only the base-source has `messages_received`, but the sub-sources have `messages_committed`.
 # Committed will usually, for auction sources, add up to received, but we don't test this (right now) because of
 # jitter on when metrics are produced for each sub-source.
+# TODO(bosconi) SUM(u.bytes_sent) > 0 once increment is implemented
 > SELECT s.name,
   bool_and(u.snapshot_committed),
-  SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
+  SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0, SUM(u.bytes_sent) >= 0, bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('accounts', 'auction_house', 'auctions', 'bids', 'organizations', 'users')
   GROUP BY s.name
   ORDER BY s.name
-accounts       true      false   true  true  false   true
-auction_house  true      true    false false true    true
-auctions       true      false   true  true  false   true
-bids           true      false   true  true  false   true
-organizations  true      false   true  true  false   true
-users          true      false   true  true  false   true
+accounts       true      false   true  true  false   true  true
+auction_house  true      true    false false true    true  true
+auctions       true      false   true  true  false   true  true
+bids           true      false   true  true  false   true  true
+organizations  true      false   true  true  false   true  true
+users          true      false   true  true  false   true  true
 
 
 # Assert that the codepath that ensures a 0-value as the first value in `mz_source_statistics` occurs, using a `SUBSCRIBE`.
@@ -149,6 +151,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 # There could also be up to 11 updates, as updates cause inserts and deletes
 # (5 initial inserts, 2 deletes, and 2 updates). In total 3 records should be present in upsert state.
 # We can't control this, so have to accept the range.
+# TODO(bosconi) SUM(u.bytes_sent) > 0 once increment is implemented
 > SELECT
     s.name,
     bool_and(u.snapshot_committed),
@@ -156,6 +159,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
     SUM(u.updates_staged) BETWEEN 3 AND 11,
     SUM(u.updates_committed) BETWEEN 3 AND 11,
     SUM(u.bytes_received) > 0,
+    SUM(u.bytes_sent) >= 0,
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed),
     bool_and(u.rehydration_latency IS NOT NULL)
@@ -164,7 +168,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 9 true true true true 3 true
+upsert true 9 true true true true true 3 true
 
 # While we can't control how batching works above, we can ensure that this new, later update
 # causes 1 more messages to be received, which is 1 update, a delete.
@@ -187,12 +191,14 @@ SELECT
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"}
 
+# TODO(bosconi) SUM(u.bytes_sent) > 0 once increment is implemented
 > SELECT s.name,
     bool_and(u.snapshot_committed),
     SUM(u.messages_received),
     SUM(u.updates_staged),
     SUM(u.updates_committed),
     SUM(u.bytes_received) > 0,
+    SUM(u.bytes_sent) >= 0,
     SUM(u.bytes_indexed) < ${state-bytes},
     SUM(u.records_indexed)
   FROM mz_sources s
@@ -200,22 +206,24 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
+upsert true 10 "${updates-committed}" "${updates-committed}" true true true 2
 
 # check pre-aggregated view
+# TODO(bosconi) SUM(u.bytes_sent) > 0 once increment is implemented
 > SELECT s.name,
     u.snapshot_committed,
     u.messages_received,
     u.updates_staged,
     u.updates_committed,
     u.bytes_received > 0,
+    u.bytes_sent >= 0,
     u.bytes_indexed < ${state-bytes},
     u.records_indexed,
     u.rehydration_latency IS NOT NULL
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
-upsert true 10 "${updates-committed}" "${updates-committed}" true true 2 true
+upsert true 10 "${updates-committed}" "${updates-committed}" true true true 2 true
 
 > DROP SOURCE upsert CASCADE
 
