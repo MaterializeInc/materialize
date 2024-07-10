@@ -2627,6 +2627,9 @@ fn plan_sink(
 
     let from_name = &from;
     let from = scx.get_item_by_resolved_name(&from)?;
+    if from.id().is_system() {
+        bail_unsupported!("creating a sink directly on a catalog object");
+    }
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key, .. } => {

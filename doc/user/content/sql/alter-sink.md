@@ -30,6 +30,10 @@ the contents of the new upstream relation are known. Attempting to `ALTER` an
 unhealthy sink that can't make progress will result in the command timing out.
 {{</ note >}}
 
+A sink cannot be created directly on a catalog object. As a workaround you can
+create a materialized view on a catalog object and create a sink on the
+materialized view.
+
 ### Valid schema changes
 
 For `ALTER SINK` to be successful, the newly specified relation must lead to a
