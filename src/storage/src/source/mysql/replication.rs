@@ -43,6 +43,7 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::num::NonZeroU64;
 use std::pin::pin;
+use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use futures::StreamExt;
@@ -75,7 +76,7 @@ use mz_timely_util::builder_async::{
 };
 
 use crate::metrics::source::mysql::MySqlSourceMetrics;
-use crate::source::types::{SourceMessage, StackedCollection};
+use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 use crate::source::RawSourceCreationConfig;
 
 use super::{
@@ -135,7 +136,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     metrics.tables.set(u64::cast_from(subsources.len()));
 
     let (button, transient_errors) = builder.build_fallible(move |caps| {
-        Box::pin(async move {
+        let busy_signal = Arc::clone(&config.busy_signal);
+        Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
             let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] =
                 caps.try_into().unwrap();
@@ -462,7 +464,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             }
             // We never expect the replication stream to gracefully end
             Err(TransientError::ReplicationEOF)
-        })
+        }))
     });
 
     // TODO: Split row decoding into a separate operator that can be distributed across all workers
