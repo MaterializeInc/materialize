@@ -75,6 +75,8 @@ ERROR_RE = re.compile(
     | environmentd\ .*\ unrecognized\ configuration\ parameter
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     | SUMMARY:\ .*Sanitizer
+    | Fixpoint\ .*\ detected\ a\ loop\ of\ length\ .*\ after\ .*\ iterations
+    | Fixpoint\ .*\ failed\ to\ reach\ a\ fixed\ point,\ or\ cycle\ of\ length\ at\ most
     | ----------\ RESULT\ COMPARISON\ ISSUE\ START\ ----------.*----------\ RESULT\ COMPARISON\ ISSUE\ END\ ------------
     # for miri test summary
     | (FAIL|TIMEOUT)\s+\[\s*\d+\.\d+s\]
