@@ -262,6 +262,7 @@ class DbFunctionWithCustomPattern(DbFunction):
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         comment: str | None = None,
         is_enabled: bool = True,
+        tags: set[str] | None = None,
     ):
         super().__init__(
             function_name,
@@ -272,6 +273,7 @@ class DbFunctionWithCustomPattern(DbFunction):
             relevance=relevance,
             comment=comment,
             is_enabled=is_enabled,
+            tags=tags,
         )
         self.pattern_per_param_count = pattern_per_param_count
 

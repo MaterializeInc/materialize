@@ -46,6 +46,7 @@ from materialize.output_consistency.operation.operation import (
 JSONB_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 TAG_JSONB_TO_TEXT = "jsonb_to_text"
+TAG_JSONB_AGGREGATION = "jsonb_aggregation"
 
 JSONB_OPERATION_TYPES.append(
     DbOperation(
@@ -172,6 +173,7 @@ JSONB_OPERATION_TYPES.append(
         JsonbReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
+        tags={TAG_JSONB_AGGREGATION},
         comment="generic variant without records",
     ),
 )
@@ -183,6 +185,7 @@ JSONB_OPERATION_TYPES.append(
         [RecordOperationParam(), SameOperationParam(index_of_previous_param=0)],
         JsonbReturnTypeSpec(),
         is_aggregation=True,
+        tags={TAG_JSONB_AGGREGATION},
         comment="additional overlapping variant only for records",
     ),
 )
@@ -199,6 +202,7 @@ JSONB_OPERATION_TYPES.append(
         JsonbReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
+        tags={TAG_JSONB_AGGREGATION},
         comment="generic variant without record values",
     ),
 )
@@ -214,6 +218,7 @@ JSONB_OPERATION_TYPES.append(
         ],
         JsonbReturnTypeSpec(),
         is_aggregation=True,
+        tags={TAG_JSONB_AGGREGATION},
         comment="additional overlapping variant only for records",
     ),
 )
