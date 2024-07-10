@@ -22,12 +22,44 @@ use tokio_stream::StreamExt;
 
 use crate::action::{ControlFlow, State};
 use crate::format::avro::{self, DebugValue};
-use crate::format::json;
 use crate::parser::BuiltinCommand;
 
+#[derive(Debug, Clone, Copy)]
 enum Format {
     Avro,
-    Json { key: bool },
+    Json,
+    Bytes,
+    Text,
+}
+
+impl TryFrom<&str> for Format {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "avro" => Ok(Format::Avro),
+            "json" => Ok(Format::Json),
+            "bytes" => Ok(Format::Bytes),
+            "text" => Ok(Format::Text),
+            f => bail!("unknown format: {}", f),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RecordFormat {
+    key: Format,
+    value: Format,
+    requires_key: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+enum DecodedValue {
+    Avro(DebugValue),
+    Json(serde_json::Value),
+    Bytes(Vec<u8>),
+    Text(String),
 }
 
 enum Topic {
@@ -71,12 +103,25 @@ pub async fn run_verify_data(
     mut cmd: BuiltinCommand,
     state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    let format = match cmd.args.string("format")?.as_str() {
-        "avro" => Format::Avro,
-        "json" => Format::Json {
-            key: cmd.args.parse("key")?,
-        },
-        f => bail!("unknown format: {}", f),
+    let mut format = if let Some(format_str) = cmd.args.opt_string("format") {
+        // If just a single format is provided, the user should specify `key=true` if they expect a
+        // in each message.  However for format=avro, we will conveniently set this based
+        // on the presence of the key schema in the registry, so this argument is not required.
+        let requires_key: bool = cmd.args.opt_bool("key")?.unwrap_or(false);
+        let format_type = format_str.as_str().try_into()?;
+        RecordFormat {
+            key: format_type,
+            value: format_type,
+            requires_key,
+        }
+    } else {
+        let key_format = cmd.args.string("key-format")?.as_str().try_into()?;
+        let value_format = cmd.args.string("value-format")?.as_str().try_into()?;
+        RecordFormat {
+            key: key_format,
+            value: value_format,
+            requires_key: true,
+        }
     };
 
     let source = match (cmd.args.opt_string("sink"), cmd.args.opt_string("topic")) {
@@ -195,178 +240,68 @@ pub async fn run_verify_data(
         }
     }
 
-    match &format {
-        Format::Avro => {
-            let value_schema = state
-                .ccsr_client
-                .get_schema_by_subject(&format!("{}-value", topic))
-                .await
-                .context("fetching schema")?
-                .raw;
-
-            let key_schema = state
-                .ccsr_client
-                .get_schema_by_subject(&format!("{}-key", topic))
-                .await
-                .ok()
-                .map(|key_schema| {
-                    avro::parse_schema(&key_schema.raw).context("parsing avro schema")
-                })
-                .transpose()?;
-
-            let value_schema = &avro::parse_schema(&value_schema).context("parsing avro schema")?;
-
-            let mut actual_messages = vec![];
-            for record in actual_bytes {
-                let key = key_schema
-                    .as_ref()
-                    .map(|key_schema| {
-                        let bytes = match record.key {
-                            Some(key) => key,
-                            None => bail!("empty message key"),
-                        };
-                        avro::from_confluent_bytes(key_schema, &bytes)
-                    })
-                    .transpose()?
-                    .map(DebugValue);
-                let value = match record.value {
-                    None => None,
-                    Some(bytes) => Some(avro::from_confluent_bytes(value_schema, &bytes)?),
-                }
-                .map(DebugValue);
-                actual_messages.push(Record {
-                    headers: record.headers,
-                    key,
-                    value,
-                });
-            }
-
-            if sort_messages {
-                actual_messages.sort_by_key(|r| format!("{:?}", r));
-            }
-
-            if debug_print_only {
-                bail!(
-                    "records in sink:\n{}",
-                    actual_messages
-                        .into_iter()
-                        .map(|a| format!("{:#?}", a))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                );
-            }
-
-            let expected = expected_messages
-                .iter()
-                .map(|v| {
-                    let (headers, v) = split_headers(v, header_keys.len())?;
-                    let mut deserializer = serde_json::Deserializer::from_str(v).into_iter();
-                    let key = if let Some(key_schema) = &key_schema {
-                        let key: serde_json::Value = match deserializer.next() {
-                            None => bail!("key missing in input line"),
-                            Some(r) => r?,
-                        };
-                        Some(avro::from_json(&key, key_schema.top_node())?)
-                    } else {
-                        None
-                    }
-                    .map(DebugValue);
-                    let value = match deserializer.next() {
-                        None => None,
-                        Some(r) => {
-                            let value = r.context("parsing json")?;
-                            Some(avro::from_json(&value, value_schema.top_node())?)
-                        }
-                    }
-                    .map(DebugValue);
-                    ensure!(
-                        deserializer.next().is_none(),
-                        "at most two avro records per expect line"
-                    );
-                    Ok(Record {
-                        headers,
-                        key,
-                        value,
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            verify_with_partial_search(
-                &expected,
-                &actual_messages,
-                &state.regex,
-                &state.regex_replacement,
-                partial_search.is_some(),
-            )?
+    let key_schema = if let Format::Avro = format.key {
+        let schema = state
+            .ccsr_client
+            .get_schema_by_subject(&format!("{}-key", topic))
+            .await
+            .ok()
+            .map(|key_schema| avro::parse_schema(&key_schema.raw).context("parsing avro schema"))
+            .transpose()?;
+        // for avro, we can determine if a key is required based on the presence of the key schema
+        // rather than requiring the user to specify the key=true flag
+        if schema.is_some() {
+            format.requires_key = true;
         }
-        Format::Json { key: has_key } => {
-            let mut actual_messages = vec![];
-            for record in actual_bytes {
-                let key = match record.key {
-                    Some(bytes) => {
-                        if *has_key {
-                            Some(serde_json::from_slice(&bytes).context("decoding json")?)
-                        } else {
-                            None
-                        }
-                    }
-                    None => None,
-                };
-                let value = match record.value {
-                    None => None,
-                    Some(bytes) => Some(serde_json::from_slice(&bytes).context("decoding json")?),
-                };
+        schema
+    } else {
+        None
+    };
+    let value_schema = if let Format::Avro = format.value {
+        let val_schema = state
+            .ccsr_client
+            .get_schema_by_subject(&format!("{}-value", topic))
+            .await
+            .context("fetching schema")?
+            .raw;
+        Some(avro::parse_schema(&val_schema).context("parsing avro schema")?)
+    } else {
+        None
+    };
 
-                actual_messages.push(Record {
-                    headers: record.headers,
-                    key,
-                    value,
-                });
-            }
+    let mut actual_messages = decode_messages(actual_bytes, &key_schema, &value_schema, &format)?;
 
-            if sort_messages {
-                actual_messages.sort_by_key(|r| format!("{:?}", r.value));
-            }
-
-            if debug_print_only {
-                bail!(
-                    "records in sink:\n{}",
-                    actual_messages
-                        .into_iter()
-                        .map(|a| format!("{:#?}", a))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                );
-            }
-
-            let expected = expected_messages
-                .iter()
-                .map(|v| {
-                    let (headers, v) = split_headers(v, header_keys.len())?;
-                    let mut deserializer = json::parse_many(v)?.into_iter();
-                    let key = if *has_key { deserializer.next() } else { None };
-                    let value = deserializer.next();
-                    ensure!(
-                        deserializer.next().is_none(),
-                        "at most two avro records per expect line"
-                    );
-                    Ok(Record {
-                        headers,
-                        key,
-                        value,
-                    })
-                })
-                .collect::<Result<Vec<_>, anyhow::Error>>()?;
-
-            verify_with_partial_search(
-                &expected,
-                &actual_messages,
-                &state.regex,
-                &state.regex_replacement,
-                partial_search.is_some(),
-            )?;
-        }
+    if sort_messages {
+        actual_messages.sort_by_key(|r| format!("{:?}", r));
     }
+
+    if debug_print_only {
+        bail!(
+            "records in sink:\n{}",
+            actual_messages
+                .into_iter()
+                .map(|a| format!("{:#?}", a))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    let expected = parse_expected_messages(
+        expected_messages,
+        key_schema,
+        value_schema,
+        &format,
+        &header_keys,
+    )?;
+
+    verify_with_partial_search(
+        &expected,
+        &actual_messages,
+        &state.regex,
+        &state.regex_replacement,
+        partial_search.is_some(),
+    )?;
+
     Ok(ControlFlow::Continue)
 }
 
@@ -393,6 +328,119 @@ fn split_headers(input: &str, n_headers: usize) -> anyhow::Result<(Vec<String>, 
     );
 
     Ok((headers, rest))
+}
+
+fn decode_messages(
+    actual_bytes: Vec<Record<Vec<u8>>>,
+    key_schema: &Option<mz_avro::Schema>,
+    value_schema: &Option<mz_avro::Schema>,
+    format: &RecordFormat,
+) -> Result<Vec<Record<DecodedValue>>, anyhow::Error> {
+    let mut actual_messages = vec![];
+
+    for record in actual_bytes {
+        let Record { key, value, .. } = record;
+        let key = if format.requires_key {
+            match (key, format.key) {
+                (Some(bytes), Format::Avro) => Some(DecodedValue::Avro(DebugValue(
+                    avro::from_confluent_bytes(key_schema.as_ref().unwrap(), &bytes)?,
+                ))),
+                (Some(bytes), Format::Json) => Some(DecodedValue::Json(
+                    serde_json::from_slice(&bytes).context("decoding json")?,
+                )),
+                (Some(bytes), Format::Bytes) => Some(DecodedValue::Bytes(bytes)),
+                (Some(bytes), Format::Text) => Some(DecodedValue::Text(String::from_utf8(bytes)?)),
+                (None, _) if format.requires_key => bail!("empty message key"),
+                (None, _) => None,
+            }
+        } else {
+            None
+        };
+
+        let value = match (value, format.value) {
+            (Some(bytes), Format::Avro) => Some(DecodedValue::Avro(DebugValue(
+                avro::from_confluent_bytes(value_schema.as_ref().unwrap(), &bytes)?,
+            ))),
+            (Some(bytes), Format::Json) => Some(DecodedValue::Json(
+                serde_json::from_slice(&bytes).context("decoding json")?,
+            )),
+            (Some(bytes), Format::Bytes) => Some(DecodedValue::Bytes(bytes)),
+            (Some(bytes), Format::Text) => Some(DecodedValue::Text(String::from_utf8(bytes)?)),
+            (None, _) => None,
+        };
+
+        actual_messages.push(Record {
+            headers: record.headers.clone(),
+            key,
+            value,
+        });
+    }
+
+    Ok(actual_messages)
+}
+
+fn parse_expected_messages(
+    expected_messages: Vec<String>,
+    key_schema: Option<mz_avro::Schema>,
+    value_schema: Option<mz_avro::Schema>,
+    format: &RecordFormat,
+    header_keys: &[String],
+) -> Result<Vec<Record<DecodedValue>>, anyhow::Error> {
+    let mut expected = vec![];
+
+    for msg in expected_messages {
+        let (headers, content) = split_headers(&msg, header_keys.len())?;
+        let mut deserializer = serde_json::Deserializer::from_str(content).into_iter();
+
+        let key = if format.requires_key {
+            let key: serde_json::Value = deserializer
+                .next()
+                .context("key missing in input line")?
+                .context("parsing json")?;
+
+            Some(match format.key {
+                Format::Avro => DecodedValue::Avro(DebugValue(avro::from_json(
+                    &key,
+                    key_schema.as_ref().unwrap().top_node(),
+                )?)),
+                Format::Json => DecodedValue::Json(key),
+                Format::Bytes => {
+                    unimplemented!("bytes format not yet supported in tests")
+                }
+                Format::Text => DecodedValue::Text(key.to_string()),
+            })
+        } else {
+            None
+        };
+
+        let value = match deserializer.next().transpose().context("parsing json")? {
+            None => None,
+            Some(value) => match format.value {
+                Format::Avro => Some(DecodedValue::Avro(DebugValue(avro::from_json(
+                    &value,
+                    value_schema.as_ref().unwrap().top_node(),
+                )?))),
+                Format::Json => Some(DecodedValue::Json(value)),
+                Format::Bytes => {
+                    unimplemented!("bytes format not yet supported in tests")
+                }
+                Format::Text => Some(DecodedValue::Text(value.to_string())),
+            },
+        };
+
+        ensure!(
+            deserializer.next().is_none(),
+            "at most two records per expect line"
+        );
+
+        expected.push(Record {
+            headers,
+            key,
+            value,
+        });
+    }
+
+    Ok(expected)
 }
 
 fn verify_with_partial_search<A>(

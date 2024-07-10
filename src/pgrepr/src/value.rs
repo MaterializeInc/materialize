@@ -403,6 +403,8 @@ impl Value {
     /// Serializes this value to `buf` using the [binary encoding
     /// format](Format::Binary).
     pub fn encode_binary(&self, ty: &Type, buf: &mut BytesMut) -> Result<(), io::Error> {
+        // NOTE: If implementing binary encoding for a previously unsupported `Value` type,
+        // please update the `can_encode_binary` method below.
         let is_null = match self {
             Value::Array { dims, elements } => {
                 let ndims = pg_len("number of array dimensions", dims.len())?;
@@ -541,6 +543,52 @@ impl Value {
             panic!("encode_binary impossibly called on a null value")
         }
         Ok(())
+    }
+
+    /// Static helper method to pre-validate that a given Datum corresponding to
+    /// the provided `ScalarType` can be converted into a `Value` and then encoded
+    /// as binary using `encode_binary` without an error.
+    pub fn can_encode_binary(typ: &ScalarType) -> bool {
+        match typ {
+            ScalarType::Bool => true,
+            ScalarType::Int16 => true,
+            ScalarType::Int32 => true,
+            ScalarType::Int64 => true,
+            ScalarType::PgLegacyChar => true,
+            ScalarType::UInt16 => true,
+            ScalarType::Oid => true,
+            ScalarType::RegClass => true,
+            ScalarType::RegProc => true,
+            ScalarType::RegType => true,
+            ScalarType::UInt32 => true,
+            ScalarType::UInt64 => true,
+            ScalarType::Float32 => true,
+            ScalarType::Float64 => true,
+            ScalarType::Numeric { .. } => true,
+            ScalarType::MzTimestamp => true,
+            ScalarType::MzAclItem => true,
+            ScalarType::AclItem => false, // "aclitem has no binary encoding"
+            ScalarType::Date => true,
+            ScalarType::Time => true,
+            ScalarType::Timestamp { .. } => true,
+            ScalarType::TimestampTz { .. } => true,
+            ScalarType::Interval => true,
+            ScalarType::Bytes => true,
+            ScalarType::String => true,
+            ScalarType::VarChar { .. } => true,
+            ScalarType::Char { .. } => true,
+            ScalarType::PgLegacyName => true,
+            ScalarType::Jsonb => true,
+            ScalarType::Uuid => true,
+            ScalarType::Array(elem_type) => Self::can_encode_binary(elem_type),
+            ScalarType::Int2Vector => false, // "binary encoding of int2vector is not implemented"
+            ScalarType::List { .. } => false, // "binary encoding of list types is not implemented"
+            ScalarType::Map { .. } => false, // "binary encoding of map types is not implemented"
+            ScalarType::Record { fields, .. } => fields
+                .iter()
+                .all(|(_, ty)| Self::can_encode_binary(&ty.scalar_type)),
+            ScalarType::Range { element_type } => Self::can_encode_binary(element_type),
+        }
     }
 
     /// Deserializes a value of type `ty` from `raw` using the specified

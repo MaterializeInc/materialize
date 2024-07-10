@@ -50,6 +50,43 @@ $ kafka-verify-data format=json sink=materialize.public.simple_view_sink key=fal
 $ kafka-verify-data format=json sink=materialize.public.simple_view_upsert key=true
 {"b": 2} {"a": 1, "b": 2, "c": 3}
 
+> CREATE MATERIALIZED VIEW complex_view AS SELECT LIST[1,3] AS a, 2 AS b, 3 AS c;
+
+> CREATE CLUSTER mixed_types_cluster SIZE '${arg.default-storage-size}';
+# this should error since binary encoding can't support complex types like lists
+! CREATE SINK mixed_types
+  IN CLUSTER mixed_types_cluster
+  FROM complex_view
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unnamed-upsert-${testdrive.seed}')
+  KEY (a)
+  KEY FORMAT BYTES
+  VALUE FORMAT JSON
+  ENVELOPE UPSERT
+contains:BYTES format with non-encodable type
+
+# this should error since compound keys can't use text or binary encoding
+! CREATE SINK mixed_types
+  IN CLUSTER mixed_types_cluster
+  FROM simple_view
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unnamed-upsert-${testdrive.seed}')
+  KEY (a, b)
+  KEY FORMAT TEXT
+  VALUE FORMAT JSON
+  ENVELOPE UPSERT
+contains:BYTES or TEXT format with multiple columns not yet supported
+
+> CREATE SINK mixed_types
+  IN CLUSTER mixed_types_cluster
+  FROM simple_view
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unnamed-upsert-${testdrive.seed}')
+  KEY (b)
+  KEY FORMAT TEXT
+  VALUE FORMAT JSON
+  ENVELOPE UPSERT
+
+$ kafka-verify-data key-format=text value-format=json sink=materialize.public.mixed_types
+2 {"a": 1, "b": 2, "c": 3}
+
 # Standard types
 
 > CREATE MATERIALIZED VIEW types_view AS

@@ -220,7 +220,7 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 2	{"a": 3, "b": 1} {"a": 3, "b": 1}
 2	{"a": 4, "b": 2} {"a": 4, "b": 2}
 
-# missing key denotes DELETE
+# missing value denotes DELETE
 
 $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
 3 {"a": 1, "b": 1}

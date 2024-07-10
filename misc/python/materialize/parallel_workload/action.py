@@ -1790,6 +1790,7 @@ class CreateKafkaSinkAction(Action):
         return [
             # Another replica can be created in parallel
             "cannot create sink in cluster with more than one replica",
+            "BYTES format with non-encodable type",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
@@ -1997,29 +1998,29 @@ dml_nontrans_action_list = ActionList(
 ddl_action_list = ActionList(
     [
         (CreateIndexAction, 2),
-        (DropIndexAction, 1),
+        (DropIndexAction, 2),
         (CreateTableAction, 2),
-        (DropTableAction, 1),
+        (DropTableAction, 2),
         (CreateViewAction, 8),
-        (DropViewAction, 4),
+        (DropViewAction, 8),
         (CreateRoleAction, 2),
-        (DropRoleAction, 1),
+        (DropRoleAction, 2),
         (CreateClusterAction, 2),
-        (DropClusterAction, 1),
+        (DropClusterAction, 2),
         (SwapClusterAction, 10),
         (CreateClusterReplicaAction, 4),
-        (DropClusterReplicaAction, 2),
+        (DropClusterReplicaAction, 4),
         (SetClusterAction, 1),
         (CreateWebhookSourceAction, 2),
-        (DropWebhookSourceAction, 1),
+        (DropWebhookSourceAction, 2),
         (CreateKafkaSinkAction, 4),
-        (DropKafkaSinkAction, 1),
+        (DropKafkaSinkAction, 4),
         (CreateKafkaSourceAction, 4),
-        (DropKafkaSourceAction, 1),
+        (DropKafkaSourceAction, 4),
         (CreateMySqlSourceAction, 4),
-        (DropMySqlSourceAction, 1),
+        (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
-        (DropPostgresSourceAction, 1),
+        (DropPostgresSourceAction, 4),
         (GrantPrivilegesAction, 4),
         (RevokePrivilegesAction, 1),
         (ReconnectAction, 1),

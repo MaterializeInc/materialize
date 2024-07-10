@@ -26,50 +26,23 @@ const MICROS_PER_MILLIS: u32 = 1_000;
 
 // Manages encoding of JSON-encoded bytes
 pub struct JsonEncoder {
-    key_columns: Option<Vec<(ColumnName, ColumnType)>>,
-    value_columns: Vec<(ColumnName, ColumnType)>,
+    columns: Vec<(ColumnName, ColumnType)>,
 }
 
 impl JsonEncoder {
-    pub fn new(key_desc: Option<RelationDesc>, value_desc: RelationDesc, debezium: bool) -> Self {
-        let mut value_columns = column_names_and_types(value_desc);
+    pub fn new(desc: RelationDesc, debezium: bool) -> Self {
+        let mut columns = column_names_and_types(desc);
         if debezium {
-            value_columns = envelopes::dbz_envelope(value_columns);
-        }
-        JsonEncoder {
-            key_columns: if let Some(desc) = key_desc {
-                Some(column_names_and_types(desc))
-            } else {
-                None
-            },
-            value_columns,
-        }
-    }
-
-    pub fn encode_row(
-        &self,
-        row: mz_repr::Row,
-        names_types: &[(ColumnName, ColumnType)],
-    ) -> Vec<u8> {
-        let value = encode_datums_as_json(row.iter(), names_types);
-        value.to_string().into_bytes()
+            columns = envelopes::dbz_envelope(columns);
+        };
+        JsonEncoder { columns }
     }
 }
 
 impl Encode for JsonEncoder {
-    fn get_format_name(&self) -> &str {
-        "json"
-    }
-
-    fn encode_key_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
-        self.encode_row(
-            row,
-            self.key_columns.as_ref().expect("key schema must exist"),
-        )
-    }
-
-    fn encode_value_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
-        self.encode_row(row, &self.value_columns)
+    fn encode_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
+        let value = encode_datums_as_json(row.iter(), self.columns.as_ref());
+        value.to_string().into_bytes()
     }
 }
 
@@ -81,7 +54,7 @@ impl fmt::Debug for JsonEncoder {
                 &format!(
                     "{:?}",
                     build_row_schema_json(
-                        &self.value_columns,
+                        &self.columns,
                         "schema",
                         &BTreeMap::new(),
                         None,
