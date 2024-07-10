@@ -54,7 +54,7 @@ pub use scalar::{
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
 /// `transform::Optimizer`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OptimizedMirRelationExpr(pub MirRelationExpr);
 
 impl OptimizedMirRelationExpr {

@@ -84,7 +84,7 @@ pub trait CollectionPlan {
 ///
 /// The AST is meant to reflect the capabilities of the `differential_dataflow::Collection` type,
 /// written generically enough to avoid run-time compilation work.
-#[derive(Clone, Debug, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, Ord, PartialOrd, Serialize, Deserialize, MzReflect)]
 pub enum MirRelationExpr {
     /// A constant relation containing specified rows.
     ///
