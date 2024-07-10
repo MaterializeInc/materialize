@@ -78,6 +78,7 @@ mod sequential_hydration;
 pub mod error;
 
 type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
+type WallclockLagFn<T> = Arc<dyn Fn(&T) -> Duration>;
 
 /// A composite trait for types that serve as timestamps in the Compute Controller.
 /// `Into<Datum<'a>>` is needed for writing timestamps to introspection collections.
@@ -165,6 +166,8 @@ pub struct ComputeController<T> {
     envd_epoch: NonZeroI64,
     /// The compute controller metrics.
     metrics: ComputeControllerMetrics,
+    /// A function that compute the lag between the given time and wallclock time.
+    wallclock_lag: WallclockLagFn<T>,
     /// Dynamic system configuration.
     ///
     /// Updated through `ComputeController::update_configuration` calls and shared with all
@@ -195,6 +198,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         envd_epoch: NonZeroI64,
         read_only: bool,
         metrics_registry: MetricsRegistry,
+        wallclock_lag: WallclockLagFn<T>,
     ) -> Self {
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
         let (introspection_tx, introspection_rx) = crossbeam_channel::unbounded();
@@ -213,6 +217,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             stashed_replica_response: None,
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
+            wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
             response_rx,
             response_tx,
@@ -332,6 +337,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             stashed_replica_response,
             envd_epoch,
             metrics: _,
+            wallclock_lag: _,
             dyncfg: _,
             response_rx: _,
             response_tx: _,
@@ -396,6 +402,7 @@ where
                 arranged_logs,
                 self.envd_epoch,
                 self.metrics.for_instance(id),
+                Arc::clone(&self.wallclock_lag),
                 Arc::clone(&self.dyncfg),
                 self.response_tx.clone(),
                 self.introspection_tx.clone(),
@@ -741,7 +748,7 @@ where
 }
 
 /// A read-only handle to a compute instance.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ComputeInstanceRef<'a, T> {
     instance_id: ComputeInstanceId,
     instance: &'a Instance<T>,
@@ -848,7 +855,7 @@ impl<T> CollectionState<T> {
 
 impl<T: ComputeControllerTimestamp> CollectionState<T> {
     /// Creates a new collection state, with an initial read policy valid from `since`.
-    pub fn new(
+    pub(crate) fn new(
         collection_id: GlobalId,
         as_of: Antichain<T>,
         storage_dependencies: Vec<GlobalId>,
@@ -894,7 +901,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
     }
 
     /// Creates a new collection state for a log collection.
-    pub fn new_log_collection(
+    pub(crate) fn new_log_collection(
         id: GlobalId,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
