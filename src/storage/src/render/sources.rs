@@ -593,10 +593,9 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
                 UpsertStyle::ValueErrInline { .. } => {
                     let mut packer = row_buf.packer();
                     packer.extend_by_row(&key_row);
-                    // The 'value' record contains all value columns
-                    packer.push_list(row.iter());
                     // The 'error' column is null
                     packer.push(Datum::Null);
+                    packer.extend_by_row(row);
                     packer.extend_by_row(&metadata);
                     Some(Ok(row_buf.clone()))
                 }
@@ -604,14 +603,23 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
             Some(Err(inner)) => {
                 match upsert_envelope.style {
                     UpsertStyle::ValueErrInline { .. } => {
+                        let mut count = 0;
                         // inline the error in the data output
                         let err_string = inner.to_string();
                         let mut packer = row_buf.packer();
-                        packer.extend_by_row(&key_row);
-                        // The 'value' column is null
-                        packer.push(Datum::Null);
+                        for datum in key_row.iter() {
+                            packer.push(datum);
+                            count += 1;
+                        }
                         // The 'error' column is a record with a 'description' column
                         packer.push_list(iter::once(Datum::String(&err_string)));
+                        count += 1;
+                        let metadata_len = metadata.as_row_ref().iter().count();
+                        // push nulls for all value columns
+                        packer.extend(
+                            iter::repeat(Datum::Null)
+                                .take(upsert_envelope.source_arity - count - metadata_len),
+                        );
                         packer.extend_by_row(&metadata);
                         Some(Ok(row_buf.clone()))
                     }
