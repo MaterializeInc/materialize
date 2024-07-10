@@ -61,7 +61,8 @@ RECORD_OPERATION_TYPES.append(
 
 RECORD_OPERATION_TYPES.append(
     DbOperation(
-        "$.$",
+        # the parentheses are necessary for Postgres only
+        "($).$",
         [RecordOperationParam(), RECORD_FIELD_PARAM],
         UndeterminedReturnTypeSpec(),
     )
