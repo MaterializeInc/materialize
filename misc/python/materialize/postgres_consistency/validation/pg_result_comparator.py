@@ -27,7 +27,8 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 # * 2038-01-19 03:14:18.123
 # * 2038-01-19 03:14:18.123+00
 # * 2038-01-19 03:14:18+00
-TIMESTAMP_PATTERN = re.compile(r"\d{4,}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?")
+# * 2038-01-19T03:14:18+00 (when used in JSONB)
+TIMESTAMP_PATTERN = re.compile(r"\d{4,}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?")
 
 # Examples:
 # * NaN
@@ -98,7 +99,7 @@ class PostgresResultComparator(ResultComparator):
         return math.isclose(value1, value2, rel_tol=self.floating_precision)
 
     def is_str_equal(self, value1: str, value2: str, is_tolerant: bool) -> bool:
-        if self.is_timestamp(value1):
+        if self.is_timestamp(value1) and self.is_timestamp(value2):
             return self.is_timestamp_equal(value1, value2)
 
         if (
@@ -143,9 +144,27 @@ class PostgresResultComparator(ResultComparator):
             value1 = last_second_and_milliseconds_pattern.sub("0", value1)
             value2 = last_second_and_milliseconds_pattern.sub("0", value2)
 
+        value1 = self._normalize_jsonb_timestamp(value1)
+        value2 = self._normalize_jsonb_timestamp(value2)
+
         assert self.is_timestamp(value1)
         assert self.is_timestamp(value2)
         return value1 == value2
+
+    def _normalize_jsonb_timestamp(self, value: str) -> str:
+        # this is due to #28137
+
+        pattern_for_date = r"\d+-\d+-\d+"
+        pattern_for_time = r"\d+:\d+:\d+[+-]\d+"
+        pattern_for_value_without_t_sep_and_timezone_mins = (
+            rf"({pattern_for_date})T({pattern_for_time}):\d+"
+        )
+        match = re.match(pattern_for_value_without_t_sep_and_timezone_mins, value)
+
+        if match is None:
+            return value
+
+        return match.group(1) + " " + match.group(2)
 
     def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
         if expression.matches(
