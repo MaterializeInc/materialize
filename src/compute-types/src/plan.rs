@@ -1144,6 +1144,7 @@ fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
 
     use super::*;
@@ -1154,7 +1155,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn available_collections_protobuf_roundtrip(expect in any::<AvailableCollections>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAvailableCollections>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -1165,7 +1166,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn get_plan_protobuf_roundtrip(expect in any::<GetPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoGetPlan>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

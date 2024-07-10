@@ -1656,7 +1656,7 @@ macro_rules! builtins {
                 assert_eq!(imp.return_is_set, expect_set_return, "wrong set return value for func with oid {}", imp.oid);
             }
             let old = builtins.insert($name, func);
-            assert!(old.is_none(), "duplicate entry in builtins list {:?}", old);
+            mz_ore::assert_none!(old, "duplicate entry in builtins list");
         )+
         builtins
     }};

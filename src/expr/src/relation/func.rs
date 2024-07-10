@@ -3050,6 +3050,7 @@ impl fmt::Display for TableFunc {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
@@ -3060,7 +3061,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn aggregate_func_protobuf_roundtrip(expect in any::<AggregateFunc>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateFunc>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }
@@ -3070,7 +3071,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn table_func_protobuf_roundtrip(expect in any::<TableFunc>() ) {
             let actual = protobuf_roundtrip::<_, ProtoTableFunc>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

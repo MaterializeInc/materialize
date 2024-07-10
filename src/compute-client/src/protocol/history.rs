@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
-use mz_ore::soft_assert_or_log;
+use mz_ore::{assert_none, soft_assert_or_log};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 
@@ -105,12 +105,12 @@ where
         for command in self.commands.drain(..) {
             match command {
                 create_timely @ ComputeCommand::CreateTimely { .. } => {
-                    assert!(create_timely_command.is_none());
+                    assert_none!(create_timely_command);
                     create_timely_command = Some(create_timely);
                 }
                 // We should be able to handle the Create* commands, should this client need to be restartable.
                 create_inst @ ComputeCommand::CreateInstance(_) => {
-                    assert!(create_inst_command.is_none());
+                    assert_none!(create_inst_command);
                     create_inst_command = Some(create_inst);
                 }
                 ComputeCommand::InitializationComplete => {

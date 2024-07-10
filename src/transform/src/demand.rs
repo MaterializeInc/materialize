@@ -10,6 +10,7 @@
 //! Transformation based on pushing demand information about columns toward sources.
 
 use itertools::Itertools;
+use mz_ore::assert_none;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{
@@ -122,7 +123,7 @@ impl Demand {
                     // and pushes the union of the requirements at its value.
                     let id = Id::Local(*id);
                     let prior = gets.insert(id, BTreeSet::new());
-                    assert!(prior.is_none()); // no shadowing
+                    assert_none!(prior); // no shadowing
                     self.action(body, columns, gets)?;
                     let needs = gets.remove(&id).expect("existing gets entry");
                     if let Some(prior) = prior {
@@ -144,7 +145,7 @@ impl Demand {
                     let ids = ids.iter().map(|id| Id::Local(*id)).collect_vec();
                     for id in ids.iter() {
                         let prior = gets.insert(id.clone(), BTreeSet::new());
-                        assert!(prior.is_none()); // no shadowing
+                        assert_none!(prior); // no shadowing
                     }
                     self.action(body, columns, gets)?;
                     for (id, value) in ids.iter().rev().zip_eq(values.iter_mut().rev()) {

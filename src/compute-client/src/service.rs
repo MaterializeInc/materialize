@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use bytesize::ByteSize;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Diff, GlobalId, Row, RowCollection};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
@@ -308,7 +309,7 @@ where
                     .entry(uuid)
                     .or_insert_with(Default::default);
                 let novel = entry.insert(shard_id, response);
-                assert!(novel.is_none(), "Duplicate peek response");
+                assert_none!(novel, "Duplicate peek response");
                 // We may be ready to respond.
                 if entry.len() == self.parts {
                     let mut response = PeekResponse::Rows(RowCollection::default());
@@ -441,7 +442,7 @@ where
                     .entry(id)
                     .or_insert_with(Default::default);
                 let novel = entry.insert(shard_id, response);
-                assert!(novel.is_none(), "Duplicate copy to response");
+                assert_none!(novel, "Duplicate copy to response");
                 // We may be ready to respond.
                 if entry.len() == self.parts {
                     let mut response = CopyToResponse::RowCount(0);

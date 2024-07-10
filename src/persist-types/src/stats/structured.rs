@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use mz_ore::assert_none;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::strategy::Strategy;
@@ -139,7 +140,7 @@ impl ColumnStats<Option<DynStruct>> for OptionStats<StructStats> {
 
 impl StatsFrom<DynStructCol> for StructStats {
     fn stats_from(col: &DynStructCol, validity: ValidityRef) -> Self {
-        assert!(col.validity.is_none());
+        assert_none!(col.validity);
         col.stats(validity).expect("valid stats").some
     }
 }

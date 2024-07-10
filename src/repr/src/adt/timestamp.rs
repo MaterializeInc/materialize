@@ -977,6 +977,7 @@ impl Arbitrary for CheckedTimestamp<DateTime<Utc>> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use mz_ore::assert_err;
     use proptest::prelude::*;
 
     #[mz_ore::test]
@@ -1062,7 +1063,7 @@ mod test {
             .unwrap();
             let _ = date.round_to_precision(Some(TimestampPrecision(7)));
         });
-        assert!(result.is_err());
+        assert_err!(result);
 
         let date = CheckedTimestamp::try_from(
             DateTime::from_timestamp_micros(123456).unwrap().naive_utc(),

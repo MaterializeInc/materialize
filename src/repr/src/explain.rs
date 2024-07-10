@@ -831,6 +831,8 @@ impl IndexUsageType {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_ok;
+
     use super::*;
 
     struct Environment {
@@ -954,7 +956,7 @@ mod tests {
         let act = do_explain(&mut env, frontiers);
         let exp = "expr = 1 + 2\nat t ∊ [3, 7)\nenv = test env\n".to_string();
 
-        assert!(act.is_ok());
+        assert_ok!(act);
         assert_eq!(act.unwrap(), exp);
     }
 }

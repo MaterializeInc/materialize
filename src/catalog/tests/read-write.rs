@@ -20,6 +20,7 @@ use mz_catalog::durable::{
     Item, OpenableDurableCatalogState, USER_ITEM_ALLOC_KEY,
 };
 use mz_catalog::memory::objects::{StateDiff, StateUpdateKind};
+use mz_ore::assert_ok;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistClient;
@@ -56,7 +57,7 @@ async fn test_confirm_leadership(
         )
         .await
         .unwrap();
-    assert!(state1.confirm_leadership().await.is_ok());
+    assert_ok!(state1.confirm_leadership().await);
 
     let mut state2 = openable_state2
         .open(
@@ -67,7 +68,7 @@ async fn test_confirm_leadership(
         )
         .await
         .unwrap();
-    assert!(state2.confirm_leadership().await.is_ok());
+    assert_ok!(state2.confirm_leadership().await);
 
     let err = state1.confirm_leadership().await.unwrap_err();
     assert!(matches!(

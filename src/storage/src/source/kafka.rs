@@ -20,6 +20,7 @@ use differential_dataflow::AsCollection;
 use futures::StreamExt;
 use maplit::btreemap;
 use mz_kafka_util::client::{get_partitions, MzClientContext, PartitionId, TunnelingClientContext};
+use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
@@ -907,8 +908,7 @@ impl KafkaSourceReader {
         self.create_partition_queue(pid, Offset::Offset(start_offset));
 
         let prev = self.last_offsets.insert(pid, start_offset - 1);
-
-        assert!(prev.is_none());
+        assert_none!(prev);
     }
 
     /// Creates a new partition queue for `partition_id`.

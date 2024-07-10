@@ -970,6 +970,7 @@ mod tests {
 
     // The below is ALL test infrastructure for the above
 
+    use mz_ore::assert_err;
     use timely::container::CapacityContainerBuilder;
     use timely::dataflow::operators::exchange::Exchange;
     use timely::dataflow::Scope;
@@ -1157,7 +1158,7 @@ mod tests {
                     }
 
                     // Assert that nothing is left in the channel.
-                    assert!(out_rx.try_recv().is_err());
+                    assert_err!(out_rx.try_recv());
                 }
             },
         )

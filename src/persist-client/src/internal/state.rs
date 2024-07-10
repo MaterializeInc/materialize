@@ -1863,6 +1863,7 @@ pub(crate) mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::now::SYSTEM_TIME;
+    use mz_ore::{assert_none, assert_ok};
     use mz_proto::RustType;
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
@@ -2763,13 +2764,13 @@ pub(crate) mod tests {
 
         // shouldn't need a rollup at the seqno of the rollup
         state.seqno = SeqNo(5);
-        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
 
         // shouldn't need a rollup at seqnos less than our threshold
         state.seqno = SeqNo(6);
-        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
         state.seqno = SeqNo(7);
-        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
 
         // hit our threshold! we should need a rollup
         state.seqno = SeqNo(8);
@@ -2780,7 +2781,7 @@ pub(crate) mod tests {
 
         // but we don't need rollups for every seqno > the threshold
         state.seqno = SeqNo(9);
-        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
 
         // we only need a rollup each `ROLLUP_THRESHOLD` beyond our current seqno
         state.seqno = SeqNo(11);
@@ -2801,7 +2802,7 @@ pub(crate) mod tests {
             .is_continue());
 
         state.seqno = SeqNo(8);
-        assert!(state.need_rollup(ROLLUP_THRESHOLD).is_none());
+        assert_none!(state.need_rollup(ROLLUP_THRESHOLD));
         state.seqno = SeqNo(9);
         assert_eq!(
             state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
@@ -2883,15 +2884,15 @@ pub(crate) mod tests {
 
         // Start at v0.10.0.
         let res = open_and_write(&mut clients, Version::new(0, 10, 0), shard_id).await;
-        assert!(res.is_ok());
+        assert_ok!(res);
 
         // Upgrade to v0.11.0 is allowed.
         let res = open_and_write(&mut clients, Version::new(0, 11, 0), shard_id).await;
-        assert!(res.is_ok());
+        assert_ok!(res);
 
         // Downgrade to v0.10.0 is allowed.
         let res = open_and_write(&mut clients, Version::new(0, 10, 0), shard_id).await;
-        assert!(res.is_ok());
+        assert_ok!(res);
 
         // Downgrade to v0.9.0 is _NOT_ allowed.
         let res = open_and_write(&mut clients, Version::new(0, 9, 0), shard_id).await;

@@ -42,6 +42,7 @@ pub struct Decoder {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::assert_err;
     use mz_repr::{Datum, Row};
 
     use crate::avro::Decoder;
@@ -56,7 +57,7 @@ mod tests {
         let mut decoder = Decoder::new(schema, None, "Test".to_string(), false).unwrap();
         // This is not a valid Avro blob for the given schema
         let mut bad_bytes: &[u8] = &[0];
-        assert!(decoder.decode(&mut bad_bytes).await.unwrap().is_err());
+        assert_err!(decoder.decode(&mut bad_bytes).await.unwrap());
         // This is the blob that will make both ints in the value zero.
         let mut good_bytes: &[u8] = &[0, 0];
         // The decode should succeed with the correct value.

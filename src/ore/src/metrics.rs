@@ -201,6 +201,8 @@ pub type UIntGaugeVec = DeleteOnDropWrapper<raw::UIntGaugeVec>;
 
 pub use prometheus::{Counter, Histogram, IntCounter, IntGauge};
 
+use crate::assert_none;
+
 /// Access to non-delete-on-drop vector types
 pub mod raw {
     use prometheus::core::{AtomicU64, GenericGaugeVec};
@@ -277,7 +279,7 @@ where
     T: Atomic + 'static,
 {
     fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
-        assert!(mk_opts.buckets.is_none());
+        assert_none!(mk_opts.buckets);
         Self::with_opts(mk_opts.opts).expect("defining a counter")
     }
 }
@@ -287,7 +289,7 @@ where
     T: Atomic + 'static,
 {
     fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
-        assert!(mk_opts.buckets.is_none());
+        assert_none!(mk_opts.buckets);
         let labels: Vec<String> = mk_opts.opts.variable_labels.clone();
         let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
         Self::new(mk_opts.opts, label_refs.as_slice()).expect("defining a counter vec")
@@ -299,7 +301,7 @@ where
     T: Atomic + 'static,
 {
     fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
-        assert!(mk_opts.buckets.is_none());
+        assert_none!(mk_opts.buckets);
         Self::with_opts(mk_opts.opts).expect("defining a gauge")
     }
 }
@@ -309,7 +311,7 @@ where
     T: Atomic + 'static,
 {
     fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
-        assert!(mk_opts.buckets.is_none());
+        assert_none!(mk_opts.buckets);
         let labels = mk_opts.opts.variable_labels.clone();
         let labels = &labels.iter().map(|x| x.as_str()).collect::<Vec<_>>();
         Self::new(mk_opts.opts, labels).expect("defining a gauge vec")

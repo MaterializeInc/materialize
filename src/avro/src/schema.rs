@@ -33,6 +33,7 @@ use std::str::FromStr;
 
 use digest::Digest;
 use itertools::Itertools;
+use mz_ore::assert_none;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::ser::{SerializeMap, SerializeSeq};
@@ -911,7 +912,7 @@ impl SchemaParser {
     }
 
     fn insert(&mut self, index: usize, schema: NamedSchemaPiece) {
-        assert!(self.named[index].is_none());
+        assert_none!(self.named[index]);
         self.named[index] = Some(schema);
     }
 
@@ -2282,6 +2283,8 @@ fn field_ordering_position(field: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::{assert_err, assert_ok};
+
     use crate::types::{Record, ToAvro};
 
     use super::*;
@@ -2336,7 +2339,7 @@ mod tests {
     #[mz_ore::test]
     fn test_multi_union_schema() {
         let schema = Schema::from_str(r#"["null", "int", "float", "string", "bytes"]"#);
-        assert!(schema.is_ok());
+        assert_ok!(schema);
         let schema = schema.unwrap();
         let node = schema.top_node();
         assert_eq!(SchemaKind::from(&schema), SchemaKind::Union);
@@ -2435,7 +2438,7 @@ mod tests {
             r#"{"type": "enum", "name": "Suit", "symbols": ["diamonds", "spades", "jokers", "clubs", "hearts"], "default": "blah"}"#,
         );
 
-        assert!(bad_schema.is_err());
+        assert_err!(bad_schema);
     }
 
     #[mz_ore::test]
@@ -2711,7 +2714,7 @@ mod tests {
             _ => panic!(),
         };
 
-        assert!(doc.is_none());
+        assert_none!(doc);
     }
 
     #[mz_ore::test]

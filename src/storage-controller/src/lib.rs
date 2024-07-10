@@ -35,9 +35,9 @@ use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_storage_client::storage_collections::{CollectionFrontiers, StorageCollections};
 use timely::progress::Timestamp as TimelyTimestamp;
 
-use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::{assert_none, instrument};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
@@ -454,7 +454,7 @@ where
             self.config.parameters.clone(),
         ));
         let old_client = self.clients.insert(id, client);
-        assert!(old_client.is_none(), "storage instance {id} already exists");
+        assert_none!(old_client, "storage instance {id} already exists");
     }
 
     fn drop_instance(&mut self, id: StorageInstanceId) {

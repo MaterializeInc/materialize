@@ -27,9 +27,9 @@ use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
-use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::VecExt;
+use mz_ore::{assert_none, soft_panic_or_log};
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -994,7 +994,7 @@ pub fn plan_create_source(
                     column_casts.push((cast_type, mir_cast));
                 }
                 let r = table_casts.insert(i + 1, column_casts);
-                assert!(r.is_none(), "cannot have table defined multiple times");
+                assert_none!(r, "cannot have table defined multiple times");
             }
 
             let connection =

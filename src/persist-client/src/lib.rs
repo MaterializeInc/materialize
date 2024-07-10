@@ -681,6 +681,7 @@ mod tests {
     use differential_dataflow::lattice::Lattice;
     use futures_task::noop_waker;
     use mz_dyncfg::ConfigUpdates;
+    use mz_ore::assert_ok;
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
     use mz_persist_types::codec_impls::{StringSchema, VecU8Schema};
@@ -1836,7 +1837,7 @@ mod tests {
             .finalize_shard::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
             .await;
 
-        assert!(finalize.is_ok(), "finalization must succeed");
+        assert_ok!(finalize, "finalization must succeed");
 
         let is_finalized = persist_client
             .is_finalized::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
@@ -1899,7 +1900,7 @@ mod tests {
             .finalize_shard::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
             .await;
 
-        assert!(finalize.is_ok(), "finalization must succeed");
+        assert_ok!(finalize, "finalization must succeed");
 
         let is_finalized = persist_client
             .is_finalized::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
@@ -1915,7 +1916,7 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn shard_id_protobuf_roundtrip(expect in any::<ShardId>() ) {
             let actual = protobuf_roundtrip::<_, String>(&expect);
-            assert!(actual.is_ok());
+            assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
         }
     }

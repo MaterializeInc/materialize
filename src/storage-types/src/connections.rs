@@ -22,6 +22,7 @@ use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
     BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
 };
+use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::netio::resolve_address;
@@ -1175,7 +1176,7 @@ impl CsrConnection {
                     });
             }
             Tunnel::AwsPrivatelink(connection) => {
-                assert!(connection.port.is_none());
+                assert_none!(connection.port);
 
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_host(
                     connection.connection_id,
@@ -1499,7 +1500,7 @@ impl PostgresConnection<InlinedConnection> {
                 }
             }
             Tunnel::AwsPrivatelink(connection) => {
-                assert!(connection.port.is_none());
+                assert_none!(connection.port);
                 mz_postgres_util::TunnelConfig::AwsPrivatelink {
                     connection_id: connection.connection_id,
                 }
@@ -1878,7 +1879,7 @@ impl MySqlConnection<InlinedConnection> {
                 }
             }
             Tunnel::AwsPrivatelink(connection) => {
-                assert!(connection.port.is_none());
+                assert_none!(connection.port);
                 mz_mysql_util::TunnelConfig::AwsPrivatelink {
                     connection_id: connection.connection_id,
                 }

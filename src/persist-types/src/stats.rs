@@ -15,8 +15,8 @@ use std::fmt::Debug;
 
 use arrow::array::Array;
 use mz_ore::cast::CastFrom;
-use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
+use mz_ore::{assert_none, metric};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::strategy::{Strategy, Union};
@@ -368,7 +368,7 @@ impl<T: DynStats> DynStats for OptionStats<T> {
 
     fn into_columnar_stats(self) -> ColumnarStats {
         let inner = self.some.into_columnar_stats();
-        assert!(inner.nulls.is_none(), "we don't support nested OptionStats");
+        assert_none!(inner.nulls, "we don't support nested OptionStats");
 
         ColumnarStats {
             nulls: Some(ColumnNullStats { count: self.none }),
@@ -452,7 +452,7 @@ where
 
 impl<T: Array> StatsFrom<T> for NoneStats {
     fn stats_from(col: &T, _validity: ValidityRef) -> Self {
-        assert!(col.logical_nulls().is_none());
+        assert_none!(col.logical_nulls());
         NoneStats
     }
 }

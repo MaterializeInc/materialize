@@ -401,6 +401,8 @@ pub fn temp_id() -> String {
 mod tests {
     use std::collections::BTreeMap;
 
+    use crate::assert_none;
+
     use super::*;
 
     #[crate::test]
@@ -501,7 +503,7 @@ mod tests {
 
         // There are only two slots, so trying to allocate 2 more should fail the second time.
         let _id_b = allocator.alloc().unwrap();
-        assert!(allocator.alloc().is_none());
+        assert_none!(allocator.alloc());
 
         // a should get freed since all outstanding references have been dropped.
         drop(id_a_clone);

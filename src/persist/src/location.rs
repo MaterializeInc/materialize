@@ -584,6 +584,7 @@ pub mod tests {
 
     use anyhow::anyhow;
     use futures_util::TryStreamExt;
+    use mz_ore::assert_err;
     use uuid::Uuid;
 
     use crate::location::Blob;
@@ -805,7 +806,7 @@ pub mod tests {
         assert_eq!(consensus.scan(&key, SeqNo(0), SCAN_ALL).await, Ok(vec![]));
 
         // Cannot truncate data from a key that doesn't have any data
-        assert!(consensus.truncate(&key, SeqNo(0)).await.is_err(),);
+        assert_err!(consensus.truncate(&key, SeqNo(0)).await);
 
         let state = VersionedData {
             seqno: SeqNo(5),
@@ -855,7 +856,7 @@ pub mod tests {
         assert_eq!(consensus.truncate(&key, SeqNo(5)).await, Ok(0));
 
         // Cannot truncate data with an upper bound > head.
-        assert!(consensus.truncate(&key, SeqNo(6)).await.is_err(),);
+        assert_err!(consensus.truncate(&key, SeqNo(6)).await);
 
         let new_state = VersionedData {
             seqno: SeqNo(10),
@@ -1061,28 +1062,30 @@ pub mod tests {
                 .await,
             Ok(CaSResult::Committed),
         );
-        assert!(consensus
-            .compare_and_set(
-                &Uuid::new_v4().to_string(),
-                None,
-                VersionedData {
-                    seqno: SeqNo(1 << 63),
-                    data: Bytes::new(),
-                }
-            )
-            .await
-            .is_err());
-        assert!(consensus
-            .compare_and_set(
-                &Uuid::new_v4().to_string(),
-                None,
-                VersionedData {
-                    seqno: SeqNo(u64::MAX),
-                    data: Bytes::new(),
-                }
-            )
-            .await
-            .is_err());
+        assert_err!(
+            consensus
+                .compare_and_set(
+                    &Uuid::new_v4().to_string(),
+                    None,
+                    VersionedData {
+                        seqno: SeqNo(1 << 63),
+                        data: Bytes::new(),
+                    }
+                )
+                .await
+        );
+        assert_err!(
+            consensus
+                .compare_and_set(
+                    &Uuid::new_v4().to_string(),
+                    None,
+                    VersionedData {
+                        seqno: SeqNo(u64::MAX),
+                        data: Bytes::new(),
+                    }
+                )
+                .await
+        );
 
         Ok(())
     }

@@ -260,6 +260,8 @@ mod tests {
     use futures::FutureExt;
     use tokio::sync::mpsc;
 
+    use crate::assert_none;
+
     use super::ReceiverExt;
 
     #[crate::test]
@@ -340,7 +342,7 @@ mod tests {
             std::task::Poll::Ready(elements) => elements,
             std::task::Poll::Pending => panic!("future didn't immediately return"),
         };
-        assert!(elements.is_none());
+        assert_none!(elements);
     }
 
     #[crate::test]
@@ -351,7 +353,7 @@ mod tests {
         drop(tx);
 
         let elements = block_on(recv_many);
-        assert!(elements.is_none());
+        assert_none!(elements);
     }
 
     #[crate::test]
@@ -419,6 +421,6 @@ mod tests {
         assert_eq!(elements, [1, 2, 3]);
 
         // Receiving again should return None.
-        assert!(block_on(rx.mz_recv_many(4)).is_none());
+        assert_none!(block_on(rx.mz_recv_many(4)));
     }
 }

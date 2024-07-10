@@ -23,9 +23,9 @@ use futures::{Future, FutureExt, StreamExt};
 use itertools::Itertools;
 
 use mz_ore::collections::CollectionExt;
-use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
+use mz_ore::{assert_none, instrument};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
@@ -1958,7 +1958,7 @@ where
             Self::Critical(handle) => handle.compare_and_downgrade_since(expected, new).await,
             Self::Leased(handle) => {
                 let (opaque, since) = new;
-                assert!(opaque.0.is_none());
+                assert_none!(opaque.0);
 
                 handle.downgrade_since(since).await;
 
@@ -1980,7 +1980,7 @@ where
             }
             Self::Leased(handle) => {
                 let (opaque, since) = new;
-                assert!(opaque.0.is_none());
+                assert_none!(opaque.0);
 
                 handle.maybe_downgrade_since(since).await;
 
@@ -2658,6 +2658,7 @@ mod tests {
 
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigSet;
+    use mz_ore::assert_err;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
@@ -2734,11 +2735,11 @@ mod tests {
         // No stats for unknown GlobalId.
         let stats =
             snapshot_stats(&cmds_tx, GlobalId::User(2), Antichain::from_elem(0.into())).await;
-        assert!(stats.is_err());
+        assert_err!(stats);
 
         // Stats don't resolve for as_of past the upper.
         let stats_fut = snapshot_stats(&cmds_tx, GlobalId::User(1), Antichain::from_elem(1.into()));
-        assert!(stats_fut.now_or_never().is_none());
+        assert_none!(stats_fut.now_or_never());
 
         // // Call it again because now_or_never consumed our future and it's not clone-able.
         let stats_ts1_fut =
