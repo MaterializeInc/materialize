@@ -248,7 +248,7 @@ async fn test_audit_logs(openable_state: Box<dyn OpenableDurableCatalogState>) {
                     on_refresh: mz_audit_log::RefreshDecisionWithReasonV1 {
                         decision: mz_audit_log::SchedulingDecisionV1::On,
                         objects_needing_refresh: vec!["u42".to_string(), "u90".to_string()],
-                        rehydration_time_estimate: "1000s".to_string(),
+                        hydration_time_estimate: "1000s".to_string(),
                     },
                 }),
             }),

@@ -4023,20 +4023,20 @@ fn plan_cluster_schedule(
 ) -> Result<ClusterSchedule, PlanError> {
     Ok(match schedule {
         ClusterScheduleOptionValue::Manual => ClusterSchedule::Manual,
-        // If `REHYDRATION TIME ESTIMATE` is not explicitly given, we default to 0.
+        // If `HYDRATION TIME ESTIMATE` is not explicitly given, we default to 0.
         ClusterScheduleOptionValue::Refresh {
-            rehydration_time_estimate: None,
+            hydration_time_estimate: None,
         } => ClusterSchedule::Refresh {
-            rehydration_time_estimate: Duration::from_millis(0),
+            hydration_time_estimate: Duration::from_millis(0),
         },
         // Otherwise we convert the `IntervalValue` to a `Duration`.
         ClusterScheduleOptionValue::Refresh {
-            rehydration_time_estimate: Some(interval_value),
+            hydration_time_estimate: Some(interval_value),
         } => {
             let interval = Interval::try_from_value(Value::Interval(interval_value))?;
             if interval.as_microseconds() < 0 {
                 sql_bail!(
-                    "REHYDRATION TIME ESTIMATE must be non-negative; got: {}",
+                    "HYDRATION TIME ESTIMATE must be non-negative; got: {}",
                     interval
                 );
             }
@@ -4044,16 +4044,16 @@ fn plan_cluster_schedule(
                 // This limitation is because we want this interval to be cleanly convertable
                 // to a unix epoch timestamp difference. When the interval involves months, then
                 // this is not true anymore, because months have variable lengths.
-                sql_bail!("REHYDRATION TIME ESTIMATE must not involve units larger than days");
+                sql_bail!("HYDRATION TIME ESTIMATE must not involve units larger than days");
             }
             let duration = interval.duration()?;
             if u64::try_from(duration.as_millis()).is_err()
                 || Interval::from_duration(&duration).is_err()
             {
-                sql_bail!("REHYDRATION TIME ESTIMATE too large");
+                sql_bail!("HYDRATION TIME ESTIMATE too large");
             }
             ClusterSchedule::Refresh {
-                rehydration_time_estimate: duration,
+                hydration_time_estimate: duration,
             }
         }
     })
@@ -4066,13 +4066,13 @@ fn unplan_cluster_schedule(schedule: ClusterSchedule) -> ClusterScheduleOptionVa
     match schedule {
         ClusterSchedule::Manual => ClusterScheduleOptionValue::Manual,
         ClusterSchedule::Refresh {
-            rehydration_time_estimate,
+            hydration_time_estimate,
         } => {
-            let interval = Interval::from_duration(&rehydration_time_estimate)
+            let interval = Interval::from_duration(&hydration_time_estimate)
                 .expect("planning ensured that this is convertible back to Interval");
             let interval_value = literal::unplan_interval(&interval);
             ClusterScheduleOptionValue::Refresh {
-                rehydration_time_estimate: Some(interval_value),
+                hydration_time_estimate: Some(interval_value),
             }
         }
     }
