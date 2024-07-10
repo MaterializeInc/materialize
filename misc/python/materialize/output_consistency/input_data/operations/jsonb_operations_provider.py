@@ -162,8 +162,7 @@ JSONB_OPERATION_TYPES.append(
         "jsonb_agg",
         [AnyOperationParam()],
         JsonbReturnTypeSpec(),
-        # this is not aggregating the rows from the original source but only the provided value
-        is_aggregation=False,
+        is_aggregation=True,
         relevance=OperationRelevance.LOW,
         comment="generic variant",
     ),
@@ -174,8 +173,7 @@ JSONB_OPERATION_TYPES.append(
         "jsonb_agg",
         [RecordOperationParam()],
         JsonbReturnTypeSpec(),
-        # this is not aggregating the rows from the original source but only the provided records
-        is_aggregation=False,
+        is_aggregation=True,
         comment="additional overlapping variant only for records",
     ),
 )
@@ -185,8 +183,7 @@ JSONB_OPERATION_TYPES.append(
         "jsonb_object_agg",
         [AnyOperationParam(), AnyOperationParam()],
         JsonbReturnTypeSpec(),
-        # this is not aggregating the rows from the original source but only the provided value
-        is_aggregation=False,
+        is_aggregation=True,
         relevance=OperationRelevance.LOW,
         comment="generic variant",
     ),
@@ -197,8 +194,7 @@ JSONB_OPERATION_TYPES.append(
         "jsonb_object_agg",
         [AnyOperationParam(), RecordOperationParam()],
         JsonbReturnTypeSpec(),
-        # this is not aggregating the rows from the original source but only the provided records
-        is_aggregation=False,
+        is_aggregation=True,
         comment="additional overlapping variant only for records",
     ),
 )
