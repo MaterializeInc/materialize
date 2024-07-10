@@ -124,7 +124,6 @@ class Composition:
             raise UnknownCompositionError(name)
 
         self.compose: dict[str, Any] = {
-            "version": "3.7",
             "services": {},
         }
 
