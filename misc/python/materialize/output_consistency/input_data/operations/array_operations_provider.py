@@ -55,7 +55,7 @@ ARRAY_OPERATION_TYPES.append(
         [
             ArrayOperationParam(),
             NumericOperationParam(
-                no_floating_point_type=True,
+                only_int_type=True,
                 incompatibilities={ExpressionCharacteristics.MAX_VALUE},
             ),
         ],
@@ -71,11 +71,11 @@ ARRAY_OPERATION_TYPES.append(
         [
             ArrayOperationParam(),
             NumericOperationParam(
-                no_floating_point_type=True,
+                only_int_type=True,
                 incompatibilities={ExpressionCharacteristics.MAX_VALUE},
             ),
             NumericOperationParam(
-                no_floating_point_type=True,
+                only_int_type=True,
                 incompatibilities={ExpressionCharacteristics.MAX_VALUE},
             ),
         ],
@@ -91,7 +91,7 @@ ARRAY_OPERATION_TYPES.append(
         [
             ArrayOperationParam(),
             NumericOperationParam(
-                no_floating_point_type=True,
+                only_int_type=True,
                 incompatibilities={ExpressionCharacteristics.MAX_VALUE},
             ),
         ],
@@ -107,7 +107,7 @@ ARRAY_OPERATION_TYPES.append(
         [
             ArrayOperationParam(),
             NumericOperationParam(
-                no_floating_point_type=True,
+                only_int_type=True,
                 incompatibilities={ExpressionCharacteristics.MAX_VALUE},
             ),
         ],
