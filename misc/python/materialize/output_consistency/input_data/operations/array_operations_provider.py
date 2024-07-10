@@ -48,6 +48,8 @@ from materialize.output_consistency.operation.operation import (
 
 ARRAY_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
+TAG_ARRAY_INDEX_OPERATION = "array_index_op"
+
 ARRAY_OPERATION_TYPES.append(
     DbOperation(
         # parentheses are needed only for Postgres when accessing an array element on the result of a function
@@ -60,6 +62,7 @@ ARRAY_OPERATION_TYPES.append(
             ),
         ],
         CollectionEntryReturnTypeSpec(param_index_to_take_type=0),
+        tags={TAG_ARRAY_INDEX_OPERATION},
         comment="access by index",
     )
 )
@@ -80,6 +83,7 @@ ARRAY_OPERATION_TYPES.append(
             ),
         ],
         ArrayReturnTypeSpec(),
+        tags={TAG_ARRAY_INDEX_OPERATION},
         comment="slice double-sided",
     )
 )
@@ -96,6 +100,7 @@ ARRAY_OPERATION_TYPES.append(
             ),
         ],
         ArrayReturnTypeSpec(),
+        tags={TAG_ARRAY_INDEX_OPERATION},
         comment="slice left open",
     )
 )
@@ -112,6 +117,7 @@ ARRAY_OPERATION_TYPES.append(
             ),
         ],
         ArrayReturnTypeSpec(),
+        tags={TAG_ARRAY_INDEX_OPERATION},
         comment="slice right open",
     )
 )
