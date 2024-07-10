@@ -36,6 +36,7 @@ from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperation,
     DbOperationOrFunction,
+    OperationRelevance,
 )
 
 JSONB_OPERATION_TYPES: list[DbOperationOrFunction] = []
@@ -159,10 +160,35 @@ JSONB_OPERATION_TYPES.append(
 JSONB_OPERATION_TYPES.append(
     DbFunction(
         "jsonb_agg",
+        [AnyOperationParam()],
+        JsonbReturnTypeSpec(),
+        # this is not aggregating the rows from the original source but only the provided value
+        is_aggregation=False,
+        relevance=OperationRelevance.LOW,
+        comment="generic variant",
+    ),
+)
+
+JSONB_OPERATION_TYPES.append(
+    DbFunction(
+        "jsonb_agg",
         [RecordOperationParam()],
         JsonbReturnTypeSpec(),
         # this is not aggregating the rows from the original source but only the provided records
         is_aggregation=False,
+        comment="additional overlapping variant only for records",
+    ),
+)
+
+JSONB_OPERATION_TYPES.append(
+    DbFunction(
+        "jsonb_object_agg",
+        [AnyOperationParam(), AnyOperationParam()],
+        JsonbReturnTypeSpec(),
+        # this is not aggregating the rows from the original source but only the provided value
+        is_aggregation=False,
+        relevance=OperationRelevance.LOW,
+        comment="generic variant",
     ),
 )
 
@@ -173,5 +199,6 @@ JSONB_OPERATION_TYPES.append(
         JsonbReturnTypeSpec(),
         # this is not aggregating the rows from the original source but only the provided records
         is_aggregation=False,
+        comment="additional overlapping variant only for records",
     ),
 )
