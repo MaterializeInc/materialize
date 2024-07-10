@@ -297,7 +297,7 @@ class Annotation:
                     error_markdown = "* Further errors exist!\n"
                     break
 
-                error_markdown = (
+                error_markdown = error_markdown + (
                     f"* {error.to_markdown()}{error.occurrences_to_markdown()}\n"
                 )
 
