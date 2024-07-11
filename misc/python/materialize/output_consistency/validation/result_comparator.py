@@ -362,7 +362,9 @@ class ResultComparator:
 
         return type(value1) == type(value2)
 
-    def is_value_equal(self, value1: Any, value2: Any) -> bool:
+    def is_value_equal(
+        self, value1: Any, value2: Any, is_tolerant: bool = False
+    ) -> bool:
         if value1 == value2:
             return True
 
@@ -393,7 +395,8 @@ class ResultComparator:
             return False
 
         for value1, value2 in zip(collection1, collection2):
-            if not self.is_value_equal(value1, value2):
+            # use is_tolerant because tuples may contain all values as strings
+            if not self.is_value_equal(value1, value2, is_tolerant=True):
                 return False
 
         return True

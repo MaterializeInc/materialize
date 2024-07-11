@@ -48,8 +48,10 @@ class PostgresResultComparator(ResultComparator):
         # do not compare error messages at all
         return False
 
-    def is_value_equal(self, value1: Any, value2: Any) -> bool:
-        if super().is_value_equal(value1, value2):
+    def is_value_equal(
+        self, value1: Any, value2: Any, is_tolerant: bool = False
+    ) -> bool:
+        if super().is_value_equal(value1, value2, is_tolerant=is_tolerant):
             return True
 
         if isinstance(value1, Decimal):
@@ -63,7 +65,7 @@ class PostgresResultComparator(ResultComparator):
             if isinstance(value2, Decimal):
                 return self.is_decimal_equal(Decimal(value1), value2)
         if isinstance(value1, str) and isinstance(value2, str):
-            return self.is_str_equal(value1, value2)
+            return self.is_str_equal(value1, value2, is_tolerant)
 
         return False
 
@@ -79,7 +81,7 @@ class PostgresResultComparator(ResultComparator):
 
         return math.isclose(value1, value2, rel_tol=self.floating_precision)
 
-    def is_str_equal(self, value1: str, value2: str) -> bool:
+    def is_str_equal(self, value1: str, value2: str, is_tolerant: bool) -> bool:
         if self.is_timestamp(value1):
             return self.is_timestamp_equal(value1, value2)
 
@@ -99,10 +101,19 @@ class PostgresResultComparator(ResultComparator):
         value1 = value1.replace(" month", " mon")
         value2 = value2.replace(" month", " mon")
 
+        if is_tolerant and self.is_decimal(value1) and self.is_decimal(value2):
+            return self.is_decimal_equal(Decimal(value1), Decimal(value2))
+
         return value1 == value2
 
-    def is_timestamp(self, value1: str) -> bool:
-        return TIMESTAMP_PATTERN.match(value1) is not None
+    def is_decimal(self, value: str):
+        if value == "NaN":
+            return True
+
+        return value.replace(".", "", 1).isdigit()
+
+    def is_timestamp(self, value: str) -> bool:
+        return TIMESTAMP_PATTERN.match(value) is not None
 
     def is_timestamp_equal(self, value1: str, value2: str) -> bool:
         last_second_and_milliseconds_regex = r"(\d\.\d+)"
