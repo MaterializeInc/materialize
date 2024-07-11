@@ -568,25 +568,10 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.29.0@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
 
-[[audits.rdkafka]]
-who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
-criteria = "safe-to-deploy"
-version = "0.29.0@git:f7d81eab5a21bdcf5c2dfb75dd7784b55a9953f9"
-
 [[audits.rdkafka-sys]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "4.3.0+1.9.2@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
-
-[[audits.rdkafka-sys]]
-who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
-criteria = "safe-to-deploy"
-version = "4.3.0+2.4.0@git:1e27332856a433235aeba7f82d46d06e3f646b69"
-
-[[audits.rdkafka-sys]]
-who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
-criteria = "safe-to-deploy"
-version = "4.3.0+2.4.0@git:f7d81eab5a21bdcf5c2dfb75dd7784b55a9953f9"
 
 [[audits.redox_syscall]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
