@@ -9,6 +9,7 @@
 
 //! A handle to a batch of updates
 
+use arrow::array::Array;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Debug;
@@ -595,12 +596,7 @@ where
             lower,
             inclusive_upper: Antichain::new(),
             blob,
-            buffer: BatchBuffer::new(
-                Arc::clone(&metrics),
-                batch_write_metrics,
-                cfg.blob_target_size,
-                expect_consolidated,
-            ),
+            buffer: BatchBuffer::new(Arc::clone(&metrics), cfg.blob_target_size),
             metrics,
             expect_consolidated,
             max_kvt_in_run: None,
@@ -653,8 +649,8 @@ where
             }
         }
 
-        let (key_lower, remainder) = self.buffer.drain();
-        self.flush_part(stats_schemas, key_lower, remainder).await;
+        let remainder = self.buffer.drain();
+        self.flush_part(stats_schemas, remainder).await;
 
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
@@ -695,9 +691,8 @@ where
         self.inclusive_upper.insert(Reverse(ts.clone()));
 
         match self.buffer.push(key, val, ts.clone(), diff.clone()) {
-            Some((key_lower, part_to_flush)) => {
-                self.flush_part(stats_schemas, key_lower, part_to_flush)
-                    .await;
+            Some(part_to_flush) => {
+                self.flush_part(stats_schemas, part_to_flush).await;
                 Ok(Added::RecordAndParts)
             }
             None => Ok(Added::Record),
@@ -712,9 +707,21 @@ where
     async fn flush_part<StatsK: Codec, StatsV: Codec>(
         &mut self,
         stats_schemas: &Schemas<StatsK, StatsV>,
-        key_lower: Vec<u8>,
         columnar: ColumnarRecords,
     ) {
+        let key_lower = {
+            let keys = columnar.keys();
+            if keys.is_empty() {
+                &[]
+            } else if self.expect_consolidated {
+                columnar.keys().value(0)
+            } else {
+                ::arrow::compute::min_binary(columnar.keys()).expect("min of nonempty array")
+            }
+        };
+        let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
+            .expect("lower bound always exists");
+
         let num_updates = columnar.len();
         if num_updates == 0 {
             return;
@@ -784,24 +791,15 @@ where
 #[derive(Debug)]
 struct BatchBuffer {
     metrics: Arc<Metrics>,
-    batch_write_metrics: BatchWriteMetrics,
     blob_target_size: usize,
-    expect_consolidated: bool,
     records_builder: ColumnarRecordsBuilder,
 }
 
 impl BatchBuffer {
-    fn new(
-        metrics: Arc<Metrics>,
-        batch_write_metrics: BatchWriteMetrics,
-        blob_target_size: usize,
-        expect_consolidated: bool,
-    ) -> Self {
+    fn new(metrics: Arc<Metrics>, blob_target_size: usize) -> Self {
         BatchBuffer {
             metrics,
-            batch_write_metrics,
             blob_target_size,
-            expect_consolidated,
             records_builder: ColumnarRecordsBuilder::default(),
         }
     }
@@ -812,7 +810,7 @@ impl BatchBuffer {
         val: &[u8],
         ts: T,
         diff: D,
-    ) -> Option<(Vec<u8>, ColumnarRecords)> {
+    ) -> Option<ColumnarRecords> {
         let update = ((key, val), ts.encode(), diff.encode());
         assert!(
             self.records_builder.push(update),
@@ -827,31 +825,12 @@ impl BatchBuffer {
         }
     }
 
-    fn drain(&mut self) -> (Vec<u8>, ColumnarRecords) {
-        // TODO: we're in a position to do a very good estimate here!
+    fn drain(&mut self) -> ColumnarRecords {
+        // TODO: we're in a position to do a very good estimate here, instead of using the default.
         let builder = mem::take(&mut self.records_builder);
         let records = builder.finish(&self.metrics.columnar);
-
-        if records.len() == 0 {
-            return (vec![], records);
-        }
-
-        let start = Instant::now();
-        let key_lower = if self.expect_consolidated {
-            records.keys().value(0)
-        } else {
-            ::arrow::compute::min_binary(records.keys()).expect("min of nonempty array")
-        };
-        let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound always exists");
-
-        self.batch_write_metrics
-            .step_columnar_encoding
-            .inc_by(start.elapsed().as_secs_f64());
-
         assert_eq!(self.records_builder.len(), 0);
-
-        (key_lower, records)
+        records
     }
 }
 
