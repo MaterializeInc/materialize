@@ -36,6 +36,7 @@ use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
+use mz_secrets::SecretsReader;
 use mz_sql::catalog::{CatalogCluster, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::session::metadata::SessionMetadata;
@@ -47,8 +48,9 @@ use mz_sql::session::vars::{
     MAX_SOURCES, MAX_TABLES,
 };
 use mz_storage_client::controller::ExportDescription;
+use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::controller::StorageError;
+use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
@@ -191,6 +193,13 @@ impl Coordinator {
 
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
+        struct PendingReplicationSlotDrop {
+            connection: PostgresConnection,
+            secrets_reader: Arc<dyn SecretsReader>,
+            storage_config: StorageConfiguration,
+            replication_slot_name: String,
+        }
+
         let mut sources_to_drop = vec![];
         let mut webhook_sources_to_restart = BTreeSet::new();
         let mut tables_to_drop = vec![];
@@ -198,7 +207,7 @@ impl Coordinator {
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
         let mut views_to_drop = vec![];
-        let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
+        let mut replication_slots_to_drop: Vec<PendingReplicationSlotDrop> = vec![];
         let mut secrets_to_drop = vec![];
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
@@ -239,28 +248,23 @@ impl Coordinator {
                                                     let conn = conn.clone().into_inline_connection(
                                                         self.catalog().state(),
                                                     );
-                                                    let config = conn
-                                                    .connection
-                                                    .config(
-                                                        self.secrets_reader(),
-                                                        self.controller.storage.config(),
-                                                        InTask::No,
-                                                    )
-                                                    .await
-                                                    .map_err(|e| {
-                                                        AdapterError::Storage(StorageError::Generic(
-                                                            anyhow::anyhow!(
-                                                                "error creating Postgres client for \
-                                                                dropping acquired slots: {}",
-                                                                e.display_with_causes()
-                                                            ),
-                                                        ))
-                                                    })?;
+                                                    let pending_drop = PendingReplicationSlotDrop {
+                                                        connection: conn.connection.clone(),
+                                                        secrets_reader: Arc::clone(
+                                                            self.secrets_reader(),
+                                                        ),
+                                                        storage_config: self
+                                                            .controller
+                                                            .storage
+                                                            .config()
+                                                            .clone(),
+                                                        replication_slot_name: conn
+                                                            .publication_details
+                                                            .slot
+                                                            .clone(),
+                                                    };
 
-                                                    replication_slots_to_drop.push((
-                                                        config,
-                                                        conn.publication_details.slot.clone(),
-                                                    ));
+                                                    replication_slots_to_drop.push(pending_drop);
                                                 }
                                                 _ => {}
                                             }
@@ -698,19 +702,50 @@ impl Coordinator {
             if !replication_slots_to_drop.is_empty() {
                 // TODO(guswynn): see if there is more relevant info to add to this name
                 task::spawn(|| "drop_replication_slots", async move {
-                    for (config, slot_name) in replication_slots_to_drop {
+                    for pending_drop in replication_slots_to_drop {
+                        let PendingReplicationSlotDrop {
+                            connection,
+                            secrets_reader,
+                            storage_config,
+                            replication_slot_name,
+                        } = pending_drop;
+                        tracing::info!(?replication_slot_name, "dropping replication slot");
+
                         // Try to drop the replication slots, but give up after a while.
-                        let _ = Retry::default()
+                        let result: Result<(), anyhow::Error> = Retry::default()
                             .max_duration(Duration::from_secs(60))
                             .retry_async(|_state| async {
+                                let config = connection
+                                    .config(&secrets_reader, &storage_config, InTask::No)
+                                    .await
+                                    .map_err(|e| {
+                                        anyhow::anyhow!(
+                                            "error creating Postgres client for \
+                                            dropping acquired slots: {}",
+                                            e.display_with_causes()
+                                        )
+                                    })?;
+
                                 mz_postgres_util::drop_replication_slots(
                                     &ssh_tunnel_manager,
                                     config.clone(),
-                                    &[&slot_name],
+                                    &[&replication_slot_name],
                                 )
-                                .await
+                                .await?;
+
+                                Ok(())
                             })
                             .await;
+
+                        // TODO(parkmycar): Pass back a channel so we can unblock the coordinator
+                        // but still bubble this error up to the user.
+                        if let Err(err) = result {
+                            tracing::warn!(
+                                ?replication_slot_name,
+                                ?err,
+                                "failed to drop replication slot"
+                            );
+                        }
                     }
                 });
             }
