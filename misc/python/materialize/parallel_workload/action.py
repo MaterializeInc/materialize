@@ -148,9 +148,17 @@ class Action:
                     "canceling statement due to user request",
                 ]
             )
+        if exe.db.scenario == Scenario.ZeroDowntimeDeploy:
+            result.extend(
+                [
+                    "cannot write in read-only mode",
+                    "500: internal storage failure! ReadOnly",
+                ]
+            )
         if exe.db.scenario in (
             Scenario.Kill,
             Scenario.BackupRestore,
+            Scenario.ZeroDowntimeDeploy,
         ):
             result.extend(
                 [
@@ -158,10 +166,16 @@ class Action:
                     "network error",
                     "Can't create a connection to host",
                     "Connection refused",
+                    "Cursor closed",
                     # websockets
                     "Connection to remote host was lost.",
                     "socket is already closed.",
                     "Broken pipe",
+                    "WS connect",
+                    # http
+                    "Remote end closed connection without response",
+                    "Connection aborted",
+                    "Connection refused",
                 ]
             )
         if exe.db.scenario in (Scenario.Kill,):
@@ -362,6 +376,7 @@ class SQLsmithAction(Action):
             if exe.db.scenario not in (
                 Scenario.Kill,
                 Scenario.BackupRestore,
+                Scenario.ZeroDowntimeDeploy,
             ):
                 raise
         finally:
@@ -954,6 +969,8 @@ class FlipFlagsAction(Action):
 
             # ignore it
             return False
+        except Exception as e:
+            raise QueryError(str(e), "FlipFlags")
 
     def create_system_connection(
         self, exe: Executor, num_attempts: int = 10
@@ -961,7 +978,9 @@ class FlipFlagsAction(Action):
         try:
             conn = pg8000.connect(
                 host=exe.db.host,
-                port=exe.db.ports["mz_system"],
+                port=exe.db.ports[
+                    "mz_system" if exe.mz_service == "materialized" else "mz_system2"
+                ],
                 user="mz_system",
                 database="materialize",
             )
@@ -1333,9 +1352,9 @@ class ReconnectAction(Action):
         self.random_role = random_role
 
     def run(self, exe: Executor) -> bool:
-        autocommit = exe.cur._c.autocommit
+        exe.mz_service = "materialized"
         host = exe.db.host
-        port = exe.db.ports["materialized"]
+        port = exe.db.ports[exe.mz_service]
         with exe.db.lock:
             if self.random_role and exe.db.roles:
                 user = self.rng.choice(
@@ -1363,13 +1382,29 @@ class ReconnectAction(Action):
         NUM_ATTEMPTS = 20
         if exe.ws:
             threading.current_thread().getName()
-            for i in range(NUM_ATTEMPTS):
+            for i in range(
+                NUM_ATTEMPTS
+                if exe.db.scenario != Scenario.ZeroDowntimeDeploy
+                else 1000000
+            ):
                 exe.ws = websocket.WebSocket()
                 try:
                     ws_conn_id, ws_secret_key = ws_connect(
-                        exe.ws, host, exe.db.ports["http"], user
+                        exe.ws,
+                        host,
+                        exe.db.ports[
+                            "http" if exe.mz_service == "materialized" else "http2"
+                        ],
+                        user,
                     )
                 except Exception as e:
+                    if exe.db.scenario == Scenario.ZeroDowntimeDeploy:
+                        exe.mz_service = (
+                            "materialized2"
+                            if exe.mz_service == "materialized"
+                            else "materialized"
+                        )
+                        continue
                     if i < NUM_ATTEMPTS - 1:
                         time.sleep(1)
                         continue
@@ -1378,12 +1413,14 @@ class ReconnectAction(Action):
                     exe.pg_pid = ws_conn_id
                 break
 
-        for i in range(NUM_ATTEMPTS):
+        for i in range(
+            NUM_ATTEMPTS if exe.db.scenario != Scenario.ZeroDowntimeDeploy else 1000000
+        ):
             try:
                 conn = pg8000.connect(
                     host=host, port=port, user=user, database="materialize"
                 )
-                conn.autocommit = autocommit
+                conn.autocommit = exe.autocommit
                 cur = conn.cursor()
                 exe.cur = cur
                 exe.set_isolation("SERIALIZABLE")
@@ -1391,6 +1428,13 @@ class ReconnectAction(Action):
                 if not exe.use_ws:
                     exe.pg_pid = cur.fetchall()[0][0]
             except Exception as e:
+                if exe.db.scenario == Scenario.ZeroDowntimeDeploy:
+                    exe.mz_service = (
+                        "materialized2"
+                        if exe.mz_service == "materialized"
+                        else "materialized"
+                    )
+                    continue
                 if i < NUM_ATTEMPTS - 1 and (
                     "network error" in str(e)
                     or "Can't create a connection to host" in str(e)
@@ -1458,8 +1502,6 @@ class KillAction(Action):
     def run(self, exe: Executor) -> bool:
         assert self.composition
         self.composition.kill("materialized")
-        # Otherwise getting failure on "up" locally
-        time.sleep(1)
         self.system_parameters = self.system_param_fn(self.system_parameters)
         with self.composition.override(
             Materialized(
@@ -1472,7 +1514,7 @@ class KillAction(Action):
             )
         ):
             self.composition.up("materialized", detach=True)
-        time.sleep(self.rng.uniform(120, 240))
+        time.sleep(self.rng.uniform(60, 120))
         return True
 
 
@@ -1482,35 +1524,80 @@ class ZeroDowntimeDeployAction(Action):
         rng: random.Random,
         composition: Composition | None,
         sanity_restart: bool,
-        system_param_fn: Callable[[dict[str, str]], dict[str, str]] = lambda x: x,
     ):
         super().__init__(rng, composition)
-        self.system_param_fn = system_param_fn
-        self.system_parameters = {}
         self.sanity_restart = sanity_restart
+        self.deploy_generation = 0
 
     def run(self, exe: Executor) -> bool:
         assert self.composition
-        self.composition.kill("materialized")
-        # Otherwise getting failure on "up" locally
-        time.sleep(1)
-        self.system_parameters = self.system_param_fn(self.system_parameters)
+
+        self.deploy_generation += 1
+
+        if self.deploy_generation % 2 == 0:
+            mz_service = "materialized"
+            ports = ["6975:6875", "6976:6876", "6977:6877"]
+        else:
+            mz_service = "materialized2"
+            ports = ["7075:6875", "7076:6876", "7077:6877"]
+
+        print(f"Deploying generation {self.deploy_generation} on {mz_service}")
+
         with self.composition.override(
             Materialized(
-                restart="on-failure",
+                name=mz_service,
                 external_minio="toxiproxy",
                 external_cockroach="toxiproxy",
-                ports=["6975:6875", "6976:6876", "6977:6877"],
+                ports=ports,
                 sanity_restart=self.sanity_restart,
-                additional_system_parameter_defaults=self.system_parameters,
-            )
+                deploy_generation=self.deploy_generation,
+                restart="on-failure",
+                healthcheck=[
+                    "CMD",
+                    "curl",
+                    "-f",
+                    "localhost:6878/api/leader/status",
+                ],
+            ),
         ):
-            self.composition.up("materialized", detach=True)
-        time.sleep(self.rng.uniform(120, 240))
+            self.composition.up(mz_service, detach=True)
+
+            # TODO: Allow read-only queries on mz_service
+
+            # Wait until ready to promote
+            while True:
+                result = json.loads(
+                    self.composition.exec(
+                        mz_service,
+                        "curl",
+                        "localhost:6878/api/leader/status",
+                        capture=True,
+                    ).stdout
+                )
+                if result["status"] == "ReadyToPromote":
+                    break
+                assert result["status"] == "Initializing", f"Unexpected status {result}"
+                print("Not ready yet, waiting 1 s")
+                time.sleep(1)
+
+            # Promote new Mz service
+            result = json.loads(
+                self.composition.exec(
+                    mz_service,
+                    "curl",
+                    "-X",
+                    "POST",
+                    "http://127.0.0.1:6878/api/leader/promote",
+                    capture=True,
+                ).stdout
+            )
+            assert result["result"] == "Success", f"Unexpected result {result}"
+
+        time.sleep(self.rng.uniform(10, 30))
         return True
 
 
-# TODO: Don't restore immediately, keep copy Database objects
+# TODO: Don't restore immediately, keep copy of Database objects
 class BackupRestoreAction(Action):
     composition: Composition
     db: Database
@@ -1661,7 +1748,10 @@ class CreateKafkaSourceAction(Action):
                 source.create(exe)
                 exe.db.kafka_sources.append(source)
             except:
-                if exe.db.scenario not in (Scenario.Kill,):
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.ZeroDowntimeDeploy,
+                ):
                     raise
         return True
 
@@ -1730,7 +1820,10 @@ class CreateMySqlSourceAction(Action):
                 source.create(exe)
                 exe.db.mysql_sources.append(source)
             except:
-                if exe.db.scenario not in (Scenario.Kill,):
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.ZeroDowntimeDeploy,
+                ):
                     raise
         return True
 
@@ -1799,7 +1892,10 @@ class CreatePostgresSourceAction(Action):
                 source.create(exe)
                 exe.db.postgres_sources.append(source)
             except:
-                if exe.db.scenario not in (Scenario.Kill,):
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.ZeroDowntimeDeploy,
+                ):
                     raise
         return True
 
@@ -1911,7 +2007,7 @@ class HttpPostAction(Action):
             if source not in exe.db.webhook_sources:
                 return False
 
-            url = f"http://{exe.db.host}:{exe.db.ports['http']}/api/webhook/{urllib.parse.quote(source.schema.db.name(), safe='')}/{urllib.parse.quote(source.schema.name(), safe='')}/{urllib.parse.quote(source.name(), safe='')}"
+            url = f"http://{exe.db.host}:{exe.db.ports['http' if exe.mz_service == 'materialized' else 'http2']}/api/webhook/{urllib.parse.quote(source.schema.db.name(), safe='')}/{urllib.parse.quote(source.schema.name(), safe='')}/{urllib.parse.quote(source.name(), safe='')}"
 
             payload = source.body_format.to_data_type().random_value(self.rng)
 
@@ -1943,6 +2039,7 @@ class HttpPostAction(Action):
                 if exe.db.scenario not in (
                     Scenario.Kill,
                     Scenario.BackupRestore,
+                    Scenario.ZeroDowntimeDeploy,
                 ):
                     raise
             except QueryError as e:
