@@ -146,9 +146,10 @@ where
         }
     };
 
-    let mut k_buf: Option<K> = None;
-    let mut v_buf: Option<V> = None;
-
+    // Optionally we reuse instances of K and V and create instances of
+    // K::Storage and V::Storage to reduce allocations.
+    let mut k_reuse: Option<K> = None;
+    let mut v_reuse: Option<V> = None;
     let mut k_storage = Some(K::Storage::default());
     let mut v_storage = Some(V::Storage::default());
 
@@ -160,12 +161,12 @@ where
                 let d = i64::from_le_bytes(d);
 
                 // Attempt to re-use allocations as much as possible.
-                match (k_buf.as_mut(), v_buf.as_mut()) {
-                    (Some(k_buf), Some(v_buf)) => {
-                        K::decode_from(k_buf, k, &mut k_storage)?;
-                        V::decode_from(v_buf, v, &mut v_storage)?;
+                match (k_reuse.as_mut(), v_reuse.as_mut()) {
+                    (Some(k_reuse), Some(v_reuse)) => {
+                        K::decode_from(k_reuse, k, &mut k_storage)?;
+                        V::decode_from(v_reuse, v, &mut v_storage)?;
 
-                        builder.push(k_buf, v_buf, t, d);
+                        builder.push(k_reuse, v_reuse, t, d);
                     }
                     (_, _) => {
                         let k = K::decode(k)?;
@@ -173,8 +174,8 @@ where
 
                         builder.push(&k, &v, t, d);
 
-                        k_buf.replace(k);
-                        v_buf.replace(v);
+                        k_reuse.replace(k);
+                        v_reuse.replace(v);
                     }
                 };
             }
