@@ -10,7 +10,10 @@ menu:
 
 ## Overview
 
-Indexes can improve query performance.
+Indexes can [optimize query performance](/transform-data/optimization).  In
+addition, because indexes in Materialize are maintained in memory, indexing a
+view (non-materialized and materialized) may provide further performance
+improvements.
 
 ## Indexes and non-materialized views
 
@@ -20,8 +23,6 @@ view](/concepts/views/#non-materialized-views) causes view results to be
 [cluster](/concepts/clusters/). The in-memory up-to-date results are accessible
 to queries within the cluster, even for queries that do not use the index
 key(s).
-
-Queries from other clusters cannot use the index.
 
 ## Indexes and materialized views
 
@@ -34,8 +35,10 @@ up-to-date results without themselves performing the incremental computation.
 The in-memory up-to-date results are accessible to queries within the cluster,
 even for queries that do not use the index key(s).
 
-Queries from other clusters cannot use the index.
+## Indexes and Clusters
 
+Indexes are local to a cluster.  Queries in a different cluster cannot use the
+indexes in another cluster.
 
 ## Related pages
 
