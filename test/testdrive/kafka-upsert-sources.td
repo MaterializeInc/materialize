@@ -659,7 +659,11 @@ ALTER SYSTEM SET enable_envelope_upsert_inline_errors = true
   VALUE FORMAT JSON
   ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE));
 
-> SELECT key, value::text, error::text FROM value_decode_error
+# there is now an additional 'error' column that should store the inline decoding errors, if any
+# since this is a json value record the output relation just has a single jsonb column named 'data'
+# though for other types (e.g. avro) the value columns should be present and flattened.
+
+> SELECT key, data, error::text FROM value_decode_error ORDER BY key
 val1 <null> "(\"Bytes: Failed to decode JSON: {\"\"a\"\":,\"\"c\"\":\"\"d\"\"} (original bytes: [7b, 22, 61, 22, 3a, 2c, 22, 63, 22, 3a, 22, 64, 22, 7d])\")"
 val2 <null> "(\"Bytes: Failed to decode JSON: [1,2, (original bytes: [5b, 31, 2c, 32, 2c])\")"
 
@@ -668,6 +672,15 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=inline-value
 val1:{"a": 1,"c":"d"}
 val2:[1,2,3]
 
-> SELECT key, value::text, error::text FROM value_decode_error
-val1 "(\"{\"\"a\"\":1,\"\"c\"\":\"\"d\"\"}\")" <null>
-val2 "(\"[1,2,3]\")" <null>
+> SELECT key, data, error::text FROM value_decode_error ORDER BY key
+val1 "{\"a\":1,\"c\":\"d\"}" <null>
+val2 [1,2,3] <null>
+
+! CREATE SOURCE value_decode_error_error
+  IN CLUSTER inline_error_cluster
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-inline-value-errors-1-${testdrive.seed}')
+  KEY FORMAT TEXT
+  VALUE FORMAT JSON
+  INCLUDE KEY AS error
+  ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE));
+contains: column "error" specified more than once
