@@ -41,6 +41,7 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
+    DbFunctionWithCustomPattern,
     DbOperation,
     DbOperationOrFunction,
 )
@@ -104,8 +105,9 @@ MAP_OPERATION_TYPES.append(
     )
 )
 MAP_OPERATION_TYPES.append(
-    DbFunction(
+    DbFunctionWithCustomPattern(
         "map_agg",
+        {2: "map_agg($, $ ORDER BY row_index)"},
         [StringOperationParam(only_type_text=True), AnyOperationParam()],
         MapReturnTypeSpec(),
     )
