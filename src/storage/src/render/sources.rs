@@ -507,7 +507,7 @@ fn append_metadata_to_value<G: Scope, FromTime: Timestamp>(
         let val = res.value.map(|val_result| {
             val_result.map(|mut val| {
                 if !res.metadata.is_empty() {
-                    RowPacker::for_existing_row(&mut val).extend(&res.metadata);
+                    RowPacker::for_existing_row(&mut val).extend_by_row(&res.metadata);
                 }
                 val
             })
@@ -575,7 +575,9 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
             Some(Ok(ref row)) => match upsert_envelope.style {
                 UpsertStyle::Debezium { after_idx } => match row.iter().nth(after_idx).unwrap() {
                     Datum::List(after) => {
-                        row_buf.packer().extend(after.iter().chain(metadata.iter()));
+                        let mut packer = row_buf.packer();
+                        packer.extend(after.iter());
+                        packer.extend_by_row(&metadata);
                         Some(Ok(row_buf.clone()))
                     }
                     Datum::Null => None,
@@ -583,17 +585,19 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
                 },
                 UpsertStyle::Default(_) => {
                     let mut packer = row_buf.packer();
-                    packer.extend(key_row.iter().chain(row.iter()).chain(metadata.iter()));
+                    packer.extend_by_row(&key_row);
+                    packer.extend_by_row(row);
+                    packer.extend_by_row(&metadata);
                     Some(Ok(row_buf.clone()))
                 }
                 UpsertStyle::ValueErrInline { .. } => {
                     let mut packer = row_buf.packer();
-                    packer.extend(key_row.iter());
+                    packer.extend_by_row(&key_row);
                     // The 'value' record contains all value columns
                     packer.push_list(row.iter());
                     // The 'error' column is null
                     packer.push(Datum::Null);
-                    packer.extend(metadata.iter());
+                    packer.extend_by_row(&metadata);
                     Some(Ok(row_buf.clone()))
                 }
             },
@@ -603,12 +607,12 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
                         // inline the error in the data output
                         let err_string = inner.to_string();
                         let mut packer = row_buf.packer();
-                        packer.extend(key_row.iter());
+                        packer.extend_by_row(&key_row);
                         // The 'value' column is null
                         packer.push(Datum::Null);
                         // The 'error' column is a record with a 'description' column
                         packer.push_list(iter::once(Datum::String(&err_string)));
-                        packer.extend(metadata.iter());
+                        packer.extend_by_row(&metadata);
                         Some(Ok(row_buf.clone()))
                     }
                     _ => Some(Err(UpsertError::Value(UpsertValueError {
