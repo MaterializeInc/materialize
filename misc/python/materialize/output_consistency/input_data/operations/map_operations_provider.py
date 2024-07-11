@@ -103,7 +103,6 @@ MAP_OPERATION_TYPES.append(
         NumericReturnTypeSpec(only_integer=True),
     )
 )
-# TODO: use with multiple keys and values
 MAP_OPERATION_TYPES.append(
     DbFunction(
         "map_agg",
