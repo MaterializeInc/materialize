@@ -16,9 +16,9 @@ use mz_audit_log::{
     DropClusterReplicaV2, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
     GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, RefreshDecisionWithReasonV1,
     RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
-    RevokeRoleV2, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1, SchemaV1, SchemaV2,
-    StorageUsageV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
-    VersionedStorageUsage,
+    RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1, SchemaV1,
+    SchemaV2, SetV1, StorageUsageV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1,
+    VersionedEvent, VersionedStorageUsage,
 };
 use mz_compute_client::controller::ComputeReplicaLogging;
 use mz_controller_types::ReplicaId;
@@ -1448,6 +1448,7 @@ impl RustType<proto::audit_log_event_v1::EventType> for EventType {
             EventType::Alter => proto::audit_log_event_v1::EventType::Alter,
             EventType::Grant => proto::audit_log_event_v1::EventType::Grant,
             EventType::Revoke => proto::audit_log_event_v1::EventType::Revoke,
+            EventType::Comment => proto::audit_log_event_v1::EventType::Comment,
         }
     }
 
@@ -1458,6 +1459,7 @@ impl RustType<proto::audit_log_event_v1::EventType> for EventType {
             proto::audit_log_event_v1::EventType::Alter => Ok(EventType::Alter),
             proto::audit_log_event_v1::EventType::Grant => Ok(EventType::Grant),
             proto::audit_log_event_v1::EventType::Revoke => Ok(EventType::Revoke),
+            proto::audit_log_event_v1::EventType::Comment => Ok(EventType::Comment),
             proto::audit_log_event_v1::EventType::Unknown => Err(
                 TryFromProtoError::unknown_enum_variant("EventType::Unknown"),
             ),
@@ -2271,6 +2273,40 @@ impl RustType<proto::audit_log_event_v1::FromPreviousIdV1> for FromPreviousIdV1 
     }
 }
 
+impl RustType<proto::audit_log_event_v1::SetV1> for SetV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::SetV1 {
+        proto::audit_log_event_v1::SetV1 {
+            name: self.name.clone(),
+            value: self.value.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::audit_log_event_v1::SetV1) -> Result<Self, TryFromProtoError> {
+        Ok(SetV1 {
+            name: proto.name,
+            value: proto.value,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::RotateKeysV1> for RotateKeysV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RotateKeysV1 {
+        proto::audit_log_event_v1::RotateKeysV1 {
+            id: self.id.clone(),
+            name: self.name.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RotateKeysV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RotateKeysV1 {
+            id: proto.id,
+            name: proto.name,
+        })
+    }
+}
+
 impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
     fn into_proto(&self) -> proto::audit_log_event_v1::Details {
         use proto::audit_log_event_v1::Details::*;
@@ -2318,6 +2354,9 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             }
             EventDetails::ToNewIdV1(details) => ToNewIdV1(details.into_proto()),
             EventDetails::FromPreviousIdV1(details) => FromPreviousIdV1(details.into_proto()),
+            EventDetails::SetV1(details) => SetV1(details.into_proto()),
+            EventDetails::ResetAllV1 => ResetAllV1(Empty {}),
+            EventDetails::RotateKeysV1(details) => RotateKeysV1(details.into_proto()),
         }
     }
 
@@ -2373,6 +2412,9 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             }
             ToNewIdV1(details) => Ok(EventDetails::ToNewIdV1(details.into_rust()?)),
             FromPreviousIdV1(details) => Ok(EventDetails::FromPreviousIdV1(details.into_rust()?)),
+            SetV1(details) => Ok(EventDetails::SetV1(details.into_rust()?)),
+            ResetAllV1(Empty {}) => Ok(EventDetails::ResetAllV1),
+            RotateKeysV1(details) => Ok(EventDetails::RotateKeysV1(details.into_rust()?)),
         }
     }
 }
