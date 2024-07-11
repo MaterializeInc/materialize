@@ -7,12 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import argparse
 import random
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
@@ -22,6 +24,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Redpanda(),
     Materialized(),
     Clusterd(),
     Toxiproxy(),
@@ -29,19 +32,34 @@ SERVICES = [
 ]
 
 
-def workflow_default(c: Composition) -> None:
+def parse_args(parser: WorkflowArgumentParser) -> argparse.Namespace:
+    parser.add_argument(
+        "--redpanda",
+        action="store_true",
+        help="run against Redpanda instead of the Confluent Platform",
+    )
+
+    return parser.parse_args()
+
+
+def get_kafka_services(redpanda: bool) -> list[str]:
+    return ["redpanda"] if redpanda else ["zookeeper", "kafka", "schema-registry"]
+
+
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in c.workflows:
         if name == "default":
             continue
         with c.test_case(name):
-            c.workflow(name)
+            c.workflow(name, *parser.args)
 
 
 #
 # Test the kafka sink resumption logic in the presence of networking problems
 #
-def workflow_sink_networking(c: Composition) -> None:
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+def workflow_sink_networking(c: Composition, parser: WorkflowArgumentParser) -> None:
+    args = parse_args(parser)
+    c.up(*(["materialized", "toxiproxy"] + get_kafka_services(args.redpanda)))
 
     seed = random.getrandbits(16)
     for i, failure_mode in enumerate(
@@ -69,13 +87,14 @@ def workflow_sink_networking(c: Composition) -> None:
         c.kill("toxiproxy")
 
 
-def workflow_source_resumption(c: Composition) -> None:
+def workflow_source_resumption(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test creating sources in a remote clusterd process."""
+    args = parse_args(parser)
 
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
     ):
-        c.up("materialized", "zookeeper", "kafka", "clusterd")
+        c.up(*(["materialized", "clusterd"] + get_kafka_services(args.redpanda)))
 
         c.run_testdrive_files("source-resumption/setup.td")
         c.run_testdrive_files("source-resumption/verify.td")
@@ -127,10 +146,11 @@ def find_source_resume_upper(c: Composition, partition_id: str) -> int | None:
     return None
 
 
-def workflow_sink_queue_full(c: Composition) -> None:
+def workflow_sink_queue_full(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Similar to the sink-networking workflow, but with 11 million rows (more then the 11 million defined as queue.buffering.max.messages) and only creating the sink after these rows are ingested into Mz. Triggers #24936"""
+    args = parse_args(parser)
     seed = random.getrandbits(16)
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    c.up(*(["materialized", "toxiproxy"] + get_kafka_services(args.redpanda)))
     c.run_testdrive_files(
         "--no-reset",
         "--max-errors=1",
