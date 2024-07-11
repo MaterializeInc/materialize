@@ -366,9 +366,9 @@ impl FoldConstants {
                             let mut next_rows = Vec::new();
                             for (old_row, old_count) in old_rows {
                                 for (new_row, new_count) in rows.iter() {
-                                    row_buf
-                                        .packer()
-                                        .extend(old_row.iter().chain(new_row.iter()));
+                                    let mut packer = row_buf.packer();
+                                    packer.extend_by_row(&old_row);
+                                    packer.extend_by_row(new_row);
                                     next_rows.push((row_buf.clone(), old_count * *new_count));
                                 }
                             }
@@ -655,9 +655,9 @@ impl FoldConstants {
                 .collect::<Result<Vec<_>, _>>()?;
             let mut output_rows = func.eval(&datums, &temp_storage)?.fuse();
             for (output_row, diff2) in (&mut output_rows).take(limit - new_rows.len()) {
-                row_buf
-                    .packer()
-                    .extend(input_row.clone().into_iter().chain(output_row.into_iter()));
+                let mut packer = row_buf.packer();
+                packer.extend_by_row(input_row);
+                packer.extend_by_row(&output_row);
                 new_rows.push((row_buf.clone(), diff2 * *diff))
             }
             // If we still have records to enumerate, but dropped out of the iteration,
