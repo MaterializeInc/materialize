@@ -12,39 +12,27 @@
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_result_size = 128
+ALTER SYSTEM SET max_result_size = '1MB'
 
 # In environmentd each Row requires 24 bytes + number of bytes to encode. But we'll also de-dupe
 # repeated values by incrementing the diff.
 
-> SELECT 1::int4 FROM generate_series(1, 10);
-1
-1
-1
-1
-1
-1
-1
-1
-1
-1
+> SELECT 1::int4 FROM generate_series(1, 10000), repeat('a', 100);
+10000 values hashing to b223cca8b360eae4e49568512e2de29f
 
-! SELECT * FROM generate_series(1, 6);
-contains:result exceeds max size of 128 B
+! SELECT * FROM generate_series(1, 10000), repeat('a', 100);
+contains:result exceeds max size of 1048.6 KB
 
-> CREATE TABLE t1 (a int4)
-
-> INSERT INTO t1 SELECT * FROM generate_series(1, 5);
-
-> INSERT INTO t1 VALUES (6);
+> CREATE TABLE t1 (a int4, b text)
+> INSERT INTO t1 SELECT * FROM generate_series(1, 10000), repeat('a', 100);
 
 ! SELECT * FROM t1
-contains:result exceeds max size of 128 B
+contains:result exceeds max size of 1048.6 KB
 
 ! INSERT INTO t1 SELECT * FROM t1;
-contains:result exceeds max size of 128 B
+contains:result exceeds max size of 1048.6 KB
 
-> INSERT INTO t1 SELECT * FROM generate_series(1, 100);
+> INSERT INTO t1 SELECT * FROM generate_series(1, 100), repeat('a', 100);
 
 > BEGIN
 
@@ -52,15 +40,13 @@ contains:result exceeds max size of 128 B
 
 # No output should be produced. Instead an error .. notice?
 ! FETCH 1 c;
-contains:result exceeds max size of 128 B
+contains:result exceeds max size of 1048.6 KB
 
 > ROLLBACK;
 
 # Constants with less than or equal to 10,000 rows will be evaluated in environmentd. Anything in excess of this will
-# be sent to computed to be executed. Therefore, we need to set the size high enough such that it will be evaluated by
+# be sent to computed to be executed. Therefore, we need to set the number of rows high enough such that it will be evaluated by
 # computed to test the computed side of things.
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_result_size = 240000;
 
 > SELECT generate_series::int4 FROM generate_series(1, 4);
 1
@@ -68,48 +54,25 @@ ALTER SYSTEM SET max_result_size = 240000;
 3
 4
 
-! SELECT generate_series::int4 FROM generate_series(1, 10001)
-contains:result exceeds max size of 240.0 KB
+! SELECT * FROM generate_series(1, 10001), repeat('a', 100)
+contains:result exceeds max size of 1048.6 KB
 
 > SELECT 1::int4 FROM generate_series(1, 10001)
 10001 values hashing to 7e844fba503f0b3f02daa3de7c80938e
 
-> CREATE TABLE t2 (a int4)
+> CREATE TABLE t2 (a int4, b text)
 
-! INSERT INTO t2 SELECT generate_series::int4 FROM generate_series(1, 10001);
-contains:result exceeds max size of 240.0 KB
+! INSERT INTO t2 SELECT * FROM generate_series(1, 10001), repeat('a', 100);
+contains:result exceeds max size of 1048.6 KB
 
-> INSERT INTO t2 SELECT generate_series::int4 FROM generate_series(1, 10000);
-
-> INSERT INTO t2 VALUES (10000);
+> INSERT INTO t2 SELECT * FROM generate_series(1, 5000), repeat('a', 100);
+> INSERT INTO t2 SELECT * FROM generate_series(5001, 10000), repeat('a', 100);
 
 ! SELECT * FROM t2
-contains:result exceeds max size of 240.0 KB
+contains:result exceeds max size of 1048.6 KB
 
 ! INSERT INTO t2 SELECT * FROM t2;
-contains:result exceeds max size of 240.0 KB
-
-# Rows keep 23 bytes inline, after that the row is spilled to the heap. int4 takes 5 bytes,
-# 4 for the int and 1 for the tag. A row of 5 int4's will spill to the heap, but any less will
-# be kept inline. A row of 5 int4's should then take 25 + 24 = 49 bytes.
-#
-# Large numbers are used to avoid this test being defeated
-# by the optimization in https://github.com/MaterializeInc/materialize/pull/21016
-
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_result_size = 49
-
-> SELECT 17000000, 17000001, 17000002, 17000003;
-17000000 17000001 17000002 17000003
-
-> SELECT 17000000, 17000001, 17000002, 17000003, 17000004;
-17000000 17000001 17000002 17000003 17000004
-
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_result_size = 48
-
-! SELECT 17000000, 17000001, 17000002, 17000003, 17000004;
-contains:result exceeds max size of 48 B
+contains:result exceeds max size of 1048.6 KB
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET max_result_size
