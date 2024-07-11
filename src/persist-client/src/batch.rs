@@ -523,7 +523,6 @@ where
     version: Version,
     blob: Arc<dyn Blob>,
     metrics: Arc<Metrics>,
-    _schemas: Schemas<K, V>,
     expect_consolidated: bool,
 
     buffer: BatchBuffer,
@@ -554,7 +553,6 @@ where
         cfg: BatchBuilderConfig,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
-        schemas: Schemas<K, V>,
         batch_write_metrics: BatchWriteMetrics,
         lower: Antichain<T>,
         blob: Arc<dyn Blob>,
@@ -586,7 +584,6 @@ where
                 expect_consolidated,
             ),
             metrics,
-            _schemas: schemas,
             expect_consolidated,
             max_kvt_in_run: None,
             parts_written: 0,

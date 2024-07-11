@@ -1646,7 +1646,6 @@ pub mod datadriven {
             cfg.clone(),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
-            schemas.clone(),
             datadriven.client.metrics.user.clone(),
             lower,
             Arc::clone(&datadriven.client.blob),

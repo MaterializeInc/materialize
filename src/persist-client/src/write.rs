@@ -608,7 +608,6 @@ where
             BatchBuilderConfig::new(&self.cfg, &self.writer_id),
             Arc::clone(&self.metrics),
             Arc::clone(&self.machine.applier.shard_metrics),
-            self.schemas.clone(),
             self.metrics.user.clone(),
             lower,
             Arc::clone(&self.blob),
