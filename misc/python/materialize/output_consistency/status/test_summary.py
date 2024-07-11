@@ -35,15 +35,21 @@ class DbOperationOrFunctionStats:
     count_included_in_successfully_executed_queries: int = 0
 
     def to_description(self) -> str:
-        success_experienced_info = (
-            "successfully executed at least once"
-            if self.count_included_in_successfully_executed_queries
-            else (
-                "not included in any query that was successfully executed in all strategies!"
-                if self.count_top_level_generated + self.count_nested_generated > 0
-                else "never generated"
+        if self.count_included_in_successfully_executed_queries:
+            success_experienced_info = "successfully executed at least once"
+        else:
+            count_generated = (
+                self.count_top_level_generated + self.count_nested_generated
             )
-        )
+            success_experienced_info = (
+                "never generated"
+                if count_generated == 0
+                else (
+                    "not included in any query that was successfully executed in all strategies!"
+                    if count_generated < 10
+                    else "not included in any query that was successfully executed in all strategies (possibly invalid operation specification)!"
+                )
+            )
 
         return (
             f"{self.count_top_level_generated} top level, "
