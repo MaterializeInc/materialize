@@ -754,7 +754,7 @@ mod non_negative {
                 // Threshold ensures non-negativity.
                 MirRelationExpr::Threshold { .. } => true,
                 MirRelationExpr::Join { .. } => {
-                    // These two cases require all of their inputs to be non-negative.
+                    // If all inputs are non-negative, the join is non-negative.
                     depends
                         .children_of_rev(index, expr.children().count())
                         .all(|off| results[off])
@@ -822,7 +822,7 @@ mod non_negative {
     ///
     /// These rules are .. somewhat arbitrary, and likely reflect observed opportunities. For example,
     /// while we do relate `distinct(filter(A)) <= distinct(A)`, we do not relate `distinct(A) <= A`.
-    pub fn is_superset_of(mut lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> bool {
+    fn is_superset_of(mut lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> bool {
         // This implementation is iterative.
         // Before converting this implementation to recursive (e.g. to improve its accuracy)
         // make sure to use the `CheckedRecursion` struct to avoid blowing the stack.
