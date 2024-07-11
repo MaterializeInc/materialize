@@ -54,12 +54,12 @@ pub trait ReceiverExt<T: Send> {
     ///
     /// TODO(parkmycar): We should refactor this to use `impl Iterator` instead of `Vec` when
     /// "impl trait in trait" is supported.
-    async fn mz_recv_many(&mut self, max: usize) -> Option<Vec<T>>;
+    async fn recv_many(&mut self, max: usize) -> Option<Vec<T>>;
 }
 
 #[async_trait]
 impl<T: Send> ReceiverExt<T> for tokio::sync::mpsc::Receiver<T> {
-    async fn mz_recv_many(&mut self, max: usize) -> Option<Vec<T>> {
+    async fn recv_many(&mut self, max: usize) -> Option<Vec<T>> {
         // Wait for a value to be ready.
         let first = self.recv().await?;
         let mut buffer = Vec::from([first]);
@@ -83,7 +83,7 @@ impl<T: Send> ReceiverExt<T> for tokio::sync::mpsc::Receiver<T> {
 
 #[async_trait]
 impl<T: Send> ReceiverExt<T> for tokio::sync::mpsc::UnboundedReceiver<T> {
-    async fn mz_recv_many(&mut self, max: usize) -> Option<Vec<T>> {
+    async fn recv_many(&mut self, max: usize) -> Option<Vec<T>> {
         // Wait for a value to be ready.
         let first = self.recv().await?;
         let mut buffer = Vec::from([first]);
@@ -274,11 +274,11 @@ mod tests {
         tx.try_send(5).expect("enough capacity");
 
         // Receive a max of three elements at once.
-        let elements = block_on(rx.mz_recv_many(3)).expect("values");
+        let elements = block_on(rx.recv_many(3)).expect("values");
         assert_eq!(elements, [1, 2, 3]);
 
         // Receive the remaining elements.
-        let elements = block_on(rx.mz_recv_many(8)).expect("values");
+        let elements = block_on(rx.recv_many(8)).expect("values");
         assert_eq!(elements, [4, 5]);
     }
 
@@ -294,11 +294,11 @@ mod tests {
         tx.send(5).expect("enough capacity");
 
         // Receive a max of three elements at once.
-        let elements = block_on(rx.mz_recv_many(3)).expect("values");
+        let elements = block_on(rx.recv_many(3)).expect("values");
         assert_eq!(elements, [1, 2, 3]);
 
         // Receive the remaining elements.
-        let elements = block_on(rx.mz_recv_many(8)).expect("values");
+        let elements = block_on(rx.recv_many(8)).expect("values");
         assert_eq!(elements, [4, 5]);
     }
 
@@ -317,7 +317,7 @@ mod tests {
         let waker = futures::task::noop_waker();
         let mut cx = std::task::Context::from_waker(&waker);
 
-        let mut recv_many = rx.mz_recv_many(4);
+        let mut recv_many = rx.recv_many(4);
 
         // The channel is closed, but there are outstanding permits, so we should return pending.
         assert!(recv_many.poll_unpin(&mut cx).is_pending());
@@ -336,7 +336,7 @@ mod tests {
         drop(recv_many);
 
         // Polling the channel one more time should return None since the channel is closed.
-        let elements = match rx.mz_recv_many(4).poll_unpin(&mut cx) {
+        let elements = match rx.recv_many(4).poll_unpin(&mut cx) {
             std::task::Poll::Ready(elements) => elements,
             std::task::Poll::Pending => panic!("future didn't immediately return"),
         };
@@ -347,7 +347,7 @@ mod tests {
     fn test_empty_channel() {
         let (tx, mut rx) = mpsc::channel::<usize>(16);
 
-        let recv_many = rx.mz_recv_many(4);
+        let recv_many = rx.recv_many(4);
         drop(tx);
 
         let elements = block_on(recv_many);
@@ -364,7 +364,7 @@ mod tests {
         tx.try_send(3).expect("enough capacity");
 
         // Even though we specify a max of one, we'll receive at least 2.
-        let elements = block_on(rx.mz_recv_many(1)).expect("values");
+        let elements = block_on(rx.recv_many(1)).expect("values");
         assert_eq!(elements, [1, 2]);
     }
 
@@ -388,7 +388,7 @@ mod tests {
             block_on(async {
                 futures::select_biased! {
                     single = &mut immediate_ready => result.push(single),
-                    many = &mut rx.mz_recv_many(2).fuse() => {
+                    many = &mut rx.recv_many(2).fuse() => {
                         let values = many.expect("stream ended!");
                         result.extend(values);
                     },
@@ -415,10 +415,10 @@ mod tests {
         drop(tx);
 
         // Make sure the buffer is larger than queued elements.
-        let elements = block_on(rx.mz_recv_many(4)).expect("elements");
+        let elements = block_on(rx.recv_many(4)).expect("elements");
         assert_eq!(elements, [1, 2, 3]);
 
         // Receiving again should return None.
-        assert!(block_on(rx.mz_recv_many(4)).is_none());
+        assert!(block_on(rx.recv_many(4)).is_none());
     }
 }

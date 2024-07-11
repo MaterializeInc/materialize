@@ -157,7 +157,7 @@ contains:requires both SSL KEY and SSL CERTIFICATE
 contains:requires both SSL KEY and SSL CERTIFICATE
 
 ! ALTER CONNECTION schema_registry SET (SSL KEY = SECRET invalid_secret), SET (SSL CERTIFICATE = 'x') WITH (VALIDATE = true);
-contains:No supported data to decode
+contains:ANY PRIVATE KEY
 
 ! ALTER CONNECTION schema_registry SET (SSL CERTIFICATE AUTHORITY = 'x') WITH (VALIDATE = true);
 contains:CERTIFICATE
@@ -167,10 +167,10 @@ contains:CERTIFICATE
 > ALTER CONNECTION schema_registry RESET (SSL CERTIFICATE);
 
 ! ALTER CONNECTION schema_registry RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = true);
-contains:self-signed certificate in certificate chain
+contains:self signed certificate in certificate chain
 
 ! ALTER CONNECTION schema_registry RESET (SSL KEY), RESET (SSL CERTIFICATE), RESET (SSL CERTIFICATE AUTHORITY);
-contains:self-signed certificate in certificate chain
+contains:self signed certificate in certificate chain
 
 ! ALTER CONNECTION schema_registry RESET (USERNAME);
 contains:Unauthorized

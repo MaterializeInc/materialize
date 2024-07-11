@@ -49,7 +49,7 @@ static_assertions = "1.1"
 timely = { version = "0.12.0", default-features = false, features = [
     "bincode",
 ] }
-tokio = { version = "1.38.0", features = [
+tokio = { version = "1.32.0", features = [
     "fs",
     "rt",
     "sync",

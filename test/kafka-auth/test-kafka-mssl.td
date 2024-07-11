@@ -29,7 +29,7 @@ banana
     BROKER 'kafka:9094',
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:ssl/tls alert bad certificate
+contains:sslv3 alert bad certificate
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9094',
@@ -37,7 +37,7 @@ contains:ssl/tls alert bad certificate
     SSL KEY SECRET kafka1_key,
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
-contains:ssl/tls alert certificate unknown
+contains:sslv3 alert certificate unknown
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9094',
@@ -45,7 +45,7 @@ contains:ssl/tls alert certificate unknown
     SSL KEY SECRET kafka1_key,
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
-contains:x509 certificate routines::key values mismatch
+contains:x509 certificate routines:X509_check_private_key:key values mismatch
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9094',

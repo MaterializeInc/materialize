@@ -22,7 +22,7 @@ http = "0.2.8"
 hyper-tls = { version = "0.5.0" }
 mz-ore = { path = "../ore", default-features = false }
 thiserror = "1.0.37"
-tokio = { version = "1.38.0", default-features = false, features = ["macros"] }
+tokio = { version = "1.32.0", default-features = false, features = ["macros"] }
 uuid = { version = "1.7.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

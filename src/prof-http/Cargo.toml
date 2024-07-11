@@ -24,7 +24,7 @@ mz-http-util = { path = "../http-util", default-features = false }
 mz-ore = { path = "../ore", default-features = false }
 mz-prof = { path = "../prof", default-features = false }
 serde = { version = "1.0.152", features = ["derive"] }
-tokio = { version = "1.38.0", features = ["time"] }
+tokio = { version = "1.32.0", features = ["time"] }
 tracing = { version = "0.1.37", optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

@@ -19,7 +19,7 @@ mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", default-features = false, features = ["cli"] }
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.89"
-tokio = { version = "1.38.0", default-features = false }
+tokio = { version = "1.24.2", default-features = false }
 uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 

@@ -146,6 +146,14 @@ criteria = "safe-to-deploy"
 version = "0.4.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.async-stream]]
+version = "0.3.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.async-stream-impl]]
+version = "0.3.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.asynchronous-codec]]
 version = "0.6.0"
 criteria = "safe-to-deploy"
@@ -328,6 +336,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.crossbeam-queue]]
 version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.crossbeam-utils]]
+version = "0.8.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.crunchy]]
@@ -622,6 +634,10 @@ criteria = "safe-to-deploy"
 version = "0.4.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.http-body-util]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.http-range-header]]
 version = "0.3.0"
 criteria = "safe-to-deploy"
@@ -666,6 +682,10 @@ criteria = "safe-to-deploy"
 version = "0.10.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.json-patch]]
+version = "1.0.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.jsonpath_lib]]
 version = "0.3.0"
 criteria = "safe-to-deploy"
@@ -674,8 +694,32 @@ criteria = "safe-to-deploy"
 version = "0.8.3"
 criteria = "safe-to-deploy"
 
+[[exemptions.k8s-openapi]]
+version = "0.20.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.keyed_priority_queue]]
 version = "0.4.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.kube]]
+version = "0.87.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.kube-client]]
+version = "0.87.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.kube-core]]
+version = "0.87.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.kube-derive]]
+version = "0.87.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.kube-runtime]]
+version = "0.87.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.launchdarkly-server-sdk-evaluation]]
@@ -826,8 +870,16 @@ criteria = "safe-to-deploy"
 version = "0.15.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.openssl]]
+version = "0.10.55"
+criteria = "safe-to-deploy"
+
 [[exemptions.openssl-probe]]
 version = "0.1.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.openssl-sys]]
+version = "0.9.90"
 criteria = "safe-to-deploy"
 
 [[exemptions.option-ext]]
@@ -904,6 +956,14 @@ criteria = "safe-to-deploy"
 
 [[exemptions.phf_shared]]
 version = "0.11.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.pin-project]]
+version = "1.0.12"
+criteria = "safe-to-deploy"
+
+[[exemptions.pin-project-internal]]
+version = "1.0.12"
 criteria = "safe-to-deploy"
 
 [[exemptions.pkg-config]]
@@ -1254,6 +1314,10 @@ criteria = "safe-to-deploy"
 version = "0.4.9"
 criteria = "safe-to-deploy"
 
+[[exemptions.socket2]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.spin]]
 version = "0.5.2"
 criteria = "safe-to-deploy"
@@ -1366,12 +1430,20 @@ criteria = "safe-to-deploy"
 version = "1.1.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.tokio]]
+version = "1.32.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.tokio-io-timeout]]
 version = "1.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-io-utility]]
 version = "0.7.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.tokio-metrics]]
+version = "0.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-native-tls]]
@@ -1384,6 +1456,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.tokio-pipe]]
 version = "0.2.12"
+criteria = "safe-to-deploy"
+
+[[exemptions.tokio-tungstenite]]
+version = "0.20.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tonic]]

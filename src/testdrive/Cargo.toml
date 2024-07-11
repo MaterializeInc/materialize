@@ -73,7 +73,7 @@ tiberius = { version = "0.11.3", default-features = false }
 time = "0.3.17"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-tokio = { version = "1.38.0", features = ["process"] }
+tokio = { version = "1.32.0", features = ["process"] }
 tokio-postgres = { version = "0.7.8", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.11"
 tokio-util = { version = "0.7.4", features = ["compat"] }

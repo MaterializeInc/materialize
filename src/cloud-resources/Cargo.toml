@@ -12,8 +12,8 @@ workspace = true
 [dependencies]
 anyhow = "1.0.66"
 async-trait = "0.1.68"
-k8s-openapi = { version = "0.22.0", features = ["schemars", "v1_28"] }
-kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "ws"] }
+k8s-openapi = { version = "0.20.0", features = ["schemars", "v1_28"] }
+kube = { version = "0.87.1", default-features = false, features = ["client", "derive", "openssl-tls", "ws"] }
 chrono = { version = "0.4.35", default-features = false }
 futures = "0.3.25"
 mz-ore = { path = "../ore", features = [] }

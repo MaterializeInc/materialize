@@ -542,7 +542,7 @@ where
                 }
 
                 // Pull as many queued updates off the channel as possible.
-                cmd = self.cmd_rx.mz_recv_many(CHANNEL_CAPACITY) => {
+                cmd = self.cmd_rx.recv_many(CHANNEL_CAPACITY) => {
                     if let Some(batch) = cmd {
 
                         let _ = self.handle_updates(batch).await?;
@@ -971,7 +971,7 @@ where
                     }
 
                     // Pull as many queued updates off the channel as possible.
-                    cmd = rx.mz_recv_many(CHANNEL_CAPACITY) => {
+                    cmd = rx.recv_many(CHANNEL_CAPACITY) => {
                         if let Some(batch) = cmd {
                             // To rate limit appends to persist we add artifical latency, and will
                             // finish no sooner than this instant.

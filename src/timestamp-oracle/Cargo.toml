@@ -22,7 +22,7 @@ mz-postgres-client = { path = "../postgres-client" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
 rand = "0.8.5"
 serde = "1.0.152"
-tokio = { version = "1.38.0", features = ["rt", "time"] }
+tokio = { version = "1.32.0", features = ["rt", "time"] }
 tracing = "0.1.37"
 uuid = { version = "1.7.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

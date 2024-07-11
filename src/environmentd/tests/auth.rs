@@ -125,10 +125,9 @@ enum TestCase<'a> {
 
 fn assert_http_rejected() -> Assert<Box<dyn Fn(Option<StatusCode>, String)>> {
     Assert::Err(Box::new(|code, message| {
-        const ALLOWED_MESSAGES: [&str; 3] = [
+        const ALLOWED_MESSAGES: [&str; 2] = [
             "Connection reset by peer",
             "connection closed before message completed",
-            "invalid HTTP version parsed",
         ];
         assert_eq!(code, None);
         if !ALLOWED_MESSAGES
@@ -1287,7 +1286,7 @@ async fn test_auth_base_disable_tls() {
                     // a graceful error message. This could plausibly change
                     // due to OpenSSL or Hyper refactorings.
                     assert!(code.is_none());
-                    assert_contains!(message, "packet length too long");
+                    assert_contains!(message, "ssl3_get_record:wrong version number");
                 })),
             },
             // System user cannot login via external ports.

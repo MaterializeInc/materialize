@@ -20,7 +20,7 @@ timely = { version = "0.12.0", default-features = false, features = ["bincode"] 
 serde = { version = "1.0.152", features = ["derive"] }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing_", "test"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.32.0", features = ["macros", "rt-multi-thread", "time"] }
 num-traits = "0.2"
 ahash = { version = "0.8.11", default-features = false }
 uuid = { version = "1.7.0", features = ["serde", "v4"] }

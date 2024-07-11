@@ -31,7 +31,7 @@ mz-server-core = { path = "../server-core" }
 mz-sql = { path = "../sql" }
 openssl = { version = "0.10.48", features = ["vendored"] }
 postgres = { version = "0.19.5" }
-tokio = "1.38.0"
+tokio = "1.32.0"
 tokio-stream = "0.1.11"
 tokio-openssl = "0.6.3"
 tokio-util = { version = "0.7.4", features = ["codec"] }

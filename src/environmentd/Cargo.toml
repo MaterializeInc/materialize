@@ -102,7 +102,7 @@ shell-words = "1.1.0"
 sysctl = "0.5.4"
 tempfile = "3.8.1"
 thiserror = "1.0.37"
-tokio = { version = "1.38.0", features = ["sync"] }
+tokio = { version = "1.32.0", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-postgres = { version = "0.7.8" }
 tokio-stream = { version = "0.1.11", features = ["net"] }

@@ -24,7 +24,7 @@ serde_json = { version = "1.0.89" }
 ssh-key = { version = "0.4.3" }
 tempfile = "3.3.0"
 thiserror = { version = "1.0.37" }
-tokio = "1.38.0"
+tokio = "1.32.0"
 tokio-stream = "0.1.11"
 tracing = "0.1.37"
 zeroize = { version = "1.5.7", features = ["serde"] }
