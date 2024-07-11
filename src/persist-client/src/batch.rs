@@ -19,15 +19,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Bytes;
-use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
-use mz_ore::instrument;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
+use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::indexed::columnar::{
     ColumnarRecords, ColumnarRecordsBuilder, ColumnarRecordsStructuredExt,
 };
@@ -525,7 +524,7 @@ where
     blob: Arc<dyn Blob>,
     metrics: Arc<Metrics>,
     _schemas: Schemas<K, V>,
-    consolidate: bool,
+    expect_consolidated: bool,
 
     buffer: BatchBuffer<T, D>,
 
@@ -564,7 +563,7 @@ where
         version: Version,
         since: Antichain<T>,
         inline_upper: Option<Antichain<T>>,
-        consolidate: bool,
+        expect_consolidated: bool,
     ) -> Self {
         let parts = BatchParts::new(
             cfg.clone(),
@@ -584,11 +583,11 @@ where
                 Arc::clone(&metrics),
                 batch_write_metrics,
                 cfg.blob_target_size,
-                consolidate,
+                expect_consolidated,
             ),
             metrics,
             _schemas: schemas,
-            consolidate,
+            expect_consolidated,
             max_kvt_in_run: None,
             parts_written: 0,
             runs: Vec::new(),
@@ -707,7 +706,7 @@ where
         }
         let diffs_sum = diffs_sum::<D>(std::iter::once(&columnar)).expect("part is non empty");
 
-        if self.consolidate {
+        if self.expect_consolidated {
             // if our parts are consolidated, we can rely on their sorted order to
             // appropriately determine runs of ordered parts
             let ((min_part_k, min_part_v), min_part_t, _d) =
@@ -719,9 +718,11 @@ where
             let max_part_t = T::decode(max_part_t);
 
             if let Some((max_run_k, max_run_v, max_run_t)) = &mut self.max_kvt_in_run {
-                // start a new run if our part contains an update that exists in the
-                // range already covered by the existing parts of the current run
+                // Our caller has promised to provide us data in sorted order. Verify that
+                // the smallest data in the part is not regressing... but for now, keep splitting
+                // runs as before.
                 if (min_part_k, min_part_v, &min_part_t) < (max_run_k, max_run_v, max_run_t) {
+                    soft_panic_or_log!("expected data in sorted order");
                     self.runs.push(self.parts_written);
                 }
 
@@ -770,7 +771,7 @@ struct BatchBuffer<T, D> {
     metrics: Arc<Metrics>,
     batch_write_metrics: BatchWriteMetrics,
     blob_target_size: usize,
-    consolidate: bool,
+    expect_consolidated: bool,
 
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
@@ -788,13 +789,13 @@ where
         metrics: Arc<Metrics>,
         batch_write_metrics: BatchWriteMetrics,
         blob_target_size: usize,
-        should_consolidate: bool,
+        expect_consolidated: bool,
     ) -> Self {
         BatchBuffer {
             metrics,
             batch_write_metrics,
             blob_target_size,
-            consolidate: should_consolidate,
+            expect_consolidated,
             key_buf: vec![],
             val_buf: vec![],
             records_builder: ColumnarRecordsBuilder::default(),
@@ -841,35 +842,14 @@ where
     fn drain(&mut self) -> (Vec<u8>, ColumnarRecords) {
         // TODO: we're in a position to do a very good estimate here!
         let builder = mem::take(&mut self.records_builder);
-        let mut records = builder.finish(&self.metrics.columnar);
-
-        if self.consolidate {
-            let start = Instant::now();
-            let mut updates = records
-                .iter()
-                .map(|(kv, t, d)| (kv, T::decode(t), D::decode(d)))
-                .collect();
-            consolidate_updates(&mut updates);
-            // TODO: expose!
-            let mut builder = ColumnarRecordsBuilder::with_capacity(records.len(), 0, 0);
-            for (kv, t, d) in updates {
-                assert!(
-                    builder.push((kv, t.encode(), d.encode())),
-                    "consolidated data should not be larger than the original"
-                );
-            }
-            records = builder.finish(&self.metrics.columnar);
-            self.batch_write_metrics
-                .step_consolidation
-                .inc_by(start.elapsed().as_secs_f64());
-        }
+        let records = builder.finish(&self.metrics.columnar);
 
         if records.len() == 0 {
             return (vec![], records);
         }
 
         let start = Instant::now();
-        let key_lower = if self.consolidate {
+        let key_lower = if self.expect_consolidated {
             records.keys().value(0)
         } else {
             ::arrow::compute::min_binary(records.keys()).expect("min of nonempty array")

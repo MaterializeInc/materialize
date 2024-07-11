@@ -697,7 +697,6 @@ pub struct BatchWriteMetrics {
     pub(crate) seconds: Counter,
     pub(crate) write_stalls: IntCounter,
 
-    pub(crate) step_consolidation: Counter,
     pub(crate) step_columnar_encoding: Counter,
     pub(crate) step_stats: Counter,
     pub(crate) step_part_writing: Counter,
@@ -725,10 +724,6 @@ impl BatchWriteMetrics {
                     "count of {} writes stalling to await max outstanding reqs",
                     name
                 ),
-            )),
-            step_consolidation: registry.register(metric!(
-                name: format!("mz_persist_{}_step_consolidation", name),
-                help: format!("time spent consolidating {} updates", name),
             )),
             step_columnar_encoding: registry.register(metric!(
                 name: format!("mz_persist_{}_step_columnar_encoding", name),

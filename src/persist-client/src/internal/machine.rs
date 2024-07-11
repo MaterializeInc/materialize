@@ -1625,7 +1625,11 @@ pub mod datadriven {
         let target_size = args.optional("target_size");
         let parts_size_override = args.optional("parts_size_override");
         let consolidate = args.optional("consolidate").unwrap_or(true);
-        let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
+        let mut updates: Vec<_> = args
+            .input
+            .split('\n')
+            .flat_map(DirectiveArgs::parse_update)
+            .collect();
 
         let mut cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &WriterId::new());
         if let Some(target_size) = target_size {
@@ -1635,6 +1639,9 @@ pub mod datadriven {
             key: Arc::new(StringSchema),
             val: Arc::new(UnitSchema),
         };
+        if consolidate {
+            consolidate_updates(&mut updates);
+        }
         let builder = BatchBuilderInternal::new(
             cfg.clone(),
             Arc::clone(&datadriven.client.metrics),
