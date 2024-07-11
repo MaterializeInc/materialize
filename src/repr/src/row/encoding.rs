@@ -1212,8 +1212,7 @@ mod tests {
             }
         });
 
-        let mut encoded = Vec::new();
-        row.encode(&mut encoded);
+        let encoded = row.encode_to_vec();
         assert_eq!(Row::decode(&encoded), Ok(row));
     }
 
