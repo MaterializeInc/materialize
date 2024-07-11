@@ -59,15 +59,17 @@ MAP_OPERATION_TYPES.append(
 MAP_OPERATION_TYPES.append(
     DbOperation(
         "$ @> $",
-        [MapOperationParam(), AnyOperationParam()],
+        [MapOperationParam(), MapOperationParam()],
         BooleanReturnTypeSpec(),
+        comment="LHS contains RHS",
     )
 )
 MAP_OPERATION_TYPES.append(
     DbOperation(
         "$ <@ $",
-        [MapOperationParam(), AnyOperationParam()],
+        [MapOperationParam(), MapOperationParam()],
         BooleanReturnTypeSpec(),
+        comment="RHS contains LHS",
     )
 )
 MAP_OPERATION_TYPES.append(
