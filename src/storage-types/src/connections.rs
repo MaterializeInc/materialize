@@ -20,7 +20,7 @@ use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{vpc_endpoint_host, AwsExternalIdPrefix, CloudResourceReader};
 use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
-    BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
+    BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
 };
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
@@ -38,6 +38,7 @@ use mz_tls_util::Pkcs12Archive;
 use mz_tracing::CloneableEnvFilter;
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
+use rdkafka::client::BrokerAddr;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::ClientContext;
@@ -752,11 +753,7 @@ impl KafkaConnection {
                     .next()
                     .context("BROKER is not address:port")?
                     .into(),
-                port: addr_parts
-                    .next()
-                    .unwrap_or("9092")
-                    .parse()
-                    .context("parsing BROKER port")?,
+                port: addr_parts.next().unwrap_or("9092").into(),
             };
             match &broker.tunnel {
                 Tunnel::Direct => {
