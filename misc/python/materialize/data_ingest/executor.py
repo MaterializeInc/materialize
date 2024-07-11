@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+import random
 import time
 from typing import Any
 
@@ -62,7 +63,13 @@ class Executor:
     def reconnect(self) -> None:
         self.mz_conn = pg8000.connect(
             host="localhost",
-            port=self.ports["materialized"],
+            port=self.ports[
+                (
+                    random.choice(["materialized", "materialized2"])
+                    if "materialized2" in self.ports
+                    else "materialized"
+                )
+            ],
             user="materialize",
             database=self.database,
         )

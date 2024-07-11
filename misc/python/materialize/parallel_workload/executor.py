@@ -51,6 +51,7 @@ class Executor:
     rollback_next: bool
     last_log: str
     action_run_since_last_commit_rollback: bool
+    autocommit: bool
 
     def __init__(
         self,
@@ -70,6 +71,8 @@ class Executor:
         self.last_log = ""
         self.action_run_since_last_commit_rollback = False
         self.use_ws = self.rng.choice([True, False]) if self.ws else False
+        self.autocommit = cur._c.autocommit
+        self.mz_service = "materialized"
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
@@ -187,7 +190,7 @@ class Executor:
 
         try:
             result = requests.post(
-                f"http://{self.db.host}:{self.db.ports['http']}/api/sql",
+                f"http://{self.db.host}:{self.db.ports['http' if self.mz_service == 'materialized' else 'http2']}/api/sql",
                 data=json.dumps({"query": query}),
                 headers={"content-type": "application/json"},
                 timeout=self.rng.uniform(0, 10),
@@ -209,5 +212,6 @@ class Executor:
             if self.db.scenario not in (
                 Scenario.Kill,
                 Scenario.BackupRestore,
+                Scenario.ZeroDowntimeDeploy,
             ):
                 raise

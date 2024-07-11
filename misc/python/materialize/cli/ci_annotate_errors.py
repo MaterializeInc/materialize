@@ -155,6 +155,9 @@ IGNORE_RE = re.compile(
     # For 0dt upgrades
     | halting\ process:\ unable\ to\ confirm\ leadership
     | halting\ process:\ fenced\ out\ old\ deployment;\ rebooting\ as\ leader
+    | parallel-workload-.*\ halting\ process:\ this\ deployment\ has\ been\ fenced\ out
+    | parallel-workload-.*\ fenced\ by\ new\ catalog\ upper
+    | parallel-workload-.*\ fenced\ by\ new\ catalog\ epoch
     )
     """,
     re.VERBOSE | re.MULTILINE,
