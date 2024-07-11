@@ -79,7 +79,7 @@ AGGREGATE_OPERATION_TYPES.append(
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "max",
-        [AnyOperationParam()],
+        [AnyOperationParam(include_record_type=False)],
         DynamicReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.HIGH,
@@ -88,7 +88,7 @@ AGGREGATE_OPERATION_TYPES.append(
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
         "min",
-        [AnyOperationParam()],
+        [AnyOperationParam(include_record_type=False)],
         DynamicReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.HIGH,
