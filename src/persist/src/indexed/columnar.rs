@@ -95,6 +95,11 @@ impl ColumnarRecords {
         self.len
     }
 
+    /// The keys in this columnar records as an array.
+    pub fn keys(&self) -> &BinaryArray {
+        &self.key_data
+    }
+
     /// The number of logical bytes in the represented data, excluding offsets
     /// and lengths.
     pub fn goodbytes(&self) -> usize {
@@ -310,6 +315,17 @@ impl ColumnarRecordsBuilder {
             + self.val_data.offsets_slice().to_byte_slice().len()
             + val.len();
         key_data_size <= limit && val_data_size <= limit
+    }
+
+    /// The current size of the columnar records data, useful for bounding batches at a
+    /// target size.
+    pub fn total_bytes(&self) -> usize {
+        self.key_data.values_slice().len()
+            + self.key_data.offsets_slice().to_byte_slice().len()
+            + self.val_data.values_slice().len()
+            + self.val_data.offsets_slice().to_byte_slice().len()
+            + self.timestamps.to_byte_slice().len()
+            + self.diffs.to_byte_slice().len()
     }
 
     /// Add a record to Self.

@@ -13,7 +13,8 @@ use std::borrow::Cow;
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::{Deref, Range};
+use std::mem;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -773,11 +774,9 @@ struct BatchBuffer<T, D> {
 
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
+    records_builder: ColumnarRecordsBuilder,
 
-    current_part: Vec<((Range<usize>, Range<usize>), T, D)>,
-    current_part_total_bytes: usize,
-    current_part_key_bytes: usize,
-    current_part_value_bytes: usize,
+    _phantom: PhantomData<(T, D)>,
 }
 
 impl<T, D> BatchBuffer<T, D>
@@ -796,12 +795,10 @@ where
             batch_write_metrics,
             blob_target_size,
             consolidate: should_consolidate,
-            key_buf: Default::default(),
-            val_buf: Default::default(),
-            current_part: Default::default(),
-            current_part_total_bytes: Default::default(),
-            current_part_key_bytes: Default::default(),
-            current_part_value_bytes: Default::default(),
+            key_buf: vec![],
+            val_buf: vec![],
+            records_builder: ColumnarRecordsBuilder::default(),
+            _phantom: Default::default(),
         }
     }
 
@@ -812,8 +809,6 @@ where
         ts: T,
         diff: D,
     ) -> Option<(Vec<u8>, ColumnarRecords)> {
-        let initial_key_buf_len = self.key_buf.len();
-        let initial_val_buf_len = self.val_buf.len();
         self.metrics
             .codecs
             .key
@@ -822,17 +817,21 @@ where
             .codecs
             .val
             .encode(|| V::encode(val, &mut self.val_buf));
-        let k_range = initial_key_buf_len..self.key_buf.len();
-        let v_range = initial_val_buf_len..self.val_buf.len();
-        let size = ColumnarRecordsBuilder::columnar_record_size(k_range.len(), v_range.len());
 
-        self.current_part_total_bytes += size;
-        self.current_part_key_bytes += k_range.len();
-        self.current_part_value_bytes += v_range.len();
-        self.current_part.push(((k_range, v_range), ts, diff));
+        let update = (
+            (self.key_buf.as_slice(), self.val_buf.as_slice()),
+            ts.encode(),
+            diff.encode(),
+        );
+        assert!(
+            self.records_builder.push(update),
+            "single update overflowed an i32"
+        );
+        self.key_buf.clear();
+        self.val_buf.clear();
 
         // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
-        if self.current_part_total_bytes >= self.blob_target_size {
+        if self.records_builder.total_bytes() >= self.blob_target_size {
             Some(self.drain())
         } else {
             None
@@ -840,65 +839,51 @@ where
     }
 
     fn drain(&mut self) -> (Vec<u8>, ColumnarRecords) {
-        let mut updates = Vec::with_capacity(self.current_part.len());
-        for ((k_range, v_range), t, d) in self.current_part.drain(..) {
-            updates.push(((&self.key_buf[k_range], &self.val_buf[v_range]), t, d));
-        }
+        // TODO: we're in a position to do a very good estimate here!
+        let builder = mem::take(&mut self.records_builder);
+        let mut records = builder.finish(&self.metrics.columnar);
 
         if self.consolidate {
             let start = Instant::now();
+            let mut updates = records
+                .iter()
+                .map(|(kv, t, d)| (kv, T::decode(t), D::decode(d)))
+                .collect();
             consolidate_updates(&mut updates);
+            // TODO: expose!
+            let mut builder = ColumnarRecordsBuilder::with_capacity(records.len(), 0, 0);
+            for (kv, t, d) in updates {
+                assert!(
+                    builder.push((kv, t.encode(), d.encode())),
+                    "consolidated data should not be larger than the original"
+                );
+            }
+            records = builder.finish(&self.metrics.columnar);
             self.batch_write_metrics
                 .step_consolidation
                 .inc_by(start.elapsed().as_secs_f64());
         }
 
-        if updates.is_empty() {
-            self.key_buf.clear();
-            self.val_buf.clear();
-            return (
-                vec![],
-                ColumnarRecordsBuilder::default().finish(&self.metrics.columnar),
-            );
+        if records.len() == 0 {
+            return (vec![], records);
         }
 
-        let ((mut key_lower, _), _, _) = &updates[0];
         let start = Instant::now();
-        let mut builder = ColumnarRecordsBuilder::with_capacity(
-            self.current_part.len(),
-            self.current_part_key_bytes,
-            self.current_part_value_bytes,
-        );
-        for ((k, v), t, d) in updates {
-            if self.consolidate {
-                debug_assert!(
-                    key_lower <= k,
-                    "consolidated data should be presented in order"
-                )
-            } else {
-                key_lower = k.min(key_lower);
-            }
-            // if this fails, the individual record is too big to fit in a ColumnarRecords by itself.
-            // The limits are big, so this is a pretty extreme case that we intentionally don't handle
-            // right now.
-            assert!(builder.push(((k, v), T::encode(&t), D::encode(&d))));
-        }
+        let key_lower = if self.consolidate {
+            records.keys().value(0)
+        } else {
+            ::arrow::compute::min_binary(records.keys()).expect("min of nonempty array")
+        };
         let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
             .expect("lower bound always exists");
-        let columnar = builder.finish(&self.metrics.columnar);
 
         self.batch_write_metrics
             .step_columnar_encoding
             .inc_by(start.elapsed().as_secs_f64());
 
-        self.key_buf.clear();
-        self.val_buf.clear();
-        self.current_part_total_bytes = 0;
-        self.current_part_key_bytes = 0;
-        self.current_part_value_bytes = 0;
-        assert_eq!(self.current_part.len(), 0);
+        assert_eq!(self.records_builder.len(), 0);
 
-        (key_lower, columnar)
+        (key_lower, records)
     }
 }
 
