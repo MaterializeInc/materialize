@@ -526,7 +526,7 @@ where
     _schemas: Schemas<K, V>,
     expect_consolidated: bool,
 
-    buffer: BatchBuffer<T, D>,
+    buffer: BatchBuffer,
 
     max_kvt_in_run: Option<(Vec<u8>, Vec<u8>, T)>,
     runs: Vec<usize>,
@@ -767,24 +767,18 @@ where
 }
 
 #[derive(Debug)]
-struct BatchBuffer<T, D> {
+struct BatchBuffer {
     metrics: Arc<Metrics>,
     batch_write_metrics: BatchWriteMetrics,
     blob_target_size: usize,
     expect_consolidated: bool,
-
+    // Reusable buffers for encoding data. Should be cleared after use!
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
     records_builder: ColumnarRecordsBuilder,
-
-    _phantom: PhantomData<(T, D)>,
 }
 
-impl<T, D> BatchBuffer<T, D>
-where
-    T: Ord + Codec64,
-    D: Semigroup + Codec64,
-{
+impl BatchBuffer {
     fn new(
         metrics: Arc<Metrics>,
         batch_write_metrics: BatchWriteMetrics,
@@ -799,11 +793,10 @@ where
             key_buf: vec![],
             val_buf: vec![],
             records_builder: ColumnarRecordsBuilder::default(),
-            _phantom: Default::default(),
         }
     }
 
-    fn push<K: Codec, V: Codec>(
+    fn push<K: Codec, V: Codec, T: Codec64, D: Codec64>(
         &mut self,
         key: &K,
         val: &V,
