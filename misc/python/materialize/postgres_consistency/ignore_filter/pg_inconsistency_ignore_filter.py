@@ -23,6 +23,7 @@ from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
+    involves_data_type_categories,
     involves_data_type_category,
     is_any_date_time_expression,
     is_known_to_involve_exact_data_types,
@@ -56,6 +57,9 @@ from materialize.output_consistency.input_data.operations.generic_operations_pro
 )
 from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
     TAG_JSONB_TO_TEXT,
+)
+from materialize.output_consistency.input_data.operations.record_operations_provider import (
+    TAG_RECORD_CREATION,
 )
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     TAG_REGEX,
@@ -140,7 +144,9 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             return YesIgnore("#22022: real with decimal comparison")
 
         if (
-            operation.is_tagged(TAG_JSONB_TO_TEXT) or operation.is_tagged(TAG_CASTING)
+            operation.is_tagged(TAG_JSONB_TO_TEXT)
+            or operation.is_tagged(TAG_CASTING)
+            or operation.is_tagged(TAG_RECORD_CREATION)
         ) and expression.matches(
             partial(
                 involves_data_type_category, data_type_category=DataTypeCategory.JSONB
@@ -275,6 +281,15 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             # do not explicitly require the TEXT type to be included because it can appear by applying || to two char values
             return YesIgnore("#27278: bpchar and char with coalesce")
+
+        if db_function.function_name_in_lower_case == "row" and expression.matches(
+            partial(
+                involves_data_type_categories,
+                data_type_categories={DataTypeCategory.RANGE, DataTypeCategory.ARRAY},
+            ),
+            True,
+        ):
+            return YesIgnore("#28130 / #28131: record type with array or ranges")
 
         return NoIgnore()
 
@@ -596,6 +611,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if "|| does not support implicitly casting" in mz_error_msg:
             return YesIgnore("#28024: no implicit casting from ...[] to ...[]")
+
+        if "cannot reference pseudo type pg_catalog.record" in mz_error_msg:
+            return YesIgnore("#17870: cannot reference pg_catalog.record")
 
         if query_template.matches_any_expression(
             partial(is_operation_tagged, tag=TAG_ARRAY_INDEX_OPERATION),

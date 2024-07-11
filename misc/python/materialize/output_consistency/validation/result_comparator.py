@@ -294,7 +294,13 @@ class ResultComparator:
             raise RuntimeError("Result contains no columns!")
 
         if num_columns1 != num_columns2:
-            raise RuntimeError("Results count different number of columns!")
+            raise RuntimeError("Results contain a different number of columns!")
+
+        if num_columns1 != len(query_execution.query_template.select_expressions):
+            # This would happen with the disabled .* operator on a row() function
+            raise RuntimeError(
+                "Number of columns in the result does not match the number of select expressions!"
+            )
 
         for col_index in range(0, num_columns1):
             self.validate_column(
@@ -356,12 +362,17 @@ class ResultComparator:
 
         return type(value1) == type(value2)
 
-    def is_value_equal(self, value1: Any, value2: Any) -> bool:
+    def is_value_equal(
+        self, value1: Any, value2: Any, is_tolerant: bool = False
+    ) -> bool:
         if value1 == value2:
             return True
 
         if isinstance(value1, list) and isinstance(value2, list):
-            return self.is_list_equal(value1, value2)
+            return self.is_list_or_tuple_equal(value1, value2)
+
+        if isinstance(value1, tuple) and isinstance(value2, tuple):
+            return self.is_list_or_tuple_equal(value1, value2)
 
         if isinstance(value1, Decimal) and isinstance(value2, Decimal):
             if value1.is_nan() and value2.is_nan():
@@ -377,12 +388,15 @@ class ResultComparator:
 
         return False
 
-    def is_list_equal(self, list1: list[Any], list2: list[Any]) -> bool:
-        if len(list1) != len(list2):
+    def is_list_or_tuple_equal(
+        self, collection1: list[Any] | tuple[Any], collection2: list[Any] | tuple[Any]
+    ) -> bool:
+        if len(collection1) != len(collection2):
             return False
 
-        for value1, value2 in zip(list1, list2):
-            if not self.is_value_equal(value1, value2):
+        for value1, value2 in zip(collection1, collection2):
+            # use is_tolerant because tuples may contain all values as strings
+            if not self.is_value_equal(value1, value2, is_tolerant=True):
                 return False
 
         return True
