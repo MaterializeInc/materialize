@@ -28,6 +28,7 @@ from materialize.parallel_workload.action import (
     CancelAction,
     KillAction,
     StatisticsAction,
+    ZeroDowntimeDeployAction,
     action_lists,
     ddl_action_list,
     dml_nontrans_action_list,
@@ -263,6 +264,32 @@ def run(
         workers.append(worker)
         thread = threading.Thread(
             name="toggle-txn-wal",
+            target=worker.run,
+            args=(host, ports["materialized"], ports["http"], "materialize", database),
+        )
+        thread.start()
+        threads.append(thread)
+    elif scenario == Scenario.ZeroDowntimeDeploy:
+        worker_rng = random.Random(rng.randrange(SEED_RANGE))
+        assert composition, "ZeroDowntimeDeploy scenario only works in mzcompose"
+        worker = Worker(
+            worker_rng,
+            [
+                ZeroDowntimeDeployAction(
+                    worker_rng,
+                    composition,
+                    sanity_restart,
+                )
+            ],
+            [1],
+            end_time,
+            autocommit=False,
+            system=False,
+            composition=composition,
+        )
+        workers.append(worker)
+        thread = threading.Thread(
+            name="zero-downtime-deploy",
             target=worker.run,
             args=(host, ports["materialized"], ports["http"], "materialize", database),
         )

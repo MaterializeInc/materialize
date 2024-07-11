@@ -1476,6 +1476,40 @@ class KillAction(Action):
         return True
 
 
+class ZeroDowntimeDeployAction(Action):
+    def __init__(
+        self,
+        rng: random.Random,
+        composition: Composition | None,
+        sanity_restart: bool,
+        system_param_fn: Callable[[dict[str, str]], dict[str, str]] = lambda x: x,
+    ):
+        super().__init__(rng, composition)
+        self.system_param_fn = system_param_fn
+        self.system_parameters = {}
+        self.sanity_restart = sanity_restart
+
+    def run(self, exe: Executor) -> bool:
+        assert self.composition
+        self.composition.kill("materialized")
+        # Otherwise getting failure on "up" locally
+        time.sleep(1)
+        self.system_parameters = self.system_param_fn(self.system_parameters)
+        with self.composition.override(
+            Materialized(
+                restart="on-failure",
+                external_minio="toxiproxy",
+                external_cockroach="toxiproxy",
+                ports=["6975:6875", "6976:6876", "6977:6877"],
+                sanity_restart=self.sanity_restart,
+                additional_system_parameter_defaults=self.system_parameters,
+            )
+        ):
+            self.composition.up("materialized", detach=True)
+        time.sleep(self.rng.uniform(120, 240))
+        return True
+
+
 # TODO: Don't restore immediately, keep copy Database objects
 class BackupRestoreAction(Action):
     composition: Composition

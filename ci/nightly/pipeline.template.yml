@@ -513,7 +513,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          # A larger instance is needed due to frequent OOMs
+          # A larger instance is needed due to frequent OOMs, same in all other platform-checks
           queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
@@ -525,7 +525,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          # A larger instance is needed due to frequent OOMs
           queue: linux-aarch64-large
         plugins:
           - ./ci/plugins/mzcompose:
@@ -586,7 +585,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel]
+              args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd"
@@ -598,7 +597,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartClusterdCompute, --execution-mode=parallel]
+              args: [--scenario=RestartClusterdCompute, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-entire-mz
         label: "Checks parallel + restart of the entire Mz"
@@ -610,7 +609,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEntireMz, --execution-mode=parallel]
+              args: [--scenario=RestartEntireMz, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-environmentd-clusterd-storage
         label: "Checks parallel + restart of environmentd & storage clusterd"
@@ -622,7 +621,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel]
+              args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-kill-clusterd-storage
         label: "Checks parallel + kill storage clusterd"
@@ -634,7 +633,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=KillClusterdStorage, --execution-mode=parallel]
+              args: [--scenario=KillClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-redpanda
         label: "Checks parallel + restart Redpanda & Debezium"
@@ -646,7 +645,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartRedpandaDebezium, --execution-mode=parallel]
+              args: [--scenario=RestartRedpandaDebezium, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart"
@@ -657,7 +656,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMz]
+              args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-continue
         label: "Checks preflight-check and continue upgrade"
@@ -668,7 +667,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=PreflightCheckContinue]
+              args: [--scenario=PreflightCheckContinue, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
@@ -679,7 +678,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=PreflightCheckRollback]
+              args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz-two-versions
         label: "Checks upgrade across two versions"
@@ -690,7 +689,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMzTwoVersions]
+              args: [--scenario=UpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz-four-versions
         label: "Checks upgrade across four versions"
@@ -701,7 +700,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMzFourVersions]
+              args: [--scenario=UpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-clusterd-compute-first
         label: "Platform checks upgrade, restarting compute clusterd first"
@@ -712,7 +711,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeClusterdComputeFirst]
+              args: [--scenario=UpgradeClusterdComputeFirst, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-clusterd-compute-last
         label: "Platform checks upgrade, restarting compute clusterd last"
@@ -723,7 +722,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeClusterdComputeLast]
+              args: [--scenario=UpgradeClusterdComputeLast, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-kill-clusterd-storage
         label: "Checks + kill storage clusterd"
@@ -814,6 +813,50 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=TogglePersistBatchColumnarFormat, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-0dt-restart-entire-mz
+        label: "Checks 0dt restart of the entire Mz"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeRestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-0dt-upgrade-entire-mz
+        label: "Checks 0dt upgrade, whole-Mz restart"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeUpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-0dt-upgrade-entire-mz-two-versions
+        label: "Checks 0dt upgrade across two versions"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeUpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-0dt-upgrade-entire-mz-four-versions
+        label: "Checks 0dt upgrade across four versions"
+        depends_on: build-aarch64
+        timeout_in_minutes: 90
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeUpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
