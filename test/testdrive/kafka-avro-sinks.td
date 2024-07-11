@@ -51,31 +51,29 @@ $ kafka-verify-data format=avro sink=materialize.public.interval_data_sink sort-
 {"before": null, "after": {"row": {"interval": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]}}}
 {"before": null, "after": {"row": {"interval": [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]}}}
 
-# See #9723
-#> CREATE MATERIALIZED VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
-#
-#> CREATE SINK unnamed_cols_sink
-# IN CLUSTER ${arg.single-replica-cluster}
-# FROM unnamed_cols
-#  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unnamed-cols-sink-${testdrive.seed}')
-#  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-#
-#$ kafka-verify-data format=avro sink=materialize.public.unnamed_cols_sink
-#{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}}
+> CREATE MATERIALIZED VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
+
+> CREATE SINK unnamed_cols_sink
+ IN CLUSTER ${arg.single-replica-cluster}
+ FROM unnamed_cols
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unnamed-cols-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+
+$ kafka-verify-data format=avro sink=materialize.public.unnamed_cols_sink
+{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}}
 
 # Test that invented field names do not clash with named columns.
 
-# See #9723
-#> CREATE MATERIALIZED VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b2, 5 as b3;
-#
-#> CREATE SINK clashing_cols_sink
-# IN CLUSTER ${arg.single-replica-cluster}
-# FROM clashing_cols
-#  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-clashing-cols-sink-${testdrive.seed}')
-#  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-#
-#$ kafka-verify-data format=avro sink=materialize.public.clashing_cols_sink
-#{"before": null, "after": {"row": {"column1": 1, "column1_1": 2, "b": 3, "b2": 4, "b3": 5}}}
+> CREATE MATERIALIZED VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b2, 5 as b3;
+
+> CREATE SINK clashing_cols_sink
+ IN CLUSTER ${arg.single-replica-cluster}
+ FROM clashing_cols
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-clashing-cols-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+
+$ kafka-verify-data format=avro sink=materialize.public.clashing_cols_sink
+{"before": null, "after": {"row": {"column1": 1, "column1_1": 2, "b": 3, "b2": 4, "b3": 5}}}
 
 # Test date/time types.
 
