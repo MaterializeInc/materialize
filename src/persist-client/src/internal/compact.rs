@@ -679,7 +679,7 @@ where
 
         let mut timings = Timings::default();
 
-        let mut batch = BatchBuilderInternal::<Vec<u8>, Vec<u8>, T, D>::new(
+        let mut batch = BatchBuilderInternal::<K, V, T, D>::new(
             cfg.batch.clone(),
             Arc::clone(&metrics),
             Arc::clone(&shard_metrics),

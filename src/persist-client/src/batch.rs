@@ -468,6 +468,12 @@ where
     // split the `add` and `finish` methods into versions that could override
     // the stats schema, but there are ownership issues with that approach that
     // I think are unresolvable.
+
+    // Reusable buffers for encoding data. Should be cleared after use!
+    pub(crate) metrics: Arc<Metrics>,
+    pub(crate) key_buf: Vec<u8>,
+    pub(crate) val_buf: Vec<u8>,
+
     pub(crate) stats_schemas: Schemas<K, V>,
     pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
 }
@@ -503,9 +509,21 @@ where
         ts: &T,
         diff: &D,
     ) -> Result<Added, InvalidUsage<T>> {
-        self.builder
-            .add(&self.stats_schemas, key, val, ts, diff)
-            .await
+        self.metrics
+            .codecs
+            .key
+            .encode(|| K::encode(key, &mut self.key_buf));
+        self.metrics
+            .codecs
+            .val
+            .encode(|| V::encode(val, &mut self.val_buf));
+        let result = self
+            .builder
+            .add(&self.stats_schemas, &self.key_buf, &self.val_buf, ts, diff)
+            .await;
+        self.key_buf.clear();
+        self.val_buf.clear();
+        result
     }
 }
 
@@ -539,7 +557,7 @@ where
 
     // These provide a bit more safety against appending a batch with the wrong
     // type to a shard.
-    _phantom: PhantomData<(K, V, T, D)>,
+    _phantom: PhantomData<fn(K, V, T, D)>,
 }
 
 impl<K, V, T, D> BatchBuilderInternal<K, V, T, D>
@@ -609,9 +627,9 @@ where
     /// This fails if any of the updates in this batch are beyond the given
     /// `upper`.
     #[instrument(level = "debug", name = "batch::finish", fields(shard = %self.shard_id))]
-    pub async fn finish<StatsK: Codec, StatsV: Codec>(
+    pub async fn finish(
         mut self,
-        stats_schemas: &Schemas<StatsK, StatsV>,
+        stats_schemas: &Schemas<K, V>,
         registered_upper: Antichain<T>,
     ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
         if PartialOrder::less_than(&registered_upper, &self.lower) {
@@ -662,8 +680,8 @@ where
     pub async fn add<StatsK: Codec, StatsV: Codec>(
         &mut self,
         stats_schemas: &Schemas<StatsK, StatsV>,
-        key: &K,
-        val: &V,
+        key: &[u8],
+        val: &[u8],
         ts: &T,
         diff: &D,
     ) -> Result<Added, InvalidUsage<T>> {
@@ -769,9 +787,6 @@ struct BatchBuffer {
     batch_write_metrics: BatchWriteMetrics,
     blob_target_size: usize,
     expect_consolidated: bool,
-    // Reusable buffers for encoding data. Should be cleared after use!
-    key_buf: Vec<u8>,
-    val_buf: Vec<u8>,
     records_builder: ColumnarRecordsBuilder,
 }
 
@@ -787,39 +802,22 @@ impl BatchBuffer {
             batch_write_metrics,
             blob_target_size,
             expect_consolidated,
-            key_buf: vec![],
-            val_buf: vec![],
             records_builder: ColumnarRecordsBuilder::default(),
         }
     }
 
-    fn push<K: Codec, V: Codec, T: Codec64, D: Codec64>(
+    fn push<T: Codec64, D: Codec64>(
         &mut self,
-        key: &K,
-        val: &V,
+        key: &[u8],
+        val: &[u8],
         ts: T,
         diff: D,
     ) -> Option<(Vec<u8>, ColumnarRecords)> {
-        self.metrics
-            .codecs
-            .key
-            .encode(|| K::encode(key, &mut self.key_buf));
-        self.metrics
-            .codecs
-            .val
-            .encode(|| V::encode(val, &mut self.val_buf));
-
-        let update = (
-            (self.key_buf.as_slice(), self.val_buf.as_slice()),
-            ts.encode(),
-            diff.encode(),
-        );
+        let update = ((key, val), ts.encode(), diff.encode());
         assert!(
             self.records_builder.push(update),
             "single update overflowed an i32"
         );
-        self.key_buf.clear();
-        self.val_buf.clear();
 
         // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
         if self.records_builder.total_bytes() >= self.blob_target_size {
@@ -1262,14 +1260,11 @@ mod tests {
 
         // We set blob_target_size to 0, so the first update gets forced out
         // into a batch.
+        let ((k, v), t, d) = &data[0];
+        let key = k.encode_to_vec();
+        let val = v.encode_to_vec();
         builder
-            .add(
-                &schemas,
-                &data[0].0 .0,
-                &data[0].0 .1,
-                &data[0].1,
-                &data[0].2,
-            )
+            .add(&schemas, &key, &val, t, d)
             .await
             .expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 1);
@@ -1277,14 +1272,11 @@ mod tests {
 
         // We set batch_builder_max_outstanding_parts to 2, so we are allowed to
         // pipeline a second part.
+        let ((k, v), t, d) = &data[1];
+        let key = k.encode_to_vec();
+        let val = v.encode_to_vec();
         builder
-            .add(
-                &schemas,
-                &data[1].0 .0,
-                &data[1].0 .1,
-                &data[1].1,
-                &data[1].2,
-            )
+            .add(&schemas, &key, &val, t, d)
             .await
             .expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 2);
@@ -1292,14 +1284,11 @@ mod tests {
 
         // But now that we have 3 parts, the add call back-pressures until the
         // first one finishes.
+        let ((k, v), t, d) = &data[2];
+        let key = k.encode_to_vec();
+        let val = v.encode_to_vec();
         builder
-            .add(
-                &schemas,
-                &data[2].0 .0,
-                &data[2].0 .1,
-                &data[2].1,
-                &data[2].2,
-            )
+            .add(&schemas, &key, &val, t, d)
             .await
             .expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 2);

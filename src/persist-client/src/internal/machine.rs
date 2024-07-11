@@ -1657,8 +1657,11 @@ pub mod datadriven {
             consolidate,
         );
         let mut builder = BatchBuilder {
-            builder,
             stats_schemas: schemas.clone(),
+            builder,
+            metrics: Arc::clone(&datadriven.client.metrics),
+            key_buf: vec![],
+            val_buf: vec![],
         };
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");

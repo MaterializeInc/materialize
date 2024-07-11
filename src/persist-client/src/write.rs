@@ -621,6 +621,9 @@ where
         BatchBuilder {
             builder,
             stats_schemas: self.schemas.clone(),
+            metrics: Arc::clone(&self.metrics),
+            key_buf: vec![],
+            val_buf: vec![],
         }
     }
 
