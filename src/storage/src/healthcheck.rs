@@ -34,10 +34,6 @@ use tracing::{error, info};
 
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 
-/// How long to wait before initiating a `SuspendAndRestart` command, to
-/// prevent hot restart loops.
-const SUSPEND_AND_RESTART_DELAY: Duration = Duration::from_secs(30);
-
 /// The namespace of the update. The `Ord` impl matter here, later variants are
 /// displayed over earlier ones.
 ///
@@ -348,6 +344,9 @@ pub(crate) fn health_operator<'g, G, P>(
     health_operator_impl: P,
     // Whether or not we should actually write namespaced errors in the `details` column.
     write_namespaced_map: bool,
+    // How long to wait before initiating a `SuspendAndRestart` command, to
+    // prevent hot restart loops.
+    suspend_and_restart_delay: Duration,
 ) -> PressOnDropButton
 where
     G: Scope<Timestamp = ()>,
@@ -512,9 +511,9 @@ where
                     info!(
                         "Broadcasting suspend-and-restart \
                         command because of {:?} after {:?} delay",
-                        halt_with, SUSPEND_AND_RESTART_DELAY
+                        halt_with, suspend_and_restart_delay
                     );
-                    tokio::time::sleep(SUSPEND_AND_RESTART_DELAY).await;
+                    tokio::time::sleep(suspend_and_restart_delay).await;
                     health_operator_impl.send_halt(id, halt_with).await;
                 }
             }
@@ -1117,6 +1116,7 @@ mod tests {
                                     input_mapping: inputs,
                                 },
                                 write_namespaced_map,
+                                Duration::from_secs(5),
                             )));
                         });
                 });
