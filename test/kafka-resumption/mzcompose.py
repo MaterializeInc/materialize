@@ -87,6 +87,47 @@ def workflow_sink_networking(c: Composition, parser: WorkflowArgumentParser) -> 
         c.kill("toxiproxy")
 
 
+def workflow_sink_kafka_restart(c: Composition, parser: WorkflowArgumentParser) -> None:
+    args = parse_args(parser)
+    if args.redpanda:
+        print(
+            "Test disabled with Redpanda, TODO: Enable when incidents-and-escalations#33 is fixed"
+        )
+        return
+
+    # Sleeping for 5s before the transaction commits virtually guarantees that
+    # there will be an open transaction when the Kafka/Redpanda service is
+    # killed, which lets us tests whether open transactions for the same
+    # producer ID are properly aborted after a broker restart.
+    with c.override(
+        Materialized(
+            environment_extra=["FAILPOINTS=kafka_sink_commit_transaction=sleep(5000)"]
+        )
+    ):
+        c.up(*(["materialized"] + get_kafka_services(args.redpanda)))
+
+        seed = random.getrandbits(16)
+        c.run_testdrive_files(
+            "--no-reset",
+            "--max-errors=1",
+            f"--seed={seed}",
+            f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
+            "--default-timeout=20s",
+            "sink-kafka-restart/setup.td",
+        )
+        c.kill("redpanda" if args.redpanda else "kafka")
+        c.up("redpanda" if args.redpanda else "kafka")
+        c.run_testdrive_files(
+            "--no-reset",
+            "--max-errors=1",
+            f"--seed={seed}",
+            f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
+            "--default-timeout=20s",
+            "sink-kafka-restart/verify.td",
+            "sink-kafka-restart/cleanup.td",
+        )
+
+
 def workflow_source_resumption(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test creating sources in a remote clusterd process."""
     args = parse_args(parser)
