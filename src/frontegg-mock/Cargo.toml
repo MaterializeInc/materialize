@@ -12,6 +12,8 @@ workspace = true
 [dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
 axum = { version = "0.6.20", features = ["headers"] }
+base64 = "0.22.0"
+chrono = { version = "0.4.35", features = ["serde"] }
 clap = { version = "3.2.24", features = ["derive", "env"] }
 hyper = { version = "0.14.23", features = ["http1", "server"] }
 jsonwebtoken = "9.2.0"
