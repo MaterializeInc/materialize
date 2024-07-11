@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from itertools import chain
 from textwrap import dedent
 from typing import Any
+from xml.etree.ElementTree import ParseError
 
 from junitparser.junitparser import Error, Failure, JUnitXml
 
@@ -331,17 +332,24 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    test_analytics_config = create_test_analytics_config_with_hostname(
-        args.cloud_hostname
-    )
-    test_analytics = TestAnalyticsDb(test_analytics_config)
+    try:
+        test_analytics_config = create_test_analytics_config_with_hostname(
+            args.cloud_hostname
+        )
+        test_analytics = TestAnalyticsDb(test_analytics_config)
 
-    # always insert a build job regardless whether it has annotations or not
-    test_analytics.builds.add_build_job(
-        was_successful=has_successful_buildkite_status()
-    )
+        # always insert a build job regardless whether it has annotations or not
+        test_analytics.builds.add_build_job(
+            was_successful=has_successful_buildkite_status()
+        )
 
-    return_code = annotate_logged_errors(args.log_files, test_analytics)
+        return_code = annotate_logged_errors(args.log_files, test_analytics)
+    except Exception as e:
+        add_annotation_raw(
+            style="error",
+            markdown=f"ci_annotate_errors failed, report this to #team-testing:\n```\n{e}\n```",
+        )
+        raise
 
     try:
         test_analytics.submit_updates()
@@ -612,7 +620,14 @@ def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError]:
 
 def _get_errors_from_junit_file(log_file_name: str) -> list[JunitError]:
     error_logs = []
-    xml = JUnitXml.fromfile(log_file_name)
+    try:
+        xml = JUnitXml.fromfile(log_file_name)
+    except ParseError as e:
+        # Ignore empty files
+        if "no element found: line 1, column 0" in str(e):
+            return error_logs
+        else:
+            raise
     for suite in xml:
         for testcase in suite:
             for result in testcase.result:
